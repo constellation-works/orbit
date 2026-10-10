@@ -232,6 +232,26 @@ pub(in super::super) fn member_ready(assessment: &Value) -> bool {
             .all(|field| assessment.get(field).is_none_or(Value::is_null))
 }
 
+/// Coerce a formatting slip in `evidence_gaps` into the array the contract
+/// asks for: a missing or null field becomes `[]`, and a scalar string becomes
+/// a one-element array (an empty string becomes `[]`). Returns the note that
+/// records the rewrite, or `None` when the field was already an array or is
+/// not a shape worth guessing at (validation then rejects it as before).
+pub(super) fn normalize_evidence_gaps(assessment: &mut Value) -> Option<Value> {
+    let fields = assessment.as_object_mut()?;
+    let (coerced, was) = match fields.get("evidence_gaps") {
+        None | Some(Value::Null) => (json!([]), "missing"),
+        Some(Value::String(gap)) if gap.trim().is_empty() => (json!([]), "empty string"),
+        Some(Value::String(gap)) => (json!([gap]), "string"),
+        Some(_) => return None,
+    };
+    fields.insert("evidence_gaps".to_string(), coerced);
+    Some(json!({
+        "field": "evidence_gaps",
+        "note": format!("{was} evidence_gaps coerced to an array"),
+    }))
+}
+
 pub(super) fn validate_recommendations(
     action: &str,
     task_id: &str,
