@@ -51,6 +51,10 @@ pub struct TaskActivityUpdate {
 pub struct ResolvedActivityTools {
     pub requested_tools: Vec<String>,
     pub effective_tools: Vec<String>,
+    /// Notes for required tools a non-implementer dropped because its
+    /// disallow list covers them. Empty when nothing was dropped.
+    /// [ORB-15162]
+    pub omitted_requirement_notes: Vec<String>,
 }
 
 pub(super) fn unsupported_runtime_capability(capability: &str) -> OrbitError {

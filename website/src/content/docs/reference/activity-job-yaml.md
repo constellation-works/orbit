@@ -50,8 +50,13 @@ after the task is created, and audit evidence records both lists.
 In deny mode the effective list is every callable tool, and the run also
 exports `ORBIT_ACTIVITY_TOOL_POLICY=deny`, `ORBIT_ACTIVITY_TOOLS_DENY`, and
 `ORBIT_ACTIVITY_NAME`. Disallow entries follow the same name and wildcard
-rules as `tools`. A task's `required_tools` cannot re-grant a disallowed tool;
-the run is refused before launch.
+rules as `tools`. A task's `required_tools` cannot re-grant a disallowed tool.
+On `agent_implement`, and on any activity outside the shipped non-implementer
+set, a covered requirement refuses the run before launch. `final_recovery`,
+`step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
+`review_reconciliation_review`, `task_pilot` and `agent_invoke` drop that
+requirement from the requested list and record a note; it stays out of the
+callable set.
 
 An `agent_loop` activity that declares neither list still loads, with a
 deprecation warning. Declare `tools` or `tool_disallow_list`.

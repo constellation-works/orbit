@@ -3,8 +3,8 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-06
-last_validated: 2026-10-05
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: activity-job
 doc_role: design
@@ -781,9 +781,23 @@ the new server applies the disallow list. A custom deny-mode activity has no
 legacy program contract and supplies an empty fallback list to old servers.
 
 A task's `required_tools` cannot override a disallow entry. Admission checks
-each requirement as in allowlist mode. A requirement the list covers fails
-`RequiredToolAdmission` before launch, and the failure names the tool and the
-activity.
+each requirement as in allowlist mode: wildcards, malformed names, unknown
+tools, inactive tools and tools that are not agent-facing fail
+`RequiredToolAdmission` before launch, naming the task and the tool.
+
+`required_tools` are the contract of the implementing activity,
+`agent_implement`. That activity, and any activity that is not one of the
+shipped non-implementers, still fails `RequiredToolAdmission` when the
+disallow list covers a requirement. The failure names the tool and the
+activity. The shipped non-implementers are `final_recovery`,
+`step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`,
+`review_reconciliation_review`, `task_pilot` and `agent_invoke`. For those, a
+covered requirement is dropped from `requested_tools` and recorded as a note
+on the resolution and on `ToolAllowlistHarnessDelegated`
+(`omitted_requirement_notes`). It stays out of `effective_tools`. A custom
+activity keeps the fail-closed denial, so an implementer that is not
+`agent_implement` cannot start without a tool its task requires and its list
+withholds. [ORB-15162]
 
 **Managed envelope.** A deny-mode run stamps:
 
@@ -826,7 +840,7 @@ with a deprecation warning, and the author should declare explicit `tools` or a
 The path is driven by `cli_runner.rs`, added in [T20260419-0104]. The flow is:
 
 1. Ask the host for the concrete CLI executor and resolve every selected task's requested tools and the effective list (in deny mode, the concrete callable set; §7.0).
-2. Emit the advisory `ToolAllowlistHarnessDelegated` event with the selected task ids, requested list, effective list, policy mode (`tool_policy`), and a deny-mode `tool_disallow_list`. Both policy fields are optional, so events recorded before deny mode existed still read.
+2. Emit the advisory `ToolAllowlistHarnessDelegated` event with the selected task ids, requested list, effective list, policy mode (`tool_policy`), a deny-mode `tool_disallow_list`, and any `omitted_requirement_notes` for requirements a non-implementer dropped (§7.0). The policy fields are optional, so events recorded before deny mode existed still read. An empty notes list is omitted, so events recorded before [ORB-15162] still read.
 3. Resolve the subprocess cwd from runtime-owned workspace context.
 4. Build an `Agent` and its provider-specific `AgentInvocationSpec`.
 5. Emit `CliInvocationStarted` with redacted argv, stdin blob ref, and resolved cwd.

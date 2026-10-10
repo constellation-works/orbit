@@ -7,6 +7,8 @@ tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: []
 related_artifacts:
   - ORB-14777
+  - ORB-15156
+  - ORB-15162
 ---
 
 # Run failure log
@@ -42,7 +44,9 @@ entries.
   one. Every `delivery-code-review` batch task requires `orbit.task.add` and
   `orbit.task.artifact.put`, so none of them can get final recovery, and the
   run parks with no decision.
-- **Fix:** ORB-15162 (open).
+- **Fix:** ORB-15162 (open). Activities in the named non-implementer set drop a
+  covered requirement from `requested_tools` and record a note; the tool stays
+  out of the callable set. `agent_implement` still fails closed.
 - **Tasks:** ORB-15156 (closed by hand).
 - **Final recovery:** none; it failed admission (`jrun-20261010-0544-c3`).
 

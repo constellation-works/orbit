@@ -14,7 +14,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_engine::{
-    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
+    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, RuntimeHost,
 };
 use orbit_store::contracts::JobRunStoreBackend;
@@ -88,6 +88,27 @@ impl Fixture {
             self.runtime.run_tool("orbit.task.update", update).unwrap();
         }
         id
+    }
+
+    /// A task whose implementer needs tools a recovery activity may disallow.
+    fn task_requiring(&self, tools: &[&str]) -> String {
+        let task = self
+            .runtime
+            .run_tool(
+                "orbit.task.add",
+                json!({
+                    "title": "Require a tool recovery must not call",
+                    "description": "Admission fixture for a disallowed requirement.",
+                    "acceptance_criteria": ["Admitted."],
+                    "complexity": "low",
+                    "workspace": self.repo.to_string_lossy(),
+                    "type": "chore",
+                    "model": "codex",
+                    "required_tools": tools,
+                }),
+            )
+            .unwrap();
+        task["id"].as_str().unwrap().to_string()
     }
 
     /// A running pipeline whose first three steps have checkpoints.
@@ -624,4 +645,130 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
             );
         }
     }
+}
+
+/// [ORB-15162] A task that requires `orbit.task.add` still gets a final-recovery
+/// invocation. The tool stays out of the callable set, and the same requirement
+/// under a covering deny list still fails the implementing activity.
+#[test]
+fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::final_recovery_drops_a_required_tool_its_disallow_list_covers",
+    ) {
+        return;
+    }
+    let fixture = fixture("[]");
+    let task_id = fixture.task_requiring(&["orbit.task.add", "orbit.task.show"]);
+    let tasks = std::slice::from_ref(&task_id);
+
+    let denied = shipped_disallow_list("final_recovery");
+    assert!(
+        denied.iter().any(|tool| tool == "orbit.task.add"),
+        "ORB-15156: final_recovery disallows orbit.task.add"
+    );
+    let resolved = fixture
+        .runtime
+        .resolve_activity_tool_denials(tasks, "final_recovery", &denied)
+        .expect("final recovery starts when the implementer requires a disallowed tool");
+    assert!(
+        !resolved
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.add"),
+        "a requirement never overrides the disallow list"
+    );
+    assert!(
+        !resolved
+            .requested_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.add"),
+        "the covered requirement is dropped from requested_tools"
+    );
+    assert!(
+        resolved
+            .requested_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.show"),
+        "a requirement the disallow list does not cover stays requested"
+    );
+    assert!(
+        resolved.omitted_requirement_notes.iter().any(|note| {
+            note.contains(&task_id)
+                && note.contains("orbit.task.add")
+                && note.contains("final_recovery")
+        }),
+        "the drop is recorded: {:?}",
+        resolved.omitted_requirement_notes
+    );
+
+    let covering = vec!["orbit.task.add".to_string()];
+    let step = fixture
+        .runtime
+        .resolve_activity_tool_denials(tasks, "step_failure_recovery", &covering)
+        .expect("step recovery drops a covered requirement instead of refusing to start");
+    assert!(
+        !step
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.add")
+    );
+    assert!(
+        !step
+            .requested_tools
+            .iter()
+            .any(|tool| tool == "orbit.task.add")
+    );
+    assert!(
+        step.omitted_requirement_notes
+            .iter()
+            .any(|note| note.contains("step_failure_recovery"))
+    );
+
+    assert_admission_refused(&fixture, tasks, "agent_implement", &covering, &task_id);
+    assert_admission_refused(&fixture, tasks, "custom_implementer", &covering, &task_id);
+}
+
+fn assert_admission_refused(
+    fixture: &Fixture,
+    tasks: &[String],
+    activity: &str,
+    disallow_list: &[String],
+    task_id: &str,
+) {
+    let refused = fixture
+        .runtime
+        .resolve_activity_tool_denials(tasks, activity, disallow_list)
+        .expect_err(
+            "an implementing activity stays fail-closed when the list covers a requirement",
+        );
+    match refused {
+        DispatchError::RequiredToolAdmission {
+            task_id: refused_task,
+            tool_name,
+            reason,
+        } => {
+            assert_eq!(refused_task, task_id);
+            assert_eq!(tool_name, "orbit.task.add");
+            assert!(
+                reason.contains("disallow list") && reason.contains(activity),
+                "{activity} denial names the tool and the activity: {reason}"
+            );
+        }
+        other => panic!("{activity}: expected RequiredToolAdmission, got {other}"),
+    }
+}
+
+fn shipped_disallow_list(activity: &str) -> Vec<String> {
+    use orbit_types::workflow::ActivityV2Spec;
+
+    let yaml = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("assets/activities/{activity}.yaml")),
+    )
+    .unwrap();
+    let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("{activity} is an agent activity")
+    };
+    spec.tool_disallow_list.expect("deny-mode activity")
 }

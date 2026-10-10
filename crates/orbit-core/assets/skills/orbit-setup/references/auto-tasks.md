@@ -177,9 +177,14 @@ reset before it stays applied, recorded as its own audited reset.
 A user-authored definition records no opt-out: delete simply removes it.
 `delete` and `restore` are CLI-only; over MCP, disable a definition instead.
 
-Required tools in a template extend an allowlist activity's baseline; in a
-deny-list activity they cannot override `tool_disallow_list`.
-They do not replace it or bypass runtime capability, policy, filesystem,
+Required tools in a template extend an allowlist activity's baseline. In a
+deny-list activity they cannot override `tool_disallow_list`. The implementing
+activity (`agent_implement`) refuses to start when the list covers one.
+`final_recovery`, `step_failure_recovery`, `pr_conflict_recovery`,
+`agent_review_repair`, `review_reconciliation_review`, `task_pilot` and
+`agent_invoke` drop that requirement from the requested tools and record a
+note; the tool stays uncallable. Any other activity keeps the refusal.
+They do not replace the list or bypass runtime capability, policy, filesystem,
 subprocess, or authentication checks. Invalid, inactive, wildcard, or
 non-agent-facing names fail dispatch before the provider starts.
 
