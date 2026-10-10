@@ -597,7 +597,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   read the owner's `orbit.jsonl`: the `still waiting for advisory file lock`
   warning names each holder of the lock by pid, section and call site, and
   `advisory file lock held past its threshold` names a section that held it
-  for 2 s or more.
+  for 2 s or more. A section queued behind a waiting admission or recovery
+  names it as `queued exclusive waiter`, followed by the holders that waiter
+  is waiting on.
 - Each leaf settles itself when it ends ([ORB-13663]): its worker records
   the handoff (success) or a failure, then delivers it to the owner, retrying
   for a few minutes if the owner is unreachable and no live drain carries the
