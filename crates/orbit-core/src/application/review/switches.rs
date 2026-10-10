@@ -16,6 +16,7 @@ use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 
+use super::crew::{REVIEW_CREW_SELECTION_RULE, configured_pool_members};
 use super::{local_route_before_landing_conflict, local_route_before_pr_conflict};
 use crate::OrbitRuntime;
 use crate::application::automation::{
@@ -39,9 +40,14 @@ pub struct BeforePrSwitch {
     /// `review.minutes`: the wall-clock limit for one candidate's review.
     pub minutes: u32,
     pub minutes_source: String,
-    /// `operation.review_crew`, the reviewer crew.
-    pub crew: Option<String>,
+    /// `operation.review_crew`, the reviewer crew or pool as canonical
+    /// `name[:weight]` entries; empty when unset.
+    pub crews: Vec<String>,
     pub crew_source: String,
+    /// How each review chooses from `crews` when it names more than one
+    /// [ORB-15195].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crew_selection: Option<&'static str>,
     /// Why before-PR review cannot run here while it is on; empty when it
     /// can or is off.
     pub problems: Vec<String>,
@@ -100,14 +106,21 @@ impl ReviewSwitches {
         } else {
             format!("unhealthy: {}; ", before_pr.problems.join("; "))
         };
+        let crew = match before_pr.crews.as_slice() {
+            [] => "crew `-`".to_string(),
+            [only] => format!("crew `{only}`"),
+            crews => format!("crews [{}]", crews.join(", ")),
+        };
+        let selection = before_pr
+            .crew_selection
+            .map_or_else(String::new, |rule| format!("; {rule}"));
         format!(
-            "{problems}{} (review.before_pr, {}); {} min per candidate (review.minutes, {}); crew \
-             `{}` (operation.review_crew, {})",
+            "{problems}{} (review.before_pr, {}); {} min per candidate (review.minutes, {}); \
+             {crew} (operation.review_crew, {}{selection})",
             if before_pr.enabled { "on" } else { "off" },
             before_pr.source,
             before_pr.minutes,
             before_pr.minutes_source,
-            before_pr.crew.as_deref().unwrap_or("-"),
             before_pr.crew_source,
         )
     }
@@ -259,7 +272,7 @@ fn review_switches_under(
                 hosts.source.label(),
             ));
         }
-        if policy.review_crew.value.is_none() {
+        if policy.review_crew.value.is_empty() {
             before_landing_problems.push(
                 "operation.review_crew is unset, so every claim from a listed host is refused"
                     .to_string(),
@@ -284,8 +297,10 @@ fn review_switches_under(
             source: policy.review_before_pr.source.label().to_string(),
             minutes: policy.review_minutes.value,
             minutes_source: policy.review_minutes.source.label().to_string(),
-            crew: policy.review_crew.value.clone(),
+            crews: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().to_string(),
+            crew_selection: (policy.review_crew.value.len() > 1)
+                .then_some(REVIEW_CREW_SELECTION_RULE),
             problems: before_pr_problems,
             local_route_incompatible: before_pr_on && local_route,
         },
@@ -309,16 +324,27 @@ fn review_switches_under(
     })
 }
 
-/// Why the shared reviewer crew cannot run a gated review here.
+/// Why the shared reviewer crew cannot run a gated review here. A pool can
+/// while any member resolves [ORB-15195].
 fn crew_problems(runtime: &OrbitRuntime, policy: &OperationPolicy) -> Vec<String> {
-    match policy.review_crew.value.as_deref() {
-        None => {
+    let members = match configured_pool_members(runtime, &policy.review_crew.value) {
+        Ok(members) => members,
+        Err(error) => return vec![format!("operation.review_crew does not resolve: {error}")],
+    };
+    match members.as_slice() {
+        [] => {
             vec!["operation.review_crew is unset, so every gated delivery is refused".to_string()]
         }
-        Some(crew) => runtime
-            .resolve_crew_for_task(Some(crew), None)
+        [only] => runtime
+            .resolve_crew_for_task(Some(&only.name), None)
             .err()
-            .map(|error| format!("review crew `{crew}` does not resolve: {error}"))
+            .map(|error| format!("review crew `{}` does not resolve: {error}", only.name))
+            .into_iter()
+            .collect(),
+        _ => runtime
+            .review_crew_candidates(&members)
+            .err()
+            .map(|error| format!("no crew of the review pool resolves: {error}"))
             .into_iter()
             .collect(),
     }

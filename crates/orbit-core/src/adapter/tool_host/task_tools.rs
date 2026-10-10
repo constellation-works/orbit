@@ -81,6 +81,7 @@ pub(super) fn add(
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default(),
             required_tools: raw_required_tools,
             plan: String::new(),
+            crew_source: None,
             comment: filed_by.map(|binding| {
                 format!(
                     "Filed by a claimed worker: claim {}, run {} on machine {}.",

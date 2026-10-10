@@ -102,6 +102,15 @@ impl Default for ReviewBudget {
     }
 }
 
+/// One weighted member of a captured reviewer pool [ORB-15195].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCrewPoolMember {
+    /// Canonical crew name.
+    pub name: String,
+    /// Relative tickets this crew holds in the reviewer draw.
+    pub weight: u32,
+}
+
 /// The versioned effective review policy a run carries in its immutable
 /// input under [`REVIEW_ADMISSION_KEY`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +128,12 @@ pub struct ReviewAdmission {
     pub crew: Option<String>,
     /// Which layer decided the crew.
     pub crew_source: String,
+    /// The configured reviewer pool when `operation.review_crew` names more
+    /// than one crew [ORB-15195]; `crew` is then unset and each review
+    /// chooses one member when it is admitted. Empty for a single crew, so
+    /// such an admission is captured exactly as before pools existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crew_pool: Vec<ReviewCrewPoolMember>,
     /// Captured review limit.
     pub budget: ReviewBudget,
     /// The workspace owner's required candidate checks captured with this

@@ -353,6 +353,7 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
         timing_source: "workspace".into(),
         crew: Some("sol".into()),
         crew_source: "workspace".into(),
+        crew_pool: Vec::new(),
         budget: orbit_types::workflow::ReviewBudget::default(),
         required_validation_commands: Some(Vec::new()),
         baseline_commands: Vec::new(),

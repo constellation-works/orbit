@@ -96,11 +96,31 @@ pub(super) fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
         .with_actor(ActorIdentity::human("fixture"))
 }
 
-fn set_policy(fixture: &Fixture, key: &str, value: &str) {
+pub(super) fn set_policy(fixture: &Fixture, key: &str, value: &str) {
     fixture
         .command(&["config", "set", "--global", key, value])
         .assert()
         .success();
+}
+
+/// Point `operation.review_crew` at a crew this host cannot run. A crew the
+/// registry does not define is refused at the write, naming it [ORB-15195],
+/// so the crew that cannot resolve is a defined one that is disabled.
+fn set_unresolvable_review_crew(fixture: &Fixture) {
+    let refused = fixture
+        .command(&[
+            "config",
+            "set",
+            "--global",
+            "operation.review_crew",
+            "missing-crew",
+        ])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&refused.get_output().stderr).into_owned();
+    assert!(stderr.contains("missing-crew"), "{stderr}");
+    set_policy(fixture, "crews.haiku.enabled", "false");
+    set_policy(fixture, "operation.review_crew", "haiku");
 }
 
 /// Provider discovery at `orbit init` is host-dependent; these tests need a
@@ -149,6 +169,17 @@ pub(super) fn land_and_evaluate(
     runtime: &orbit_core::OrbitRuntime,
     content: &str,
 ) -> Option<String> {
+    land_tasks_and_evaluate(fixture, runtime, content, &[])
+}
+
+/// [`land_and_evaluate`] for a delivery that landed `task_ids`, or an
+/// unattributed one when there are none.
+pub(super) fn land_tasks_and_evaluate(
+    fixture: &Fixture,
+    runtime: &orbit_core::OrbitRuntime,
+    content: &str,
+    task_ids: &[String],
+) -> Option<String> {
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     evaluate_auto_task(runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
@@ -167,8 +198,10 @@ pub(super) fn land_and_evaluate(
                 before: before.clone(),
                 after: landed.clone(),
                 commits: vec![landed.commit.clone()],
-                task_ids: vec![],
-                unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
+                task_ids: task_ids.to_vec(),
+                unattributed: task_ids
+                    .is_empty()
+                    .then(|| UNATTRIBUTED_NO_LANDING_TASK.into()),
                 evidence_reference: format!("run:fixture-run:{}", landed.commit),
                 evidence_digest: "fixture-digest".into(),
                 landed_at: Utc::now(),
@@ -461,7 +494,7 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     assert_doctor_fails(&fixture, "instead of `landed_code_review_v1`");
     retarget(&fixture, &trigger());
 
-    set_policy(&fixture, "operation.review_crew", "missing-crew");
+    set_unresolvable_review_crew(&fixture);
     assert_doctor_fails(&fixture, "does not resolve");
 }
 
@@ -623,7 +656,7 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     assert_eq!(doctor_row(&fixture).0["status"], "ok");
 
     set_policy(&fixture, "review.before_pr", "true");
-    set_policy(&fixture, "operation.review_crew", "missing-crew");
+    set_unresolvable_review_crew(&fixture);
     assert_doctor_fails(&fixture, "does not resolve");
 }
 

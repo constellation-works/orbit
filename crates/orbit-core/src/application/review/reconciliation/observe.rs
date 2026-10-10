@@ -2,6 +2,8 @@
 //! claim journal, the provider and the owner checkout every time it matters:
 //! at submission, before validation, before recording, and at completion.
 
+use std::collections::BTreeSet;
+
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::git::run_git;
@@ -15,6 +17,8 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::seeded_crew_ticket;
+use crate::application::review::crew::{configured_pool_members, pool_source};
 use crate::application::task::HandoffPullRequest;
 
 /// A merged foreign delivery whose head differs from its handed-off candidate.
@@ -212,29 +216,72 @@ pub(super) fn contract(
         );
     }
     let crew = &runtime.operation_policy().review_crew;
-    let review_crew = crew
-        .value
-        .clone()
-        .filter(|crew| !crew.trim().is_empty())
-        .ok_or_else(|| {
-            "no independent review crew is configured; set `[operation] review_crew` in the \
-             owner's configuration and retry"
-                .to_string()
-        })?;
-    runtime
-        .resolve_crew_for_task(Some(&review_crew), None)
-        .map_err(|error| {
-            format!(
-                "the configured review crew '{review_crew}' cannot be resolved on this host \
-                 ({error}); define it or set another `[operation] review_crew` and retry"
-            )
-        })?;
+    let pool = configured_pool_members(runtime, &crew.value).map_err(|error| error.to_string())?;
+    let (review_crew, review_crew_source) = match pool.as_slice() {
+        [] => {
+            return Err(
+                "no independent review crew is configured; set `[operation] review_crew` in the \
+                 owner's configuration and retry"
+                    .into(),
+            );
+        }
+        [only] => {
+            let review_crew = only.name.clone();
+            runtime
+                .resolve_crew_for_task(Some(&review_crew), None)
+                .map_err(|error| {
+                    format!(
+                        "the configured review crew '{review_crew}' cannot be resolved on this \
+                         host ({error}); define it or set another `[operation] review_crew` and \
+                         retry"
+                    )
+                })?;
+            (review_crew, crew.source.label().to_string())
+        }
+        // A pool draws one reviewer, preferring one that did not implement the
+        // task, seeded by the handoff so inspection shows what a submission
+        // freezes [ORB-15195].
+        members => {
+            let names = members
+                .iter()
+                .map(|member| member.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let unavailable = |error: OrbitError| {
+                format!(
+                    "no crew of the configured review pool [{names}] can be resolved on this \
+                     host ({error}); define one or set another `[operation] review_crew` and \
+                     retry"
+                )
+            };
+            let candidates = runtime
+                .review_crew_candidates(members)
+                .map_err(unavailable)?;
+            let implementers = runtime
+                .get_task(&accepted.handoff.task_id)
+                .ok()
+                .and_then(|task| task.crew)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            let chosen = runtime
+                .draw_review_crew(
+                    candidates,
+                    &implementers,
+                    &mut seeded_crew_ticket(format!(
+                        "reconcile:{}:{}",
+                        accepted.handoff.task_id, accepted.handoff_id
+                    )),
+                )
+                .map_err(unavailable)?;
+            (chosen.name, pool_source(crew.source.label()))
+        }
+    };
     Ok(ReconciliationContract {
         accepted_commands: accepted.required_commands.clone(),
         required_commands,
         commands_source,
         review_crew,
-        review_crew_source: crew.source.label().to_string(),
+        review_crew_source,
         frozen_at: Utc::now(),
     })
 }

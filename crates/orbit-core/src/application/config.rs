@@ -48,6 +48,7 @@ const CREW_REFERENCE_KEYS: &[&str] = &["workflow.default_crew", "workflow.system
 
 /// Weighted or bare crew lists whose membership the settings view reports.
 const CREW_POOL_KEYS: &[&str] = &[
+    "operation.review_crew",
     "workflow.final_recovery_crews",
     "workflow.low_complexity_crews",
     "workflow.medium_complexity_crews",
@@ -820,8 +821,7 @@ fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Vec<Jso
     let limits = runtime.provider_limits_view(chrono::Utc::now());
     let mut references: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in values {
-        if CREW_REFERENCE_KEYS.contains(&entry.key.as_str()) || entry.key == "operation.review_crew"
-        {
+        if CREW_REFERENCE_KEYS.contains(&entry.key.as_str()) {
             if let Some(name) = entry.value.as_str() {
                 references
                     .entry(name.trim().to_string())
