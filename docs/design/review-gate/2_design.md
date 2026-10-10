@@ -193,9 +193,13 @@ trusted system writer; actor labels and tool input cannot grant that authority.
 This covers local puts, task updates, CLI and dashboard writes. The exception
 is the exact `review-report.json` name: a live reviewer may attach a report
 that passes the shared version and attempt validator, with its
-revision retained by the store. The claimed-worker broker uses the same
-namespace classifier and additionally requires the running reviewer's admitted
-attempt for report writes. External evidence cannot name this reserved namespace.
+revision retained by the store. The owner applies the same rule to a claimed
+worker's artifact writes, whatever route reaches it: a worker on the owner's
+machine arrives in process, past any broker. A claimed leaf's gate writes its
+records on the host-owned worker channel, which tool input cannot select. The
+claimed-worker broker uses the same namespace classifier and additionally
+requires the running reviewer's admitted attempt for report writes. External
+evidence cannot name this reserved namespace.
 
 Admission and settlement retry transient failures (three attempts,
 exponential backoff) and the reviewer step retries once; each then gets one

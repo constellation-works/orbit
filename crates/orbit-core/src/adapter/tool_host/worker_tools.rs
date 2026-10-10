@@ -183,6 +183,16 @@ pub(crate) fn execute(
                     "fields",
                 ],
             )?;
+            let mut artifacts = super::input::parse_artifacts(input)?;
+            // A worker on its owner's machine reaches this boundary in
+            // process, past any broker, so the reserved review namespace is
+            // enforced here for every route. Only the host's own channel —
+            // the review gate writing its records — is the system writer.
+            if !session.worker_host_call {
+                for artifact in &mut artifacts {
+                    crate::application::task::admit_agent_artifact(artifact)?;
+                }
+            }
             ClaimMutation::Update(ClaimWorkerUpdate {
                 plan: orbit_common::protocol::tool_input::optional_raw_string(input, "plan")?,
                 context_files:
@@ -200,7 +210,7 @@ pub(crate) fn execute(
                     comment: orbit_common::protocol::tool_input::optional_raw_string(
                         input, "comment",
                     )?,
-                    artifacts: super::input::parse_artifacts(input)?,
+                    artifacts,
                     ..Default::default()
                 },
                 ..Default::default()

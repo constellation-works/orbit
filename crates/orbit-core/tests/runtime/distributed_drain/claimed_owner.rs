@@ -6,10 +6,12 @@
 //! task's finding may also name its culprit, see `no_diff`), and only while
 //! the claim is still active; a friction the worker files is recorded
 //! during the claimed task whatever the call names.
+//! Its artifact writes never reach the reserved review namespace, which only
+//! its gate's host-owned channel writes.
 
 use super::*;
 
-use super::claimed_review::ReviewedLeaf;
+use super::claimed_review::{ReviewedLeaf, revision};
 
 #[test]
 fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
@@ -283,5 +285,141 @@ fn a_worker_update_persists_redacted_text_and_a_task_scoped_audit() {
             .any(|row| row.task_id.as_deref() == Some(&leaf.task)
                 && row.command == "artifact_redaction"),
         "redaction audit must name the claimed task: {rows:?}"
+    );
+}
+
+/// A claimed worker's writes reach the owner in process past any broker —
+/// a leaf on its owner's machine through `execute_owner_coordination`, as
+/// here. On that route the owner still refuses an agent's artifact in the
+/// reserved review namespace, under every alias spelling, and leaves the task
+/// unchanged; the reviewer's report is admitted only under its schema. The
+/// gate's own records cross on the host channel, so the manifest and the
+/// certificate land and the owner pins the certificate, which the agent then
+/// cannot overwrite either.
+#[test]
+fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::handoff::HandoffReviewEvidence;
+    use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, ReviewVerdict};
+
+    let mut leaf = ReviewedLeaf::admit();
+    let owner = leaf.pair.wire.owner.clone();
+    let bound = leaf.bound.clone();
+    let task = leaf.task.clone();
+    let binding = bound.worker_invocation().unwrap().clone();
+    let source = leaf.pair.follower_repo.join(".orbit/tmp/forged.json");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let forged = br#"{"schema_version":1,"gate":"passed"}"#.to_vec();
+    std::fs::write(&source, &forged).unwrap();
+    // The agent's tool call through its binding, and the same write as the
+    // owner receives it from a worker on its own machine.
+    let agent_put = |path: &str| {
+        bound
+            .run_tool(
+                "orbit.task.artifact.put",
+                json!({"id": task, "model": "codex", "path": path, "source_path": source}),
+            )
+            .map_err(|error| error.to_string())
+    };
+    let owner_put = |path: &str, content: &[u8]| {
+        owner
+            .execute_owner_coordination(
+                "orbit.task.artifact.put",
+                json!({
+                    "id": task,
+                    "workspace": binding.owner_workspace_id,
+                    "artifacts": [{
+                        "path": path, "content": content, "media_type": "application/json",
+                    }],
+                }),
+                ToolSessionContext {
+                    worker_invocation: Some(binding.clone()),
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| error.to_string())
+    };
+    let task_view = || {
+        (
+            owner
+                .run_tool("orbit.task.show", json!({"id": task}))
+                .unwrap(),
+            owner.get_task_artifact_manifest(&task).unwrap(),
+            owner.get_task_comments(&task).unwrap(),
+            owner.get_task_history(&task).unwrap(),
+        )
+    };
+
+    let before = task_view();
+    for path in [
+        "review-gate.json",
+        "./review-gate.json",
+        "  review-gate.json  ",
+        "Review-Gate.JSON",
+        "review-evidence-hold.json",
+        "./REVIEW-MANIFEST.json",
+        "review-baseline.json",
+    ] {
+        for refused in [agent_put(path), owner_put(path, &forged)] {
+            let refused = refused.expect_err(path);
+            assert!(
+                refused.contains("reserved for the review gate's system writer"),
+                "{path}: {refused}"
+            );
+        }
+    }
+    let malformed = owner_put("./review-report.json", &forged).unwrap_err();
+    assert!(
+        malformed.contains("does not match the review report contract"),
+        "{malformed}"
+    );
+    assert_eq!(
+        task_view(),
+        before,
+        "a refused write must leave the owner's task unchanged"
+    );
+
+    let admitted = leaf.admit_review();
+    let attempt_id = admitted["attempt_id"].as_str().unwrap().to_string();
+    assert!(
+        leaf.owner_artifact(REVIEW_MANIFEST_ARTIFACT).is_some(),
+        "the gate's manifest crosses on the host channel"
+    );
+    leaf.reviewer_reports(&attempt_id, ReviewVerdict::AcceptWithFixes, true);
+    let settled = leaf.settle().expect("an accepted review passes");
+    assert_eq!(settled["gate"], "passed", "{settled}");
+    let certificate = leaf
+        .owner_artifact(REVIEW_GATE_ARTIFACT)
+        .expect("the gate's certificate crosses on the host channel");
+    let evidence: HandoffReviewEvidence =
+        serde_json::from_value(settled["handoff_evidence"].clone()).expect("handoff evidence");
+    leaf.owner_accepts(evidence, &revision(&leaf.pair.follower_repo, "HEAD"))
+        .expect("the owner accepts the reviewed handoff");
+    assert!(
+        owner
+            .review_store()
+            .unwrap()
+            .review_certificate(&owner.workspace_id().unwrap(), &attempt_id)
+            .unwrap()
+            .is_some(),
+        "the owner pins the gate's certificate"
+    );
+
+    for refused in [
+        agent_put(REVIEW_GATE_ARTIFACT),
+        owner_put(REVIEW_GATE_ARTIFACT, &forged),
+    ] {
+        assert!(refused.is_err(), "the pinned certificate was overwritten");
+    }
+    assert_eq!(
+        leaf.owner_artifact(REVIEW_GATE_ARTIFACT),
+        Some(certificate),
+        "the pinned certificate is unchanged"
     );
 }
