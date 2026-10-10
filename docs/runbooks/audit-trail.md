@@ -153,10 +153,10 @@ traffic that otherwise fills the list; that caller's failures and denials stay
 visible. It is off by default so drill-downs still show every row.
 
 Audit Summary tables fit their card width. Compact cards omit secondary total
-and unexpected counts in the tool-failures table, and other/internal counts
-in Role split; hover the row label to read all values. Wider cards show those
-columns. Top duration ranks named tools only, excluding the synthetic
-`unknown` bucket and empty names before choosing the top eight.
+and unexpected counts in the tool-failures table; hover the row label to read
+all values. Wider cards show those columns. Top duration ranks named tools
+only, excluding the synthetic `unknown` bucket and empty names before choosing
+the top eight.
 
 Audit > Policy shows the canonical policy-decision count (`denials` in
 `/api/audit/summary`), split into invocation and envelope decisions, alongside

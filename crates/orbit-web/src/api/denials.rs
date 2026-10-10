@@ -473,51 +473,6 @@ fn extract_after_prefix(message: &str, prefix: &str) -> Option<String> {
     }
 }
 
-/// Top-N tool denials for the audit-summary side panel. Targets `kind == "tool"`
-/// rows (so `target` is a tool name); fs rows are excluded because their `target`
-/// is a path and would clutter the per-tool list.
-pub(super) fn denials_by_tool_summary(rows: &[DenialRow], limit: usize) -> Value {
-    let mut counts: BTreeMap<String, i64> = BTreeMap::new();
-    for row in rows {
-        if row.kind != "tool" {
-            continue;
-        }
-        if row.target.is_empty() {
-            continue;
-        }
-        *counts.entry(row.target.clone()).or_insert(0) += 1;
-    }
-    let mut out: Vec<_> = counts.into_iter().collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    Value::Array(
-        out.into_iter()
-            .take(limit)
-            .map(|(tool, count)| json!({"tool": tool, "count": count}))
-            .collect(),
-    )
-}
-
-/// Top-N denial causes (fs profile, tool name, lock conflict, etc.) across all
-/// denial kinds for the audit-summary side panel.
-pub(super) fn denials_by_reason_summary(rows: &[DenialRow], limit: usize) -> Value {
-    let mut counts: BTreeMap<String, i64> = BTreeMap::new();
-    for row in rows {
-        let cause = row.diagnostics.cause.clone();
-        if cause.is_empty() {
-            continue;
-        }
-        *counts.entry(cause).or_insert(0) += 1;
-    }
-    let mut out: Vec<_> = counts.into_iter().collect();
-    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    Value::Array(
-        out.into_iter()
-            .take(limit)
-            .map(|(reason, count)| json!({"reason": reason, "count": count}))
-            .collect(),
-    )
-}
-
 pub(super) async fn list_denials(Ws(runtime): Ws, Query(q): Query<DenialsQuery>) -> Response {
     let raw_since = q.since.as_deref().unwrap_or(DEFAULT_SUMMARY_WINDOW);
     let since = match parse_since(raw_since) {

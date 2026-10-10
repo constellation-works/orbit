@@ -318,7 +318,7 @@ impl OrbitRuntime {
 
     /// Per-role aggregate of audit events at or after `since`, with the
     /// MCP-vs-CLI surface split (`mcp` = `subcommand='run-mcp'`, `cli` =
-    /// `subcommand='run'`). Drives the Role-split and MCP-vs-CLI cards.
+    /// `subcommand='run'`). Drives the MCP-vs-CLI card.
     pub fn audit_event_aggregates_by_role(
         &self,
         since: &DateTime<Utc>,
