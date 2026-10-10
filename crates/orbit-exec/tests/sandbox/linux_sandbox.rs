@@ -266,7 +266,7 @@ fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
     assert!(
         plan.args
             .windows(3)
-            .any(|triple| triple == ["--ro-bind", "/dev/null", clock_env.as_str()]),
+            .any(|triple| triple == ["--dev-bind", "/dev/null", clock_env.as_str()]),
         "the present masked file must be covered by /dev/null: {:?}",
         plan.args
     );
