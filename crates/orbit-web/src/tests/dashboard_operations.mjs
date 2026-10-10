@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setHost, setWorkspace, statusPill } = await import('./js/common.js');
+const { setHost, setWorkspace, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
@@ -503,13 +503,40 @@ await fetchAndRenderOperations();
 assert(get('auto-drain-live').querySelector('.drain-approvals').textContent === 'Approving proposed tasks', 'a payload without counts shows only the flag');
 approvalsFixture = { enabled: false };
 await fetchAndRenderOperations();
-// A non-serving host: every run link names that host and the workspace, so a
-// link opened in a new tab shows the same run on the same host.
+// Run links retain scope on every surface and let the browser open modified
+// clicks in a new tab instead of routing them in the current page.
 setHost('hostb');
+setWindow('7d');
 await fetchAndRenderOperations();
-const runLinks = Array.from(document.querySelectorAll('a[href*="#runs?run_id="]'));
-assert(runLinks.length >= 2 && runLinks.every(link => link.getAttribute('href').startsWith('?host=hostb&workspace=one#runs?run_id=')), `every run link names the selected host and workspace: ${runLinks.map(link => link.getAttribute('href')).join(' ')}`);
-assert(runLinks.some(link => link.getAttribute('href') === '?host=hostb&workspace=one#runs?run_id=jrun-20260923-0400-a1'), 'the Drain card links its live run on the selected host');
+for (const [surface, runId] of [
+  ['auto-drain-live', 'jrun-20260923-0400-a1'],
+  ['jobs-body', 'jrun-fixture-running'],
+  ['routines-body', 'jrun-fixture-done'],
+]) {
+  const link = Array.from(get(surface).querySelectorAll('a')).find(link => new URL(link.href).hash === `#runs?run_id=${runId}`);
+  assert(link, `${surface} links its run`);
+  const url = new URL(link.href);
+  assert(url.searchParams.get('host') === 'hostb' && url.searchParams.get('workspace') === 'one'
+    && url.searchParams.get('window') === '7d', `${surface} retains the selected host, workspace and window: ${url}`);
+  for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, [modifier]: true });
+    let intercepted;
+    link.addEventListener('click', observed => {
+      intercepted = observed.defaultPrevented;
+      // Prevent the harness itself from opening or navigating a tab.
+      observed.preventDefault();
+    }, { once: true });
+    link.dispatchEvent(event);
+    assert(intercepted === false, `${surface} preserves the browser default for ${modifier} clicks`);
+  }
+}
+setMultiWorkspace(true);
+setWorkspace(null);
+const aggregateRunUrl = new URL(runHref('jrun-aggregate'), window.location.href);
+assert(aggregateRunUrl.searchParams.get('workspace') === 'all', 'an aggregate run link retains All workspaces instead of silently selecting the default');
+setWorkspace('one');
+setMultiWorkspace(false);
+setWindow('24h');
 setHost(null);
 await fetchAndRenderOperations();
 drainButton('Stop').click(); await tick(); await tick(); await tick();

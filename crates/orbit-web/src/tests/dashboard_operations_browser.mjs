@@ -377,6 +377,36 @@ try {
   await otherPage.close();
   await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
 
+  // ORB-15226: a plain click on a Drain run link follows it inside the page,
+  // while a Ctrl-click is left to the browser, which opens the link's own
+  // address in a new tab. That address names the workspace and time window.
+  await page.evaluate(async () => {
+    (await import('/js/common.js')).setWindow('7d');
+    await globalThis.setDrainFixturePhase('draining');
+  });
+  const drainRunLink = page.locator('#auto-drain-live a.operation-run-link');
+  const drainRunUrl = new URL(await drainRunLink.getAttribute('href'), page.url());
+  if (drainRunUrl.searchParams.get('workspace') !== 'one' || drainRunUrl.searchParams.get('window') !== '7d' || drainRunUrl.hash !== '#runs?run_id=jrun-20260923-0400-a1') throw new Error(`Drain run link lost its scope: ${drainRunUrl}`);
+  const urlBeforeClicks = page.url();
+  const [linkedTab] = await Promise.all([page.context().waitForEvent('page'), drainRunLink.click({ modifiers: ['Control'] })]);
+  try {
+    await linkedTab.waitForURL(drainRunUrl.href);
+  } finally {
+    await linkedTab.close();
+  }
+  if (page.url() !== urlBeforeClicks) throw new Error(`A Ctrl-click on the Drain run link also moved this page: ${urlBeforeClicks} -> ${page.url()}`);
+  await drainRunLink.click();
+  await page.waitForFunction(() => location.hash.startsWith('#runs/jrun-20260923-0400-a1'));
+  if (page.context().pages().length !== 1) throw new Error('A plain click on the Drain run link opened a new tab');
+  await page.evaluate(async () => {
+    const { persistScopeToUrl, setWindow } = await import('/js/common.js');
+    setWindow('24h');
+    persistScopeToUrl();
+    (await import('/js/router.js')).setActiveTab('auto-drain');
+    await globalThis.setDrainFixturePhase('draining');
+  });
+  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
+
   // ORB-14489: render the live throttle case with spare workspace capacity.
   // A text check alone would pass for clipped IDs, so also measure each link
   // against its row and inspect the clipping styles at the reported width.
