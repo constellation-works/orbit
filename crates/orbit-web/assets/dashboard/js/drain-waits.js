@@ -13,12 +13,12 @@ export const DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_membe
 
 // Readiness reasons that mean "waiting on slots or host pressure": a full
 // workspace, a throttle, a scheduled shutdown or stopped admissions.
-export const DRAIN_CAPACITY_REASONS = new Set(["capacity_saturated", "resource_throttled", "host_shutdown_scheduled", "admissions_stopped", "cpu_light_budget_full"]);
+const DRAIN_CAPACITY_REASONS = new Set(["capacity_saturated", "resource_throttled", "host_shutdown_scheduled", "admissions_stopped", "cpu_light_budget_full"]);
 
 // A task whose `os:` tags this host's OS does not satisfy waits for a host of
 // its own (a pull-drain follower on that OS, say), and one a pilot found needs
 // native evidence from another OS waits for the `os:` tag readiness names.
-export const DRAIN_HOST_WAIT_REASONS = new Set(["host_os_mismatch", "native_os_required"]);
+const DRAIN_HOST_WAIT_REASONS = new Set(["host_os_mismatch", "native_os_required"]);
 
 export function drainReason(task) {
   return typeof task.reason === "string" && task.reason.trim() ? task.reason : "unknown";
@@ -28,7 +28,7 @@ export function drainReason(task) {
 // `conflicts[].locking_task_id`; same-wave deferrals report
 // `conflicts[].blocking_task_id` plus `blocking_task_ids`; live-child claims
 // report only `run_ids`, which have no task holder.
-export function drainHolders(task) {
+function drainHolders(task) {
   const holders = new Set();
   for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
     const holder = conflict?.locking_task_id || conflict?.blocking_task_id;
@@ -40,7 +40,7 @@ export function drainHolders(task) {
   return [...holders].sort();
 }
 
-export function drainConflictSelectors(task, holder) {
+function drainConflictSelectors(task, holder) {
   const selectors = [];
   for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
     const conflictHolder = conflict?.locking_task_id || conflict?.blocking_task_id;
@@ -51,15 +51,8 @@ export function drainConflictSelectors(task, holder) {
   return selectors;
 }
 
-// `file:crates/a/b/c.rs` → `…/b/c.rs`: the dock is 336px, so the lock line
-// keeps the part of the path that tells files apart; the title has the rest.
-export function drainShortSelector(selector) {
-  const parts = String(selector).replace(/^[a-z]+:/, "").split("/");
-  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : parts.join("/");
-}
-
 // Which pool group a readiness entry falls in. Every entry lands in exactly one.
-export function drainPoolKey(task) {
+function drainPoolKey(task) {
   const reason = drainReason(task);
   return task.eligible === true ? "eligible"
     : DRAIN_LOCK_REASONS.has(reason) ? "locks"

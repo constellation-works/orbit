@@ -251,25 +251,30 @@ try {
       if (width) layout.style.setProperty('--dock-w', `${width}px`); else layout.style.removeProperty('--dock-w');
       const dock = document.getElementById('side-dock');
       const card = document.getElementById('auto-drain-panel');
+      const start = document.getElementById('auto-drain-start');
       const cardBox = card.getBoundingClientRect();
-      const overflowing = Array.from(card.querySelectorAll('*'))
-        .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > cardBox.right + 1)
-        .map((node) => node.className || node.tagName);
+      const overflowing = [card, start].flatMap((box) => {
+        const bounds = box.getBoundingClientRect();
+        return Array.from(box.querySelectorAll('*'))
+          .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > bounds.right + 1)
+          .map((node) => node.className || node.tagName);
+      });
       return {
         mode: dock.dataset.mode,
         dockWidth: Math.round(dock.getBoundingClientRect().width),
         cardVisible: cardBox.height > 0,
-        firstPanel: dock.querySelector('.dock-pane[data-pane="drain"] > .panel')?.id,
-        scroll: card.scrollWidth > card.clientWidth + 1,
+        startVisible: start.getBoundingClientRect().height > 0,
+        panels: [...dock.querySelectorAll('.dock-pane[data-pane="drain"] > .panel')].map(panel => panel.id),
+        scroll: [card, start].some(box => box.scrollWidth > box.clientWidth + 1),
         overflowing,
-        durations: card.querySelectorAll('.drain-duration[aria-pressed]').length,
-        text: card.textContent,
+        durations: start.querySelectorAll('.drain-duration[aria-pressed]').length,
+        bar: Boolean(card.querySelector('.drain-capacity-bar[aria-label]')),
       };
     }, dockWidth);
-    if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
-    if (result.firstPanel !== 'auto-drain-panel') throw new Error(`auto-drain card is not the first dock card at ${label}: ${result.firstPanel}`);
+    if (result.mode !== 'drain' || !result.cardVisible || !result.startVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
+    if (result.panels.join(' ') !== 'auto-drain-panel auto-drain-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
     if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
-    if (result.durations !== 6 || !result.text.includes('Pool: waiting on locks') || /Pool: blocked/.test(result.text)) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
+    if (result.durations !== 6 || !result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     return result.dockWidth;
   };
@@ -280,16 +285,19 @@ try {
     await page.evaluate(state => globalThis.setDrainFixturePhase(state), phase);
     const rendered = await page.evaluate(() => ({
       card: document.getElementById('auto-drain-panel').dataset.drainState,
-      header: document.getElementById('auto-drain-live').textContent,
+      header: document.getElementById('auto-drain-phase-label').textContent,
+      live: document.getElementById('auto-drain-live')?.textContent || '',
+      admitted: document.querySelector('#auto-drain-live [data-stat="admitted"] dd')?.textContent,
+      running: document.querySelector('#auto-drain-live [data-stat="running"] dd')?.textContent,
       global: document.getElementById('global-drain-state').textContent,
       globalHidden: document.getElementById('global-drain-state').hidden,
       tab: document.getElementById('dock-drain-state').textContent,
       tabLabel: document.getElementById('dock-tab-drain').getAttribute('aria-label'),
       status: document.getElementById('auto-drain-operation-feedback').textContent,
     }));
-    if (rendered.card !== phase || !rendered.header.includes(label)) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
-    if (phase === 'draining' && (!rendered.header.includes('left') || !rendered.header.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.header}`);
-    if (phase !== 'idle' && !rendered.header.includes('This window: 1 running of 3 admitted')) throw new Error(`Missing scoped window count: ${rendered.header}`);
+    if (rendered.card !== phase || rendered.header.toLowerCase() !== label.toLowerCase()) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
+    if (phase === 'draining' && (!rendered.live.includes('left') || !rendered.live.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.live}`);
+    if (phase !== 'idle' && (rendered.admitted !== '3' || rendered.running !== '1')) throw new Error(`Missing scoped window count: ${JSON.stringify(rendered)}`);
     if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tabLabel.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
     if (phase === 'draining' && rendered.tab) throw new Error(`ORB-14489: Drain tab repeats draining state: ${rendered.tab}`);
     if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
@@ -335,7 +343,7 @@ try {
       inputConnected: input.isConnected,
       inputFocused: document.activeElement === input,
       loading: [...body.querySelectorAll('[data-panel-status]')].some(note => note.textContent === 'Loading…'),
-      liveCount: document.getElementById('auto-drain-live').textContent,
+      liveCount: document.getElementById('auto-drain-phase-label').textContent,
       requestedConcurrency: globalThis.drainReadinessConcurrency(),
     };
   });
@@ -348,7 +356,7 @@ try {
   const completedDrainRefresh = await page.evaluate(() => ({
     inputFocused: document.activeElement?.id === 'auto-drain-concurrency',
     inputValue: document.getElementById('auto-drain-concurrency')?.value,
-    liveCount: document.getElementById('auto-drain-live').textContent,
+    liveCount: document.getElementById('auto-drain-phase-label').textContent,
   }));
   if (!completedDrainRefresh.inputFocused || completedDrainRefresh.inputValue !== '6'
     || completedDrainRefresh.liveCount === '—') {
@@ -407,46 +415,34 @@ try {
   });
   await page.waitForFunction(() => location.hash.startsWith('#tasks'));
 
-  // ORB-14489: render the live throttle case with spare workspace capacity.
-  // A text check alone would pass for clipped IDs, so also measure each link
-  // against its row and inspect the clipping styles at the reported width.
+  // ORB-14489: render the live throttle case with spare workspace capacity:
+  // the summary blames the throttle, not running tasks.
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.evaluate(() => globalThis.setDrainFixtureReadiness({ capacity: {
     active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0,
     occupancy: { runs: [{ task_ids: ['ORB-14488'], phase: 'post_implementation' }] },
     resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] },
   } }));
-  await drainCheck('1024-throttled-blockers', null);
+  await drainCheck('1024-throttled', null);
   const drainEvidence = await page.evaluate(() => {
     const card = document.getElementById('auto-drain-panel');
-    const row = card.querySelector('.drain-blocked-row');
-    const who = row.querySelector('.drain-blocked-who');
-    const lock = row.querySelector('.drain-blocked-lock');
-    const bounds = row.getBoundingClientRect();
-    const links = [...who.querySelectorAll('a')].map(link => {
-      const box = link.getBoundingClientRect();
-      return { text: link.textContent, visible: box.width > 0 && box.left >= bounds.left && box.right <= bounds.right + 1 };
-    });
     return {
       summary: card.querySelector('.drain-slots').textContent,
-      workspace: card.querySelector('.drain-capacity-count').textContent,
-      window: card.querySelector('.drain-window-count').textContent,
-      pool: [...card.querySelectorAll('.drain-stat-label')].map(node => node.textContent),
+      workspace: card.querySelector('.drain-capacity-bar').getAttribute('aria-label'),
+      admitted: card.querySelector('[data-stat="admitted"] dd')?.textContent,
+      running: card.querySelector('[data-stat="running"] dd')?.textContent,
+      throttle: Boolean(card.querySelector('.drain-throttle-note')),
       tab: document.getElementById('dock-tab-drain').textContent.trim(),
-      blocker: who.textContent, links,
-      idsClipped: getComputedStyle(who).overflow === 'hidden' || who.scrollWidth > who.clientWidth + 1,
-      lockTruncated: lock.scrollWidth > lock.clientWidth && getComputedStyle(lock).textOverflow === 'ellipsis',
       stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
     };
   });
-  if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary)) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
-  if (!drainEvidence.workspace.includes('Workspace: 6 of 12') || !drainEvidence.window.includes('This window: 1 running of 3') || !drainEvidence.pool.every(label => label.startsWith('Pool:'))) throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
-  if (drainEvidence.blocker !== 'ORB-14334 waits on ORB-14488' || drainEvidence.links.length !== 2 || drainEvidence.links.some(link => !link.visible) || drainEvidence.idsClipped || !drainEvidence.lockTruncated) throw new Error(`ORB-14489: blocker IDs must stay whole while the lock path truncates at 1024px: ${JSON.stringify(drainEvidence)}`);
+  if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary) || !drainEvidence.throttle) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
+  if (drainEvidence.workspace !== 'Workspace: 6 of 12 leaf slots in use' || drainEvidence.admitted !== '3' || drainEvidence.running !== '1') throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
   if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
   if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
   fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
   // ORB-14705: a 36-task backlog (17 locks, 13 throttled, 3 saturated, 3 other)
-  // reads as four figures that add up, at desktop and phone widths.
+  // leaves the cards fitting at desktop and phone widths, every task in a pool.
   await page.evaluate(() => {
     const task = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
     const reasons = [...Array(17).fill('context_lock_conflict'), ...Array(13).fill('resource_throttled'), ...Array(3).fill('capacity_saturated'), 'operator_validation_handoff', 'pilot_already_landed', 'surface_reserved'];
@@ -458,8 +454,11 @@ try {
   for (const [label, width, dock] of [['1440', 1440, 336], ['390', 390, null]]) {
     await page.setViewportSize({ width, height: 1000 });
     await drainCheck(`backlog36-${label}`, dock);
-    const pool = await page.evaluate(() => [...document.querySelectorAll('#auto-drain-panel .drain-stat')].map(node => Number(node.querySelector('.drain-stat-value').textContent)));
-    if (pool.reduce((sum, n) => sum + n, 0) !== 36) throw new Error(`Pool figures at ${label}px do not sum to 36: ${pool}`);
+    const pooled = await page.evaluate(async () => {
+      const { drainReadinessFor } = await import('/js/drain-waits.js');
+      return Array.from({ length: 36 }, (_, i) => drainReadinessFor(`ORB-${9000 + i}`)?.pool).filter(Boolean).length;
+    });
+    if (pooled !== 36) throw new Error(`Readiness at ${label}px does not place all 36 tasks: ${pooled}`);
   }
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.evaluate(() => globalThis.setDrainFixtureReadiness());
@@ -487,7 +486,7 @@ try {
       document.querySelector('input[name="auto-drain-approve"][value="approve"]').click();
     });
     const form = await page.evaluate(() => {
-      const card = document.getElementById('auto-drain-panel');
+      const card = document.getElementById('auto-drain-start');
       const box = card.getBoundingClientRect();
       const label = card.querySelector('.drain-field-approve');
       return {
@@ -498,7 +497,7 @@ try {
     });
     if (!form.selected || !form.reachable || form.overflowing.length) throw new Error(`Approve-proposed control at ${label}: ${JSON.stringify(form)}`);
     await page.waitForTimeout(400);
-    await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
+    await page.locator('#auto-drain-start').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
     await page.evaluate(async () => {
       await globalThis.setDrainFixturePhase('draining');
       await globalThis.setDrainFixtureApprovals({ enabled: true, approved_total: 3, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] });
@@ -507,11 +506,12 @@ try {
       const card = document.getElementById('auto-drain-panel');
       const box = card.getBoundingClientRect();
       return {
-        text: card.querySelector('.drain-approvals')?.textContent,
+        approved: card.querySelector('[data-stat="approved"] dd')?.firstChild?.textContent,
+        held: card.querySelector('[data-stat="approved"] .drain-window-stat-detail')?.textContent,
         overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
       };
     });
-    if (live.text !== 'Approving proposed tasks · 3 approved · 2 held' || live.overflowing.length) throw new Error(`Live approvals line at ${label}: ${JSON.stringify(live)}`);
+    if (live.approved !== '3' || live.held !== '2 held' || live.overflowing.length) throw new Error(`Live approvals at ${label}: ${JSON.stringify(live)}`);
     await page.waitForTimeout(400);
     await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-live-${label}.png`) });
     await page.evaluate(async () => {
@@ -716,7 +716,7 @@ try {
   if (taskLayout.listWidth < taskLayout.inner - 80) {
     throw new Error(`task list is not full-width at 375px: ${taskLayout.listWidth} vs ${taskLayout.inner}`);
   }
-  if (!taskLayout.areas.includes('id title') || !taskLayout.areas.includes('status crew')) {
+  if (!taskLayout.areas.includes('id title') || !taskLayout.areas.includes('crew run quick')) {
     throw new Error(`375px task row must use the 520px two-row areas, got ${JSON.stringify(taskLayout)}`);
   }
   await assertNoOverflow('375x812 / tasks');

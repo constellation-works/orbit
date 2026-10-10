@@ -1636,26 +1636,21 @@ function autoDrainWindow(payload) {
   if (phase === "idle") return null;
   const stats = el("dl", { class: "drain-window-stats" });
   stats.setAttribute("aria-label", "This window");
-  const stat = (label, value, detail = "", title = "") => {
+  const stat = (key, label, value, detail = "", title = "") => {
     const tile = el("div", { class: "drain-window-stat", title }, [
       el("dt", { text: label }),
       el("dd", {}, [String(value), detail ? el("span", { class: "drain-window-stat-detail", text: detail }) : null]),
     ]);
+    tile.dataset.stat = key;
     stats.appendChild(tile);
   };
   if (capacity.admitted_workers != null) {
-    stat("Admitted", capacity.admitted_workers);
-    stat("Still running", running);
+    stat("admitted", "Admitted", capacity.admitted_workers);
+    stat("running", "Still running", running);
   }
   const approvals = autoDrainApprovals(payload.approvals);
-  if (approvals) stat("Approved", approvals.approved, approvals.held, approvals.title);
+  if (approvals) stat("approved", "Approved", approvals.approved, approvals.held, approvals.title);
   if (stats.children.length > 0) block.appendChild(stats);
-  if (stats.children.length > 0) {
-    block.appendChild(el("p", {
-      class: "visually-hidden",
-      text: `This window: ${running} running of ${capacity.admitted_workers ?? "?"} admitted`,
-    }));
-  }
   const runId = capacity.drain_status_run_id || live.runId;
   const when = phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "admissions stopped";
   if (runId || when) {
@@ -2099,7 +2094,7 @@ function autoDrainCapacity(capacity, counts, blocked) {
   const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
   const head = el("div", { class: "drain-capacity-head" }, [
     el("span", { class: "drain-capacity-label", text: "Workspace leaf slots" }),
-    el("span", { class: "drain-capacity-count mono", text: known ? `${busy} of ${limit} in use` : "unknown" }),
+    el("span", { class: "drain-capacity-count mono", text: known ? `${busy} of ${limit} in use` : "capacity unknown" }),
     Number.isFinite(free)
       ? el("span", { class: `drain-capacity-free mono${free <= 0 ? " full" : ""}`, text: `${Math.max(0, free)} free` })
       : null,
