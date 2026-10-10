@@ -18,8 +18,76 @@ fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Result<Val
     )
 }
 
+/// A review baseline gate the follower's own sandbox could not fully run,
+/// kept in the follower's ignored scratch so the clean checkout stays clean.
+/// What it prints and reports is set per case; each run is counted.
+struct Gate {
+    script: PathBuf,
+    runs: PathBuf,
+}
+
+impl Gate {
+    fn new(follower: &Path) -> Self {
+        let scratch = follower.join(".orbit/tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let gate = Self {
+            script: scratch.join("affected-gate.sh"),
+            runs: scratch.join("affected-gate.runs"),
+        };
+        gate.executes(3);
+        gate
+    }
+
+    /// The gate as the follower's configuration names it.
+    fn command(&self) -> String {
+        format!("sh '{}'", self.script.display())
+    }
+
+    fn set(&self, body: &str) {
+        std::fs::write(
+            &self.script,
+            format!("echo ran >> '{}'\n{body}\n", self.runs.display()),
+        )
+        .unwrap();
+    }
+
+    fn summary(tests: u64) -> String {
+        format!(
+            "printf '{{\"schema_version\":1,\"selection\":{{\"packages\":[\"fixture\"]}},\
+             \"tests_run\":{tests}}}' > \"$ORBIT_VALIDATION_SUMMARY\""
+        )
+    }
+
+    /// Runs `tests` tests and reports them, as `make ci-test-affected` does.
+    fn executes(&self, tests: u64) {
+        self.set(&Self::summary(tests));
+    }
+
+    /// Defers its Bubblewrap tests again: this host cannot create the
+    /// namespaces either.
+    fn defers(&self) {
+        self.set(&format!(
+            "echo '{}' >&2\n{}",
+            Self::notice(),
+            Self::summary(3)
+        ));
+    }
+
+    fn notice() -> String {
+        orbit_exec::bwrap_deferral_notice(
+            "spawn_under_linux_bwrap",
+            "bwrap: No permissions to create a new namespace",
+        )
+    }
+
+    fn runs(&self) -> usize {
+        std::fs::read_to_string(&self.runs).map_or(0, |runs| runs.lines().count())
+    }
+}
+
 struct CleanLeaf {
     pair: Pair,
+    gate: Option<Gate>,
     leaf: String,
     task: String,
     bound: OrbitRuntime,
@@ -69,11 +137,45 @@ impl CleanLeaf {
         )
     }
 
+    /// A tagged review whose follower names a baseline gate beside the
+    /// required command, as `make ci-test-affected` is in the shipped
+    /// configuration. The implementer may hand its Bubblewrap deferrals off
+    /// by setting `implementation.deferred_sandbox_validation` [ORB-15287].
+    fn gated(completion: &str) -> Self {
+        Self::build_with(
+            false,
+            completion,
+            &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
+            false,
+            true,
+        )
+    }
+
     fn build(already_landed: bool, completion: &str, tags: &[&str], report: bool) -> Self {
-        let config = format!(
+        Self::build_with(already_landed, completion, tags, report, false)
+    }
+
+    fn build_with(
+        already_landed: bool,
+        completion: &str,
+        tags: &[&str],
+        report: bool,
+        gated: bool,
+    ) -> Self {
+        let mut config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{CHECK}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );
         let pair = Pair::with_owner_config(&config, &[None]);
+        let gate = gated.then(|| Gate::new(&pair.follower_repo));
+        if let Some(gate) = &gate {
+            config = config.replace(
+                "before_pr = true\n",
+                &format!(
+                    "before_pr = true\nbaseline_commands = [\"{}\"]\n",
+                    gate.command()
+                ),
+            );
+        }
         let task = pair.tasks[0].clone();
         let repo = &pair.owner_repo;
         std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
@@ -168,6 +270,7 @@ impl CleanLeaf {
         });
         let mut fixture = Self {
             pair,
+            gate,
             leaf,
             task,
             bound,
@@ -1057,6 +1160,185 @@ fn a_claimed_no_diff_chore_that_changed_its_worktree_is_refused_by_name() {
             fixture.pair.admission(&fixture.leaf).settlement.is_none(),
             "a refused leaf records no handoff"
         );
+        fixture.assert_no_blocked();
+    }
+}
+
+impl CleanLeaf {
+    /// The implementer's record of a passing gate whose only gap is a
+    /// Bubblewrap deferral, backed by a failing namespace probe [ORB-15287].
+    fn hand_off_deferral(&mut self) {
+        let command = self.gate.as_ref().unwrap().command();
+        self.input["implementation"]["deferred_sandbox_validation"] = json!({
+            "command": command,
+            "exit_code": 0,
+            "tests_run": 2164,
+            "base": self.base,
+            "notices": [Gate::notice()],
+            "probe": {
+                "command": orbit_types::workflow::BUBBLEWRAP_NAMESPACE_PROBE,
+                "exit_code": 1,
+                "output": "bwrap: No permissions to create a new namespace",
+            },
+        });
+    }
+
+    /// The commands the owner holds a passing log for.
+    fn owner_validated_commands(&self, handoff: &TaskHandoff) -> Vec<String> {
+        let artifacts = RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
+        handoff
+            .validation
+            .iter()
+            .map(|reference| {
+                let artifact = artifacts
+                    .iter()
+                    .find(|artifact| artifact.path == reference.path)
+                    .unwrap();
+                let log: Value = serde_json::from_slice(&artifact.content).unwrap();
+                assert_eq!(log["exit_code"], 0, "{log}");
+                log["command"].as_str().unwrap().to_string()
+            })
+            .collect()
+    }
+
+    /// Whether the owner holds any attached validation log, passing or not.
+    fn owner_holds_validation_logs(&self) -> bool {
+        RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task)
+            .unwrap()
+            .iter()
+            .any(|artifact| artifact.path.starts_with("validation/"))
+    }
+
+    /// Run a shipped clean pipeline that must refuse, and return the refusal.
+    fn refused_pipeline(&self, name: &str) -> String {
+        let refusal = match self.execute_clean_pipeline(name) {
+            Err(error) => error.to_string(),
+            Ok(outcome) => {
+                assert!(!outcome.success, "{name} must refuse: {outcome:#?}");
+                format!("{outcome:#?}")
+            }
+        };
+        assert!(
+            self.pair.admission(&self.leaf).settlement.is_none(),
+            "a refused leaf records no handoff"
+        );
+        assert!(
+            !self.owner_holds_validation_logs(),
+            "a refused leaf attaches no validation log"
+        );
+        self.assert_no_blocked();
+        refusal
+    }
+}
+
+const NO_DIFF_ROUTES: [&str; 2] = ["task_claimed_pr_pipeline", "task_claimed_local_pipeline"];
+
+/// A clean-base NoDiff handoff replays the gate the implementer's sandbox
+/// deferred, even when only `review.baseline_commands` names it, and attaches
+/// its log beside the required command's. Before, only the required commands
+/// ran and the deferral was silently dropped [ORB-15287].
+#[test]
+fn a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_handoff_replays_a_baseline_only_deferred_gate",
+    ) {
+        return;
+    }
+    for job in NO_DIFF_ROUTES {
+        let mut fixture = CleanLeaf::gated("done");
+        fixture.attach("automation-coverage.json", json!({"findings": []}));
+        fixture.hand_off_deferral();
+        let handoff = fixture.run_clean_pipeline(job);
+        let gate = fixture.gate.as_ref().unwrap();
+        assert_eq!(gate.runs(), 1, "{job}: the deferred gate replays once");
+        assert_eq!(
+            fixture.owner_validated_commands(&handoff),
+            vec![CHECK.to_string(), gate.command()],
+            "{job}: the replay's log is attached beside the required command's"
+        );
+        assert!(
+            matches!(handoff.candidate.delivery, HandoffDelivery::NoDiff { .. }),
+            "{job}: the clean-base checkpoint is preserved"
+        );
+        let settled = fixture
+            .settle(&handoff)
+            .expect("the owner accepts the replayed handoff");
+        assert_eq!(settled["status"], "review", "{job}: {settled}");
+        fixture.assert_no_blocked();
+    }
+}
+
+/// A replay that still defers on the validating host never ran the paths it
+/// was handed off for: the validation environment's failure, with no passing
+/// log attached and no handoff recorded.
+#[test]
+fn a_claimed_no_diff_replay_that_still_defers_is_refused() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_replay_that_still_defers_is_refused",
+    ) {
+        return;
+    }
+    for job in NO_DIFF_ROUTES {
+        let mut fixture = CleanLeaf::gated("done");
+        fixture.hand_off_deferral();
+        fixture.gate.as_ref().unwrap().defers();
+        let refusal = fixture.refused_pipeline(job);
+        assert!(
+            orbit_types::workflow::is_validation_environment_failure(None, Some(&refusal)),
+            "{job}: {refusal}"
+        );
+        assert_eq!(fixture.gate.as_ref().unwrap().runs(), 1, "{job}");
+    }
+}
+
+/// A replay that reports no executed test replayed nothing, so it cannot
+/// carry a deferral.
+#[test]
+fn a_claimed_no_diff_replay_that_ran_no_tests_is_refused() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_replay_that_ran_no_tests_is_refused",
+    ) {
+        return;
+    }
+    for job in NO_DIFF_ROUTES {
+        let mut fixture = CleanLeaf::gated("done");
+        fixture.hand_off_deferral();
+        fixture.gate.as_ref().unwrap().executes(0);
+        let refusal = fixture.refused_pipeline(job);
+        assert!(
+            !orbit_types::workflow::is_validation_environment_failure(None, Some(&refusal))
+                && refusal.contains("replayed nothing"),
+            "{job}: a policy denial, not an environment failure: {refusal}"
+        );
+        assert_eq!(fixture.gate.as_ref().unwrap().runs(), 1, "{job}");
+    }
+}
+
+/// With nothing handed off, a gate named only as a baseline command stays
+/// unrun and the ordinary clean-base handoff delivers as before.
+#[test]
+fn a_claimed_no_diff_handoff_without_a_deferral_replays_nothing() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_no_diff_handoff_without_a_deferral_replays_nothing",
+    ) {
+        return;
+    }
+    for job in NO_DIFF_ROUTES {
+        let fixture = CleanLeaf::gated("done");
+        fixture.attach("automation-coverage.json", json!({"findings": []}));
+        let handoff = fixture.run_clean_pipeline(job);
+        assert_eq!(fixture.gate.as_ref().unwrap().runs(), 0, "{job}");
+        assert_eq!(
+            fixture.owner_validated_commands(&handoff),
+            vec![CHECK.to_string()],
+            "{job}"
+        );
+        let settled = fixture.settle(&handoff).expect("the owner accepts it");
+        assert_eq!(settled["status"], "review", "{job}: {settled}");
         fixture.assert_no_blocked();
     }
 }

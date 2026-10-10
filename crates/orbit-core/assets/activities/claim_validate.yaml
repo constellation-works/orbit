@@ -28,8 +28,8 @@ spec:
     and pin the checkpoint for owner revalidation without publication.
     A gate the implementer handed off with Bubblewrap deferrals
     (`implementation.deferred_sandbox_validation`) runs after the required
-    commands and must report executed tests; one that still defers is the
-    validation environment's failure.
+    commands, on the NoDiff route too, and must report executed tests; one
+    that still defers is the validation environment's failure.
   input_schema_json:
     type: object
     required: [workspace_path]

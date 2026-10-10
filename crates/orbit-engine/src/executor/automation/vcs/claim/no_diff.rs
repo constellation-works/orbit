@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 
-use super::super::baseline::run_validation_command;
+use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::git::{
     BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
 };
@@ -19,7 +19,7 @@ use super::super::review_gate::revision;
 use super::delivery::repository;
 use super::input::refused;
 use super::observe::{observe_with, require_clean_candidate};
-use super::validation::{attach_handoff_logs, claim_failure, passed_output};
+use super::validation::{attach_handoff_logs, passed_output, run_claimed_commands};
 use crate::executor::automation::vcs::commit::{
     claimed_clean_base_checkpoint, verify_clean_tree_handoff, verify_clean_tree_handoff_at_revision,
 };
@@ -242,19 +242,11 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
         },
     )?;
     require_clean_candidate(workspace, &candidate)?;
-    let mut results = Vec::new();
-    let mut validation_env = Value::Null;
-    for (index, command) in context.required_commands.iter().enumerate() {
-        let run = run_validation_command(host, workspace, command, None)?;
-        validation_env = run.environment_record();
-        if !run.passed {
-            return Err(claim_failure(
-                host, context, workspace, input, &candidate, index, &run,
-            ));
-        }
-        require_clean_candidate(workspace, &candidate)?;
-        results.push((run.command, run.output));
-    }
+    let replays = claimed_deferred_replays(host, input)?;
+    let commands = with_replays(context.required_commands.clone(), &replays);
+    let (results, validation_env) = run_claimed_commands(
+        host, context, workspace, input, &candidate, &commands, &replays,
+    )?;
     // Commands may have changed task artifacts too; recheck the checkpoint.
     verify_leaf(host, context, workspace, &evidence)?;
     let references = attach_handoff_logs(host, context, &candidate, &results)?;

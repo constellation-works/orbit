@@ -491,6 +491,9 @@ spec:
         base_sha: "{{ steps.worktree.output.base_sha }}"
         skipped_no_diff_expected: true
         already_landed_checkpoint: "{{ steps.commit.output }}"
+        # ORB-15287: the clean base replays a gate the implementer's sandbox
+        # deferred, as the ordinary route does.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: handoff_no_diff
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
