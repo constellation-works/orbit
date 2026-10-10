@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Vision
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: task-migration
 doc_role: vision
@@ -107,7 +107,7 @@ accept deliberately.
 ## Task References
 
 - [ORB-00034] — task migration tooling: `orbit task export/import/reindex`.
-- [ORB-10721] — per-host `task_prefix` in `host.toml`.
+- [ORB-10721] — per-host `task_prefix` in global `~/.orbit/config.toml`.
 - [ORB-12126] — owner-wins cross-host sync: import policy that overwrites only foreign-prefix bundles.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
