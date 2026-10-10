@@ -79,6 +79,19 @@ pub mod test_support {
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
     };
 
+    /// A claimed leaf's call to its owner on the host's own channel, the one
+    /// the review gate writes its records on. The owner refuses the reserved
+    /// review names on every other claimed-worker route, so a test that plays
+    /// the gate must cross here and keep the agent's writes on the agent
+    /// route.
+    pub fn route_worker_host_tool(
+        runtime: &crate::OrbitRuntime,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, crate::OrbitError> {
+        runtime.route_worker_host_tool(name, input)
+    }
+
     /// One clock tick against an explicit global root at `now`, so a test can
     /// make a routine slot or an auto-task interval due.
     pub fn run_sweep_at(
