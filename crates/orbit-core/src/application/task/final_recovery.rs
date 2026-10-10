@@ -6,7 +6,6 @@
 //! and the out-of-pipeline backstop both apply decisions through this one
 //! module, so a decision means the same thing whichever path produced it.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -43,9 +42,9 @@ const REMOTE_REF_REFRESH_OUTPUT_LIMIT: usize = 16 * 1024;
 /// rather than overwrite a human's call with an agent's. Writes recovery is
 /// allowed to cause do not count: a friction it records (on a claimed task,
 /// the bridge's `claim_friction` history entry), the selectors Orbit widens
-/// over a recovery agent's repair, comments Orbit writes for a run, and run
-/// bookkeeping such as the execution summary, run link, external refs or
-/// artifacts.
+/// over a recovery agent's repair after the failure, comments Orbit writes
+/// for a run, and run bookkeeping such as the execution summary, run link,
+/// external refs or artifacts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalRecoveryTaskRevision {
     /// Status at the failure.
@@ -59,12 +58,35 @@ pub struct FinalRecoveryTaskRevision {
 }
 
 impl FinalRecoveryTaskRevision {
-    /// The revision `task` is at now, given its comments and history.
+    /// The revision `task` is at now, given its comments and history: what a
+    /// failure observes.
     pub fn of(task: &Task, comments: &[TaskComment], history: &[TaskHistoryEntry]) -> Self {
+        Self::measured(task, comments, history, None)
+    }
+
+    /// The revision `task` is at now, measured against `observed`: the
+    /// selectors a recovery widened after `observed` are set aside while they
+    /// still stand where the widening appended them. Selectors an earlier
+    /// recovery widened count like any other.
+    pub fn after(
+        observed: &Self,
+        task: &Task,
+        comments: &[TaskComment],
+        history: &[TaskHistoryEntry],
+    ) -> Self {
+        Self::measured(task, comments, history, Some(observed.updated_at))
+    }
+
+    fn measured(
+        task: &Task,
+        comments: &[TaskComment],
+        history: &[TaskHistoryEntry],
+        observed_at: Option<DateTime<Utc>>,
+    ) -> Self {
         Self {
             status: task.status,
             updated_at: task.updated_at,
-            lifecycle_digest: Some(lifecycle_digest(task, comments, history)),
+            lifecycle_digest: Some(lifecycle_digest(task, comments, history, observed_at)),
         }
     }
 
@@ -82,22 +104,38 @@ impl FinalRecoveryTaskRevision {
 
 /// Digest of what a lifecycle change alters: the task's content, scope,
 /// crew and relations, how many transitions its history holds, and every
-/// comment not written by Orbit for a run. Selectors widened over a
-/// recovery agent's changes are left out; they record recovery's own repair.
-fn lifecycle_digest(task: &Task, comments: &[TaskComment], history: &[TaskHistoryEntry]) -> String {
+/// comment not written by Orbit for a run.
+///
+/// With `observed_at`, the selectors recovery widenings appended after it
+/// are left out when they still end the task's selectors in the order they
+/// were appended; they record the current recovery's own repair. Selectors
+/// edited after such a widening digest differently from any unedited list,
+/// so an edit to them still counts.
+fn lifecycle_digest(
+    task: &Task,
+    comments: &[TaskComment],
+    history: &[TaskHistoryEntry],
+    observed_at: Option<DateTime<Utc>>,
+) -> String {
     use sha2::{Digest, Sha256};
-    let recovery_widened = history
-        .iter()
-        .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
-        .filter_map(|entry| {
-            entry
-                .note
-                .as_deref()
-                .and_then(ContextFilesWidening::from_note)
-        })
-        .filter(|widening| widening.step == ContextWideningStep::Recovery)
-        .flat_map(|widening| widening.selectors)
-        .collect::<HashSet<_>>();
+    let widened_since = observed_at.map_or_else(Vec::new, |observed_at| {
+        history
+            .iter()
+            .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT && entry.at > observed_at)
+            .filter_map(|entry| {
+                entry
+                    .note
+                    .as_deref()
+                    .and_then(ContextFilesWidening::from_note)
+            })
+            .filter(|widening| widening.step == ContextWideningStep::Recovery)
+            .flat_map(|widening| widening.selectors)
+            .collect::<Vec<_>>()
+    });
+    let context_files = match task.context_files.strip_suffix(widened_since.as_slice()) {
+        Some(before) => json!(before),
+        None => json!({ "edited_after_recovery_widening": task.context_files }),
+    };
     let content = json!({
         "title": task.title,
         "description": task.description,
@@ -105,11 +143,7 @@ fn lifecycle_digest(task: &Task, comments: &[TaskComment], history: &[TaskHistor
         "plan": task.plan,
         "tags": task.tags,
         "required_tools": task.required_tools,
-        "context_files": task
-            .context_files
-            .iter()
-            .filter(|selector| !recovery_widened.contains(*selector))
-            .collect::<Vec<_>>(),
+        "context_files": context_files,
         "priority": task.priority,
         "complexity": task.complexity,
         "task_type": task.task_type,
@@ -271,7 +305,7 @@ impl OrbitRuntime {
                     return Ok(());
                 }
                 let task = self.get_task(&request.task_id)?;
-                let current = self.final_recovery_revision(&task)?;
+                let current = self.final_recovery_revision_after(&request.observed, &task)?;
                 let plan = match refusal(&task, &current, request) {
                     Some(reason) => Plan::refused(&task, request, &decision, reason),
                     None => self.plan(&task, request, &decision)?,
@@ -319,6 +353,22 @@ impl OrbitRuntime {
         task: &Task,
     ) -> Result<FinalRecoveryTaskRevision, OrbitError> {
         Ok(FinalRecoveryTaskRevision::of(
+            task,
+            &self.get_task_comments(&task.id)?,
+            &self.get_task_history(&task.id)?,
+        ))
+    }
+
+    /// The revision `task` is at now, measured against `observed`
+    /// ([`FinalRecoveryTaskRevision::after`]), for judging whether it changed
+    /// since.
+    pub(crate) fn final_recovery_revision_after(
+        &self,
+        observed: &FinalRecoveryTaskRevision,
+        task: &Task,
+    ) -> Result<FinalRecoveryTaskRevision, OrbitError> {
+        Ok(FinalRecoveryTaskRevision::after(
+            observed,
             task,
             &self.get_task_comments(&task.id)?,
             &self.get_task_history(&task.id)?,

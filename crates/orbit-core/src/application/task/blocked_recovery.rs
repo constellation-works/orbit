@@ -629,7 +629,7 @@ impl OrbitRuntime {
     ) -> Result<Result<BlockEpisode, String>, OrbitError> {
         let task = self.get_task(&input.task_id)?;
         if self
-            .final_recovery_revision(&task)?
+            .final_recovery_revision_after(&input.observed, &task)?
             .changed_since(&input.observed)
         {
             return Ok(Err(format!(
