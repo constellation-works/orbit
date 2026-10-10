@@ -444,9 +444,8 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     test_env::wait_until("the drain to hand over to the installed executable", || {
         running_digest(&workspace, drain.pid).as_deref() == Some(new_digest.as_str())
     });
-    // Same run, same owner: the new image adopted it rather than claiming it,
-    // and it is still running a few admission passes later.
-    std::thread::sleep(Duration::from_secs(3));
+    // Same run, same owner: the new image adopted it rather than claiming it.
+    // Cancellation below must be handled by that image and end the same run.
     let adopted = run_show(&workspace, &drain.run_id);
     assert_eq!(adopted["run"]["state"], "running", "{adopted}");
     assert_eq!(adopted["run"]["pid"].as_u64(), Some(u64::from(drain.pid)));
@@ -1015,9 +1014,10 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
             "--workspace",
             "ws_mcp-roundtrip",
         ])
+        .env("RUST_LOG", "orbit.mcp.handover=debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::null());
     let child = spawn_copied_orbit(&mut command).expect("old server");
     let pid = child.id();
     let mut client = McpClient::new(child);
@@ -1049,21 +1049,34 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
     let new_digest = executable_generation(&candidate).expect("candidate digest");
     crate::generation_fixture::install_over(&candidate, &installed);
 
-    // Hold the partial line across multiple lifecycle checks. The old image
-    // must keep serving; yielding or handing over now would lose this call.
-    let hold_until = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < hold_until {
-        assert!(
-            matches!(client.child.try_wait(), Ok(None)),
-            "an oversized partial request must not yield the MCP session"
-        );
-        assert_eq!(
-            running_digest(&workspace, pid).as_deref(),
-            Some(old_digest.as_str()),
-            "handover must wait for the oversized partial line to complete"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    // Observe actual deferred lifecycle checks rather than assuming five
+    // seconds of wall time gave a busy host multiple chances to hand over.
+    let log = workspace.home.join(".orbit/state/logs/orbit.jsonl");
+    test_env::wait_until(
+        "two handover checks to defer the oversized partial request",
+        || {
+            assert!(
+                matches!(client.child.try_wait(), Ok(None)),
+                "an oversized partial request must not yield the MCP session"
+            );
+            assert_eq!(
+                running_digest(&workspace, pid).as_deref(),
+                Some(old_digest.as_str()),
+                "handover must wait for the oversized partial line to complete"
+            );
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|event| {
+                    event["target"] == "orbit.mcp.handover"
+                        && event["fields"]["handover_deferred"] == true
+                })
+                .take(2)
+                .count()
+                == 2
+        },
+    );
 
     client
         .writer
@@ -1107,6 +1120,8 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     let installed = install.join("orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
     let old_digest = executable_generation(&installed).expect("old digest");
+    let stderr_path = workspace.home.join("invalid-handover.stderr");
+    let stderr = std::fs::File::create(&stderr_path).expect("server stderr");
     let mut command =
         McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home);
     command
@@ -1117,9 +1132,10 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
             "--workspace",
             "ws_mcp-roundtrip",
         ])
+        .env("RUST_LOG", "orbit.generation=debug,orbit.mcp=debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::from(stderr));
     let child = spawn_copied_orbit(&mut command).expect("old server");
     let pid = child.id();
     let mut client = McpClient::new(child);
@@ -1165,9 +1181,22 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     crate::generation_fixture::install_over(&candidate, &installed);
 
     // The idle server notices within a lifecycle interval and execs itself.
+    let started = Instant::now();
     test_env::wait_until(
         "the idle server to hand over to the installed executable",
-        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+        || {
+            assert!(
+                started.elapsed() < test_env::FIXTURE_STEP_DEADLINE,
+                "idle handover did not finish: {}",
+                std::fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+            assert!(
+                client.child.try_wait().expect("poll server").is_none(),
+                "the server exited instead of handing over: {}",
+                std::fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+            running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str())
+        },
     );
 
     // Same process, same pipes, no second `initialize`: the session goes on.

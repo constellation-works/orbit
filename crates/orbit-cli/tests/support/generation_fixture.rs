@@ -67,8 +67,8 @@ pub(crate) fn install_over(source: &Path, installed: &Path) {
     std::fs::rename(&staged, installed).expect("replace installation");
 }
 
-/// Run a freshly written executable once, so a later timed probe of it
-/// measures the program rather than the host admitting a new file.
+/// Run a freshly written executable's handover contract before installing it,
+/// so a later timed probe exercises an already completed command path.
 ///
 /// macOS assesses each new executable file on its first exec and holds the
 /// process until that finishes: seconds for the debug `orbit` image, queued
@@ -79,14 +79,24 @@ pub(crate) fn install_over(source: &Path, installed: &Path) {
 /// run is bounded only as a hang guard.
 pub(crate) fn assess(executable: &Path) {
     let mut command = assert_cmd::Command::new(executable);
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
     command
-        .arg("--version")
+        .args(["update", "--contract", "--json"])
         .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE);
     let output = launch(|| command.output()).expect("run the new executable");
     assert!(
         output.status.success(),
-        "{} --version: {output:?}",
+        "{} update --contract --json: {output:?}",
         executable.display()
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("handover contract");
+    assert_eq!(
+        report["admission_contract"],
+        orbit_common::fs::generation::GENERATION_CONTRACT,
+        "the warmed executable must speak the handover admission contract"
     );
 }
 

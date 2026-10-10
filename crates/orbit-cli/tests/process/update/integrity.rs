@@ -192,6 +192,39 @@ fn bounded_output(command: &mut assert_cmd::Command, what: &str) -> Output {
     output
 }
 
+/// Release a fixture participant only after `release` observes the updater's
+/// rendezvous, then collect the bounded child and its output.
+fn update_while(install: &Install, args: &[&str], release: impl FnOnce(&mut Child)) -> Output {
+    let stdout = install._root.path().join("waiting-update.stdout");
+    let stderr = install._root.path().join("waiting-update.stderr");
+    let child = install
+        .std_command()
+        .env(QUIESCE_TIMEOUT_ENV, "60")
+        .args(args)
+        .stdout(File::create(&stdout).expect("update stdout"))
+        .stderr(File::create(&stderr).expect("update stderr"))
+        .spawn()
+        .expect("spawn update");
+    let mut child = ReapedChild { child: Some(child) };
+    release(child.child.as_mut().expect("child"));
+    let mut status = None;
+    test_env::wait_until("the waiting update to finish", || {
+        status = child
+            .child
+            .as_mut()
+            .expect("child")
+            .try_wait()
+            .expect("poll update");
+        status.is_some()
+    });
+    child.child = None;
+    Output {
+        status: status.expect("update finished"),
+        stdout: fs::read(stdout).expect("update stdout"),
+        stderr: fs::read(stderr).expect("update stderr"),
+    }
+}
+
 fn apply_env(command: &mut assert_cmd::Command, install: &Install) {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -552,20 +585,33 @@ fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     let script = candidate_script("99.0.0");
     install.publish("99.0.0", Some(&tar_gz(&script)), true);
     let tick = clock_tick(&install);
-    let hold = Duration::from_secs(3);
-
-    let began = Instant::now();
-    let finishing = std::thread::spawn(move || {
-        std::thread::sleep(hold);
+    let record = fs::read(&install.generation).expect("generation held by the tick");
+    let output = update_while(&install, &["update", "--json"], |child| {
+        // The updater holds admission exclusively while waiting for the tick.
+        // Rendezvous with that lock instead of letting slow startup consume a
+        // timed hold before the updater ever reaches admission.
+        test_env::wait_until("the update to wait behind the clock tick", || {
+            assert!(child.try_wait().expect("poll update").is_none());
+            let Ok(admission) = File::open(install.home.join(".orbit/.generation-admission.lock"))
+            else {
+                return false;
+            };
+            // SAFETY: probe only this fixture's descriptor. Dropping it releases
+            // a successful shared lock; EWOULDBLOCK identifies exclusive admission.
+            if unsafe { libc::flock(admission.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
+                return false;
+            }
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock, "{error}");
+            true
+        });
+        assert_eq!(
+            fs::read(&install.executable).expect("installed"),
+            install.before
+        );
+        assert_eq!(fs::read(&install.generation).expect("record"), record);
         drop(tick);
     });
-    let mut command = install.command();
-    command
-        .env(QUIESCE_TIMEOUT_ENV, "60")
-        .args(["update", "--json"]);
-    let output = bounded_output(&mut command, "orbit update beside a clock tick");
-    let waited = began.elapsed();
-    finishing.join().expect("clock tick thread");
 
     assert!(
         output.status.success(),
@@ -575,10 +621,6 @@ fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
     assert_eq!(report["outcome"], "updated");
-    assert!(
-        waited >= hold,
-        "the update replaced the executable before the tick finished ({waited:?})"
-    );
     assert_eq!(
         fs::read(&install.executable).expect("updated bytes"),
         script
@@ -668,36 +710,27 @@ fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
 
     let script = resuming_candidate_script("99.0.0");
     install.publish("99.0.0", Some(&tar_gz(&script)), true);
-    let executable = install.executable.clone();
-    let installed = script.clone();
-    let handing_over = std::thread::spawn(move || {
-        test_env::wait_until("the release to be installed", || {
-            fs::read(&executable).ok().as_deref() == Some(installed.as_slice())
-        });
-        // Still holding the replaced generation after the rename: the update
-        // must not pin until it is released.
-        std::thread::sleep(Duration::from_millis(1500));
-        let released = Instant::now();
-        drop(session);
-        released
-    });
-    let mut command = install.command();
-    command
-        .env(QUIESCE_TIMEOUT_ENV, "60")
-        .args(["update", "--version", "99.0.0", "--json"]);
-    let output = bounded_output(&mut command, "orbit update beside a handing-over session");
-    let finished = Instant::now();
-    let released = handing_over.join().expect("session thread");
+    let output = update_while(
+        &install,
+        &["update", "--version", "99.0.0", "--json"],
+        |child| {
+            test_env::wait_until("the release to be installed", || {
+                assert!(child.try_wait().expect("poll update").is_none());
+                fs::read(&install.executable).ok().as_deref() == Some(script.as_slice())
+            });
+            // The session still holds the replaced generation after the rename:
+            // it must not be pinned until that participant releases its lock.
+            assert_eq!(fs::read(&install.generation).expect("record"), record);
+            assert!(child.try_wait().expect("poll update").is_none());
+            drop(session);
+        },
+    );
 
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        finished >= released,
-        "the update finished before the handover"
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
     assert_eq!(report["outcome"], "updated", "{report}");
