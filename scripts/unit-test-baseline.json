@@ -273,6 +273,7 @@
         "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_child_profile_denies_registered_auto_task_definitions",
         "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores",
         "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_reviewer_profile_grants_no_source_or_workspace_writes",
+        "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree",
         "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::registered_checkout_denies_live_orbit_versioned_stores",
         "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor",
         "adapter/engine_host/v2_host/sandbox/tests/resolve.rs::shipped_agent_executor_without_a_host_backend_is_refused_with_remedies",

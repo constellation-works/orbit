@@ -1883,6 +1883,7 @@ dependencies = [
  "orbit-store",
  "orbit-tools",
  "orbit-types",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

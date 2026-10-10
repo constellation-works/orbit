@@ -228,7 +228,9 @@ pub(super) fn last_compiled_file_write_allows_under(
 /// Whether the last `file-write*` clause rooted inside `fixture` that covers
 /// `path` allows it, or `None` when no such clause exists. A temp fixture
 /// sits beneath the host scratch allows, so a `None` path is writable there
-/// even though a real checkout would leave it to the default deny.
+/// even though a real checkout would leave it to the default deny. A `regex`
+/// clause, which policy globs such as `**/.env` compile to, counts whenever
+/// it matches a `path` inside `fixture`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn last_compiled_file_write_under(
     profile: &str,
@@ -252,21 +254,36 @@ pub(super) fn last_compiled_file_write_under(
                 .strip_prefix(prefix)
                 .and_then(|rest| rest.strip_suffix('"'))
         };
-        let (covers, root) = if let Some(root) = quoted("(subpath \"") {
-            (
-                rendered == root || rendered.starts_with(&format!("{root}/")),
-                root,
-            )
+        let in_fixture = if let Some(root) = quoted("(subpath \"") {
+            (rendered == root || rendered.starts_with(&format!("{root}/")))
+                && std::path::Path::new(root).starts_with(fixture)
         } else if let Some(entry) = quoted("(literal \"") {
-            (rendered == entry, entry)
+            rendered == entry && std::path::Path::new(entry).starts_with(fixture)
+        } else if let Some(pattern) = quoted("(regex \"") {
+            sbpl_regex(pattern).is_match(&rendered) && path.starts_with(fixture)
         } else {
             continue;
         };
-        if covers && std::path::Path::new(root).starts_with(fixture) {
+        if in_fixture {
             allowed = Some(!is_deny);
         }
     }
     allowed
+}
+
+/// The pattern of an SBPL `regex` filter, with its string escapes undone.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn sbpl_regex(quoted: &str) -> regex::Regex {
+    let mut pattern = String::with_capacity(quoted.len());
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        pattern.push(if c == '\\' {
+            chars.next().expect("complete SBPL escape")
+        } else {
+            c
+        });
+    }
+    regex::Regex::new(&pattern).unwrap_or_else(|error| panic!("SBPL regex `{pattern}`: {error}"))
 }
 
 /// [ORB-13458] Every positive macOS `modify` entry compiles to an SBPL write
@@ -334,6 +351,122 @@ fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
             );
         }
     }
+}
+
+/// [ORB-15117] A writer from a managed worktree gets the policy inside that
+/// worktree as authored: its own grants, every policy deny, and nothing else
+/// there or in the registered checkout. Re-allowing the bare worktree after
+/// the denies let SBPL last-match-wins override them, including the `**/.env`
+/// globs, which compile to `regex` clauses rather than `subpath` ones.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let repo = repo_root.canonicalize().expect("canonical repo");
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-orb-15117");
+    for directory in ["a", "docs/drafts", "src"] {
+        std::fs::create_dir_all(worktree.join(directory)).expect("worktree layout");
+    }
+    std::fs::create_dir_all(repo.join("docs")).expect("registered docs");
+    let wt = |relative: &str| worktree.join(relative);
+    // (profile, writable, explicitly denied, granted by no clause)
+    let cases = [
+        (
+            "implementer",
+            vec![wt("src/lib.rs")],
+            vec![
+                wt(".env"),
+                wt(".env.local"),
+                wt("a/b.env"),
+                wt("a/prod.env.bak"),
+            ],
+            vec![repo.join("src/lib.rs")],
+        ),
+        (
+            "docs_writer",
+            vec![wt("docs/guide.md")],
+            vec![wt("docs/drafts/plan.md")],
+            vec![
+                wt("src/lib.rs"),
+                wt("README.md"),
+                repo.join("docs/guide.md"),
+                repo.join("src/lib.rs"),
+            ],
+        ),
+    ];
+
+    for provider in ["claude", "codex"] {
+        seed_executor(
+            &runtime,
+            provider,
+            Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+        );
+        for (profile, writable, denied, not_granted) in &cases {
+            let sandbox = runtime
+                .resolve_executor_sandbox(provider, Some(profile), Some(&worktree))
+                .expect("resolve writer sandbox")
+                .expect("macOS sandbox");
+            let sbpl = orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
+                .expect("compile writer profile");
+            for path in writable {
+                assert!(
+                    last_compiled_file_write_allows_under(&sbpl, path, &repo),
+                    "{provider} {profile} from a worktree must write {}:\n{sbpl}",
+                    path.display()
+                );
+            }
+            for path in denied {
+                assert_eq!(
+                    last_compiled_file_write_under(&sbpl, path, &repo),
+                    Some(false),
+                    "{provider} {profile} from a worktree must be denied {}:\n{sbpl}",
+                    path.display()
+                );
+            }
+            for path in not_granted {
+                assert!(
+                    !last_compiled_file_write_allows_under(&sbpl, path, &repo),
+                    "{provider} {profile} from a worktree must not be granted {}:\n{sbpl}",
+                    path.display()
+                );
+            }
+            if orbit_exec::macos_sandbox_test_guard(
+                "macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree",
+            ) {
+                for path in writable {
+                    assert_native_write(&sbpl, path, true);
+                }
+                for path in denied {
+                    assert_native_write(&sbpl, path, false);
+                }
+            }
+        }
+    }
+}
+
+/// Create or append to `path` under `profile` with the native wrapper.
+#[cfg(target_os = "macos")]
+fn assert_native_write(profile: &str, path: &std::path::Path, allowed: bool) {
+    let output = orbit_common::process::run_bounded_capped(
+        std::process::Command::new("/usr/bin/sandbox-exec").args([
+            "-p",
+            profile,
+            "/bin/sh",
+            "-c",
+            "printf probe >> \"$1\"",
+            "write-probe",
+            path.to_str().expect("fixture path"),
+        ]),
+        std::time::Duration::from_secs(10),
+        64 * 1024,
+    )
+    .expect("run sandbox-exec write probe");
+    assert_eq!(
+        output.status.success(),
+        allowed,
+        "native write to {}: {output:?}",
+        path.display()
+    );
 }
 
 /// The recovery authority is the one durable record a resume trusts, so it
