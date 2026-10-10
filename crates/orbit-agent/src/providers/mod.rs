@@ -21,8 +21,8 @@ mod usage_window;
 mod tests;
 
 pub use antigravity::{
-    antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
-    apply_antigravity_print_timeout,
+    antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
+    antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
 };
 pub use usage_window::provider_usage_windows;
 
