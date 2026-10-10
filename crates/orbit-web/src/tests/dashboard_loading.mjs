@@ -3,7 +3,7 @@
 const node = id => document.getElementById(id);
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
-const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
+const response = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), { status, headers });
 let heldPath = '/api/tasks';
 let networkDown = false;
 let metricsError = false;
@@ -82,6 +82,9 @@ function fixture(url) {
         : terminalRuns;
       return list(runs);
     }
+    case '/api/audit': return url.searchParams.has('before')
+      ? [{ id: 8999 }]
+      : [{ id: 9000 }];
     case '/api/runs/cross-workspace-run': return {
       run: { run_id: 'cross-workspace-run', job_id: 'fixture', state: 'success' },
       steps: [],
@@ -180,11 +183,14 @@ globalThis.fetch = async (path, options = {}) => {
   if (metricsError && url.pathname === '/api/diagnostics/metrics') return response({ error: 'Metrics fixture failure' }, 500);
   const payload = fixture(url);
   if (url.pathname === heldPath) return new Promise((resolve, reject) => pendingReads.push({ payload, resolve, reject }));
-  return response(payload);
+  const headers = url.pathname === '/api/audit' && !url.searchParams.has('before')
+    ? { 'x-audit-next-before': 'fixture-audit-cursor' }
+    : {};
+  return response(payload, 200, headers);
 };
 await import('./app.js');
 await settle();
-const { persistScopeToUrl, setWorkspace, setWindow, getHost, getWorkspace, formatDateTime } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace, setWindow, getHost, getWorkspace, formatDateTime, fetchJsonPage } = await import('./js/common.js');
 const { navigateToRun, setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -194,6 +200,10 @@ const click = target => target.listeners ? target.listeners.click() : target.cli
 const release = (request, payload = request.payload) => request.resolve(response(payload));
 const text = id => node(id).textContent;
 const busy = id => node(id).getAttribute ? node(id).getAttribute('aria-busy') : node(id)['aria-busy'];
+const auditHeadPage = await fetchJsonPage('/api/audit?limit=50');
+check(auditHeadPage.header('x-audit-next-before') === 'fixture-audit-cursor', 'continuing audit fixture response exposes its paging cursor');
+const auditTerminalPage = await fetchJsonPage('/api/audit?limit=50&before=fixture-audit-cursor');
+check(auditTerminalPage.header('x-audit-next-before') === null, 'terminal audit fixture response exposes an absent cursor as null');
 check(text('tasks-body').includes('Loading'), 'cold Tasks must visibly load');
 check(!text('tasks-body').includes('No tasks'), 'cold Tasks cannot claim empty');
 for (const request of pendingReads.splice(0)) release(request, list([]));
