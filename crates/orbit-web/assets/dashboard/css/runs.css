@@ -3,7 +3,7 @@
 .runs-row {
   display: grid;
   grid-template-columns:
-    104px minmax(100px, 1fr) minmax(140px, 1.3fr) minmax(130px, 1fr)
+    104px minmax(100px, 1fr) minmax(140px, 1.3fr) minmax(170px, 1.5fr) minmax(130px, 1fr)
     56px 68px 84px 84px 96px;
   gap: 12px;
   min-height: 42px;
@@ -25,7 +25,7 @@
 #runs-body { overflow-x: auto; }
 .runs-row.workspace-attributed {
   grid-template-columns:
-    104px minmax(70px, 0.6fr) minmax(90px, 1fr) minmax(130px, 1.3fr) minmax(116px, 1fr)
+    104px minmax(70px, 0.6fr) minmax(90px, 1fr) minmax(130px, 1.3fr) minmax(170px, 1.5fr) minmax(116px, 1fr)
     56px 68px 84px 84px 96px;
 }
 .runs-row .run-workspace {
@@ -40,6 +40,25 @@
 .run-task-id { font-family: var(--font-mono); font-size: 12px; }
 .run-task-title { color: var(--fg-dim); }
 .runs-row .run-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Why a failed run ended: the step, then a clipped error excerpt. */
+.runs-row .run-failed-at { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.runs-row.runs-header .run-failed-at-header { white-space: nowrap; }
+.runs-row .run-failed-step {
+  color: var(--state-failed);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.runs-row .run-failed-excerpt { color: var(--fg-dim); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.runs-row .run-failed-at.empty { color: var(--fg-mute); font-size: 12px; }
+.runs-row .run-failed-step,
+.runs-row .run-failed-at.empty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A task's pipeline runs fold under one header row; opened, they indent below it. */
+.runs-row.runs-group { background: var(--bg-elev); }
+.runs-row.runs-group:hover { background: var(--bg-hover); }
+.runs-row .run-group-toggle { font-family: var(--font-sans); text-align: left; cursor: pointer; }
+.runs-row .run-group-count { color: var(--fg-mute); font-size: 12px; }
+.runs-row.runs-group-child { box-shadow: inset 3px 0 0 var(--hair); }
+.runs-row.runs-group-child > .id { padding-left: 14px; }
 .runs-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -254,8 +273,8 @@
   /* The grid's tracks overflow the row's auto-sized box at these widths.
      Give the row its table width so its sticky State cell stays pinned for
      the full scroll range. */
-  .runs-row { min-width: 1090px; }
-  .runs-row.workspace-attributed { min-width: 1192px; }
+  .runs-row { min-width: 1272px; }
+  .runs-row.workspace-attributed { min-width: 1374px; }
   .runs-row > :first-child {
     position: sticky;
     left: 0;
@@ -284,8 +303,8 @@
    the viewport. */
 @media (max-width: 768px) {
   #runs-body { container-type: inline-size; }
-  .runs-row { min-width: 1090px; }
-  .runs-row.workspace-attributed { min-width: 1192px; }
+  .runs-row { min-width: 1272px; }
+  .runs-row.workspace-attributed { min-width: 1374px; }
   .runs-toolbar,
   .runs-filter,
   .runs-source-warning,
@@ -313,6 +332,7 @@
       "job job job"
       "workspace workspace workspace"
       "task task task"
+      "failed failed failed"
       "runid runid runid"
       "denials toolfails duration"
       "actions actions actions";
@@ -337,6 +357,8 @@
   .runs-row .id { grid-area: job; }
   .runs-row .run-workspace { grid-area: workspace; }
   .runs-row .run-tasks { grid-area: task; }
+  .runs-row .run-failed-at { grid-area: failed; }
+  .runs-row .run-failed-at:empty { display: none; }
   .runs-row .run-id-cell { grid-area: runid; }
   .runs-row .num.denials { grid-area: denials; text-align: left; }
   .runs-row .num.tool-fails { grid-area: toolfails; text-align: left; }
