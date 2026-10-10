@@ -977,7 +977,7 @@ when a request is replayed. Use the printed id with `--reconciliation`.
 
 On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
-be refused with `active execution claim requires a claim-scoped mutation`.
+be refused with `active execution claim requires a claim-scoped mutation`, which names the task and the claiming run.
 
 **Stopping or cancelling a follower drain** ([ORB-13663], [ORB-13892]). All
 three are safe; none strands a claim, and none fails a task that never ran.

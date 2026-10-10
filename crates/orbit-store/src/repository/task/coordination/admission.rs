@@ -125,14 +125,15 @@ impl TaskCommitBoundary {
     }
 
     pub(crate) fn refuse_unscoped_claim_write(&self, task_id: &str) -> Result<(), OrbitError> {
-        if self
+        if let Some(claim) = self
             .execution_claims()?
-            .iter()
-            .any(|c| c.task_id == task_id && c.phase.protects_footprint())
+            .into_iter()
+            .find(|claim| claim.task_id == task_id && claim.phase.protects_footprint())
         {
-            return Err(OrbitError::InvalidInput(
-                "active execution claim requires a claim-scoped mutation".into(),
-            ));
+            return Err(OrbitError::InvalidInput(format!(
+                "active execution claim requires a claim-scoped mutation (task {}, run {})",
+                claim.task_id, claim.run_context.run_id
+            )));
         }
         Ok(())
     }

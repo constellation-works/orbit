@@ -84,6 +84,17 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.resolve_execution_claims()
     }
+    fn record_deferred_branch_observation(
+        &self,
+        observation: &crate::contracts::DeferredBranchObservation,
+    ) -> Result<(), OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.record_deferred_branch_observation(observation),
+            None => Err(OrbitError::Store(
+                "deferred branch observations require coordination".into(),
+            )),
+        }
+    }
     fn lookup_admission(
         &self,
         identity: &crate::contracts::AdmissionIdentity,

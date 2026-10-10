@@ -37,11 +37,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_common::security::release::sha256_hex;
 use orbit_engine::ci_run_event::is_branch_event;
-use orbit_types::task::{
-    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id,
-};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -51,6 +48,7 @@ use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::bounded_u64;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
+use super::branch_observation::{note_branch_retention, retain_branch_observations};
 use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
 };
@@ -320,7 +318,7 @@ where
             "reasons": reasons,
         }));
     }
-    let audit = inconclusive_audit(deferral_audit(audit, &deferred), &inconclusive);
+    let mut audit = inconclusive_audit(deferral_audit(audit, &deferred), &inconclusive);
     // Failures collection held back while a descendant's run is in flight.
     // Filing adds the ones whose repair already landed on a descendant.
     let mut pending_supersession = evidence
@@ -343,8 +341,13 @@ where
         ));
     }
 
+    // Retain before either return. One claimed owner or one bad receipt must
+    // not drop landing repairs, and a later lookup failure must not lose the
+    // observations already classified.
+    let retention = retain_branch_observations(runtime, &branch_observations);
+    note_branch_retention(&mut audit, &retention);
+
     if clusters.is_empty() {
-        let attributed = retain_branch_observations(runtime, &branch_observations)?;
         // Nothing was complete enough to file. The gaps are the whole result,
         // so this stays a retryable error rather than a clean sweep.
         if !deferred.is_empty() {
@@ -354,15 +357,22 @@ where
                 deferred_errors(&deferred),
             ));
         }
+        let outcome = if retention.attributed.is_empty()
+            && retention.deferred_attribution.is_empty()
+            && excluded_branch_failures.is_empty()
+            && evidence_incomplete.is_empty()
+            && retention.observation_errors.is_empty()
+        {
+            OUTCOME_NO_CURRENT_FAILURE
+        } else {
+            OUTCOME_CURRENT_FAILURES
+        };
+        let detail = empty_snapshot_detail(
+            inconclusive.is_empty(),
+            retention.deferred_attribution.is_empty(),
+        );
         return Ok(json!({
-            "outcome": if attributed.is_empty()
-                && excluded_branch_failures.is_empty()
-                && evidence_incomplete.is_empty()
-            {
-                OUTCOME_NO_CURRENT_FAILURE
-            } else {
-                OUTCOME_CURRENT_FAILURES
-            },
+            "outcome": outcome,
             "capability": capability,
             "clusters": 0,
             "filed_count": 0,
@@ -377,14 +387,11 @@ where
             "inconclusive": inconclusive,
             "already_repaired": already_repaired,
             "pending_supersession": pending_supersession,
-            "attributed": attributed,
+            "attributed": retention.attributed,
+            "deferred_attribution": retention.deferred_attribution,
             "excluded_branch_failures": excluded_branch_failures,
             "audit": pending_audit(audit, &pending_supersession),
-            "detail": if inconclusive.is_empty() {
-                "no landing-branch repair remains; task-branch evidence is retained on its owner and other branch failures are excluded"
-            } else {
-                "the queries ran and found no current, non-superseded failure; cancelled jobs without failed steps remain explicit inconclusive evidence, not a pass"
-            },
+            "detail": detail,
         }));
     }
 
@@ -505,8 +512,6 @@ where
                 .transpose()
         })
         .collect::<Result<Vec<_>, _>>()?;
-
-    let attributed = retain_branch_observations(runtime, &branch_observations)?;
 
     for ((((cluster, duplicate_match), duplicate_task), descendant_landing), operator) in clusters
         .iter()
@@ -687,7 +692,8 @@ where
         "skipped_existing": skipped_existing,
         "withheld": withheld,
         "repair_assessments": repair_assessments,
-        "attributed": attributed,
+        "attributed": retention.attributed,
+        "deferred_attribution": retention.deferred_attribution,
         "excluded_branch_failures": excluded_branch_failures,
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
@@ -766,35 +772,12 @@ fn retain_compiler_observations(
     Ok(())
 }
 
-/// Immutable, content-addressed receipts survive retries without duplicate
-/// comments, changing task meaning, or promoting the owner's lifecycle.
-fn retain_branch_observations(
-    runtime: &OrbitRuntime,
-    observations: &[(String, Value)],
-) -> Result<Vec<Value>, OrbitError> {
-    let mut attributed = Vec::new();
-    for (owner, failure) in observations {
-        let content = serde_json::to_string(&json!({
-            "schema_version": 1, "kind": "task_branch_ci_failure", "failure": failure,
-        }))
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-        let path = format!(
-            "ci-branch-observations/{}.json",
-            sha256_hex(content.as_bytes())
-        );
-        if runtime.get_task_artifact(owner, &path)?.is_none() {
-            runtime.update_task(
-                owner,
-                TaskUpdateParams {
-                    upsert_artifacts: vec![TaskArtifact::from_text(path.clone(), content)],
-                    ..Default::default()
-                },
-            )?;
-        }
-        attributed.push(json!({
-            "task_id": owner, "run_id": failure.get("run_id"),
-            "job_id": failure.get("job_id"), "artifact": path,
-        }));
+fn empty_snapshot_detail(inconclusive_empty: bool, deferred_empty: bool) -> &'static str {
+    if !inconclusive_empty {
+        "the queries ran and found no current, non-superseded failure; cancelled jobs without failed steps remain explicit inconclusive evidence, not a pass"
+    } else if !deferred_empty {
+        "task-branch evidence on a claimed owner is deferred until that claim settles; landing failures in this snapshot are filed separately"
+    } else {
+        "no landing-branch repair remains; task-branch evidence is retained on its owner and other branch failures are excluded"
     }
-    Ok(attributed)
 }

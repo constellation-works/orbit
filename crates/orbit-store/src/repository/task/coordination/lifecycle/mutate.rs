@@ -638,6 +638,13 @@ impl TaskCommitBoundary {
         } else {
             params.rows.push(new_state);
         }
+        // A phase that still protects the task (including repair admission,
+        // which revokes and re-claims in its own commit) must not receive
+        // observations queued by the sweep. Once this mutation leaves the
+        // task unprotected, land them in the same commit.
+        if !state.claim.phase.protects_footprint() {
+            self.attach_deferred_branch_observations(&claim.task_id, &mut evidence, &mut effects)?;
+        }
         let outcome = self.commit_locked_effects(
             &params,
             &mut |_| Ok(params.rows.clone()),

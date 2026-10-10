@@ -2,6 +2,7 @@
 //! tasks (`filing`), then admit piloted tasks to the backlog (`admission`).
 
 pub(super) mod admission;
+mod branch_observation;
 mod cancellation;
 mod cluster;
 mod escalation;
