@@ -390,6 +390,8 @@ fn append_shared_cause(out: &mut String, snapshot: &Value, alerts: &[Value]) {
     ));
 }
 
+/// One bullet per alert. Rejected-owner matching reads each bullet as that
+/// alert's own number and location, so both stay on this single line.
 fn append_alert_ledger(out: &mut String, alerts: &[Value]) {
     out.push_str("\n## Per-alert evidence ledger\n\n");
     for alert in alerts {
