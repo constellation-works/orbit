@@ -658,10 +658,10 @@ pub(super) fn superseded_task(
         )));
     }
     if ci_sweep && current.status != snapshot.status {
-        // CI-sweep authority only treats operator rejection or archival as a
-        // benign race. Other status changes continue through admission and
-        // fail its proposed-status check unless this operation's receipt
-        // proves its own promotion already landed.
+        // Other status changes continue through admission: a promotion
+        // elsewhere settles superseded there unless this operation's receipt
+        // proves its own promotion already landed, and any other status fails
+        // its proposed-status check.
         return Ok(None);
     }
     if !ci_sweep

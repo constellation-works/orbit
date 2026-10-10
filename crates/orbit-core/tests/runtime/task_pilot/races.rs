@@ -327,12 +327,15 @@ fn promoting_ci_sweep_replay_settles_already_applied_without_writes() {
         history
     );
 
-    // A different operation cannot borrow the committed promotion's receipt.
+    // A different operation cannot borrow the committed promotion's receipt:
+    // to it the task was promoted elsewhere, so it admits and writes nothing.
     input["results"][0]["tasks"][0]["assessment_rationale"] =
         json!("A new assessment of the failure.");
     let changed = workspace.action("apply_task_pilot_results", input);
-    assert_eq!(changed["status"], "failed", "{changed}");
-    assert_eq!(changed["task_outcomes"][0]["outcome"], "invalid");
+    assert_eq!(changed["status"], "succeeded", "{changed}");
+    assert_eq!(changed["applied_count"], 0, "{changed}");
+    assert_eq!(changed["ci_sweep_admission"], json!([]), "{changed}");
+    assert_eq!(changed["task_outcomes"][0]["reason"], "promoted_elsewhere");
     assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), applied);
     assert_eq!(
         workspace.runtime.get_task_history(&task.id).unwrap(),

@@ -435,9 +435,10 @@ fn assignment_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, Aut
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}))
 }
 
-/// Tasks held by successful preparation checkpoints of active pilot runs.
-/// Reconcile stale owners before treating their checkpoints as holds; a
-/// terminal run no longer prevents another pilot from preparing its tasks.
+/// Tasks held by active pilot runs: by their prepare reservations and their
+/// successful preparation checkpoints. Reconcile stale owners before treating
+/// their checkpoints as holds; a terminal run no longer prevents another pilot
+/// from preparing its tasks.
 pub(crate) fn active_task_pilot_preparations(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
@@ -481,6 +482,11 @@ pub(crate) fn active_task_pilot_preparations(
                     .insert(run.run_id.clone());
             }
         }
+    }
+    // A run holds its tasks from its reservation in prepare, before its
+    // checkpoint persists.
+    for (task_id, run_ids) in super::pilot_reservation::live_reservations(runtime)? {
+        prepared_by_task.entry(task_id).or_default().extend(run_ids);
     }
     Ok(prepared_by_task)
 }

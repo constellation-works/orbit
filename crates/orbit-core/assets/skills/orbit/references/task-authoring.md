@@ -140,7 +140,8 @@ Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. `context_files` are optional for local auto,
 ship and owner pull admission; empty context holds no context lock. Do not
 invent paths to satisfy admission. Task-pilot can prepare unknown targets,
-and a live preparation checkpoint still holds its tasks until that run settles.
+and a live pilot's preparation (its reservation from prepare, then its
+checkpoint) still holds its tasks until that run settles.
 
 A `proposed` or `backlog` task reports its `readiness`: `{ready, gaps}`,
 each gap with `code`, `severity`, `message` and `fix`. The `orbit.task.add`

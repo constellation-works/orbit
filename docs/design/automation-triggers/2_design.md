@@ -351,13 +351,20 @@ Use proposed defaults of a two-minute quiet period, ten-minute maximum wait and
 50 tasks per batch, preserving partitions of at most five. Coalesce repeated
 changes to a pending task into its newest fingerprint. One in-flight assessment
 per task/fingerprint; changes during execution remain pending and do not mutate
-the captured snapshot. Successful preparation checkpoints in any active pilot
-run also hold their tasks across consumers: observation and admission withhold
-them as `already_preparing: <run id>` until that run becomes terminal. This
-prevents a routine from duplicating a targeted CI-sweep or manual pilot, even
-when the task's material changes while held. Explicit pilot selections report
-held tasks as `already_preparing` exclusions with `prepared_by_run_ids` and
-prepare the free tasks; an all-held selection succeeds without agent work.
+the captured snapshot. Any active pilot run also holds its tasks across
+consumers: prepare reserves its selection inside the workspace's commit
+boundary, checking every live holder and writing its own reservation in one
+critical section, and its successful preparation checkpoint holds the same
+tasks afterwards. Observation and admission withhold them as
+`already_preparing: <run id>` until that run becomes terminal. This prevents a
+routine, a drain or the CI sweep from duplicating another pilot that started
+seconds earlier, even when the task's material changes while held. Explicit
+pilot selections report held tasks as `already_preparing` exclusions with
+`prepared_by_run_ids`, settle each as superseded `piloted_elsewhere` naming its
+holder, and prepare the free tasks; an all-held selection succeeds without
+agent work. A claimed member whose material changed between its claim and
+prepare is set aside as superseded on its own and claimed afresh, while its
+batch siblings are piloted.
 At pilot apply, a companion status-neutral fingerprint
 allows one fresh read and retry when only the task's status or a dependency's
 status changed. A dependency-only status change may then apply; a task that
@@ -554,8 +561,9 @@ and the idempotency receipt at one task-bundle boundary. `context_files` are
 optional for admission: local auto, ship (including explicit selection), and
 owner pull admit selector-free backlog tasks on the next pass without holding
 a context lock. Task-pilot can supply selectors, but empty context alone does
-not exclude work or produce a readiness reason. A live pilot's successful
-preparation checkpoint still holds its tasks until that run settles.
+not exclude work or produce a readiness reason. A live pilot's preparation
+reservation or successful checkpoint still holds its tasks until that run
+settles.
 Local automatic admission rejects any
 still-unassessed task, including urgent security work, except
 one tagged exactly `no-diff-expected`, which is admitted without an assessment
