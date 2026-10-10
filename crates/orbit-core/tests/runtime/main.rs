@@ -73,6 +73,7 @@ mod task_lint_paths;
 mod task_pilot;
 mod task_pr_closure;
 mod task_update;
+mod upgrade_pending_requeue;
 mod upgrade_resume;
 mod worker_fixture;
 mod worktree_reclaim;

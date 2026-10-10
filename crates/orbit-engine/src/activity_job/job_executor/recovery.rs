@@ -82,11 +82,12 @@ impl StepFailure {
 
     /// [ORB-14268] Fail the step as the blocker its recovery declared. The
     /// marker leads the message, so final recovery skips it and the failure
-    /// handoff blocks the task with the kind, as for an implementer blocker.
+    /// handoff blocks the task with the kind, as for an implementer blocker
+    /// (or holds it in the backlog, for an upgrade refusal).
     fn into_blocked(self, blocker: &AgentBlocker) -> Result<StepOutcome, DispatchError> {
         let message = format!(
             "{}\noriginal error before recovery: {}",
-            orbit_types::workflow::task_blocked_by_agent_message(blocker),
+            blocker.step_failure_message(),
             self.diagnostic()
         );
         match self {
@@ -169,6 +170,11 @@ pub(super) fn recover_or_return_original(
     // Another agent would only spend the recovery budget the stop was meant
     // to avoid.
     if orbit_types::workflow::is_task_blocked_by_agent(None, Some(&failure.diagnostic())) {
+        return failure.into_result();
+    }
+    // Nor can it run `orbit` while an upgrade refuses the step's agents; the
+    // step runs again once the upgrade settles.
+    if orbit_types::workflow::is_upgrade_pending(None, Some(&failure.diagnostic())) {
         return failure.into_result();
     }
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
@@ -845,6 +851,9 @@ pub(super) fn attempt_failure_activity(
             if orbit_types::workflow::is_task_blocked_by_agent(None, Some(&error.to_string())) =>
         {
             orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE
+        }
+        error if orbit_types::workflow::is_upgrade_pending(None, Some(&error.to_string())) => {
+            orbit_types::workflow::UPGRADE_PENDING_ERROR_CODE
         }
         // [ORB-14266] The handoff preserves the candidate for the next run.
         error => {

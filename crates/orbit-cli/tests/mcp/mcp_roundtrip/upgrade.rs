@@ -182,6 +182,7 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
         role: ParticipantRole::McpServe,
         access: Access::Write,
         handover: None,
+        in_activity: false,
     };
     let _old_client = GenerationGuard::join(
         &authority_root(&workspace),
@@ -492,6 +493,7 @@ fn a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points() 
         role: ParticipantRole::Command,
         access: Access::Write,
         handover: None,
+        in_activity: false,
     };
     let root = authority_root(&workspace);
 
@@ -1239,6 +1241,7 @@ fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_re
             role: ParticipantRole::Dashboard,
             access: Access::Write,
             handover: None,
+            in_activity: false,
         },
         Duration::ZERO,
         || Ok(0),

@@ -363,6 +363,78 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
     Ok(output)
 }
 
+/// Keep the candidate of a step whose agent an Orbit upgrade refused
+/// mid-step ([`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER)).
+///
+/// A newer `orbit` replaced the installed one while the step ran, and every
+/// `orbit` command its agent ran was refused. That is the host's state, not
+/// the candidate's, so it is kept as a provider failure keeps it: whatever
+/// the agent left is committed on the run's branch, carried to its durable
+/// ref and recorded in the task's history, and no PR is opened. The task's
+/// status is not written here: run finalization returns it to the backlog,
+/// and its next run, once the upgrade settles, resumes this candidate.
+pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let kind = orbit_types::workflow::upgrade_pending_kind(error_message)
+        .unwrap_or(orbit_types::workflow::UPGRADE_PENDING_ERROR_CODE)
+        .to_string();
+    let held = carry_held_candidate(
+        host,
+        task,
+        run_id,
+        failed_step_id,
+        &branch,
+        &head_sha,
+        workspace_path,
+    )?;
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            append_history: vec![held_history(&held)],
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!(
+                    "## Orbit upgrade\n\nRun `{run_id}` stopped at `{failed_step_id}`: an Orbit \
+                     upgrade refused its agent's `orbit` commands (kind `{kind}`). This is the \
+                     host's upgrade, not the candidate, so no repair or review budget was spent \
+                     and nothing was published. The candidate `{head_sha}` is committed on branch \
+                     `{branch}`, and the task's next run resumes it once the upgrade \
+                     settles.\n\n{}",
+                    held_place(&held)
+                ),
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+    let mut output = json!({
+        "phase": "failure_handoff",
+        "decision": "held_upgrade_pending",
+        "blocker_kind": kind,
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "committed_files": committed_files,
+        "candidate_preserved": true,
+        "pr_created": false,
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    });
+    insert_carry(&mut output, &held);
+    Ok(output)
+}
+
 /// Keep a candidate whose required command fails on its base exactly as on
 /// the candidate, and hold its task [ORB-14258].
 ///

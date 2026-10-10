@@ -282,6 +282,7 @@ fn clock_ticks_refused_by_a_breaking_migration_are_reported_by_doctor() {
             role: ParticipantRole::Drain,
             access: Access::Write,
             handover: None,
+            in_activity: false,
         },
         Duration::ZERO,
         || Ok(0),

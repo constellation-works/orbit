@@ -30,6 +30,10 @@
 //!   role and start time.
 //! - An incompatible *older* binary is refused outright: it may not displace
 //!   newer participants.
+//! - A process inside an Orbit-managed activity ([`Participant::in_activity`])
+//!   never records a pending switch nor waits behind one: the drain that
+//!   started its step yields only at the step boundary. It is refused at once
+//!   with an `[upgrade_pending]` refusal, which the step settles as transient.
 //!
 //! Participants register PID, role and start time under
 //! `.generation-participants/`, each record held by its own lock. A live

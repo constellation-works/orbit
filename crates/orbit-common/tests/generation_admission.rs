@@ -71,6 +71,7 @@ fn join(
         role,
         access,
         handover: None,
+        in_activity: false,
     };
     // A zero bound fails immediately if join decides to quiesce. Success
     // therefore means no live participant was asked to yield.
@@ -339,6 +340,7 @@ fn join_within(
         role: ParticipantRole::Command,
         access,
         handover: None,
+        in_activity: false,
     };
     GenerationGuard::join(root, &participant, bound, store_schema)
 }
@@ -727,6 +729,103 @@ fn a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield() {
     drop(upgraded);
 }
 
+/// A command inside an Orbit-managed activity (an agent's nested `orbit`)
+/// may resolve to a newer binary than the drain that started its step. It
+/// never records a pending switch, which that drain could yield to only at
+/// the step boundary this command holds up, nor waits behind one: it is
+/// refused at once, typed `[upgrade_pending]`, whichever generation it is.
+#[test]
+fn a_command_inside_an_activity_is_refused_typed_instead_of_switching_the_generation() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let old = identity(10, 0);
+    let newer = identity(12, 12);
+    let live = join(
+        &root,
+        &digest(10),
+        &old,
+        ParticipantRole::Drain,
+        Access::Write,
+    )
+    .expect("the drain holds the authority");
+    let nested = |digest: &str, identity: &CompatibilityIdentity| {
+        let participant = Participant {
+            digest,
+            identity,
+            role: ParticipantRole::Command,
+            access: Access::Write,
+            handover: None,
+            in_activity: true,
+        };
+        let started = Instant::now();
+        let refused = refusal(GenerationGuard::join(
+            &root,
+            &participant,
+            Duration::from_secs(30),
+            || Ok(10),
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "refused at once, not after the quiesce bound: {refused}"
+        );
+        assert!(
+            refused.contains(orbit_types::workflow::UPGRADE_PENDING_MARKER),
+            "{refused}"
+        );
+        refused
+    };
+
+    let refused = nested(&digest(12), &newer);
+    assert!(
+        refused.contains("would switch the store generation"),
+        "{refused}"
+    );
+    assert!(
+        pending_switch(&root).is_none(),
+        "the nested command records no pending switch"
+    );
+
+    // An upgrader outside any activity records the switch; a nested command
+    // of either generation is refused behind it rather than waiting.
+    let upgrader = std::thread::spawn({
+        let root = root.clone();
+        let newer = newer.clone();
+        move || {
+            join_within(
+                &root,
+                &digest(12),
+                &newer,
+                Access::Write,
+                Duration::from_secs(30),
+                || Ok(10),
+            )
+            .map_err(|error| error.to_string())
+        }
+    });
+    let waiting = Instant::now();
+    while pending_switch(&root).is_none() {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(10),
+            "the upgrader records a pending switch"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for (digest, identity) in [(digest(10), &old), (digest(12), &newer)] {
+        let refused = nested(&digest, identity);
+        assert!(
+            refused.contains("generation switch is pending"),
+            "{refused}"
+        );
+    }
+
+    drop(live);
+    let upgraded = upgrader
+        .join()
+        .expect("upgrader thread")
+        .expect("the upgrader takes over once the drain yields");
+    drop(upgraded);
+}
+
 /// A live participant registered in `role`, handing over with `handover`.
 fn holding_as(root: &Path, role: ParticipantRole, handover: Option<&str>) -> GenerationGuard {
     let identity = identity(10, 0);
@@ -737,6 +836,7 @@ fn holding_as(root: &Path, role: ParticipantRole, handover: Option<&str>) -> Gen
         role,
         access: Access::Write,
         handover,
+        in_activity: false,
     };
     GenerationGuard::join(root, &participant, Duration::ZERO, || Ok(10)).expect("joins")
 }
@@ -830,6 +930,7 @@ fn a_candidate_admission_pins_once_the_server_has_handed_over() {
             role: ParticipantRole::McpServe,
             access: Access::Write,
             handover: Some(RESUME_MCP_STDIO),
+            in_activity: false,
         },
         Duration::from_secs(10),
         || Ok(11),

@@ -1150,6 +1150,30 @@ fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
     );
 }
 
+/// A candidate an Orbit upgrade held when it refused the reviewer's `orbit`
+/// is resumed by the task's next run, as validated work: the upgrade never
+/// judged it.
+#[test]
+fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
+    isolated(
+        "a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            preserved.preserve_decision("review", "held_upgrade_pending");
+            preserved
+                .host
+                .set_required_commands(&["test -f feature.txt"]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+            assert_eq!(resumed["implement"], false, "{resumed}");
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            assert_resume_recorded(&preserved, "resumed_validated");
+        },
+    );
+}
+
 /// A candidate that conflicts with the advanced base is handed to the
 /// implementer as uncommitted work with the conflict markers and paths;
 /// validation does not run on a conflicted tree.
@@ -1854,12 +1878,17 @@ impl PreservedCandidate {
     }
 
     fn preserve_step(&self, failed_step_id: &str) {
+        self.preserve_decision(failed_step_id, "blocked_failure_pr");
+    }
+
+    /// Record the failed run's handoff at `failed_step_id` as `decision`.
+    fn preserve_decision(&self, failed_step_id: &str, decision: &str) {
         self.host.preserve(
             FAILED_RUN,
             failed_step_id,
             json!({
                 "phase": "failure_handoff",
-                "decision": "blocked_failure_pr",
+                "decision": decision,
                 "task_id": RESUME_TASK,
                 "handoff_run_id": FAILED_RUN,
                 "branch": self.branch,

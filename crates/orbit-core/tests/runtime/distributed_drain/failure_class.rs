@@ -374,6 +374,72 @@ fn crew_failures_release_the_claim_and_exclude_the_crew_for_the_window() {
     }
 }
 
+/// An Orbit upgrade replaced the follower's `orbit` while a claimed leaf's
+/// before-landing reviewer ran, and its agent declared the refusal under one
+/// of the kinds agents gave it. The claim releases as `transient`, as a leaf
+/// interrupted at a step boundary by the same upgrade does: the task returns
+/// to the backlog rather than blocked, the pushed candidate rides on the
+/// release, and the task's next claim resumes it.
+#[test]
+fn an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it() {
+    if !isolated(
+        module_path!(),
+        "an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it",
+    ) {
+        return;
+    }
+    for kind in [
+        "upgrade_admission_refused",
+        "orbit_upgrade_admission_refused",
+        "orbit.generation_switch_pending",
+    ] {
+        let blocker = orbit_types::workflow::AgentBlocker {
+            kind: kind.to_string(),
+            evidence: "cannot record the pending generation switch: Operation not permitted \
+                       (os error 1)"
+                .to_string(),
+        };
+        let error = format!(
+            "{}\noriginal error before recovery: the review report was never recorded",
+            blocker.step_failure_message()
+        );
+        let (pair, _, _) = a_released_failure_after(&error, "transient", |pair, leaf| {
+            let mut outputs = prepared();
+            outputs["sync_base"] = json!({"head": BRANCH, "head_sha": HEAD});
+            outputs["review_gate_admit"] = json!({"applies": false});
+            outputs["review_gate_settle"] = json!({"applies": false});
+            outputs["validate"] = json!({"decision": "passed"});
+            outputs["push"] = json!({"branch": BRANCH, "local_sha": HEAD});
+            outputs["pr_open"] = json!({"pr_number": "42"});
+            outputs["landing_review_gate_admit"] = json!({"applies": true});
+            leaf_completed(pair, leaf, outputs);
+        });
+        let task = pair.tasks[0].clone();
+        let leaf = pair.leaf_runs()[0].clone();
+        let candidate = &settlement_of(&pair, &leaf)["Release"]["failure"]["candidate"];
+        assert_eq!(candidate["branch"], BRANCH, "{kind}: {candidate}");
+        assert_eq!(candidate["head_sha"], HEAD, "{kind}: {candidate}");
+        assert_eq!(candidate["pull_request"], "42", "{kind}: {candidate}");
+
+        // A new drain: this one's window excluded the crew the transient
+        // release ran on.
+        let drain = pair.run_drain();
+        let next = pair.running_leaf(&drain, 1);
+        assert_eq!(pair.claimed_task(&next), task, "{kind}: pulled again");
+        let resumed = pair
+            .admission(&next)
+            .receipt
+            .and_then(|receipt| receipt.task)
+            .and_then(|task| task.resume_candidate)
+            .unwrap_or_else(|| panic!("{kind}: the claim carries the kept candidate"));
+        assert_eq!(
+            (resumed.branch.as_str(), resumed.head_sha.as_str()),
+            (BRANCH, HEAD),
+            "{kind}"
+        );
+    }
+}
+
 /// [ORB-14439] The owner's run history never holds a follower's leaf, so the
 /// owner keeps what the leaf's settlement said: a failure scan on the owner
 /// reads a follower's provider outage, typed, from the owner's own store.
