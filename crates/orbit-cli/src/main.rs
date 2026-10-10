@@ -292,6 +292,39 @@ fn is_clock_tick(command: &command::Commands) -> bool {
             if matches!(clock.command, command::clock::ClockSubcommand::Tick(_)))
 }
 
+/// A clock tick refused because a breaking migration cannot run beside the
+/// live processes stops routines and worktree GC on this host until they
+/// exit. Say so on every refused tick, and keep the run of refusals for
+/// `orbit doctor` [ORB-15260].
+fn report_refused_clock_tick(root: &std::path::Path, error: &orbit_core::OrbitError) {
+    let recorded = orbit_common::fs::generation::process_generation().and_then(|digest| {
+        orbit_common::fs::generation::record_clock_upgrade_refusal(
+            root,
+            digest,
+            chrono::Utc::now(),
+            error,
+        )
+    });
+    let run = match &recorded {
+        Ok(hold) => format!(
+            "{} tick(s) in a row since {}",
+            hold.refused_ticks,
+            hold.started_at.to_rfc3339()
+        ),
+        Err(record_error) => format!("the refusal could not be recorded: {record_error}"),
+    };
+    tracing::error!(
+        target: "orbit.cli.clock",
+        error = %error,
+        "clock tick refused by upgrade admission"
+    );
+    eprintln!(
+        "clock tick refused by upgrade admission ({run}): scheduled routines and worktree GC \
+         are not running on this host until the live Orbit processes named below exit or \
+         yield; `orbit doctor` reports this hold"
+    );
+}
+
 /// Where an explicitly chosen Orbit root came from, if it was chosen at all.
 fn explicit_root_source(root_override: Option<&std::path::Path>) -> Option<&'static str> {
     if root_override.is_some() {
@@ -613,7 +646,9 @@ fn run() {
                 Some(guard)
             }
             Err(error) => {
-                if clock_tick
+                if clock_tick && orbit_common::fs::generation::is_clock_upgrade_refusal(&error) {
+                    report_refused_clock_tick(&root, &error);
+                } else if clock_tick
                     && orbit_common::fs::generation::is_clock_generation_hold(&error)
                     && let Ok(digest) = orbit_common::fs::generation::process_generation()
                     && orbit_common::fs::generation::record_clock_generation_hold(

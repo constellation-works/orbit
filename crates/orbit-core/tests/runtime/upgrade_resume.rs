@@ -322,6 +322,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
                 reader_floor: 1,
             },
             features: BTreeMap::new(),
+            feature_floors: BTreeMap::new(),
         },
         requested_at: Utc::now(),
         deadline: Utc::now() + chrono::Duration::seconds(60),

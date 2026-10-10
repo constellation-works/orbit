@@ -21,6 +21,13 @@ pub(super) const WRITES_WHILE_FOREIGN: &str = "another executable generation is 
 
 pub(super) const SWITCH_PENDING: &str = "a generation switch is pending";
 
+/// A newer binary waited for live participants to yield to its breaking
+/// migration, and they did not.
+pub(super) const BREAKING_WAITING: &str = "a breaking migration is waiting";
+
+/// An older binary met newer live participants it cannot run beside.
+pub(super) const INCOMPATIBLE: &str = "is incompatible with the live Orbit processes";
+
 /// Remedy when admission was only busy with other ordinary startups.
 const CONTENDED: &str = "Retry the command; nothing is upgrading. If startups on this host \
      routinely take this long, raise the admission wait";
@@ -84,8 +91,7 @@ pub(super) fn quiesce_timeout(
     blockers: &[ParticipantRecord],
 ) -> OrbitError {
     refusal(format!(
-        "a breaking migration is waiting ({reason}), and these Orbit processes did not yield \
-         within {}s: {}",
+        "{BREAKING_WAITING} ({reason}), and these Orbit processes did not yield within {}s: {}",
         bound.as_secs(),
         describe_blockers(blockers)
     ))

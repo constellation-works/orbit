@@ -14,6 +14,9 @@
 //! An updater waits for short-lived participants and refuses long-lived ones,
 //! except those a candidate-aware admission knows will hand over after the
 //! rename.
+//!
+//! A feature schema widens like the store schema: a newer binary whose newer
+//! feature migrations are all additive or data-only joins live older ones.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 orbit_common::isolate_test_process!();
@@ -28,8 +31,9 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use orbit_common::fs::generation::{
-    Access, CompatibilityIdentity, GenerationGuard, GenerationUpdate, HandoverCandidate,
-    LedgerCompatibility, Participant, ParticipantRole, RESUME_MCP_STDIO, pending_switch,
+    Access, CompatibilityIdentity, FeatureFloor, GenerationGuard, GenerationUpdate,
+    HandoverCandidate, LedgerCompatibility, Participant, ParticipantRole, RESUME_MCP_STDIO,
+    pending_switch,
 };
 use serde_json::{Value, json};
 
@@ -50,6 +54,7 @@ fn identity(version: u32, writer_floor: u32) -> CompatibilityIdentity {
             reader_floor: 0,
         },
         features: BTreeMap::new(),
+        feature_floors: BTreeMap::new(),
     }
 }
 
@@ -225,6 +230,99 @@ fn live_writer_is_not_treated_as_an_empty_authority() {
     assert!(pending_switch(root).is_none(), "{refused}");
     assert_envelope(root, store(10, 10, 0, Some(10)), Some(1));
     drop(live);
+}
+
+/// A store-schema-10 identity carrying the automation feature schema at
+/// `version`, whose newest breaking migration is `floor` — or, with `None`,
+/// as a binary that predates feature floors recorded it.
+fn automation(version: u32, floor: Option<(u32, &str)>) -> CompatibilityIdentity {
+    let mut identity = identity(10, 0);
+    identity.features.insert("automation".into(), version);
+    if let Some((floor, name)) = floor {
+        identity.feature_floors.insert(
+            "automation".into(),
+            FeatureFloor {
+                version: floor,
+                name: Some(name.into()),
+            },
+        );
+    }
+    identity
+}
+
+/// The incident [ORB-15260]: a drain started by the old binary at automation
+/// 4 kept every command of a binary that only added a data-only automation 5
+/// waiting for it to yield. A data-only v5 joins beside it, and the envelope
+/// keeps binaries that compare feature versions exactly out; a breaking v5
+/// still refuses, naming the feature and the migration.
+#[test]
+fn a_data_only_feature_migration_joins_beside_an_older_live_participant() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let drain = join(
+        root,
+        &digest(4),
+        &automation(4, None),
+        ParticipantRole::Drain,
+        Access::Write,
+    )
+    .expect("the pre-change drain holds the authority");
+    // Record the envelope as the pre-change binary wrote it: feature versions
+    // alone, with no feature ledgers.
+    let mut record = compat(root);
+    record["envelope"]
+        .as_object_mut()
+        .expect("envelope")
+        .remove("feature_ledgers");
+    std::fs::write(
+        root.join(".generation-compat.json"),
+        serde_json::to_string(&record).expect("record"),
+    )
+    .expect("rewrite the envelope as the pre-change binary");
+
+    let breaking = automation(5, Some((5, "release_misread_pilot_failures")));
+    let refused = refusal(join(
+        root,
+        &digest(51),
+        &breaking,
+        ParticipantRole::Command,
+        Access::Write,
+    ));
+    assert!(refused.contains("feature schema automation"), "{refused}");
+    assert!(
+        refused.contains("v5 (release_misread_pilot_failures)"),
+        "{refused}"
+    );
+    assert!(refused.contains("did not yield"), "{refused}");
+    assert!(pending_switch(root).is_none(), "{refused}");
+
+    let data_only = automation(5, Some((4, "release_stale_source_failures")));
+    let command = join(
+        root,
+        &digest(5),
+        &data_only,
+        ParticipantRole::Command,
+        Access::Write,
+    )
+    .expect("a data-only automation 5 joins beside the live automation 4 drain");
+    assert!(
+        pending_switch(root).is_none(),
+        "the live drain is not asked to yield"
+    );
+    let envelope = &compat(root)["envelope"];
+    assert_eq!(envelope["features"], json!({"automation": 5}));
+    assert_eq!(envelope["feature_ledgers"]["automation"]["min_version"], 4);
+
+    // An older binary that declares its floors widens the envelope too.
+    let older = join(
+        root,
+        &digest(41),
+        &automation(4, Some((4, "release_stale_source_failures"))),
+        ParticipantRole::Command,
+        Access::Write,
+    )
+    .expect("an automation 4 binary that declares its floor joins beside automation 5");
+    drop((older, command, drain));
 }
 
 fn join_within(

@@ -120,7 +120,10 @@ Each binary is compiled with a **compatibility identity**, which `orbit update
   [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace)
   for how migrations are classified);
 - every feature schema (automation, review, local pull) at the version the binary
-  migrates it to. Feature ledgers refuse any newer version, so they must match.
+  migrates it to, plus its newest **breaking** migration. A feature migration is
+  declared additive, data-only (a one-time rewrite of existing rows into a shape older
+  binaries already read and write, with no table or column change) or breaking; see
+  [Feature schemas](#feature-schemas).
 
 The authority records the envelope of every identity admitted since it last had no
 participant in `.generation-compat.json`, and each live process registers a
@@ -134,13 +137,18 @@ the live processes when:
 - every live reader can read what the newcomer migrates to, and it can read theirs;
 - the oldest live writer keeps writing correctly through the newcomer's migrations;
 - when the newcomer writes, it keeps writing correctly through theirs;
-- the feature schemas are equal.
+- for each feature schema, no breaking migration lies between the live versions and
+  the newcomer's.
 
 So a new build with the **same schema, layout and feature schemas** runs task, clock,
 `migrate` and `workspace sync` commands while older `mcp serve`, dashboard and drain
 processes stay up. A build that adds only **additive** migrations migrates the store
-while they are live, and the older processes keep reading *and writing* it. Distinct
-executables share the authority; identical copies trivially do.
+while they are live, and the older processes keep reading *and writing* it. The same
+holds for a build whose newer feature migrations are all additive or data-only: it
+applies them beside an older drain instead of waiting for it. Builds from before
+feature migrations declared compatibility compare feature versions exactly, so such a
+build stays refused beside a newer feature schema. Distinct executables share the
+authority; identical copies trivially do.
 
 #### A migration older processes cannot keep: the quiesce wait
 
@@ -241,7 +249,7 @@ are not handed over; they finish on the image they started with.
 `orbit update --contract --json` reports protocol support without opening state:
 
 ```json
-{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":32,"writer_floor":28,"reader_floor":26},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":3,"local_pull":1,"review":1}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
+{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":32,"writer_floor":28,"reader_floor":26},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":3,"local_pull":1,"review":1},"feature_floors":{"automation":{"version":3,"name":"consumer_recovery_records"},"local_pull":{"version":1,"name":"pending_requests_and_unique_leaves"},"review":{"version":1,"name":"lineages_certificates_landings"}}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
 ```
 
 `contract` stays `executable-generation-v1` because every v2 binary still honours it
@@ -409,9 +417,15 @@ to force admission. Keep them in the authoritative root and out of lock-file gar
 collection. A participant record left by a process that exited without cleanup is
 unlocked, and the next admission collects it.
 
-A new writing `orbit clock tick` that is refused — the live generation is
-incompatible, or a switch is pending — logs one dated hold summary and runs again
-once admitted. A claimed worker terminated without a recorded cancellation (an
+A new writing `orbit clock tick` held back behind another live generation — a v1
+generation is still pinned, or a switch is pending — logs one dated hold summary and
+runs again once admitted. A tick refused outright, because a breaking migration
+cannot run beside the live processes (the quiesce wait expired, or the tick is the
+older binary), stops scheduled routines and worktree GC on that host until those
+processes exit. Every such tick says so on stderr (`clock tick refused by upgrade
+admission (N tick(s) in a row since …)`), followed by the refusal, and `orbit doctor`'s
+`clock-unit` row reports an error naming the run of refused ticks and the latest
+refusal until a tick runs again. A claimed worker terminated without a recorded cancellation (an
 external installer or service restart signalling it) is `interrupted` with
 `worker_terminated` whether its supervisor observes SIGTERM or stale-owner
 reconciliation sees the dead process first.
@@ -811,6 +825,24 @@ a read-compatible layout migration the binary lacks refuses the workspace like a
 one. Records written by a binary from before writers were classified carry no
 read-compatible list; an older binary then opens a newer store read-only and a newer
 layout for writes, exactly as it did before.
+
+### Feature schemas
+
+Feature crates (automation, review, local pull) keep their own ledgers in the
+`feature_schema_meta` table. Each feature migration is declared additive, data-only or
+breaking, and the binary that applies one records the classification in a
+`feature.compat.<feature>` row of `schema_meta`. A binary older than a feature schema
+keeps opening it, for reads and writes, when every newer migration is additive or
+data-only; otherwise it refuses, naming the first breaking migration it lacks:
+
+```text
+error: feature schema 'automation' version 6 is newer than the newest version this binary
+supports (5), and migration v6 (…) is a breaking change this binary does not have;
+upgrade orbit to open this feature schema
+```
+
+A feature schema advanced by a binary from before these records refuses older binaries
+as before.
 
 ### Breaking-newer, or unclassified: still refused
 

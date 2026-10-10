@@ -13,8 +13,8 @@ use super::image::process_digest;
 use super::paths::{ADMISSION_LOCK, GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_compat, read_generation, write_compat};
 use super::refusal::{
-    SWITCH_PENDING, WRITES_WHILE_FOREIGN, contended, quiesce_timeout, refusal, switch_pending,
-    unwritable, upgrade_holds_admission,
+    INCOMPATIBLE, SWITCH_PENDING, WRITES_WHILE_FOREIGN, contended, quiesce_timeout, refusal,
+    switch_pending, unwritable, upgrade_holds_admission,
 };
 use super::registry::{
     self, ParticipantRecord, ParticipantRole, PendingClaim, PendingSwitch, Registration,
@@ -466,7 +466,7 @@ impl GenerationGuard {
                 Self::quiesce(root, admission, generation, participant, quiesce, &reason)
             }
             Some(reason) => Err(refusal(format!(
-                "this binary ({identity}) is incompatible with the live Orbit processes: {reason}"
+                "this binary ({identity}) {INCOMPATIBLE}: {reason}"
             ))),
         }
     }

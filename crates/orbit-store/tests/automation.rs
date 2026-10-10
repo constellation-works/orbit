@@ -7,6 +7,7 @@ use std::process::Command;
 
 use chrono::{DateTime, Utc};
 use orbit_common::{process, test_env};
+use orbit_store::maintenance::migration::FeatureMigration;
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::recovery::{
     AutomationStall, CoverageDebt, RecoveryRecord, ResetRecord,
@@ -693,4 +694,84 @@ fn feature_repair_releases_pilot_failures_settled_from_another_steps_checkpoint(
             .generation,
         4
     );
+
+    // The repair is data-only [ORB-15260]: a binary whose automation registry
+    // stops at v4 still opens this store and reads the repaired rows, so
+    // upgrade admission lets it keep running beside this one.
+    let floor = &compose::compiled_compatibility().feature_floors["automation"];
+    assert!(
+        floor.version < 5,
+        "release_misread_pilot_failures must stay data-only, or older binaries refuse: {floor:?}"
+    );
+    let older: Vec<FeatureMigration> = [
+        "consumer_checkpoints_and_coverage",
+        "retry_lineage_index",
+        "consumer_recovery_records",
+        "release_stale_source_failures",
+    ]
+    .into_iter()
+    .zip(1..)
+    .map(|(name, version)| FeatureMigration::breaking(version, name, |_| Ok(())))
+    .collect();
+    base.apply_feature_migrations("automation", &older)
+        .expect("an automation v4 binary opens the repaired v5 schema");
+    let status = base.feature_schema_status("automation", &older).unwrap();
+    assert_eq!(status.current_version, 5);
+    assert!(status.pending.is_empty());
+    let raw: String = base
+        .connection()
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT state_json FROM automation_consumers WHERE consumer = ?1",
+            [&state.consumer],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let read: AutomationState = serde_json::from_str(&raw).unwrap();
+    assert_eq!(read.generation, 4);
+    let members = read.members.unwrap();
+    assert!(members.pending.contains_key("running"));
+    assert!(!members.failed.contains_key("running"));
+}
+
+/// An older binary keeps opening a feature schema a newer one advanced only
+/// by data-only or additive migrations, and refuses one advanced by a
+/// breaking migration, naming it [ORB-15260].
+#[test]
+fn older_binaries_open_a_feature_schema_newer_only_by_migrations_they_survive() {
+    if isolated("older_binaries_open_a_feature_schema_newer_only_by_migrations_they_survive") {
+        return;
+    }
+    let base = Store::open_in_memory().unwrap();
+    let older = [FeatureMigration::breaking(1, "fixture_tables", |_| Ok(()))];
+    let repair = [
+        older[0],
+        FeatureMigration::data_only(2, "fixture_repair", |_| Ok(())),
+        FeatureMigration::additive(3, "fixture_index", |_| Ok(())),
+    ];
+    base.apply_feature_migrations("fixture", &repair).unwrap();
+    base.apply_feature_migrations("fixture", &older)
+        .expect("a v1 binary survives data-only v2 and additive v3");
+
+    let reinterpret = [
+        repair[0],
+        repair[1],
+        repair[2],
+        FeatureMigration::breaking(4, "fixture_reinterpret", |_| Ok(())),
+    ];
+    base.apply_feature_migrations("fixture", &reinterpret)
+        .unwrap();
+    for registry in [&older[..], &repair[..]] {
+        let refused = base
+            .apply_feature_migrations("fixture", registry)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("v4 (fixture_reinterpret)"), "{refused}");
+        let status = base.feature_schema_status("fixture", registry).unwrap_err();
+        assert!(
+            status.to_string().contains("fixture_reinterpret"),
+            "{status}"
+        );
+    }
 }

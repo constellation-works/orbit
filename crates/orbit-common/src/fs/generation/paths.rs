@@ -18,6 +18,7 @@ fn generation_record_name(name: &str) -> Result<&'static str, OrbitError> {
         GENERATION_LOCK => Ok(GENERATION_LOCK),
         COMPAT_RECORD => Ok(COMPAT_RECORD),
         IMAGE_DIGEST_CACHE => Ok(IMAGE_DIGEST_CACHE),
+        CLOCK_HOLD => Ok(CLOCK_HOLD),
         _ => Err(refusal("invalid generation record name")),
     }
 }
