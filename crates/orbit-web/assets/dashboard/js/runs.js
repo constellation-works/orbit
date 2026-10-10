@@ -837,6 +837,16 @@ export function setRunFilter(value) {
   doFetchAndRenderRuns().catch((error) => console.error(error));
 }
 
+// The rail badge counts every failed run in the window, so it opens that whole
+// scope: a task or job search would otherwise narrow the list below the count.
+export function showAllFailedRuns() {
+  runTaskId = "";
+  runJobId = "";
+  const input = $("runs-body")?.querySelector(".runs-query");
+  if (input) input.value = "";
+  setRunFilter("failed");
+}
+
 function setRunWindow(value) {
   if (!DASHBOARD_WINDOWS.includes(value) || value === getWindow()) return;
   setWindow(value);
