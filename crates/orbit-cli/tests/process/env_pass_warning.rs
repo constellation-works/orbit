@@ -380,6 +380,142 @@ impl Fixture {
     }
 }
 
+#[cfg(unix)]
+fn set_worker_containment(fixture: &Fixture, enabled: bool) {
+    let path = fixture.home.join(".orbit/config.toml");
+    let mut config: DocumentMut = fs::read_to_string(&path)
+        .expect("read config")
+        .parse()
+        .expect("parse config");
+    config["machine"]["worker_containment"] = value(enabled);
+    fs::write(&path, config.to_string()).expect("write containment");
+}
+
+/// A pass-listed ambient credential reaches the worker's provider child, and
+/// that child's argv does not carry the value [ORB-15175].
+///
+/// Containment is off: this fixture has no seam onto `systemd-run` argv. The
+/// scoped command's argv contract is the orbit-core worker test. The provider
+/// script stands in for the agent the worker launches after the policy is
+/// applied.
+#[cfg(unix)]
+#[test]
+fn admitted_ambient_credential_reaches_the_uncontained_worker_child() {
+    const CHILD: &str = "env_pass_warning::admitted_ambient_credential_worker_child";
+    let temp = tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", CHILD, "--ignored", "--nocapture"]);
+    let output = test_env::run_child_test(&mut command, CHILD, temp.path());
+    test_env::assert_child_test_passed(CHILD, output.status, &output.stdout, &output.stderr);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "isolated ambient credential worker boundary"]
+fn admitted_ambient_credential_worker_child() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::new();
+    fixture.pass_list(&["HOME", "PATH", SET]);
+    set_worker_containment(&fixture, false);
+    let provider = fixture.home.join("codex");
+    fs::write(
+        &provider,
+        format!(
+            "#!/bin/sh\ncat >/dev/null\n\
+             present=false; filtered=false; argv_clean=true\n\
+             [ \"${{{SET}-}}\" = '{AMBIENT_SECRET}' ] && present=true\n\
+             [ \"${{{NOT_PASSED}+present}}\" != present ] && filtered=true\n\
+             for arg in \"$@\"; do\n\
+               case \"$arg\" in *'{AMBIENT_SECRET}'*) argv_clean=false ;; esac\n\
+             done\n\
+             printf '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{\"present\":%s,\"filtered\":%s,\"argv_clean\":%s}},\"error\":null}}\\n' \
+             \"$present\" \"$filtered\" \"$argv_clean\"\n"
+        ),
+    )
+    .expect("write credential probe");
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+    let root = fixture.home.join(".orbit");
+    fs::write(
+        root.join("resources/executors/codex.yaml"),
+        serde_json::json!({
+            "schemaVersion": 2, "kind": "Executor", "metadata": {"name": "codex"},
+            "spec": {"executor_type": "direct_agent", "command": provider,
+                "args": [], "sandbox": "off", "env": {}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        root.join(format!("resources/jobs/{JOB}.yaml")),
+        serde_json::json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": JOB},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                "id": "probe", "spec": {"type": "agent_loop", "provider": "codex",
+                    "backend": "cli", "description": "Probe the child environment",
+                    "instruction": "Return the fixed fixture response",
+                    "wall_clock_timeout_seconds": 30}
+            }]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (started, stderr) = fixture.start(
+        &[(SET, AMBIENT_SECRET), (NOT_PASSED, AMBIENT_SECRET)],
+        &["run", "job", JOB, "--json"],
+    );
+    assert!(
+        !stderr.contains(AMBIENT_SECRET),
+        "job start printed the credential: {stderr}"
+    );
+    let id = started["run_id"].as_str().expect("run id");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let output = fixture.show(id);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let shown_stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stdout.contains(AMBIENT_SECRET) && !shown_stderr.contains(AMBIENT_SECRET),
+            "run observation printed the credential"
+        );
+        assert!(
+            output.status.success(),
+            "run show failed: {stdout}{shown_stderr}"
+        );
+        let shown: Value = serde_json::from_str(&stdout).unwrap();
+        if shown["run"]["state"] == "success" {
+            let probe = &shown["pipeline_state"]["pipeline"]["probe"];
+            assert_eq!(
+                probe["present"], true,
+                "admitted credential did not reach the child environment: {shown}"
+            );
+            assert_eq!(
+                probe["filtered"], true,
+                "a name outside the pass list reached the child: {shown}"
+            );
+            assert_eq!(
+                probe["argv_clean"], true,
+                "the credential appeared on the child argv: {shown}"
+            );
+            break;
+        }
+        assert!(
+            !matches!(
+                shown["run"]["state"].as_str(),
+                Some("failed" | "cancelled" | "interrupted")
+            ),
+            "credential worker ended unsuccessfully: {shown}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "credential worker did not succeed: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// The launchd/systemd clock holds no login environment, so `clock.env` is its
 /// only source of operator credentials [ORB-15154]. Only pass-listed names are
 /// loaded, and a file other users can read is refused outright.
