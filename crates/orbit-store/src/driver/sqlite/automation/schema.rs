@@ -37,6 +37,11 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
         "release_stale_source_failures",
         super::members::release_stale_source_failures,
     ),
+    FeatureMigration::new(
+        5,
+        "release_misread_pilot_failures",
+        super::members::release_misread_pilot_failures,
+    ),
 ];
 
 pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {

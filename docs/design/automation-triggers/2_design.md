@@ -433,6 +433,23 @@ while pending at another source, is removed and the consumer's generation
 advances. Persisted state does not record why an attempt failed, so a member
 that failed for another reason costs at most one more pilot attempt.
 
+A member settles only from the run's deterministic `prepare`, `apply` and
+`apply_repairs` checkpoints. Core finds each by step id and action in the
+definition the run executed (its pinned snapshot, otherwise the catalog job),
+never by position, and reads a checkpoint only when the pipeline entry under
+that id agrees with it. Only an apply record counts: an output that carries
+`repair_count` or `member_evidence`. Until a running run records one, its
+members stay claimed. When apply requests repairs, the claim stays until
+`apply_repairs` records. Positional reads once took the `pilots` fan-in output
+for the apply record after a step was inserted before `apply`. Every member
+of those runs was recorded failed, often while apply was still running, and a
+later repair apply found its claim gone. Automation store schema v5 releases
+those records once: an exhausted preparation failure record is removed when
+its task-pilot run's checkpoint at apply's former index 2 is not that run's
+`apply` output. Its withheld reason goes with it, and the consumer's
+generation advances. Those members are then observed again, and the next
+pilot certifies them.
+
 The routine passes explicit batch task IDs and expected fingerprints to the
 existing pilot job, which today only accepts IDs/source preparation inputs and
 needs a small contract extension. A trigger never bypasses domain eligibility.

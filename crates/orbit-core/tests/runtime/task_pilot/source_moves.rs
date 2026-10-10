@@ -38,7 +38,12 @@ fn head(workspace: &Workspace) -> String {
 }
 
 /// Run a claimed deterministic step as the attempt's own run.
-fn claimed(workspace: &Workspace, attempt: &MemberAttempt, action: &str, input: Value) -> Value {
+pub(super) fn claimed(
+    workspace: &Workspace,
+    attempt: &MemberAttempt,
+    action: &str,
+    input: Value,
+) -> Value {
     let context = ToolContext {
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: attempt.action_id.clone().unwrap(),
@@ -53,7 +58,7 @@ fn claimed(workspace: &Workspace, attempt: &MemberAttempt, action: &str, input: 
 }
 
 /// Prepare `attempt` the way its run does: at the claim's frozen source.
-fn prepare_claim(workspace: &Workspace, attempt: &MemberAttempt) -> Value {
+pub(super) fn prepare_claim(workspace: &Workspace, attempt: &MemberAttempt) -> Value {
     claimed(
         workspace,
         attempt,
@@ -66,7 +71,11 @@ fn prepare_claim(workspace: &Workspace, attempt: &MemberAttempt) -> Value {
     )
 }
 
-fn apply_claim(workspace: &Workspace, attempt: &MemberAttempt, prepared: &Value) -> Value {
+pub(super) fn apply_claim(
+    workspace: &Workspace,
+    attempt: &MemberAttempt,
+    prepared: &Value,
+) -> Value {
     claimed(
         workspace,
         attempt,
@@ -76,13 +85,9 @@ fn apply_claim(workspace: &Workspace, attempt: &MemberAttempt, prepared: &Value)
 }
 
 /// Record `steps` as the run's successful step outputs and stop the run.
-fn finish_run(workspace: &Workspace, attempt: &MemberAttempt, steps: &[(u32, &Value)]) {
+fn finish_run(workspace: &Workspace, attempt: &MemberAttempt, steps: &[(&str, &Value)]) {
     let run_id = attempt.action_id.clone().unwrap();
-    let mut state = PipelineState::new(run_id.clone(), "task_pilot_pipeline".into(), json!({}));
-    for (index, output) in steps {
-        state.record_step(*index, JobRunState::Success, Some((*output).clone()), None);
-    }
-    workspace.runtime.write_run_state(&run_id, &state).unwrap();
+    workspace.record_steps(&run_id, steps);
     workspace
         .jobs
         .mark_job_run_running(&run_id, Utc::now(), std::process::id())
@@ -248,7 +253,11 @@ fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
     assert!(!pilot_applied(&workspace, &overlapping));
     assert!(pilot_applied(&workspace, &disjoint));
 
-    finish_run(&workspace, &attempt, &[(0, &prepared), (2, &output)]);
+    finish_run(
+        &workspace,
+        &attempt,
+        &[("prepare", &prepared), ("apply", &output)],
+    );
     // Settle inside the debounce window, so this pass admits nothing.
     evaluate_routine(
         &workspace.runtime,
@@ -446,7 +455,11 @@ fn context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failu
             true
         );
 
-        finish_run(&workspace, &attempt, &[(0, &prepared), (2, &output)]);
+        finish_run(
+            &workspace,
+            &attempt,
+            &[("prepare", &prepared), ("apply", &output)],
+        );
         evaluate_routine(
             &workspace.runtime,
             &routine,
@@ -547,7 +560,11 @@ fn an_instruction_edit_off_every_selector_path_is_ignored_by_default() {
             ..Default::default()
         })
         .unwrap();
-    finish_run(&workspace, &attempt, &[(0, &prepared), (2, &output)]);
+    finish_run(
+        &workspace,
+        &attempt,
+        &[("prepare", &prepared), ("apply", &output)],
+    );
     evaluate_routine(&workspace.runtime, &routine, false, Utc::now()).unwrap();
     let attempt = workspace.admitted(&task, 2);
     let prepared = prepare_claim(&workspace, &attempt);
