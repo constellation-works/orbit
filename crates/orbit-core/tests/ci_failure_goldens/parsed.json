@@ -416,5 +416,29 @@
         "46a98d26d58a6a2b"
       ]
     }
+  ],
+  "unknown_step_labelled_job_log_binds_its_one_failed_step": [
+    {
+      "filed_count": 1,
+      "tasks": [
+        {
+          "failure_key": "0e9c0905a352a450",
+          "signature": "fail [ <n>.<n>s] orbit-engine::engine transport::nextest_forces_plain_output",
+          "step_fallback": false,
+          "excerpt": "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[group]Run cargo nextest run --workspace --profile ci\nCheck / Clippy / Test\tUNKNOWN STEP\t[... 930291 command bytes omitted ...]\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z         FAIL [   0.104s] orbit-engine::engine transport::nextest_forces_plain_output\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z thread 'transport::nextest_forces_plain_output' panicked at crates/orbit-engine/tests/engine/transport.rs:41:5:\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z assertion `left == right` failed\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z   left: \"\\u{1b}[32mPASS\"\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z  right: \"PASS\"\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z      Summary [ 412.003s] 6001 tests run: 6000 passed, 1 failed, 0 skipped\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z         FAIL [   0.104s] orbit-engine::engine transport::nextest_forces_plain_output\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z error: test run failed\nCheck / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[error]Process completed with exit code 100.\n",
+          "excerpt_has_note": true
+        }
+      ],
+      "skipped_keys": [],
+      "collected": {
+        "source_bytes": 932100,
+        "log_truncated": true,
+        "retryable_errors": [],
+        "diagnostic_kind": "runner_failure_regions",
+        "diagnostic_step": "Test",
+        "step_attribution": "unattributed",
+        "failure_anchor_count": 5
+      }
+    }
   ]
 }

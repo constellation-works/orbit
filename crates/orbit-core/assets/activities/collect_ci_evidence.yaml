@@ -24,7 +24,11 @@ spec:
     and one-job fallback. A separate diagnostic_unit keeps a complete runner
     command from its Run group through nonzero process completion (256 KiB cap),
     bound to the unique failed step. A truncated head/tail display alone does
-    not defer a job with this complete unit. Missing/ambiguous command boundaries,
+    not defer a job with this complete unit. When gh labels every line of the
+    unit with its unattributed `UNKNOWN STEP` column, the unit names no
+    conflicting step, so the one nonzero-exit command is bound to the job's
+    one failed step and records `step_attribution: unattributed`; a unit
+    mixing a different step's label is still rejected. Missing/ambiguous command boundaries,
     source truncation and exhausted job/checkout budgets remain retryable;
     complete sibling jobs still progress. Checkout identity is extracted while
     the full runner-log stream is drained, before the human excerpt is truncated;
@@ -121,7 +125,13 @@ spec:
     retries of one workflow run count once, an error missing from one sweep
     starts over, and an error that names no run never degrades. An unavailable
     GitHub capability breaks the streak because that sweep could not observe
-    the error.
+    the error. A landing-branch failure is also counted by branch and workflow,
+    because each push replaces the run its gap is keyed by: once that identity
+    has stayed unfileable on 3 consecutive sweeps, whichever runs it was seen
+    on, its gaps become persistent too. Every persistently incomplete
+    landing-branch failure is listed in `landing_evidence_incomplete` with
+    `evidence_gaps` and `consecutive_sweeps`, and keeps `outcome_hint` at
+    `current_failures`, so filing escalates it instead of deferring it again.
     When no GitHub client is available or authenticated the snapshot carries
     `collected: false` and gathers nothing further, so a caller can never
     mistake it for a clean CI result.
@@ -234,6 +244,12 @@ spec:
             type: array
           persistently_incomplete:
             type: array
+          landing_evidence_incomplete:
+            type: array
+            description: >
+              Persistently incomplete landing-branch failures, each with the
+              `evidence_gaps` that kept it unfileable and `consecutive_sweeps`.
+              Filing escalates each branch and workflow to one task.
           summary:
             type: object
           truncation:

@@ -464,9 +464,19 @@ fn set_checkout_identity(failure: &mut Value, scope: &str, log: &super::query::R
     });
 }
 
+/// The step column `gh run view --log*` prints when it cannot attribute a log
+/// line to a step. Some runs label every line of a job this way.
+const UNATTRIBUTED_STEP: &str = "UNKNOWN STEP";
+
 /// A unique runner failure unit can only name a unique failed step. Primary
 /// gh output also carries job/step columns; reject conflicting labels rather
 /// than borrowing a different step's command. Raw fallback logs have no columns.
+///
+/// A unit whose every line carries gh's unattributed step label names no step
+/// at all, so it cannot conflict with one. The collector already selected the
+/// one command that completed with a nonzero exit, and the job's metadata
+/// names exactly one failed step, so that command is bound to that step and
+/// the unit records `step_attribution: "unattributed"`.
 pub(super) fn bound_diagnostic(
     log: &super::query::RunLog,
     failure: &Value,
@@ -492,11 +502,25 @@ pub(super) fn bound_diagnostic(
         .filter(|name| !name.trim().is_empty())?;
     if log.source == orbit_tools::github_cli::SOURCE_RUN_LOG {
         let job_name = job["name"].as_str()?;
+        let mut labels = std::collections::BTreeSet::new();
         for line in text.lines() {
             let mut columns = line.splitn(3, '\t');
-            if columns.next()? != job_name || columns.next()? != step || columns.next().is_none() {
+            let (Some(line_job), Some(line_step), Some(_)) =
+                (columns.next(), columns.next(), columns.next())
+            else {
+                return None;
+            };
+            if line_job != job_name || (line_step != step && line_step != UNATTRIBUTED_STEP) {
                 return None;
             }
+            labels.insert(line_step);
+        }
+        match labels.into_iter().collect::<Vec<_>>().as_slice() {
+            [label] if *label == UNATTRIBUTED_STEP => {
+                unit["step_attribution"] = json!("unattributed");
+            }
+            [label] if *label == step => {}
+            _ => return None,
         }
     }
     unit["job_id"] = json!(job_id);
