@@ -141,6 +141,26 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
             remote_sha.as_deref().unwrap_or("<missing>")
         )));
     }
+    // A claimed leaf that adopted a published candidate's branch holds a lease
+    // on exactly that head, whatever else the run observed. The read is
+    // lenient: a run checkpointed before the step named the field has none,
+    // and adopted no branch.
+    let adopted_head = input
+        .get("candidate_resume")
+        .and_then(|resumed| input_string_field(resumed, "reused_head_sha"));
+    if let Some(adopted) = &adopted_head
+        && remote_sha.as_deref() != Some(adopted.as_str())
+        && remote_sha.as_deref() != Some(local_sha.as_str())
+    {
+        return Err(OrbitError::Execution(format!(
+            "push_lease_lost: 'origin/{branch}' is {}, not the published head {adopted} the \
+             resumed candidate adopted; the branch changed or was deleted since, so it is not \
+             overwritten or recreated",
+            remote_sha
+                .as_deref()
+                .map_or_else(|| "missing".to_string(), |sha| format!("at {sha}"))
+        )));
+    }
     let decision = push_decision(workspace_path, &branch, &local_sha, remote_sha.as_deref())?;
     let (label, force_with_lease) = match decision {
         PushDecision::Missing => ("performed_create", false),
@@ -161,18 +181,11 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         }
         // [ORB-15308] A claimed leaf that resumed a published candidate on
         // its branch replaces exactly that published head, so the
-        // candidate's pull request carries the new one. The step output is
-        // read leniently: a run checkpointed before it named the field has
-        // none, and adopted no branch.
-        PushDecision::Diverged
-            if remote_sha.is_some()
-                && input
-                    .get("candidate_resume")
-                    .and_then(|resumed| input_string_field(resumed, "reused_head_sha"))
-                    == remote_sha =>
-        {
-            ("performed_force_with_lease", true)
-        }
+        // candidate's pull request carries the new one. The guard above has
+        // already refused any other remote, so the lease below is on it and
+        // the ordinary rewrite checkpoint, which a moved base can satisfy
+        // against a remote the candidate never contained, is not consulted.
+        PushDecision::Diverged if adopted_head.is_some() => ("performed_force_with_lease", true),
         PushDecision::Diverged => {
             validate_rewrite_checkpoint(input, &branch, &local_sha, remote_sha.as_deref())?;
             ("performed_force_with_lease", true)

@@ -42,9 +42,12 @@ spec:
         type: string
       # A claimed leaf's `candidate_resume` output. When its
       # `reused_head_sha` names the published head of the candidate whose
-      # branch this run adopted, a local branch that diverged from exactly
-      # that remote head replaces it under a lease; any other remote head is
-      # refused as usual. Absent or without that field, nothing changes.
+      # branch this run adopted, the remote branch must still be at exactly
+      # that head: a local branch that diverged from it replaces it under a
+      # lease on it, regardless of any rewrite checkpoint. A remote at any
+      # other head, or a deleted one, fails the step as `push_lease_lost`
+      # and is neither overwritten nor recreated; a remote already at the
+      # local head is reused. Absent or without that field, nothing changes.
       candidate_resume:
         type: [object, "null"]
       # Transient push retry budget. Absent means the production default:

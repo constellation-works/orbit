@@ -50,7 +50,8 @@ spec:
     request (`published`, `pull_request`), a resumed candidate also renames
     this checkout's branch to the candidate's, so the leaf's push replaces
     the published head under a lease (`reused_head_sha`) and its `pr_open`
-    reuses that pull request. A local branch of that name held by a retained
+    reuses that pull request. The push refuses, rather than overwrites or
+    recreates, a branch that advanced or was deleted since that head. A local branch of that name held by a retained
     worktree at the published head is renamed aside first; one at any other
     commit is never moved. When the branch cannot be adopted the output says
     why (`branch_reuse_refused`), and the leaf's `pr_open` closes
