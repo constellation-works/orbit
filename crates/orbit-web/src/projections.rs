@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    TaskRow, task_status_transition_allowed, task_status_transition_required_field,
+    PullRequestLinks, TaskRow, task_status_transition_allowed,
+    task_status_transition_required_field,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{
@@ -144,7 +145,15 @@ fn job_v2_step_to_json(step: &JobV2Step) -> Value {
     value
 }
 
-pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStatus>) -> Value {
+/// `links` fills the page of a `github-pr` ref recorded without one, so the
+/// dashboard can link every delivered pull request.
+pub(crate) fn task_to_json(
+    task: &Task,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+    links: &PullRequestLinks,
+) -> Value {
+    let mut external_refs = task.external_refs.clone();
+    links.link(&mut external_refs);
     let mut value = json!({
         "id": task.id,
         "parent_id": task.parent_id(),
@@ -166,7 +175,7 @@ pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         "complexity": task.complexity.map(|value| value.to_string()),
         "type": task.task_type.to_string(),
         "pr_status": task.pr_status,
-        "external_refs": task.external_refs,
+        "external_refs": external_refs,
         "relations": orbit_types::task::resolve_task_relations(task, status_by_id),
         "source_task_id": task.source_task_id(),
         "job_run_id": task.job_run_id,
@@ -234,7 +243,7 @@ pub(crate) fn task_row_to_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
     let task = &row.task;
-    let mut value = task_to_json(task, status_by_id);
+    let mut value = task_to_json(task, status_by_id, &PullRequestLinks::new(runtime));
     let object = value.as_object_mut().ok_or_else(|| {
         OrbitError::Execution("task JSON projection did not produce an object".to_string())
     })?;
@@ -319,6 +328,8 @@ pub(crate) struct TaskListProjection {
     local_machine_id: Option<String>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
+    /// Reads the origin remote once, on the page's first unlinked PR ref.
+    pull_request_links: PullRequestLinks,
 }
 
 impl TaskListProjection {
@@ -327,6 +338,7 @@ impl TaskListProjection {
             registry: runtime.configured_crew_registry_projection(),
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
             preparing: OnceCell::new(),
+            pull_request_links: PullRequestLinks::new(runtime),
         }
     }
 
@@ -339,7 +351,7 @@ impl TaskListProjection {
         status_by_id: &BTreeMap<String, TaskStatus>,
     ) -> Result<Value, OrbitError> {
         let task = &row.task;
-        let mut value = task_to_json(task, status_by_id);
+        let mut value = task_to_json(task, status_by_id, &self.pull_request_links);
         let object = value.as_object_mut().ok_or_else(|| {
             OrbitError::Execution("task JSON projection did not produce an object".to_string())
         })?;

@@ -63,6 +63,7 @@ pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
         return Err(error);
     }
 
+    let pr_url = input_string_field(input, "pr_url");
     let mut performed_task_ids = Vec::new();
     let mut reused_task_ids = Vec::new();
     for task in &context.tasks {
@@ -76,7 +77,10 @@ pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
 
         let model = pr_review_attribution(host, task, &context.batch_id)?;
         let external_refs = match pr_number.as_deref() {
-            Some(number) => vec![ExternalRef::github_pr(number.to_string())?],
+            Some(number) => vec![ExternalRef::github_pr_with_url(
+                number.to_string(),
+                pr_url.as_deref(),
+            )?],
             None => Vec::new(),
         };
         let update = TaskAutomationUpdate {
@@ -103,7 +107,7 @@ pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
         "performed_task_ids": performed_task_ids,
         "reused_task_ids": reused_task_ids,
         "pr_number": pr_number,
-        "pr_url": input_string_field(input, "pr_url"),
+        "pr_url": pr_url,
         "no_diff_expected": no_diff_expected,
     }))
 }

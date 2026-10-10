@@ -2,7 +2,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_store::pr_scoreboard;
-use orbit_types::task::{ExternalRef, Task, TaskStatus};
+use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -158,16 +158,22 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         )));
     }
 
-    // Find the GitHub PR external ref from the first task that has one.
-    let pr_number = batch_tasks
+    // Find the GitHub PR external ref from the first task that has one. The
+    // ref is re-recorded on every task below, link included when known.
+    let pr_ref = batch_tasks
         .iter()
-        .find_map(Task::github_pr_number)
+        .find_map(|task| {
+            task.external_refs
+                .iter()
+                .find(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        })
+        .cloned()
         .ok_or_else(|| {
             OrbitError::InvalidInput(
                 "merge_batch_pr: no task in batch has a github-pr external ref".to_string(),
             )
-        })?
-        .to_string();
+        })?;
+    let pr_number = pr_ref.id.clone();
 
     let workspace_path = resolve_batch_workspace_path(host, input, batch_id)?;
 
@@ -237,7 +243,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
                 } else {
                     None
                 },
-                external_refs: vec![ExternalRef::github_pr(pr_number.clone())?],
+                external_refs: vec![pr_ref.clone()],
                 model: ship_done_attribution(task),
                 ..TaskAutomationUpdate::default()
             },

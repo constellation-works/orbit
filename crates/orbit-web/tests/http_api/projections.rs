@@ -761,3 +761,97 @@ fn scoreboard_polls_reuse_window_memo_without_writing_summary() {
         },
     );
 }
+
+/// A `github-pr` ref recorded with only its number links to the pull request
+/// in the workspace's own GitHub repository, in the detail and on list rows.
+/// A recorded page is kept; a ref whose id is not a PR number, or a workspace
+/// whose origin is not on GitHub, stays unlinked.
+#[test]
+fn github_pr_refs_link_the_pull_request_from_the_origin_remote() {
+    isolated(
+        "projections::github_pr_refs_link_the_pull_request_from_the_origin_remote",
+        || {
+            let fixture = Fixture::new();
+            let repo = fixture.path("repo");
+            let git = |args: &[&str]| {
+                let status = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&repo)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "git {args:?}");
+            };
+            git(&["init", "-q"]);
+            git(&[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:constellation-works/orbit.git",
+            ]);
+            let server = fixture.server(true);
+            let create = |refs: Value| {
+                json_ok(server.send(
+                    "POST",
+                    "/api/tasks?workspace=ws_http_fixture",
+                    json!({"title": "PR link fixture", "description": "Delivered work",
+                    "acceptance_criteria": ["Link the PR"], "complexity": "low",
+                    "external_refs": refs}),
+                ))["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            };
+            let refs = |id: &str| {
+                json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")))
+                    ["external_refs"]
+                    .clone()
+            };
+            let number_only = create(json!([
+                {"system": "github-pr", "id": "4067"},
+                {"system": "jira", "id": "ENG-1"},
+            ]));
+            let recorded = create(json!([
+                {"system": "github-pr", "id": "12", "url": "https://github.example/o/r/pull/12"},
+            ]));
+            let not_a_number = create(json!([{"system": "github-pr", "id": "40/../67"}]));
+
+            let linked = json!([
+                {"system": "github-pr", "id": "4067",
+                 "url": "https://github.com/constellation-works/orbit/pull/4067"},
+                {"system": "jira", "id": "ENG-1"},
+            ]);
+            assert_eq!(refs(&number_only), linked);
+            assert_eq!(
+                refs(&recorded),
+                json!([{"system": "github-pr", "id": "12",
+                        "url": "https://github.example/o/r/pull/12"}])
+            );
+            assert_eq!(
+                refs(&not_a_number),
+                json!([{"system": "github-pr", "id": "40/../67"}])
+            );
+            let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+            let row = page["items"]
+                .as_array()
+                .or_else(|| page.as_array())
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == number_only.as_str())
+                .cloned()
+                .unwrap();
+            assert_eq!(row["external_refs"], linked, "the list row links it too");
+
+            git(&[
+                "remote",
+                "set-url",
+                "origin",
+                "https://gitlab.example/o/r.git",
+            ]);
+            assert_eq!(
+                refs(&number_only),
+                json!([{"system": "github-pr", "id": "4067"}, {"system": "jira", "id": "ENG-1"}]),
+                "a remote off GitHub leaves the number unlinked"
+            );
+        },
+    );
+}

@@ -385,17 +385,38 @@ impl ExternalRef {
         Self::try_new(GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(), id.into(), None)
     }
 
+    /// A `github-pr` ref carrying the pull request's page when the provider
+    /// reported one. Only an https URL is kept: anything else would be dropped
+    /// by the dashboard anyway, and an unusable URL must not fail the delivery
+    /// step that records the number.
+    pub fn github_pr_with_url(id: impl Into<String>, url: Option<&str>) -> Result<Self, TaskError> {
+        let mut external_ref = Self::github_pr(id)?;
+        external_ref.url = url
+            .map(str::trim)
+            .filter(|value| Url::parse(value).is_ok_and(|parsed| parsed.scheme() == "https"))
+            .map(ToOwned::to_owned);
+        Ok(external_ref)
+    }
+
     pub fn has_key(&self, system: &str, id: &str) -> bool {
         self.system == system && self.id == id
     }
 }
 
+/// Add `external_ref` unless a ref with its key is already recorded. A
+/// recorded ref without a URL takes the new one's, so a later writer that
+/// knows the link completes an earlier key-only ref.
 pub fn push_external_ref_if_missing(refs: &mut Vec<ExternalRef>, external_ref: ExternalRef) {
-    if !refs
-        .iter()
-        .any(|candidate| candidate.has_key(&external_ref.system, &external_ref.id))
+    match refs
+        .iter_mut()
+        .find(|candidate| candidate.has_key(&external_ref.system, &external_ref.id))
     {
-        refs.push(external_ref);
+        Some(existing) => {
+            if existing.url.is_none() {
+                existing.url = external_ref.url;
+            }
+        }
+        None => refs.push(external_ref),
     }
 }
 

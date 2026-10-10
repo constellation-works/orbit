@@ -821,10 +821,23 @@ function buildReadinessBlock(readiness) {
   return wrap;
 }
 
+const GITHUB_PR_REF_SYSTEM = "github-pr";
+
+// The delivery pull request a row links: the task's github-pr ref, when it
+// carries an http(s) page. The server fills that page from the workspace's own
+// origin remote for a ref recorded with only its number.
+function pullRequestLink(task) {
+  const refs = Array.isArray(task.external_refs) ? task.external_refs : [];
+  const ref = refs.find((candidate) => candidate && candidate.system === GITHUB_PR_REF_SYSTEM && isHttpUrl(candidate.url));
+  return ref ? { number: String(ref.id || ""), url: ref.url } : null;
+}
+
 function buildExternalRefs(refs) {
   const wrap = el("div");
   for (const ref of refs) {
-    const label = `${ref.system || "external"}:${ref.id || ""}`;
+    const label = ref.system === GITHUB_PR_REF_SYSTEM
+      ? `PR #${ref.id || ""}`
+      : `${ref.system || "external"}:${ref.id || ""}`;
     const line = el("div", { class: "external-ref-line" });
     // Task records are agent-writable, so a non-http(s) URL stays text.
     if (isHttpUrl(ref.url)) {
@@ -2168,6 +2181,9 @@ const REJECT_STATUSES = new Set(["proposed", "review", "backlog"]);
 // Ship dispatches a task through the pipeline, which admits it out of backlog —
 // so backlog is the only status where the control means anything.
 const SHIP_STATUSES = new Set(["backlog"]);
+// Rows whose quick-action cell links the delivery pull request, when the task
+// has one and the cell holds nothing else.
+const PULL_REQUEST_LINK_STATUSES = new Set(["review", "in-progress"]);
 // Group heading for the status targets the lifecycle table refuses. Choosing one
 // is the operator override recorded in task history as `forced`.
 const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
@@ -2900,7 +2916,8 @@ function quickActionSignature(task) {
   const machine = task.job_run_machine;
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
-  return `${task.job_run_id || ""}-${navigable}-${host}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}` : ""}`;
+  const pullRequest = pullRequestLink(task);
+  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
@@ -2923,6 +2940,7 @@ function hasQuickAction(task) {
     if (task.job_run_navigable !== false) return true;
     if (summaryExecutionLocation(task.job_run_machine).known) return true;
   }
+  if (PULL_REQUEST_LINK_STATUSES.has(task.status) && pullRequestLink(task)) return true;
   return task.status === "proposed" || SHIP_STATUSES.has(task.status);
 }
 
@@ -2946,6 +2964,16 @@ function buildQuickAction(task, context) {
       cell.appendChild(buildExecutionProvenance(location, { runId: task.job_run_id, workspace: task.workspace_id }));
       return cell;
     }
+  }
+  const pullRequest = PULL_REQUEST_LINK_STATUSES.has(task.status) ? pullRequestLink(task) : null;
+  if (pullRequest) {
+    const link = el("a", { class: "task-quick-link", text: `PR #${pullRequest.number}`, title: `Open pull request #${pullRequest.number}` });
+    link.href = pullRequest.url;
+    link.rel = "noopener noreferrer";
+    link.target = "_blank";
+    link.addEventListener("click", (event) => event.stopPropagation());
+    cell.appendChild(link);
+    return cell;
   }
   let spec = null;
   if (task.status === "proposed") {

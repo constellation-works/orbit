@@ -318,7 +318,10 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             status: Some(TaskStatus::Blocked),
             status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
-            external_refs: vec![ExternalRef::github_pr(pr_number.clone())?],
+            external_refs: vec![ExternalRef::github_pr_with_url(
+                pr_number.clone(),
+                pr_url.as_deref(),
+            )?],
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
