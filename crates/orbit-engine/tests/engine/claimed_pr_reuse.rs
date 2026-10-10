@@ -244,6 +244,84 @@ fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
     );
 }
 
+/// A remote still at the published head fast-forwards under the lease on it,
+/// and a retried push finds the candidate published.
+#[test]
+fn an_unmoved_adopted_branch_fast_forwards_under_its_published_lease() {
+    isolated(
+        "an_unmoved_adopted_branch_fast_forwards_under_its_published_lease",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            let head = fx.continue_from_published_head();
+
+            let pushed = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
+            assert_eq!(pushed["decision"], "performed_fast_forward", "{pushed}");
+            assert_eq!(pushed["force_with_lease"], true, "{pushed}");
+            assert_eq!(fx.remote_tip(EARLIER), head);
+
+            let retried = action(&host, "git_push", &fx.push_input(EARLIER, &resumed)).unwrap();
+            assert_eq!(retried["decision"], "reused_current", "{retried}");
+            assert_eq!(fx.remote_tip(EARLIER), head);
+        },
+    );
+}
+
+/// The adopted branch is deleted after the engine observed it, before its
+/// fast-forward push starts. The lease refuses the push, and the branch stays
+/// deleted.
+#[test]
+fn a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation() {
+    isolated(
+        "a_fast_forward_does_not_recreate_an_adopted_branch_deleted_after_observation",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_from_published_head();
+            fx.change_before_push(Change::Delete);
+
+            action(&host, "git_push", &fx.push_input(EARLIER, &resumed))
+                .expect_err("the push is refused under the published-head lease");
+            let refs = git(
+                &fx.forge.join("remote.git"),
+                &["for-each-ref", &format!("refs/heads/{EARLIER}")],
+            );
+            assert!(refs.is_empty(), "the branch stays deleted: {refs}");
+        },
+    );
+}
+
+/// The adopted branch is rewound to an ancestor of the local candidate after
+/// the engine observed it, before its fast-forward push starts. The lease
+/// refuses the push, and the rewound head survives.
+#[test]
+fn a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation() {
+    isolated(
+        "a_fast_forward_does_not_move_an_adopted_branch_rewound_after_observation",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_from_published_head();
+            let rewound = git(&fx.repo, &["rev-parse", &format!("{}^", fx.earlier_head)]);
+            fx.change_before_push(Change::Rewind(rewound.clone()));
+
+            action(&host, "git_push", &fx.push_input(EARLIER, &resumed))
+                .expect_err("the push is refused under the published-head lease");
+            assert_eq!(fx.remote_tip(EARLIER), rewound, "the rewound head survives");
+        },
+    );
+}
+
+/// A change to the adopted branch on the remote, timed to land after the
+/// engine observed the branch and before its push starts.
+enum Change {
+    Delete,
+    Rewind(String),
+}
+
 struct Fixture {
     forge: PathBuf,
     repo: PathBuf,
@@ -253,6 +331,8 @@ struct Fixture {
     /// The re-claim's worktree, on [`OURS`] at the moved base.
     claim: PathBuf,
     base_sha: String,
+    /// Where a [`Change`] waits for the engine's next push.
+    change_file: PathBuf,
 }
 
 impl Fixture {
@@ -322,6 +402,23 @@ impl Fixture {
         fs::create_dir_all(gh.parent().unwrap()).unwrap();
         fs::write(&gh, FAKE_GH.replace("__FORGE__", path_str(&forge))).unwrap();
         fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The real Git is found before the substitute shadows it on `PATH`.
+        let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .find_map(|dir| fs::canonicalize(dir.join("git")).ok())
+            .expect("git on PATH");
+        let change_file = sandbox.join("push-change");
+        let git_shim = sandbox.join("bin").join("git");
+        fs::write(
+            &git_shim,
+            PUSH_BOUNDARY_GIT
+                .replace("__GIT__", path_str(&real_git))
+                .replace("__REMOTE__", path_str(&remote))
+                .replace("__CHANGE__", path_str(&change_file))
+                .replace("__REF__", &format!("refs/heads/{EARLIER}")),
+        )
+        .unwrap();
+        fs::set_permissions(&git_shim, fs::Permissions::from_mode(0o755)).unwrap();
         Self {
             forge,
             repo,
@@ -329,6 +426,7 @@ impl Fixture {
             earlier_head,
             claim,
             base_sha,
+            change_file,
         }
     }
 
@@ -364,6 +462,24 @@ impl Fixture {
         git(&self.claim, &["add", "-A"]);
         git(&self.claim, &["commit", "-q", "-m", "continued candidate"]);
         git(&self.claim, &["rev-parse", "HEAD"])
+    }
+
+    /// The continued candidate committed on the published head. Adoption
+    /// leaves HEAD at the moved base, so the adopted branch is first reset
+    /// onto the published head, the state a fast-forward needs.
+    fn continue_from_published_head(&self) -> String {
+        git(&self.claim, &["reset", "-q", "--hard", &self.earlier_head]);
+        self.continue_and_commit()
+    }
+
+    /// Lands `change` on the adopted branch when the engine's next push
+    /// starts, after the engine has observed the branch.
+    fn change_before_push(&self, change: Change) {
+        let to = match change {
+            Change::Delete => "delete".to_string(),
+            Change::Rewind(sha) => sha,
+        };
+        fs::write(&self.change_file, to).unwrap();
     }
 
     fn push_input(&self, branch: &str, resumed: &Value) -> Value {
@@ -631,6 +747,38 @@ case "$1 ${2:-}" in
         printf 'CLOSED' > "$forge/prs/$3/state" ;;
     *) echo "fake gh: unsupported call: $*" >&2; exit 2 ;;
 esac
+"#;
+
+/// A `git` that shadows the real one on `PATH`. When the engine's push is about
+/// to run, a change waiting in `__CHANGE__` lands on the bare remote first, so
+/// the push's lease is checked against a ref already moved, before Git
+/// advertises anything. Other invocations, and a push with nothing waiting,
+/// exec the real Git unchanged.
+const PUSH_BOUNDARY_GIT: &str = r#"#!/bin/sh
+set -eu
+git='__GIT__'
+remote='__REMOTE__'
+change='__CHANGE__'
+ref='__REF__'
+subcommand=
+skip=
+for arg in "$@"; do
+    if [ -n "$skip" ]; then skip=; continue; fi
+    case "$arg" in
+        -c) skip=1 ;;
+        -*) ;;
+        *) subcommand=$arg; break ;;
+    esac
+done
+if [ "$subcommand" = push ] && [ -f "$change" ]; then
+    action=$(cat "$change")
+    mv "$change" "$change.applied"
+    case "$action" in
+        delete) "$git" --git-dir="$remote" update-ref -d "$ref" ;;
+        *) "$git" --git-dir="$remote" update-ref "$ref" "$action" ;;
+    esac
+fi
+exec "$git" "$@"
 "#;
 
 /// Run `body` in a copy of this test binary whose `PATH` starts with the
