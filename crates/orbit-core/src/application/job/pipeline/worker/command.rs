@@ -8,6 +8,8 @@
 //! removed because filename layout does not prove which entry point ran.
 
 use super::log::pipeline_worker_file_name;
+#[cfg(test)]
+use super::scope::contain_worker_command_with_availability;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -353,9 +355,59 @@ impl WorkerCommandConfig {
         self
     }
 
+    /// Limits and runtime policy for a worker program the caller already built.
+    /// Production launch uses [`Self::for_paths`] and [`Self::build`].
+    #[cfg(test)]
+    pub(crate) fn for_prepared_worker(
+        limits: Option<WorkerLimits>,
+        policy: orbit_config::ExecutionEnvPolicy,
+    ) -> Self {
+        Self {
+            root_override: None,
+            containment: limits,
+            strict_containment: false,
+            environment: Some(policy),
+        }
+    }
+
+    /// Apply the admitted policy, then contain the prepared program using an
+    /// injected scope-availability result instead of the live systemd probe.
+    #[cfg(test)]
+    pub(crate) fn contain_prepared(
+        &self,
+        mut command: Command,
+        run_id: &str,
+        availability: Result<(), String>,
+    ) -> Result<Command, OrbitError> {
+        self.apply_launch_environment(&mut command);
+        contain_worker_command_with_availability(
+            command,
+            run_id,
+            self.containment.as_ref(),
+            self.strict_containment,
+            Some(availability),
+            true,
+            &std::sync::Once::new(),
+        )
+    }
+
     /// The command that runs `run_id`'s worker from `workspace`.
     pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
         let mut command = self.build_uncontained(workspace, run_id)?;
+        self.apply_launch_environment(&mut command);
+        contain_worker_command(
+            command,
+            run_id,
+            self.containment.as_ref(),
+            self.strict_containment,
+        )
+    }
+
+    /// Admitted runtime credentials and the strict-containment flag.
+    ///
+    /// An edit already on `command`, including a removal, keeps precedence over
+    /// the policy snapshot.
+    fn apply_launch_environment(&self, command: &mut Command) {
         if let Some(policy) = &self.environment {
             for (name, value) in policy.agent_subprocess_env(&[]) {
                 if !command
@@ -371,12 +423,6 @@ impl WorkerCommandConfig {
         } else {
             command.env_remove(STRICT_WORKER_CONTAINMENT_ENV);
         }
-        contain_worker_command(
-            command,
-            run_id,
-            self.containment.as_ref(),
-            self.strict_containment,
-        )
     }
 
     fn build_uncontained(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {

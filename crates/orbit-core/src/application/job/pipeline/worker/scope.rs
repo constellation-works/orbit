@@ -172,10 +172,12 @@ pub(crate) fn scope_unit_name(run_id: &str) -> String {
 
 /// `systemd-run --user --scope … -- <base argv>`, carrying over `base`'s
 /// working directory and environment edits over the shared child allowlist.
-/// Explicit `--setenv` values keep the launching service's toolchain PATH
-/// across the user-manager boundary. `--scope` execs the program in
-/// the same process, so stdio and `pre_exec` set on the result later still
-/// apply to the worker.
+/// Each admitted name is also passed as `--setenv=NAME` with no value.
+/// systemd-run (211 and later, including 259) copies that value from its own
+/// environment, which `command.envs` already holds, so a toolchain PATH
+/// still crosses the user-manager boundary and credential values never appear
+/// in argv. `--scope` execs the program in the same process, so stdio and
+/// `pre_exec` set on the result later still apply to the worker.
 pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerLimits) -> Command {
     let mut command = Command::new(SYSTEMD_RUN);
     command
@@ -209,11 +211,12 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
             command.env_remove(key);
         }
     }
-    for (key, value) in &environment {
+    // Name only. The value is already in this command's environment; putting
+    // it in argv exposes pass-listed credentials to process listings and
+    // execve observers [ORB-15175].
+    for key in environment.keys() {
         let mut argument = OsString::from("--setenv=");
         argument.push(key);
-        argument.push("=");
-        argument.push(value);
         command.arg(argument);
     }
     command

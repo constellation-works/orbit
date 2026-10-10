@@ -341,6 +341,7 @@
         "application/gc/tests/tmp.rs::preview_skips_entries_removed_after_the_listing",
         "application/health/tests/artifact.rs::doctor_retirement_confines_linked_and_regular_skill_assets",
         "application/health/tests/artifact.rs::retired_backend_repair_confines_links_cycles_and_special_files",
+        "application/job/pipeline/worker/tests/scope.rs::admitted_credentials_reach_the_scoped_worker_environment_and_stay_off_argv",
         "application/job/pipeline/worker/tests/scope.rs::enabled_containment_always_yields_limits",
         "application/job/pipeline/worker/tests/scope.rs::scope_launch_carries_allowlisted_environment_and_honors_edits",
         "application/job/pipeline/worker/tests/supervisor.rs::a_closed_observer_channel_stops_and_reaps_the_spawned_child",

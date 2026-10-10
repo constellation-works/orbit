@@ -136,9 +136,11 @@ own transient scope, `orbit-worker-<run_id>-<nonce>.scope`, under the user
 manager's `app.slice`. One runaway run is throttled or OOM-killed inside that
 scope; the dashboard, the sweep clock, SSH, and sibling runs keep working.
 
-Scope launches explicitly carry the launching process's allow-listed child
-variables (including `PATH`), plus deliberate worker environment edits, through
-`systemd-run --setenv`. Required validation runs `/bin/sh` with a cleared,
+Scope launches carry the launching process's allow-listed child variables
+(including `PATH`) and deliberate worker environment edits in the child
+environment. `systemd-run` receives name-only `--setenv=NAME` arguments and
+copies each value from that environment, so credentials are not placed on the
+command line. Required validation runs `/bin/sh` with a cleared,
 allow-listed environment. By default Orbit resolves its `PATH` and allowed
 toolchain variables from the owner's interactive login shell, falling back to
 a non-interactive login shell when that probe fails. Each probe is bounded to
