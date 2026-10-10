@@ -80,6 +80,14 @@ impl Store {
             conditions.push(format!("lease_id = ?{}", param_values.len() + 1));
             param_values.push(Box::new(lease_id.clone()));
         }
+        if let Some(before_id) = filter.before_id {
+            conditions.push(format!("id < ?{}", param_values.len() + 1));
+            param_values.push(Box::new(before_id));
+        }
+        if filter.exclude_unverified_success {
+            conditions
+                .push("NOT (COALESCE(role, '') = 'unverified' AND status = 'success')".to_string());
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()

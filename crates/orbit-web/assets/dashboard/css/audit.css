@@ -422,3 +422,25 @@ table.policy-table.policy-cause-table td {
 .lifecycle-failure-counts {
   font: 12px var(--font-mono); color: var(--fg); overflow-wrap: anywhere; margin-bottom: 6px;
 }
+
+.audit-more {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--fg-dim);
+}
+.audit-more-btn {
+  font: inherit;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.audit-more-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.audit-more-btn:disabled { cursor: progress; color: var(--fg-dim); }
+.audit-more-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.audit-more-error { color: var(--state-failed); }

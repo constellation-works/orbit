@@ -83,6 +83,14 @@ pub(super) struct AuditQuery {
     pub(super) limit: Option<usize>,
     #[serde(default)]
     pub(super) offset: Option<usize>,
+    /// Keyset cursor: only rows with an id below this value. Take it from the
+    /// previous page's `x-audit-next-before` header.
+    #[serde(default)]
+    pub(super) before: Option<i64>,
+    /// Hide successful calls from the unconfirmed (`unverified`) caller, the
+    /// high-frequency probe traffic. Their failures and denials stay listed.
+    #[serde(default)]
+    pub(super) hide_unverified: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

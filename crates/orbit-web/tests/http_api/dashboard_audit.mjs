@@ -7,7 +7,13 @@ class Node {
   constructor(tag) {
     this.tagName = tag; this.children = []; this.dataset = {}; this.className = '';
     this.text = ''; this.listeners = new Map(); this.style = { setProperty() {} };
-    this.classList = { add: name => { this.className += ` ${name}`; } };
+    this.classList = {
+      add: name => { this.className += ` ${name}`; },
+      toggle: (name, on) => {
+        const names = this.className.split(' ').filter(n => n && n !== name);
+        this.className = (on ? [...names, name] : names).join(' ');
+      },
+    };
   }
   set textContent(value) { this.text = String(value); this.children = []; }
   set innerHTML(value) { assert.equal(value, ''); this.children = []; this.text = ''; }
@@ -51,7 +57,7 @@ const window = {
 const requestedPaths = [];
 const context = vm.createContext({
   URL, URLSearchParams, window, document, console, AbortController, setTimeout, clearTimeout,
-  fetch: async path => { requestedPaths.push(path); return { ok: true, json: async () => [] }; },
+  fetch: async path => { requestedPaths.push(path); return { ok: true, headers: { get: () => null }, json: async () => [] }; },
 });
 const common = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'), { context });
 const audit = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/audit.js', import.meta.url), 'utf8'), { context });

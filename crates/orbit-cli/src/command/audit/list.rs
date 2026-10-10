@@ -94,6 +94,8 @@ impl Execute for AuditListArgs {
             mcp_call_id: self.mcp_call,
             job_run_id: self.run,
             lease_id: self.lease,
+            before_id: None,
+            exclude_unverified_success: false,
             limit: self.limit,
             offset: 0,
         })?;

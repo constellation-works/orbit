@@ -39,8 +39,26 @@ const policy = {
     cause: index < 4 ? 'policy' : 'context refusal', denial_kind: 'tool_policy',
   })),
 };
+// When set, /api/audit pages through it like the real endpoint: newest first,
+// `before` keyset cursor, `x-audit-next-before` while a full page may have more.
+let pagedEvents = null;
+const auditRequests = [];
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/audit' && pagedEvents) {
+    auditRequests.push(url.searchParams);
+    const limit = Number(url.searchParams.get('limit'));
+    const before = url.searchParams.get('before');
+    const rows = pagedEvents
+      .filter(event => before === null || event.id < Number(before))
+      .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status'))
+      .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
+      .slice(0, limit);
+    res.setHeader('content-type', 'application/json');
+    if (rows.length >= limit) res.setHeader('x-audit-next-before', String(rows.at(-1).id));
+    res.end(JSON.stringify(rows));
+    return;
+  }
   if (url.pathname.startsWith('/api/')) {
     let payload = events;
     if (url.pathname === '/api/diagnostics/denials') {
@@ -169,7 +187,56 @@ try {
   assert.equal(await page.locator('#audit-detail-1').count(), 0);
   assert.equal(await page.locator('[data-key="duration-by-tool"] tbody tr').count(), 1);
   assert.equal(await page.locator('[data-key="duration-by-tool"] tbody tr td').first().textContent(), events[0].tool_name);
+  // Paging: the header separates rows shown from events in the window, older
+  // pages append, and the filters (and their URL) ride along on every page.
+  pagedEvents = Array.from({ length: 120 }, (_, index) => ({
+    ...events[1], id: 120 - index, execution_id: `paged-${120 - index}`,
+    status: index % 4 === 0 ? 'failure' : 'success',
+    role: index % 3 === 0 ? 'unverified' : 'codex',
+  }));
+  const countText = () => page.locator('#audit-count').textContent();
+  await page.evaluate(async (summary) => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+    auditFixture.renderAuditSummary({ ...summary, events: 120 }, auditContext);
+  }, summary);
+  assert.equal(await page.locator('.audit-row').count(), 50);
+  assert.equal(await countText(), '50 of 120 in 24h');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await countText(), '100 of 120 in 24h');
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'older pages continue where the last ended');
+  // A refresh re-fetches the newest page but keeps the older rows on screen.
+  pagedEvents.unshift({ ...pagedEvents[0], id: 121, execution_id: 'paged-121' });
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  assert.equal(await page.locator('.audit-row').count(), 101, 'refresh keeps loaded pages and adds the new event');
+  assert.equal(new Set(await page.locator('.audit-row').evaluateAll(rows => rows.map(row => row.title))).size, 101, 'no row is listed twice');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 121);
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no button once the window is exhausted');
+  assert.match(await page.locator('.audit-more-end').textContent(), /No older events/);
+  assert.equal(await countText(), '121 of 121 in 24h', 'the shown count never exceeds the window count');
+  auditRequests.length = 0;
   await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=success&hide_unverified=1'));
+    auditFixture.buildAuditChips(auditContext);
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  assert.equal(await page.evaluate(() => auditFixture.buildAuditHash()), '#audit?since=24h&status=success&hide_unverified=1', 'the hide choice is part of the URL');
+  assert.equal(auditRequests.at(-1).get('hide_unverified'), 'true');
+  assert.equal(await page.locator('.chip[data-toggle="hide_unverified"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.audit-row .c-role', { hasText: 'Unconfirmed caller' }).count(), 0, 'unconfirmed successes are hidden');
+  assert.match(await countText(), /^50 shown · 120 in 24h$/);
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length > 50);
+  const olderRequest = auditRequests.at(-1);
+  assert.ok(olderRequest.has('before'), 'paging sends the cursor');
+  assert.equal(olderRequest.get('status'), 'success', 'paging keeps the status filter');
+  assert.equal(olderRequest.get('hide_unverified'), 'true', 'paging keeps the probe filter');
+  assert.equal(await page.locator('.audit-row .audit-status:not(.success)').count(), 0, 'every page honours the status filter');
+  pagedEvents = null;
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
     auditFixture.setAuditSubtab('policy');
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });

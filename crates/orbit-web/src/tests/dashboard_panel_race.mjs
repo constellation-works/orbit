@@ -113,7 +113,7 @@ const document = {
 };
 const window = { location: { search: '?window=24h', hash: '' }, confirm: () => true };
 const pending = [];
-const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => payload, text: async () => JSON.stringify(payload) });
+const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => payload, text: async () => JSON.stringify(payload) });
 const fetch = (path, options = {}) => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve }));
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, Node,
