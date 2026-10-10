@@ -158,9 +158,10 @@ non-interactive probe. `workflow.validation_env.path` adds explicit PATH entries
 is `prepend` by default or `replace` to use only those entries. Only allow-listed
 toolchain variables cross the probe; it does not copy the shell's environment.
 Agent sessions start with the same `path` entries ahead of their PATH, so a
-reviewer runs the `python3` validation runs. A provider whose commands run in a
-login shell rereads profiles; on macOS `path_helper` then demotes inherited
-entries, so keep the toolchain first in `~/.zprofile` as well.
+reviewer runs the `python3` validation runs. While `path` has an entry, Codex
+is started with `allow_login_shell=false`, so its tool commands skip the login
+profiles where macOS `path_helper` would demote those entries; list every
+toolchain directory agents need in `path`.
 
 The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 

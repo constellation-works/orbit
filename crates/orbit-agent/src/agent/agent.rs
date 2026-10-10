@@ -14,6 +14,9 @@ pub enum ProviderOptions {
         sandbox: String,
         approval_policy: Option<String>,
         writable_dirs: Vec<String>,
+        /// Codex's `allow_login_shell`; `None` keeps Codex's default (login
+        /// shells allowed and used) [ORB-15204].
+        allow_login_shell: Option<bool>,
     },
     Gemini,
     Antigravity,

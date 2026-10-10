@@ -429,7 +429,8 @@ pub trait RuntimeHost: Send + Sync {
 
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
-    /// settings (for example Codex reads `"sandbox"` and `"approval_policy"`).
+    /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and
+    /// `"allow_login_shell"`).
     fn agent_provider_config(&self) -> HashMap<String, String> {
         HashMap::new()
     }

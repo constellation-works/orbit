@@ -167,8 +167,10 @@ impl ValidationEnvPolicy {
     /// implementer runs are the ones required validation runs with
     /// [ORB-15204]. The entries are prepended under either
     /// [`Self::path_mode`], because the rest of PATH still locates the
-    /// provider CLI. The login-shell probe is not applied: an agent's shell
-    /// reads the same profiles itself. A PATH that already starts with the
+    /// provider CLI. The login-shell probe is not applied. A provider that
+    /// would reread login profiles is told not to while
+    /// [`Self::pins_agent_path`] holds, since a profile can reorder PATH
+    /// (macOS `path_helper`). A PATH that already starts with the
     /// entries (a nested Orbit process inside an agent) is kept as is.
     pub fn agent_environment(&self, mut env: Vec<(String, String)>) -> Vec<(String, String)> {
         let configured = self.expanded_path(lookup(&env, "HOME")).join(":");
@@ -187,6 +189,13 @@ impl ValidationEnvPolicy {
         env.retain(|(name, _)| name != "PATH");
         env.push(("PATH".to_string(), path));
         env
+    }
+
+    /// Whether [`Self::path`] has an entry, so agent sessions must run their
+    /// commands with the PATH [`Self::agent_environment`] composed rather
+    /// than one a login shell rebuilds from profiles [ORB-15204].
+    pub fn pins_agent_path(&self) -> bool {
+        self.path.iter().any(|entry| !entry.trim().is_empty())
     }
 
     /// The non-empty [`Self::path`] entries with `~` expanded against `home`.

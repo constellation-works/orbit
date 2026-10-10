@@ -277,7 +277,10 @@ fn crew_effort_is_optional_and_omitted_when_unset() {
 /// A reviewer on a Mac follower resolved `/usr/bin/python3` (3.9) while host
 /// validation ran Homebrew's through `workflow.validation_env.path`, so the
 /// two disagreed on the same base [ORB-15204]. An agent session must resolve
-/// tools through that configured prefix first.
+/// tools through that configured prefix first. This covers the environment the
+/// provider process starts with; Codex, whose tool commands run in a login
+/// shell that rereads profiles, is covered at that boundary in
+/// `codex_fake_agent`.
 #[test]
 fn agent_session_resolves_python3_through_the_validation_env_prefix() {
     let body = format!(
