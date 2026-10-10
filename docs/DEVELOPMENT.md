@@ -143,7 +143,7 @@ Test design (boundary first, unit tests by exception, binary layout) is in [test
 
 Gates often run beside a busy drain, where a fixture's wall-clock time stretches tenfold. Keep outcomes independent of host load:
 
-- Re-execute child tests through `orbit_common::test_env::run_child_test` and verify them with `assert_child_test_passed`. `CHILD_TEST_DEADLINE` (300 s, below nextest's ten-minute kill) is a hang guard; an overrun reports load averages and the child's output.
+- Re-execute child tests through `orbit_common::test_env::run_child_test` and verify them with `assert_child_test_passed`. `CHILD_TEST_DEADLINE` (300 s, below nextest's ten-minute kill) is a hang guard; an overrun reports load averages and the child's output. The child leads its own process group; a watchdog process kills that group if the test process dies first (nextest interrupt or timeout), so no fixture child outlives its parent.
 - End a wait when its event arrives, size its ceiling for a saturated host, and on expiry report what it saw plus `orbit_common::test_env::host_load()`.
 - Admission reads the host resource monitor, so a fixture not testing throttling pins a calm sample with `OrbitRuntime::with_host_resource_probe` on every runtime it opens, including reopens; a CLI fixture sets `workflow.resource_throttle.enabled` to false with `orbit config set` in its disposable config. Throttling tests drive their own probe.
 - Bound work, not elapsed time: measure cost guards in CPU time where possible.
