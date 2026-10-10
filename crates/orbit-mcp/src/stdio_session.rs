@@ -347,6 +347,11 @@ async fn serve_handing_over(
             let (accepted, response) = tokio::sync::oneshot::channel();
             let _ = stop.send(unix::PumpStop::HandOver(accepted)).await;
             if matches!(response.await, Ok(false)) {
+                tracing::debug!(
+                    target: "orbit.mcp.handover",
+                    handover_deferred = true,
+                    "deferring executable handover until the partial request completes"
+                );
                 continue;
             }
         } else {

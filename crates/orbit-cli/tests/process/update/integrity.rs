@@ -30,6 +30,25 @@ use super::output_of;
 
 const WAIT_SLICE: Duration = Duration::from_millis(20);
 
+/// [`PROBE_TIMEOUT_ENV`] for every fixture command, in seconds. Each probe's
+/// clock starts at spawn, and macOS holds the first exec of a new executable,
+/// such as the staged release, until it has assessed the file. That wait
+/// queues behind every other new image on the host, so on a loaded host a
+/// release script that answers at once outlasted the 30 s default. A hang
+/// guard, half the command's [`test_env::FIXTURE_STEP_DEADLINE`], so a probe
+/// that truly hangs is still reported by the update rather than killed with it.
+const PROBE_BOUND_SECS: u64 = 60;
+
+/// The probe bound under which the hanging candidate is killed. Linux starts
+/// the script at once. On macOS the probe's clock also runs while the host
+/// assesses the new script (see [`PROBE_BOUND_SECS`]), and a probe killed in
+/// that wait never starts, so it gets the full hang guard.
+const HUNG_PROBE_BOUND_SECS: u64 = if cfg!(target_os = "macos") {
+    PROBE_BOUND_SECS
+} else {
+    8
+};
+
 struct Install {
     _root: TempDir,
     home: PathBuf,
@@ -173,6 +192,39 @@ fn bounded_output(command: &mut assert_cmd::Command, what: &str) -> Output {
     output
 }
 
+/// Release a fixture participant only after `release` observes the updater's
+/// rendezvous, then collect the bounded child and its output.
+fn update_while(install: &Install, args: &[&str], release: impl FnOnce(&mut Child)) -> Output {
+    let stdout = install._root.path().join("waiting-update.stdout");
+    let stderr = install._root.path().join("waiting-update.stderr");
+    let child = install
+        .std_command()
+        .env(QUIESCE_TIMEOUT_ENV, "60")
+        .args(args)
+        .stdout(File::create(&stdout).expect("update stdout"))
+        .stderr(File::create(&stderr).expect("update stderr"))
+        .spawn()
+        .expect("spawn update");
+    let mut child = ReapedChild { child: Some(child) };
+    release(child.child.as_mut().expect("child"));
+    let mut status = None;
+    test_env::wait_until("the waiting update to finish", || {
+        status = child
+            .child
+            .as_mut()
+            .expect("child")
+            .try_wait()
+            .expect("poll update");
+        status.is_some()
+    });
+    child.child = None;
+    Output {
+        status: status.expect("update finished"),
+        stdout: fs::read(stdout).expect("update stdout"),
+        stderr: fs::read(stderr).expect("update stderr"),
+    }
+}
+
 fn apply_env(command: &mut assert_cmd::Command, install: &Install) {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -191,6 +243,7 @@ fn apply_env(command: &mut assert_cmd::Command, install: &Install) {
             "ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE",
             "1",
         )
+        .env(PROBE_TIMEOUT_ENV, PROBE_BOUND_SECS.to_string())
         .env_remove("ORBIT_HOME")
         .env_remove("ORBIT_INSTALL_REPO")
         .env_remove("ORBIT_RELEASE_PUBLIC_KEY_FILE")
@@ -215,6 +268,7 @@ fn apply_std_env(command: &mut Command, install: &Install) {
             "ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE",
             "1",
         )
+        .env(PROBE_TIMEOUT_ENV, PROBE_BOUND_SECS.to_string())
         .env_remove("ORBIT_HOME")
         .env_remove("ORBIT_INSTALL_REPO")
         .env_remove("ORBIT_RELEASE_PUBLIC_KEY_FILE")
@@ -531,20 +585,33 @@ fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     let script = candidate_script("99.0.0");
     install.publish("99.0.0", Some(&tar_gz(&script)), true);
     let tick = clock_tick(&install);
-    let hold = Duration::from_secs(3);
-
-    let began = Instant::now();
-    let finishing = std::thread::spawn(move || {
-        std::thread::sleep(hold);
+    let record = fs::read(&install.generation).expect("generation held by the tick");
+    let output = update_while(&install, &["update", "--json"], |child| {
+        // The updater holds admission exclusively while waiting for the tick.
+        // Rendezvous with that lock instead of letting slow startup consume a
+        // timed hold before the updater ever reaches admission.
+        test_env::wait_until("the update to wait behind the clock tick", || {
+            assert!(child.try_wait().expect("poll update").is_none());
+            let Ok(admission) = File::open(install.home.join(".orbit/.generation-admission.lock"))
+            else {
+                return false;
+            };
+            // SAFETY: probe only this fixture's descriptor. Dropping it releases
+            // a successful shared lock; EWOULDBLOCK identifies exclusive admission.
+            if unsafe { libc::flock(admission.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
+                return false;
+            }
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock, "{error}");
+            true
+        });
+        assert_eq!(
+            fs::read(&install.executable).expect("installed"),
+            install.before
+        );
+        assert_eq!(fs::read(&install.generation).expect("record"), record);
         drop(tick);
     });
-    let mut command = install.command();
-    command
-        .env(QUIESCE_TIMEOUT_ENV, "60")
-        .args(["update", "--json"]);
-    let output = bounded_output(&mut command, "orbit update beside a clock tick");
-    let waited = began.elapsed();
-    finishing.join().expect("clock tick thread");
 
     assert!(
         output.status.success(),
@@ -554,10 +621,6 @@ fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
     assert_eq!(report["outcome"], "updated");
-    assert!(
-        waited >= hold,
-        "the update replaced the executable before the tick finished ({waited:?})"
-    );
     assert_eq!(
         fs::read(&install.executable).expect("updated bytes"),
         script
@@ -647,36 +710,27 @@ fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
 
     let script = resuming_candidate_script("99.0.0");
     install.publish("99.0.0", Some(&tar_gz(&script)), true);
-    let executable = install.executable.clone();
-    let installed = script.clone();
-    let handing_over = std::thread::spawn(move || {
-        test_env::wait_until("the release to be installed", || {
-            fs::read(&executable).ok().as_deref() == Some(installed.as_slice())
-        });
-        // Still holding the replaced generation after the rename: the update
-        // must not pin until it is released.
-        std::thread::sleep(Duration::from_millis(1500));
-        let released = Instant::now();
-        drop(session);
-        released
-    });
-    let mut command = install.command();
-    command
-        .env(QUIESCE_TIMEOUT_ENV, "60")
-        .args(["update", "--version", "99.0.0", "--json"]);
-    let output = bounded_output(&mut command, "orbit update beside a handing-over session");
-    let finished = Instant::now();
-    let released = handing_over.join().expect("session thread");
+    let output = update_while(
+        &install,
+        &["update", "--version", "99.0.0", "--json"],
+        |child| {
+            test_env::wait_until("the release to be installed", || {
+                assert!(child.try_wait().expect("poll update").is_none());
+                fs::read(&install.executable).ok().as_deref() == Some(script.as_slice())
+            });
+            // The session still holds the replaced generation after the rename:
+            // it must not be pinned until that participant releases its lock.
+            assert_eq!(fs::read(&install.generation).expect("record"), record);
+            assert!(child.try_wait().expect("poll update").is_none());
+            drop(session);
+        },
+    );
 
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        finished >= released,
-        "the update finished before the handover"
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
     assert_eq!(report["outcome"], "updated", "{report}");
@@ -736,7 +790,7 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     let stderr_path = install._root.path().join("hung.stderr");
     let child = install
         .std_command()
-        .env(PROBE_TIMEOUT_ENV, "8")
+        .env(PROBE_TIMEOUT_ENV, HUNG_PROBE_BOUND_SECS.to_string())
         .arg("update")
         .stdout(File::create(install._root.path().join("hung.stdout")).expect("stdout"))
         .stderr(File::create(&stderr_path).expect("stderr"))
@@ -767,7 +821,10 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     child.child = None;
     let stderr = fs::read_to_string(&stderr_path).expect("update stderr");
     assert_eq!(status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("did not finish within 8s"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("did not finish within {HUNG_PROBE_BOUND_SECS}s")),
+        "{stderr}"
+    );
     assert!(stderr.contains("nothing was replaced"), "{stderr}");
     install.assert_untouched("hung candidate");
     install.assert_no_backup("hung candidate");

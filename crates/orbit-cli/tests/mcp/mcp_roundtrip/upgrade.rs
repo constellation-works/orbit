@@ -438,15 +438,14 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    install_over(&candidate, &installed);
+    crate::generation_fixture::install_over(&candidate, &installed);
 
     // The coordinator notices at its next admission pass and execs in place.
     test_env::wait_until("the drain to hand over to the installed executable", || {
         running_digest(&workspace, drain.pid).as_deref() == Some(new_digest.as_str())
     });
-    // Same run, same owner: the new image adopted it rather than claiming it,
-    // and it is still running a few admission passes later.
-    std::thread::sleep(Duration::from_secs(3));
+    // Same run, same owner: the new image adopted it rather than claiming it.
+    // Cancellation below must be handled by that image and end the same run.
     let adopted = run_show(&workspace, &drain.run_id);
     assert_eq!(adopted["run"]["state"], "running", "{adopted}");
     assert_eq!(adopted["run"]["pid"].as_u64(), Some(u64::from(drain.pid)));
@@ -929,15 +928,6 @@ fn read_only_foreign_digest_refuses_when_store_schema_differs() {
     assert_eq!(generation_record(&workspace), format!("1:{FOREIGN}\n"));
 }
 
-/// Install `source`'s bytes at `installed` the way an installer does: write
-/// beside it, then rename over it, so the running inode is left untouched.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn install_over(source: &Path, installed: &Path) {
-    let staged = installed.with_extension("staged");
-    std::fs::copy(source, &staged).expect("stage replacement");
-    std::fs::rename(&staged, installed).expect("replace installation");
-}
-
 /// The source commit every local candidate here is attested to.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const CANDIDATE_COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
@@ -967,7 +957,10 @@ fn write_candidate_manifest(workspace: &McpWorkspace, candidate: &Path) -> PathB
 }
 
 /// Install `candidate` over `installed` with `orbit update --local-candidate`,
-/// run through the candidate itself as the runbook does.
+/// run through the candidate itself as the runbook does. The update probes the
+/// copy it stages, which macOS first assesses as a new executable while the
+/// probe's clock runs; on a loaded host that outlasted the 30 s default, so the
+/// probe bound here is only a hang guard.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn local_candidate_update(
     workspace: &McpWorkspace,
@@ -981,6 +974,10 @@ fn local_candidate_update(
         .env(
             "ORBIT_INSTALL_DIR",
             installed.parent().expect("install dir"),
+        )
+        .env(
+            orbit_cmd::update::converge::PROBE_TIMEOUT_ENV,
+            test_env::FIXTURE_STEP_DEADLINE.as_secs().to_string(),
         )
         .args(["update", "--local-candidate"])
         .arg(candidate)
@@ -1017,9 +1014,10 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
             "--workspace",
             "ws_mcp-roundtrip",
         ])
+        .env("RUST_LOG", "orbit.mcp.handover=debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::null());
     let child = spawn_copied_orbit(&mut command).expect("old server");
     let pid = child.id();
     let mut client = McpClient::new(child);
@@ -1049,23 +1047,36 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    install_over(&candidate, &installed);
+    crate::generation_fixture::install_over(&candidate, &installed);
 
-    // Hold the partial line across multiple lifecycle checks. The old image
-    // must keep serving; yielding or handing over now would lose this call.
-    let hold_until = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < hold_until {
-        assert!(
-            matches!(client.child.try_wait(), Ok(None)),
-            "an oversized partial request must not yield the MCP session"
-        );
-        assert_eq!(
-            running_digest(&workspace, pid).as_deref(),
-            Some(old_digest.as_str()),
-            "handover must wait for the oversized partial line to complete"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    // Observe actual deferred lifecycle checks rather than assuming five
+    // seconds of wall time gave a busy host multiple chances to hand over.
+    let log = workspace.home.join(".orbit/state/logs/orbit.jsonl");
+    test_env::wait_until(
+        "two handover checks to defer the oversized partial request",
+        || {
+            assert!(
+                matches!(client.child.try_wait(), Ok(None)),
+                "an oversized partial request must not yield the MCP session"
+            );
+            assert_eq!(
+                running_digest(&workspace, pid).as_deref(),
+                Some(old_digest.as_str()),
+                "handover must wait for the oversized partial line to complete"
+            );
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|event| {
+                    event["target"] == "orbit.mcp.handover"
+                        && event["fields"]["handover_deferred"] == true
+                })
+                .take(2)
+                .count()
+                == 2
+        },
+    );
 
     client
         .writer
@@ -1109,6 +1120,8 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     let installed = install.join("orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
     let old_digest = executable_generation(&installed).expect("old digest");
+    let stderr_path = workspace.home.join("invalid-handover.stderr");
+    let stderr = std::fs::File::create(&stderr_path).expect("server stderr");
     let mut command =
         McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home);
     command
@@ -1119,9 +1132,10 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
             "--workspace",
             "ws_mcp-roundtrip",
         ])
+        .env("RUST_LOG", "orbit.generation=debug,orbit.mcp=debug")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::from(stderr));
     let child = spawn_copied_orbit(&mut command).expect("old server");
     let pid = child.id();
     let mut client = McpClient::new(child);
@@ -1164,12 +1178,25 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    install_over(&candidate, &installed);
+    crate::generation_fixture::install_over(&candidate, &installed);
 
     // The idle server notices within a lifecycle interval and execs itself.
+    let started = Instant::now();
     test_env::wait_until(
         "the idle server to hand over to the installed executable",
-        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+        || {
+            assert!(
+                started.elapsed() < test_env::FIXTURE_STEP_DEADLINE,
+                "idle handover did not finish: {}",
+                std::fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+            assert!(
+                client.child.try_wait().expect("poll server").is_none(),
+                "the server exited instead of handing over: {}",
+                std::fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+            running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str())
+        },
     );
 
     // Same process, same pipes, no second `initialize`: the session goes on.

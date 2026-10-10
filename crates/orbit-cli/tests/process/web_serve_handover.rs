@@ -87,9 +87,7 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
     let candidate = temp.path().join("candidate");
     generation_fixture::distinct_copy(Path::new(env!("CARGO_BIN_EXE_orbit")), &candidate);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    let staged = install.join("orbit.staged");
-    std::fs::copy(&candidate, &staged).expect("stage replacement");
-    std::fs::rename(&staged, &installed).expect("replace installation");
+    generation_fixture::install_over(&candidate, &installed);
 
     test_env::wait_until("handover", || {
         generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()
