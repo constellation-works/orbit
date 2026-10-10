@@ -144,6 +144,8 @@
     "orbit-common": {
       "test_function_paths": [
         "fs/generation/tests/admission.rs::an_update_waits_for_a_participant_paused_mid_release",
+        "fs/generation/tests/handoff.rs::a_completed_refusal_is_not_probed_again",
+        "fs/generation/tests/handoff.rs::a_probe_that_times_out_is_retried_at_the_next_boundary",
         "fs/tests/cwd.rs::symlink_that_escapes_is_refused",
         "fs/tests/file_lock.rs::a_descriptor_inherited_by_a_forked_child_is_not_read_as_contention",
         "fs/tests/io.rs::exclusive_lock_is_reentrant_within_a_thread",
