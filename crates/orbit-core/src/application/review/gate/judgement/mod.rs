@@ -6,7 +6,9 @@ mod construction;
 mod repairs;
 mod verdict;
 
-pub(super) use comment::{review_fixes_section, verdict_comment, write_artifact};
+pub(super) use comment::{
+    Delivery, comment_lead, review_fixes_section, verdict_comment, write_artifact,
+};
 pub(super) use repairs::repair_author_label;
 
 use orbit_types::workflow::{RetainedObligation, RetiredValidation, ReviewVerdict};
@@ -43,4 +45,8 @@ pub(super) struct Judgement {
     /// [ORB-15122] Failed required checks the host passed on the final
     /// candidate after refuting the reviewer's red-base claim.
     pub(super) host_overrides: Vec<orbit_types::workflow::HostCandidateOverride>,
+    /// [ORB-15130] Set when every report this judgement read is still the
+    /// only revision the host retained for the attempt, so the reviewer never
+    /// updated what it first persisted.
+    initial_report_only: bool,
 }

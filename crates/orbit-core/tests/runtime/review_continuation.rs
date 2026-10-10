@@ -1137,3 +1137,77 @@ fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
             .all(|entry| entry.event != "review_timeout_incomplete")
     );
 }
+
+/// A before-PR reviewer that exits cleanly with only its initial placeholder
+/// report leaves its review unspent, and the handoff blocks delivery without
+/// calling the missing verdict an escalation [ORB-15130].
+#[test]
+fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
+    if !super::dispatch_admission::isolated(
+        "review_continuation::an_abandoned_before_pr_review_is_released_and_the_handoff_says_so",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    add_origin(&fixture);
+    fixture.admit();
+    RuntimeHost::mark_job_run_running(
+        &fixture.runtime,
+        fixture.input["job_run_id"].as_str().unwrap(),
+        Utc::now(),
+        std::process::id(),
+    )
+    .unwrap();
+    attach(
+        &fixture,
+        REVIEW_REPORT_ARTIFACT,
+        &json!({
+            "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
+            "verdict": "incomplete", "summary": "Review still running; validation not yet complete.",
+            "findings": [], "validation": [],
+        }),
+    );
+    let refused = fixture
+        .settle()
+        .expect_err("an abandoned review settles no verdict")
+        .to_string();
+    assert!(
+        refused.contains(orbit_types::workflow::REVIEW_ABANDONED_MARKER),
+        "{refused}"
+    );
+    let ledger = fixture
+        .runtime
+        .review_store()
+        .unwrap()
+        .review_ledger(
+            &fixture.runtime.workspace_id().unwrap(),
+            fixture.input["admission"]["lineage_key"].as_str().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let attempt = &ledger.attempts[0];
+    assert!(attempt.released_at.is_some());
+    assert!(!ledger.reviewed(&attempt.candidate, &attempt.task_meaning_digest));
+
+    let handoff = execute_deterministic_action(&fixture.runtime, "pr_failure_handoff", &json!({}), &json!({
+        "failed_step_id": "review_gate_settle", "error_code": "deterministic_action_refused",
+        "error_message": refused,
+        "run_id": fixture.input["job_run_id"],
+        "job_input": {"task_ids": [fixture.task_id], "base_branch": "main", "base_sync": "local"},
+        "pipeline": {
+            "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
+            "sync_base": {"base": "main", "base_ref": "main"},
+            "review_gate_admit": fixture.input["admission"],
+        },
+    }), false, &Default::default(), None).unwrap();
+    assert_eq!(handoff["decision"], "blocked_review_gate", "{handoff}");
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Blocked
+    );
+    let note = latest_decision(&fixture).note.unwrap();
+    assert!(
+        note.contains("review is not spent") && !note.contains("substantive review escalation"),
+        "{note}"
+    );
+}

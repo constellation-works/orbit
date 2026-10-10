@@ -3,6 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
+use orbit_types::workflow::REVIEW_ABANDONED_MARKER;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -125,6 +126,10 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         0
     };
     let timeout_exhausted = timed_out && timeout_requeues >= REVIEW_TIMEOUT_MAX_REQUEUES;
+    // [ORB-15130] Settlement released an attempt whose reviewer ended with only
+    // its initial placeholder report: no verdict, so no escalation to decide.
+    let abandoned =
+        failed_step_id == "review_gate_settle" && error_message.contains(REVIEW_ABANDONED_MARKER);
     let (status, event, decision) = if evidence_hold {
         (
             TaskStatus::InProgress,
@@ -161,6 +166,9 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             "Reviewer timed out and settled incomplete. The partial report is retained; delivery is requeued ({}/{REVIEW_TIMEOUT_MAX_REQUEUES} automatic timeout requeues for this implementation tree). A fresh run starts a new review lineage with its captured budget; resuming the same lineage uses its remaining budget.",
             timeout_requeues + 1,
         )
+    } else if abandoned {
+        "The reviewer ended its session with only its initial placeholder report, so the review produced no verdict. The attempt was released and the candidate's review is not spent. Delivery is blocked until a reviewer is admitted again by resuming the run or requeueing the task; it runs within the review's remaining minutes."
+            .to_string()
     } else {
         "A substantive review escalation requires a recorded repair or scope decision.".to_string()
     };

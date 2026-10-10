@@ -237,6 +237,26 @@ impl Judgement {
             .filter(ValidationDefect::correctable)
     }
 
+    /// [ORB-15130] Whether the reviewer left nothing but its initial
+    /// provisional report: an `incomplete` verdict with no escalation,
+    /// finding, validation record or evidence requirement, which the reviewer
+    /// never updated. A genuine incomplete names what blocked it, records a
+    /// check, or revises its report, and a host refusal is its own reason;
+    /// none of those is abandoned work.
+    pub(in crate::application::review::gate) fn abandoned_placeholder(&self) -> bool {
+        self.initial_report_only
+            && self.verdict == ReviewVerdict::Incomplete
+            && !self.host_refused
+            && self
+                .escalation
+                .as_deref()
+                .is_none_or(|reason| reason.trim().is_empty())
+            && self.findings.is_empty()
+            && self.validation.is_empty()
+            && self.external_evidence.is_empty()
+            && self.retained_obligations.is_empty()
+    }
+
     pub(in crate::application::review::gate) fn downgrade(&mut self, reason: &str) {
         self.host_refused = true;
         self.verdict = ReviewVerdict::Incomplete;

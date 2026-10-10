@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 use super::super::automation::SourceRevision;
 use super::{ReviewBudget, ReviewConsumption, ReviewVerdict};
 
+/// Typed lead of the refusal a settlement raises when the reviewer exited
+/// cleanly but left only its initial provisional report [ORB-15130]. The
+/// attempt is released, never settled, so it does not count as the
+/// candidate's review ([`ReviewLedger::reviewed`]); the failure handoff keys
+/// on this marker.
+pub const REVIEW_ABANDONED_MARKER: &str = "review_abandoned:";
+
 /// The state of one reviewer attempt in a lineage ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
@@ -205,7 +212,10 @@ impl ReviewLedger {
     }
 
     /// Whether `candidate` already had its review: an attempt on it settled
-    /// with a reviewer verdict rather than being released unfinished.
+    /// with a reviewer verdict rather than being released unfinished. A
+    /// reviewer that exited with only its initial provisional report is
+    /// released, so it leaves the review unspent
+    /// ([`REVIEW_ABANDONED_MARKER`]).
     pub fn reviewed(&self, candidate: &SourceRevision, task_meaning_digest: &str) -> bool {
         self.review_attempts(candidate, task_meaning_digest)
             .any(|attempt| {

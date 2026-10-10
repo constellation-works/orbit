@@ -56,8 +56,10 @@ impl Judgement {
             host_refused: true,
             host_evidence: Vec::new(),
             host_overrides: Vec::new(),
+            initial_report_only: false,
         };
         let mut reports = Vec::new();
+        let mut initial_only = true;
         let mut revisions = Vec::new();
         let mut stale = false;
         for task_id in &context.task_ids {
@@ -65,10 +67,13 @@ impl Judgement {
                 continue;
             };
             let history = runtime.get_task_artifact(task_id, REVIEW_REPORT_HISTORY_ARTIFACT)?;
-            match retained_revisions(task_id, history, attempt, &artifact.content) {
-                Ok(kept) => revisions.extend(kept),
+            let initial = match retained_revisions(task_id, history, attempt, &artifact.content) {
+                Ok((kept, initial)) => {
+                    revisions.extend(kept);
+                    initial
+                }
                 Err(reason) => return Ok(incomplete(&reason)),
-            }
+            };
             let manifest = runtime.get_task_artifact_manifest(task_id)?;
             if manifest
                 .iter()
@@ -100,6 +105,7 @@ impl Judgement {
                     report.attempt_id, attempt.attempt_id
                 )));
             }
+            initial_only &= initial;
             reports.push(report);
         }
         let Some(report) = merge_reports(reports) else {
@@ -135,6 +141,7 @@ impl Judgement {
             host_refused: false,
             host_evidence: Vec::new(),
             host_overrides: Vec::new(),
+            initial_report_only: initial_only,
         })
     }
 
@@ -172,6 +179,7 @@ impl Judgement {
             host_refused: false,
             host_evidence: certificate.host_evidence.clone(),
             host_overrides: certificate.host_overrides.clone(),
+            initial_report_only: false,
         }
     }
 
@@ -237,16 +245,18 @@ fn merge_reports(reports: Vec<ReviewReport>) -> Option<ReviewReport> {
 }
 
 /// The report revisions the host retained on `task_id` for this attempt,
-/// other than the current report itself. A history that cannot be read is
-/// an incomplete review, never an empty one.
+/// other than the current report itself, and whether the current report is
+/// the only revision the attempt ever recorded. A history that cannot be
+/// read is an incomplete review, never an empty one; a missing history
+/// proves nothing about the revisions.
 fn retained_revisions(
     task_id: &str,
     history: Option<TaskArtifact>,
     attempt: &ReviewAttempt,
     current: &[u8],
-) -> Result<Vec<ReviewReportRevision>, String> {
+) -> Result<(Vec<ReviewReportRevision>, bool), String> {
     let Some(history) = history else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     };
     let history = ReviewReportHistory::parse(&history.content).map_err(|error| {
         format!("report_history_unreadable: the report history on {task_id}: {error}")
@@ -266,11 +276,14 @@ fn retained_revisions(
             .check_record_continuity(&report)
             .map_err(|error| format!("report_record_ids_invalid: {error}"))?;
     }
-    Ok(history
-        .for_attempt(&attempt.attempt_id)
+    let own = history.for_attempt(&attempt.attempt_id).collect::<Vec<_>>();
+    let initial = matches!(own.as_slice(), [only] if only.sha256 == current_sha256);
+    let kept = own
+        .into_iter()
         .filter(|revision| revision.sha256 != current_sha256)
         .cloned()
-        .collect())
+        .collect();
+    Ok((kept, initial))
 }
 
 /// The required-check records of earlier revisions, oldest first, minus any

@@ -2,7 +2,7 @@
 
 use orbit_automation::review::{validation_limitations, validation_role_counts};
 use orbit_common::OrbitError;
-use orbit_types::task::TaskArtifact;
+use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::workflow::{
     FindingDisposition, ReviewCertificate, ReviewValidation, ReviewVerdict,
 };
@@ -10,10 +10,57 @@ use orbit_types::workflow::{
 use crate::OrbitRuntime;
 use crate::application::task::TaskUpdateParams;
 
+/// Where delivery stands when a settlement comment is written [ORB-15130], so
+/// the comment says what is true instead of what the before-PR gate implies.
+pub(in crate::application::review::gate) enum Delivery {
+    /// The before-PR gate: no PR is open and the task is still in progress.
+    BeforePr,
+    /// The before-landing gate: the PR is already open and the task already
+    /// promoted, so a verdict that does not approve leaves both as they are.
+    BeforeLanding {
+        pr_number: Option<String>,
+        task_status: TaskStatus,
+    },
+}
+
+impl Delivery {
+    /// The delivery a before-landing settlement comment on `task` describes:
+    /// the PR the task carries and the status the store holds now.
+    pub(in crate::application::review::gate) fn before_landing(task: &Task) -> Self {
+        Self::BeforeLanding {
+            pr_number: task.github_pr_number().map(ToOwned::to_owned),
+            task_status: task.status,
+        }
+    }
+
+    fn pull_request(pr_number: Option<&str>) -> String {
+        pr_number.map_or_else(|| "the PR".to_string(), |number| format!("PR #{number}"))
+    }
+}
+
+/// The part of a settlement comment that names the attempt and its verdict.
+/// A replay recognizes its own comment by this lead, which does not depend on
+/// the task status the rest of the comment reports.
+pub(in crate::application::review::gate) fn comment_lead(
+    certificate: &ReviewCertificate,
+    delivery: &Delivery,
+) -> String {
+    format!(
+        "{} review settled attempt `{}`: verdict **{}**",
+        match delivery {
+            Delivery::BeforePr => "before-PR",
+            Delivery::BeforeLanding { .. } => "before-landing",
+        },
+        certificate.attempt_id,
+        certificate.verdict.as_str(),
+    )
+}
+
 /// The task comment a settlement posts [ORB-13989]: the verdict, every
 /// finding with what the reviewer changed for it, then the evidence.
 pub(in crate::application::review::gate) fn verdict_comment(
     certificate: &ReviewCertificate,
+    delivery: &Delivery,
 ) -> String {
     let assurance = certificate
         .assurance
@@ -37,7 +84,7 @@ pub(in crate::application::review::gate) fn verdict_comment(
             .join(", ")
     };
     format!(
-        "before-PR review settled attempt `{}`: verdict **{}** (assurance: {}).\n\n\
+        "{} (assurance: {}).\n\n\
          {}\n\n\
          - Reviewer: crew `{}` ({} / {}){}\n\
          - Implementation: `{}` on base `{}` ({} commit(s), unchanged by review)\n\
@@ -51,8 +98,7 @@ pub(in crate::application::review::gate) fn verdict_comment(
          - Reviewer runtime: {}s of {} min\n\
          - Escalation: {}\n\n\
          {}",
-        certificate.attempt_id,
-        certificate.verdict.as_str(),
+        comment_lead(certificate, delivery),
         assurance,
         finding_lines(&certificate.findings),
         certificate.reviewer.crew,
@@ -82,34 +128,82 @@ pub(in crate::application::review::gate) fn verdict_comment(
         certificate.consumed.seconds,
         certificate.budget.minutes,
         certificate.escalation.as_deref().unwrap_or("none"),
-        verdict_consequence(certificate),
+        verdict_consequence(certificate, delivery),
     )
 }
 
 /// What the verdict means for delivery, in one paragraph.
-fn verdict_consequence(certificate: &ReviewCertificate) -> &'static str {
+fn verdict_consequence(certificate: &ReviewCertificate, delivery: &Delivery) -> String {
+    if let Delivery::BeforeLanding {
+        pr_number,
+        task_status,
+    } = delivery
+    {
+        return landing_consequence(certificate, pr_number.as_deref(), *task_status);
+    }
     if !certificate.baseline_red.is_empty() {
         return "Delivery waits: every failed required check fails the same way on the pinned \
                 base, so the candidate did not cause it. No PR is opened; the candidate is kept \
                 and the task is held in the backlog until the base passes, when a fresh review \
-                judges it.";
+                judges it."
+            .to_string();
     }
     match certificate.verdict {
         ReviewVerdict::Accept => {
             "Accepted as implemented; the PR carries the implementation commit(s) only. This \
              verdict is review evidence, not task approval or merge permission."
+                .to_string()
         }
         ReviewVerdict::AcceptWithFixes => {
             "Accepted with the reviewer's fixes as a separate commit. Owner validation and the \
              ownership check run again on that head before the PR opens; a failure there blocks \
              the task as `reject`. The fixes were validated but not independently reviewed, and \
              this verdict is not task approval or merge permission."
+                .to_string()
         }
         ReviewVerdict::Reject | ReviewVerdict::Incomplete => {
             "Delivery stops: no PR is opened, the task is blocked, and the candidate branch keeps \
              every commit for final recovery or an operator decision. There is no second review \
              round."
+                .to_string()
         }
+    }
+}
+
+/// [ORB-15130] The same paragraph for a before-landing review, whose PR is
+/// already open: a verdict that does not approve leaves that PR open and
+/// unmerged and the task where the store holds it.
+fn landing_consequence(
+    certificate: &ReviewCertificate,
+    pr_number: Option<&str>,
+    task_status: TaskStatus,
+) -> String {
+    let pull_request = Delivery::pull_request(pr_number);
+    if !certificate.baseline_red.is_empty() {
+        return format!(
+            "Delivery waits: every failed required check fails the same way on the pinned \
+             base, so the candidate did not cause it. {pull_request} stays open and unmerged on \
+             its published head, and the task is held until the base passes, when a fresh \
+             review judges it."
+        );
+    }
+    match certificate.verdict {
+        ReviewVerdict::Accept => format!(
+            "Accepted as implemented; {pull_request} may land. This verdict is review evidence, \
+             not task approval or merge permission."
+        ),
+        ReviewVerdict::AcceptWithFixes => format!(
+            "Accepted with the reviewer's fixes as a separate commit. Owner validation and the \
+             ownership check run again on that head before it is pushed to {pull_request} and \
+             merged; a failure there leaves {pull_request} open and unmerged. The fixes were \
+             validated but not independently reviewed, and this verdict is not task approval or \
+             merge permission."
+        ),
+        ReviewVerdict::Reject | ReviewVerdict::Incomplete => format!(
+            "Delivery stops: {pull_request} stays open and unmerged and the task stays \
+             `{task_status}`; nothing was merged, and the candidate branch keeps every commit. \
+             An operator decides what lands next. There is no second review round."
+        ),
     }
 }
 

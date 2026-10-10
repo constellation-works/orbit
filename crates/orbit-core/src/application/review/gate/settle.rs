@@ -6,14 +6,15 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::review_gate::{candidate_identity_at, committed_paths, uncommitted_paths};
-use orbit_engine::{DispatchError, RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::{DispatchError, ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{ClaimEvidence, ClaimWorkerUpdate, ReviewSettlement};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
-    CommitIdentity, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewTiming, ReviewerIdentity,
+    CommitIdentity, REVIEW_ABANDONED_MARKER, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate,
+    ReviewTiming, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -25,9 +26,11 @@ use super::admit::reviewer_identity;
 use super::baseline;
 use super::context::GateContext;
 use super::judgement::{
-    Judgement, repair_author_label, review_fixes_section, verdict_comment, write_artifact,
+    Delivery, Judgement, comment_lead, repair_author_label, review_fixes_section, verdict_comment,
+    write_artifact,
 };
 use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received};
+use super::release::release_review_attempt;
 
 /// Close the admitted attempt with an honest verdict.
 ///
@@ -35,7 +38,11 @@ use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received}
 /// With the reviewer's fixes committed it also reports `reviewer_fixed`, so
 /// the pipeline reruns owner validation and the ownership check on that head
 /// before publishing, and the PR body's "Review fixes" section [ORB-13989].
-/// An evidence-only verdict holds delivery without recovery. Other verdicts
+/// A reviewer that exited cleanly with only its initial provisional report
+/// abandoned the review: the attempt is released, not settled, so it does not
+/// spend the candidate's one review, and the refusal leads with
+/// `review_abandoned:` [ORB-15130]. An evidence-only verdict holds delivery
+/// without recovery. Other verdicts
 /// refuse the step — a settled verdict is not retried and
 /// never goes back to the implementer — so the pipeline's failure handoff
 /// preserves the candidate and blocks the task with the escalation.
@@ -111,6 +118,11 @@ pub(crate) fn review_gate_settle(
             baseline::audit_outcome(&certificate.baseline_red),
             None,
         ),
+        Ok(Settled::Abandoned) => (
+            AuditEventStatus::Success,
+            json!({"gate": "abandoned", "released": true}),
+            None,
+        ),
         Err(error) => (
             AuditEventStatus::Failure,
             json!("refused"),
@@ -164,6 +176,23 @@ pub(crate) fn review_gate_settle(
             message: baseline::baseline_red_refusal(&certificate.baseline_red, &attempt_id)
                 .unwrap_or_default(),
         }),
+        Ok(Settled::Abandoned) => Err(DispatchError::DeterministicActionRefused {
+            action: action.to_string(),
+            message: format!(
+                "{REVIEW_ABANDONED_MARKER} the reviewer exited successfully but its only report \
+                 is the initial provisional one (verdict incomplete, no escalation, finding or \
+                 validation record, never updated); attempt {attempt_id} was released without a \
+                 verdict, so the candidate's review is not spent and a reviewer is admitted again \
+                 within its remaining minutes; {}",
+                if admission_output.get("timing").and_then(Value::as_str)
+                    == Some(ReviewTiming::BeforeLanding.as_str())
+                {
+                    "the pull request stays open and unmerged until a recorded decision lands it"
+                } else {
+                    "the candidate stays unpublished until a recorded decision resumes delivery"
+                }
+            ),
+        }),
         Err(error) => Err(failed(error.to_string())),
     }
 }
@@ -175,6 +204,10 @@ enum Settled {
     /// Every failed required check fails the same way on the pinned base,
     /// and nothing else keeps the review from passing.
     BaselineRed(Box<ReviewCertificate>),
+    /// The reviewer exited cleanly leaving only its initial provisional
+    /// report [ORB-15130]. The attempt was released, so it is not a verdict
+    /// and the candidate's review stays unspent.
+    Abandoned,
 }
 
 fn settle(
@@ -322,6 +355,29 @@ fn settle(
         })?
         .unwrap_or_default();
     judgement.check_task_meaning(context, &attempt, &admitted_selectors)?;
+    // [ORB-15130] A reviewer that ended its session with nothing but the
+    // provisional report it persisted first produced no verdict. Settling it
+    // would count it as the candidate's one review, so the attempt is released
+    // and the step refuses with a typed reason. A reviewer timeout fails the
+    // reviewer step before settlement runs, so only a clean exit reaches this.
+    // Anything the reviewer changed or revised is a real review, however
+    // incomplete.
+    if held.is_none()
+        && recorded.is_none()
+        && committed_repair.is_none()
+        && judgement.abandoned_placeholder()
+        && uncommitted_paths(&context.workspace_path)?.is_empty()
+    {
+        release_review_attempt(
+            runtime,
+            &ReviewReleaseRequest {
+                run_id: context.run_id.clone(),
+                lineage_key: lineage_key.clone(),
+                attempt_id: attempt_id.to_string(),
+            },
+        )?;
+        return Ok(Settled::Abandoned);
+    }
     let repair = match committed_repair {
         Some(commit) => {
             let paths = committed_paths(&context.workspace_path, &commit.commit)?;
@@ -604,8 +660,20 @@ fn publish_certificate(
 ) -> Result<(), OrbitError> {
     let certificate_bytes = serde_json::to_vec_pretty(certificate)
         .map_err(|error| OrbitError::Execution(format!("serialize review certificate: {error}")))?;
-    let comment = verdict_comment(certificate);
+    let landing = context
+        .admission
+        .as_ref()
+        .is_some_and(|admission| admission.gates_landing());
     for task in &context.tasks {
+        // [ORB-15130] A before-landing comment states the PR and the status
+        // the store holds when it is written, not the before-PR template.
+        let delivery = if landing {
+            Delivery::before_landing(&runtime.get_task(&task.id)?)
+        } else {
+            Delivery::BeforePr
+        };
+        let comment = verdict_comment(certificate, &delivery);
+        let lead = comment_lead(certificate, &delivery);
         let current = runtime.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?;
         let current_matches = current
             .as_ref()
@@ -630,10 +698,12 @@ fn publish_certificate(
                 &certificate_bytes,
             )?;
         }
+        // The status line may differ on a replay, so a comment already
+        // posted for this attempt and verdict counts as disclosed.
         let disclosed = runtime
             .get_task_comments(&task.id)?
             .iter()
-            .any(|existing| existing.message.trim() == comment.trim());
+            .any(|existing| existing.message.trim_start().starts_with(&lead));
         if !disclosed {
             post_comment(runtime, context, &task.id, &comment)?;
         }
