@@ -61,7 +61,7 @@ review certificate to another head.
 | `reject` or other substantive `incomplete` | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
 | Abandoned review: the reviewer exited cleanly but its only report is the initial placeholder (`incomplete`, no escalation, finding or validation record, never revised) | the implementation is pushed; nothing was reviewed | settlement releases the attempt and refuses with `review_abandoned:`, so the candidate's one review is not spent; the task is blocked with a comment saying so, and resuming the run or requeueing it admits a reviewer again within the remaining minutes; no PR opens |
 | Reviewer wall-clock timeout | the implementation and any partial reviewer repairs are pushed; the partial report is retained | the first timeout on a task's implementation tree requeues it to `backlog` with `review_timeout_incomplete`; another timeout on that tree blocks it with `review_timeout_requeue_exhausted`; no PR opens |
-| Red base: every failed required check carries a `baseline` claim settlement confirms, and nothing else is open | the reviewed candidate is kept unpublished | the step fails typed `[baseline_red]`; the task goes to `backlog` under `baseline_red_hold` until the base passes, and the next run resumes the candidate for a fresh review |
+| Red base: every failed required check carries a `baseline` claim settlement confirms, and nothing else is open | the reviewed candidate is kept unpublished | the step fails typed `[baseline_red]` and the run ends `held`; the task goes to `backlog` under `baseline_red_hold` until the base passes, and the next run resumes the candidate for a fresh review |
 | Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished; a claimed leaf also pushes it to `orbit-evidence/<branch>` on `origin` | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
 
 The implementation commit is never amended. A failed revalidation of the
@@ -78,6 +78,12 @@ With `review.before_landing` captured, the table above applies to the
 | `accept` | completion merges the reviewed head | `done` with `--complete`, else `review` |
 | `accept_with_fixes` | owner validation reruns on the reviewer commit, which `landing_push` pushes onto the published head under a lease; hosted CI restarts and completion merges that head | `done` with `--complete`, else `review` |
 | `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
+
+A refusal that leaves the PR open for a recorded decision (`reject`, any
+`incomplete`, or an abandoned review below) ends the run `held` with code
+`review_decision_pending`, not `failed`: nothing went wrong, and the gate and
+auto parents waiting on it pass it as held. A reviewer timeout, failed
+revalidation or `push_lease_lost` still ends the run `failed`.
 
 A reviewer that exits cleanly with only its initial placeholder report is
 released, not settled: the refusal leads with `review_abandoned:`, the failure

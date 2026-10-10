@@ -80,9 +80,17 @@ including the interval before a leaf run exists. Owner and follower drains use t
 **Footprints.** There is no epic path ([§7.1](#71-epic-machinery)); an `epic`-tagged task is an
 ordinary entry using its own `context_files`, and sequencing is expressed with dependencies.
 
-- `context_files` are optional for local auto, ship (including explicit selection), and owner
-  pull admission. A backlog task with no selectors is admitted on the next pass without holding
-  a context lock; it needs no `no-diff-expected` tag or pilot preparation. Conflicts from undeclared
+- `context_files` are optional, but an empty list holds no context lock. A single-slot local
+  drain, an explicit `orbit run ship <id>` and owner pull admission admit a backlog task with no
+  selectors on the next pass. A local drain or discovery ship with more than one slot treats such
+  a task (no `no-diff-expected` tag) as a whole-tree footprint [ORB-15191]. While an enabled
+  `preparation_eligible` routine this host owns would still prepare it (its eligibility admits
+  the task, the pilot has not assessed it, and `max_wait_minutes + deadline_minutes` since its
+  last change have not elapsed), the task waits as `awaiting_footprint`. Otherwise it starts only
+  when no other leaf is in flight and nothing editing was selected ahead of it in the wave
+  (`awaiting_exclusive_slot`); the first such waiter reserves the tree, so lower-ranked editing
+  work defers to it (`exclusive_reservation`). While it runs, other editing work is deferred
+  (`unknown_footprint`) and `no-diff-expected` work still admits. Conflicts from undeclared
   edits are handled at landing by rebase and conflict repair. Remote pull claims tagged
   `no-diff-expected` work like any other: the claimed leaf hands off `NoDiff`
   ([task-pull](./specs/task-pull.md)). Work that must stay on the owner is pinned with an
@@ -94,6 +102,16 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   `allow_missing_context` governs explicit operator existence checks and records the exact
   creation intent task-pilot honours; it never affects admission. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
+- A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-sweep` or
+  `security-review`) carries its evidence as selectors: every cited source path plus the
+  regression-test location. Task-pilot may add modification targets to it but never drops one of
+  those selectors that still resolves at the pinned source; apply keeps any the pilot omitted, in
+  the filed order, and reports them as `context_evidence_retained`, so re-assessment does not
+  rewrite the scope [ORB-15285]. The evidence stays in `context_files` and so in the lock
+  surface: a finding's evidence names the files its repair is likely to edit, the review templates
+  bound it to the cited paths, and the per-complexity over-attachment finding counts retained
+  selectors. A selector that no longer resolves is dropped and reported like any other missing
+  target, and an operator `orbit.task.update` that narrows the scope is respected.
 - The original canonical footprint is immutable in the admission receipt. The live claim
   protects it through execution and review, including after reservation expiry; only owner-validated
   widening at handoff may add selectors, and checkout contents cannot shrink it.
@@ -122,7 +140,12 @@ tags do not name) is judged against the requesting executor's
 `AdmissionRequest::os`, so pull defers it only from a follower of another OS,
 naming the criterion and the tag in `deferred_conflicts`; the in-section re-check
 applies the same rule. A task whose `os:` tags exclude the executor is left to
-the OS filter below.
+the OS filter below. When the finding names one OS and the task has no `os:`
+tag, the pilot's atomic apply adds that tag, so the OS filter routes it. The
+same hold may carry a machine requirement (`required_machine`: evidence only
+the owner's own store, services or data can produce), judged against the
+requesting identity's machine id: pull defers the task from every other
+machine with a `Machine requirement:` reason.
 
 **Eligibility.** Pull filters on the executor's host OS and its crews. The OS filter
 [ORB-14005]: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision
@@ -735,7 +758,10 @@ and PR identity, source branch, published candidate head SHA, validated base SHA
 and landing branch, execution summary and validation artifact references.
 
 - The owner captures its `review.before_pr` and `review.before_landing` contract at admission;
-  config load refuses both on at once [ORB-14849]. When either is on, the owner admits only
+  config load refuses both on at once [ORB-14849]. With both off, `review.before_landing_hosts`
+  turns before-landing on for the claims of the executor machines it lists, so the owner's own
+  deliveries can skip it while a follower's claims review before landing [ORB-15192]; it is
+  refused beside `review.before_pr`. When either is on, the owner admits only
   PR-mode executors that declare `review_gate`; the executor's captured `caller_before_pr` is
   diagnostic. Local ship mode is refused because it has no claimed leaf on which to run the gate.
   Before-PR review runs on the leaf before the PR opens. Before-landing review runs on the leaf
@@ -1113,6 +1139,7 @@ Acceptance criteria, not reported as passing.
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
 | In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
 | Critical or high-priority task waits on several locks that free one at a time | It reserves its surface: lower-ranked backlog work overlapping it waits as `surface_reserved` naming it, non-overlapping work admits, and it takes the wave once its locks free. At most two reserve per pass; nothing persists between passes ([ORB-14310]) |
+| Backlog task with no `context_files` in a multi-slot local drain or discovery ship | Waits for this host's task pilot (`awaiting_footprint`), else runs only with no other leaf in flight (`awaiting_exclusive_slot`) and holds the tree while it runs; single-slot runs, explicit ship and owner pull admission keep admitting it on the next pass ([ORB-15191]) |
 | Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
 | Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
@@ -1184,5 +1211,7 @@ Acceptance criteria, not reported as passing.
 - [ORB-14695] — released a claimed leaf whose provider account hit its usage limit as an unbudgeted `provider` failure that excludes every crew of that provider for the window.
 - [ORB-15088] — answered an owner's lock-wait timeout as the retryable `lock_busy`, retried a bound worker's owner reads on it, and settled a step it still fails as `transient`.
 - [ORB-14697] — excluded crews whose provider the follower reads at or near its usage limit from each pass's crew window (`provider_limit`, lifting at `until` in the same drain), replacing the window-long exclusion a limit release added.
+- [ORB-15191] — made a multi-slot local drain or discovery ship wait for the task pilot to prepare empty-context backlog work (`awaiting_footprint`), then run it only alone (`awaiting_exclusive_slot`), after three such tasks edited one stylesheet concurrently.
+- [ORB-15285] — kept a review-filed task's evidence selectors through task-pilot assessments that propose only modification targets.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

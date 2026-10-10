@@ -3,7 +3,7 @@
 const node = id => document.getElementById(id);
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
-const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
+const response = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), { status, headers });
 let heldPath = '/api/tasks';
 let networkDown = false;
 let metricsError = false;
@@ -25,6 +25,7 @@ let frictionTitle = 'stable friction title';
 let frictionBody = 'stable friction body';
 let frictionDuring = 'ORB-100';
 const runQueries = [];
+const runRequests = [];
 const runDetailRequests = [];
 const terminalRuns = ['success', 'failed', 'timeout', 'cancelled', 'interrupted'].map(state => ({
   run_id: `terminal-${state}`, job_id: 'fixture', state,
@@ -76,12 +77,16 @@ function fixture(url) {
     };
     case '/api/job-runs': {
       runQueries.push(url.searchParams.get('state'));
+      runRequests.push(url.search);
       if (!terminalRunFixture) return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
       const runs = url.searchParams.get('state') === 'failed'
         ? terminalRuns.filter(run => ['failed', 'timeout', 'interrupted'].includes(run.state))
         : terminalRuns;
       return list(runs);
     }
+    case '/api/audit': return url.searchParams.has('before')
+      ? [{ id: 8999 }]
+      : [{ id: 9000 }];
     case '/api/runs/cross-workspace-run': return {
       run: { run_id: 'cross-workspace-run', job_id: 'fixture', state: 'success' },
       steps: [],
@@ -180,11 +185,14 @@ globalThis.fetch = async (path, options = {}) => {
   if (metricsError && url.pathname === '/api/diagnostics/metrics') return response({ error: 'Metrics fixture failure' }, 500);
   const payload = fixture(url);
   if (url.pathname === heldPath) return new Promise((resolve, reject) => pendingReads.push({ payload, resolve, reject }));
-  return response(payload);
+  const headers = url.pathname === '/api/audit' && !url.searchParams.has('before')
+    ? { 'x-audit-next-before': 'fixture-audit-cursor' }
+    : {};
+  return response(payload, 200, headers);
 };
 await import('./app.js');
 await settle();
-const { persistScopeToUrl, setWorkspace, setWindow, getHost, getWorkspace, formatDateTime } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace, setWindow, getHost, getWorkspace, formatDateTime, fetchJsonPage } = await import('./js/common.js');
 const { navigateToRun, setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -194,6 +202,10 @@ const click = target => target.listeners ? target.listeners.click() : target.cli
 const release = (request, payload = request.payload) => request.resolve(response(payload));
 const text = id => node(id).textContent;
 const busy = id => node(id).getAttribute ? node(id).getAttribute('aria-busy') : node(id)['aria-busy'];
+const auditHeadPage = await fetchJsonPage('/api/audit?limit=50');
+check(auditHeadPage.header('x-audit-next-before') === 'fixture-audit-cursor', 'continuing audit fixture response exposes its paging cursor');
+const auditTerminalPage = await fetchJsonPage('/api/audit?limit=50&before=fixture-audit-cursor');
+check(auditTerminalPage.header('x-audit-next-before') === null, 'terminal audit fixture response exposes an absent cursor as null');
 check(text('tasks-body').includes('Loading'), 'cold Tasks must visibly load');
 check(!text('tasks-body').includes('No tasks'), 'cold Tasks cannot claim empty');
 for (const request of pendingReads.splice(0)) release(request, list([]));
@@ -379,6 +391,33 @@ for (const state of ['failed', 'timeout', 'interrupted']) {
   check(failureRows.some(row => row.textContent.includes(`terminal-${state}`)), `${state} run remains visible under the Failed filter`);
 }
 check(!text('runs-body').includes('terminal-success') && !text('runs-body').includes('terminal-cancelled'), 'Failed filter excludes successful and cancelled runs');
+// The rail badge counts every failed run in its window, so opening it from a
+// task or job search must drop that search; otherwise the list can narrow below
+// the number clicked. The Failed-selected case covers a toolbar that is not rebuilt.
+const runsSearch = () => node('runs-body').querySelector('.runs-query');
+for (const [kind, value, param, startFilter] of [['task', 'ORB-15159', 'task_id', 'All'], ['job', 'ci_failure_sweep_pipeline', 'job_id', 'Failed']]) {
+  setActiveTab('diagnostics/runs'); await settle();
+  click(Array.from(node('runs-body').querySelectorAll('.runs-filter-button')).find(button => button.textContent === startFilter)); await settle();
+  runsSearch().value = value;
+  runsSearch().dispatchEvent(new Event('input')); await settle();
+  check(new URL(window.location.href).searchParams.get(param) === value, `${kind} search is kept in the address before the badge click`);
+  const badgeWindow = node('rail-count-diag-runs').dataset.window;
+  click(node('rail-count-diag-runs')); await settle();
+  const address = new URL(window.location.href).searchParams;
+  const request = new URLSearchParams(runRequests.at(-1));
+  check(address.get('run_state') === 'failed' && !address.has('task_id') && !address.has('job_id'), `${kind} badge click opens the failure scope without the ${kind} search in the address`);
+  check(request.get('state') === 'failed' && !request.has('task_id') && !request.has('job_id'), `${kind} badge click requests every failed run without the ${kind} search`);
+  check(request.get('since') === badgeWindow, `${kind} badge click requests the badge's counted window`);
+  check(runsSearch().value === '', `${kind} badge click clears the search field`);
+}
+// Ordinary Runs-label navigation keeps the search on screen.
+setActiveTab('diagnostics/runs'); await settle();
+runsSearch().value = 'ORB-15159';
+runsSearch().dispatchEvent(new Event('input')); await settle();
+click(document.querySelector('.tab[data-tab="runs"]')); await settle();
+check(new URL(window.location.href).searchParams.get('task_id') === 'ORB-15159' && runsSearch().value === 'ORB-15159', 'the Runs label keeps the task search');
+runsSearch().value = '';
+runsSearch().dispatchEvent(new Event('input')); await settle();
 terminalRunFixture = false;
 
 // Both entrypoints share a pending-request guard, but an accepted run must not

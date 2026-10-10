@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use chrono::{Duration, Utc};
+use orbit_common::test_env::FixtureProgress;
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{AutoTaskAddParams, Task};
@@ -69,7 +70,12 @@ fn instance(fixture: &Fixture, tags: Vec<String>, status: TaskStatus) -> Task {
     }
 }
 
-fn seed(fixture: &Fixture, total: usize) -> BTreeMap<String, Vec<Task>> {
+fn seed(
+    fixture: &Fixture,
+    total: usize,
+    progress: &mut FixtureProgress,
+) -> BTreeMap<String, Vec<Task>> {
+    progress.phase("seed tasks", total);
     let mut instances = BTreeMap::new();
     for index in 0..16 {
         let name = format!("fixture-{index:02}");
@@ -84,12 +90,17 @@ fn seed(fixture: &Fixture, total: usize) -> BTreeMap<String, Vec<Task>> {
         };
         definition_with_schedule(fixture, &name, schedule);
         let tasks = (0..20)
-            .map(|_| instance(fixture, vec![auto_task_tag(&name)], TaskStatus::Backlog))
+            .map(|_| {
+                let task = instance(fixture, vec![auto_task_tag(&name)], TaskStatus::Backlog);
+                progress.advance();
+                task
+            })
             .collect();
         instances.insert(name, tasks);
     }
     for _ in 320..total {
         instance(fixture, vec!["unrelated".into()], TaskStatus::Done);
+        progress.advance();
     }
     instances
 }
@@ -99,11 +110,18 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
     isolated(
         "auto_tasks::list_uses_one_freshness_pass_and_selects_each_instance_once",
         || {
+            // Seeding and two cold list requests can outlast the child's hang
+            // guard on a saturated host; name the phase that was running.
+            let mut progress = FixtureProgress::start("auto-task list freshness");
             let fixture = Fixture::new();
-            let instances = seed(&fixture, 320);
+            let instances = seed(&fixture, 320, &mut progress);
+            progress.phase("start server", 1);
             let server = fixture.counted_task_server();
+            progress.advance();
+            progress.phase("list requests", 2);
             for request in 1..=2 {
                 let response = json_ok(server.get(URL));
+                progress.advance();
                 assert_eq!(response["definitions"].as_array().unwrap().len(), 16);
                 for row in response["definitions"].as_array().unwrap() {
                     let newest = instances[row["name"].as_str().unwrap()].last().unwrap();
@@ -138,6 +156,7 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
                     assert_eq!(selections[&task.id], request, "each instance selected once");
                 }
             }
+            progress.finish();
         },
     );
 }
@@ -268,8 +287,10 @@ fn newest_cursor_id(fixture: &Fixture) -> String {
 #[ignore = "manual before/after latency evidence on a 4,000-task fixture"]
 fn list_latency_4000_tasks() {
     isolated("auto_tasks::list_latency_4000_tasks", || {
+        let mut progress = FixtureProgress::start("auto-task list latency");
         let fixture = Fixture::new();
-        seed(&fixture, 4000);
+        seed(&fixture, 4000, &mut progress);
+        progress.finish();
         let server = fixture.server(false);
         let mut samples = Vec::new();
         for _ in 0..7 {

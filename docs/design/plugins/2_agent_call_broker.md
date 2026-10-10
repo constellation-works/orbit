@@ -564,9 +564,10 @@ granting `unsandboxed`.
 ### 6.1 What is denied
 
 `<global_root>/state/plugins/` and `<global_root>/state/plugin-secrets/`, for reads and writes,
-on both platforms. Other nested-`orbit` reads under the global root are unchanged. That
-includes `plugins/`, `plugins/.grants/` (the loader verifies witnesses when it builds the tool
-surface) and `state/plugin-callbacks/`.
+on both platforms. The same mask also hides `clock.env`
+([policy-sandbox design](../policy-sandbox/2_design.md)). Other nested-`orbit` reads under the
+global root are unchanged. That includes `plugins/`, `plugins/.grants/` (the loader verifies
+witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
 
 ### 6.2 Mechanics
 

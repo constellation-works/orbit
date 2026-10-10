@@ -7,10 +7,10 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_engine::DispatchError;
-use orbit_types::task::{HostOs, TaskComplexity};
+use orbit_types::task::{ExecutionLocation, HostOs, TaskComplexity};
 use serde_json::{Value, json};
 
-use crate::application::task::NativeOsRequirement;
+use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
 use super::VALIDATION_TOOL_WARNINGS;
 use super::input::{action_failed, required_string, required_string_array, string_array_value};
@@ -384,6 +384,98 @@ pub(super) fn required_os(
     Ok(requirements)
 }
 
+/// The one OS a validated `required_os` finding routes the task to: every
+/// requirement names it. Requirements on several OSes name no single host, so
+/// they route nothing and stay a hold for an operator to split.
+pub(super) fn routing_os(requirements: &[NativeOsRequirement]) -> Option<HostOs> {
+    let os = requirements.first()?.os;
+    requirements
+        .iter()
+        .all(|requirement| requirement.os == os)
+        .then_some(os)
+}
+
+/// The pilot's typed machine finding: each `required_machine` entry names a
+/// 1-based criterion whose evidence only `owner`, the machine that owns this
+/// workspace's task store, can produce, and that evidence. Absent or empty is
+/// no finding. The entry must name the owner by machine id or name: a pilot
+/// cannot route work to a machine this owner does not know.
+pub(super) fn required_machine(
+    action: &str,
+    task_id: &str,
+    assessment: &Value,
+    criteria: usize,
+    owner: Option<&ExecutionLocation>,
+) -> Result<Option<MachineRequirement>, DispatchError> {
+    let Some(entries) = assessment
+        .get("required_machine")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let invalid =
+        |detail: &str| action_failed(action, format!("task {task_id} required_machine {detail}"));
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| invalid("must be an array or null"))?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let owner = owner.ok_or_else(|| {
+        invalid(
+            "needs this owner's machine identity, and it has none; no other machine can claim \
+             its tasks, so leave required_machine empty",
+        )
+    })?;
+    let mut requirement = MachineRequirement {
+        criteria: Vec::new(),
+        machine_id: owner.machine_id.clone(),
+        machine_name: owner.machine_name.clone(),
+    };
+    for entry in entries {
+        let criterion = entry
+            .get("criterion")
+            .and_then(Value::as_u64)
+            .and_then(|criterion| usize::try_from(criterion).ok())
+            .filter(|criterion| (1..=criteria).contains(criterion))
+            .ok_or_else(|| {
+                invalid(&format!(
+                    "criterion must be a 1-based index of the task's {criteria} acceptance criteria"
+                ))
+            })?;
+        let machine = entry
+            .get("machine")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let names_owner = machine.eq_ignore_ascii_case(&owner.machine_id)
+            || owner
+                .machine_name
+                .as_deref()
+                .is_some_and(|name| machine.eq_ignore_ascii_case(name.trim()));
+        if !names_owner {
+            let owner_name = owner.machine_name.as_deref().map_or_else(
+                || owner.machine_id.clone(),
+                |name| format!("{name} ({})", owner.machine_id),
+            );
+            return Err(invalid(&format!(
+                "machine {machine:?} must name this owner, {owner_name}; report a requirement \
+                 on another machine in utility_warnings instead"
+            )));
+        }
+        entry
+            .get("evidence")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|evidence| !evidence.is_empty())
+            .ok_or_else(|| invalid("evidence must be a non-empty string"))?;
+        requirement.criteria.push(criterion);
+    }
+    requirement.criteria.sort_unstable();
+    requirement.criteria.dedup();
+    Ok(Some(requirement))
+}
+
 fn validate_optional_finding(
     action: &str,
     task_id: &str,
@@ -453,6 +545,72 @@ pub(super) fn unauthorized_missing_targets(
         }
     }
     Ok(findings)
+}
+
+/// Tags the review templates stamp on the findings they file. Each template
+/// requires a finding to carry its evidence — every cited source path and
+/// the regression-test location — as `context_files`.
+const REVIEW_FINDING_TAGS: [&str; 4] = [
+    "code-review",
+    "delivery-code-review",
+    "qa-sweep",
+    "security-review",
+];
+
+/// Whether a review filed the task, so its selectors are evidence the pilot
+/// may add to but not drop.
+pub(super) fn review_filed(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|tag| REVIEW_FINDING_TAGS.contains(&tag.as_str()))
+}
+
+/// The selectors of a review-filed task's prepared scope that `after` omits
+/// and that still resolve, with their recorded kind, at the pinned source (or
+/// in the workspace without one). A pilot narrowing the scope to its
+/// modification targets would otherwise erase the review's evidence on every
+/// assessment. A selector that no longer resolves is not kept: it falls to
+/// the same missing-target handling as any other dropped selector.
+pub(super) fn retained_review_evidence(
+    action: &str,
+    before: &[String],
+    after: &[String],
+    workspace_root: &Path,
+    source: Option<&SourceSnapshot>,
+) -> Result<Vec<String>, DispatchError> {
+    let mut retained = Vec::new();
+    for selector in before {
+        if after.contains(selector) || retained.contains(selector) {
+            continue;
+        }
+        let Ok(anchor) = anchor_path(selector) else {
+            continue;
+        };
+        let expected_dir = selector.starts_with("dir:");
+        let resolves = match source {
+            Some(source) => {
+                canonical_selector(selector).ok().as_ref() == Some(selector)
+                    && matches!(
+                        (
+                            source.path_kind(action, workspace_root, &anchor)?,
+                            expected_dir
+                        ),
+                        (GitPathKind::Tree, true) | (GitPathKind::Blob, false)
+                    )
+            }
+            None => {
+                canonical_selector_in_workspace(selector, workspace_root)
+                    .ok()
+                    .as_ref()
+                    == Some(selector)
+                    && exists_in_workspace(selector, workspace_root)
+                    && validate_selector_target_kind(action, "", selector, workspace_root).is_ok()
+            }
+        };
+        if resolves {
+            retained.push(selector.clone());
+        }
+    }
+    Ok(retained)
 }
 
 /// How an operator records that a missing selector is a target the task will

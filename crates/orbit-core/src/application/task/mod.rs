@@ -22,6 +22,7 @@ mod paths;
 mod pilot_admission;
 mod pilot_no_diff;
 mod pr_closure;
+mod pull_request_links;
 mod query;
 mod records;
 mod resolves;
@@ -60,14 +61,16 @@ pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
 pub(crate) use pilot_admission::{
-    HostOperationalHold, NativeOsHold, NativeOsRequirement, OperatorValidationHold,
-    OperatorValidationRequirement, PilotAdmissionHold, operator_validation_requirements,
+    HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement,
+    OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
+    operator_validation_requirements,
 };
 pub(crate) use pilot_no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 pub use provider_limit_view::{
     CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
     UngatedLaneLimit, short_time,
 };
+pub use pull_request_links::PullRequestLinks;
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
@@ -77,6 +80,7 @@ pub(crate) use lifecycle::{
 };
 pub use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 pub(crate) use paths::{compute_task_add_warnings, context_workspace_root};
+pub(crate) use update::admit_agent_artifact;
 
 #[cfg(test)]
 mod tests;

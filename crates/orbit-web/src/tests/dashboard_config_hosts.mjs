@@ -142,6 +142,28 @@ let entries = [
 const cached = row => ({ ...row, reachable: null, error: null, binary_version: null, protocol_fingerprint: null, skew: false, skew_fields: [], workspaces: [] });
 let loadError = null;
 let hostEdit = { authorized: true, reason: null };
+const reading = (percent, severity) => ({ percent, severity, unknown_reason: null });
+const resourceBody = (cpu, memory, disk, extra = {}) => ({
+  cpu: reading(cpu.percent, cpu.severity),
+  memory: reading(memory.percent, memory.severity),
+  disk: { path: '/data', ...reading(disk.percent, disk.severity) },
+  sample_age_seconds: 2, max_age_seconds: 30, stale: false, throttle: false, pressures: [],
+  reason: 'open', thresholds: { enabled: true }, verdict_unknown: false, ...extra,
+});
+const RESOURCES = {
+  'box-a': resourceBody({ percent: 12, severity: 'ok' }, { percent: 40, severity: 'ok' }, { percent: 22, severity: 'ok' }),
+  alpha: resourceBody({ percent: 30, severity: 'ok' }, { percent: 40, severity: 'ok' }, { percent: 55, severity: 'elevated' }),
+  gamma: resourceBody(
+    { percent: 280, severity: 'critical' },
+    { percent: 91, severity: 'critical' },
+    { percent: 50, severity: 'ok' },
+    { throttle: true, pressures: [{ resource: 'cpu' }, { resource: 'memory' }], reason: 'cpu and memory high' },
+  ),
+};
+const DRAINS = {
+  gamma: { drain_phase: 'draining', drain_run_id: 'jrun-gamma', pull_drain_run_id: 'jrun-pull', pull_drain_admissions_stopped: false },
+};
+const resourceFailures = {};
 const requests = [];
 const holds = [];
 const response = (payload, status = 200) => ({ ok: status < 400, status, json: async () => payload, text: async () => JSON.stringify(payload) });
@@ -174,6 +196,18 @@ const route = (url, options) => {
     }
     entries = entries.filter(row => row.machine_id !== id);
     return response({ action: 'removed', entry: { name: entry.name, machine_id: id, ssh: entry.ssh, task_prefix: entry.task_prefix }, previous_name: null, migrated: [], host: null, orphaned: dependents });
+  }
+  const forwarded = url.pathname.match(/^\/api\/on\/([^/]+)\/(.+)$/);
+  if (forwarded && method === 'GET') {
+    const name = decodeURIComponent(forwarded[1]);
+    const rest = forwarded[2];
+    if (rest === 'host/resources') {
+      if (resourceFailures[name]) return refuse(503, 'resource_unavailable', resourceFailures[name]);
+      return response(RESOURCES[name] || resourceBody({ percent: 10, severity: 'ok' }, { percent: 10, severity: 'ok' }, { percent: 10, severity: 'ok' }));
+    }
+    if (rest === 'workflows/auto/readiness') {
+      return response({ capacity: DRAINS[name] || { drain_phase: 'idle', drain_run_id: null, pull_drain_run_id: null } });
+    }
   }
   return response({ error: `unexpected ${method} ${url.pathname}` }, 404);
 };
@@ -209,6 +243,17 @@ const type = (cls, text) => { const input = named(editor(), cls)[0]; input.value
 const escape = () => editor().dispatch('keydown', { key: 'Escape' });
 const submit = () => editor().dispatch('submit');
 const lastRequest = () => requests.at(-1);
+const isHostFile = (path) => path === '/api/hosts' || path.startsWith('/api/hosts?') || path.startsWith('/api/hosts/');
+const hostFileRequests = () => requests.filter((request) => isHostFile(request.path));
+const chipOf = (id, resource) => {
+  const chip = named(row(id), 'host-resource').find((node) => node.dataset.resource === resource);
+  if (!chip) return null;
+  return {
+    className: chip.className,
+    k: named(chip, 'k')[0].textContent,
+    v: named(chip, 'v')[0].textContent.replace(/\s+/g, ' ').trim(),
+  };
+};
 
 initConfig();
 setConfigSubtab('hosts');
@@ -216,13 +261,13 @@ assert.equal(getConfigSubtab(), 'hosts', 'the Hosts sub-view is routable');
 await fetchAndRenderConfig();
 
 // ---- render: local host first, labelled as the host this dashboard edits ----
-assert.deepEqual(requests.map(r => r.path), ['/api/hosts'], 'opening the view probes every host');
+assert.equal(hostFileRequests()[0].path, '/api/hosts', 'opening the view probes every host');
 assert.equal(explainer.hidden, true, 'Hosts does not repeat the config explainer');
 assert.deepEqual(rows().map(node => node.dataset.key), ['hm_local', 'hm_alpha', 'hm_beta', 'hm_gamma']);
 assert.match(textOf(body, 'host-scope')[0], /edits the host file of box-a: \/home\/op\/\.orbit\/hosts\.toml/);
 assert.match(row('hm_local').textContent, /local · edited here/);
 assert.equal(named(row('hm_local'), 'host-rename').length, 0, 'the local host is renamed through machine.name, not here');
-assert.match(textOf(row('hm_local'), 'host-workspace')[0], /orbit \(replica of hm_alpha\)/);
+assert.match(textOf(row('hm_local'), 'host-workspace')[0], /orbit \(replica of alpha\)/, 'a replica names its owner by registered name [ORB-15216]');
 assert.equal(textOf(row('hm_alpha'), 'host-reach')[0], 'yes');
 assert.equal(textOf(row('hm_alpha'), 'host-version')[0], '1.4.0');
 assert.equal(textOf(row('hm_alpha'), 'host-protocol')[0], 'abcdef012345');
@@ -234,13 +279,69 @@ assert.match(textOf(row('hm_beta'), 'host-error')[0], /unreachable_destination: 
 assert.equal(textOf(row('hm_gamma'), 'host-skew')[0], 'skew: binary_version');
 assert.equal(count.textContent, '3 remote hosts');
 
+// ---- per-host health: same readings as the top bar, drain, throttle, unreachable ----
+const { describeResource } = load('host-resources.js').namespace;
+const alphaCpu = describeResource(RESOURCES.alpha, 'cpu');
+const shownAlpha = chipOf('hm_alpha', 'cpu');
+assert.equal(shownAlpha.k, alphaCpu.label);
+assert.equal(shownAlpha.v, `${alphaCpu.value}${alphaCpu.suffix}`.replace(/\s+/g, ' ').trim());
+assert.equal(shownAlpha.className, `host-resource ${alphaCpu.severity}`, 'a host row uses the top-bar severity');
+assert.equal(chipOf('hm_alpha', 'disk').className, 'host-resource elevated');
+assert.equal(chipOf('hm_local', 'cpu').v, '0.1× cores');
+const gammaCpu = chipOf('hm_gamma', 'cpu');
+assert.equal(gammaCpu.v, '2.8× cores');
+assert.equal(gammaCpu.className, 'host-resource critical throttled');
+assert.equal(chipOf('hm_gamma', 'memory').className, 'host-resource critical throttled');
+assert.equal(chipOf('hm_gamma', 'disk').className, 'host-resource ok');
+assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'idle');
+assert.match(named(row('hm_alpha'), 'host-drain')[0].title, /orbit: idle/);
+assert.match(named(row('hm_alpha'), 'host-drain')[0].title, /Throttle verdict: open/);
+assert.equal(named(row('hm_gamma'), 'host-drain')[0].textContent, 'Draining · Pull drain · throttled');
+DRAINS.alpha = { drain_phase: 'winding_down', drain_run_id: 'jrun-wind', pull_drain_run_id: 'jrun-pull-a', pull_drain_admissions_stopped: true };
+await fetchAndRenderConfig();
+assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'Winding down · Pull drain · admissions stopped');
+delete DRAINS.alpha;
+assert.match(named(row('hm_gamma'), 'host-health')[0].getAttribute('aria-label'), /Throttle verdict: held/);
+assert.equal(named(row('hm_beta'), 'host-resource').length, 0, 'an unreachable host has no readings');
+assert.match(named(row('hm_beta'), 'host-health')[0].textContent, /unreachable_destination: ssh: Could not resolve hostname beta/);
+const healthPaths = requests.filter((request) => request.path.startsWith('/api/on/')).map((request) => request.path.split('?')[0]);
+for (const name of ['box-a', 'alpha', 'gamma']) {
+  assert.ok(healthPaths.includes(`/api/on/${name}/host/resources`), `${name} resources were read`);
+  assert.ok(healthPaths.includes(`/api/on/${name}/workflows/auto/readiness`), `${name} drain capacity was read`);
+}
+assert.equal(healthPaths.filter((path) => path.includes('/beta/')).length, 0, 'an unreachable host is not asked for readings');
+assert.match(named(body, 'host-head')[0].textContent, /Health/);
+const switched = [];
+load('common.js').namespace.setHostSwitchHandler((name) => switched.push(name));
+const showAlpha = named(row('hm_alpha'), 'host-switch')[0];
+assert.equal(showAlpha.tagName, 'A');
+assert.match(showAlpha.href, /(?:\?|&)host=alpha(?:&|$)/);
+showAlpha.click();
+assert.deepEqual(switched, ['alpha']);
+assert.equal(named(row('hm_local'), 'host-showing')[0].textContent, 'showing');
+assert.equal(named(row('hm_local'), 'host-switch').length, 0, 'the host already shown has no switch link');
+
+resourceFailures.alpha = 'sampler down';
+await fetchAndRenderConfig();
+assert.match(named(row('hm_alpha'), 'host-health')[0].textContent, /sampler down/);
+assert.equal(named(row('hm_alpha'), 'host-resource').length, 0, 'a failed reading is not shown as a number');
+assert.equal(chipOf('hm_gamma', 'cpu').v, '2.8× cores', 'one host failing leaves the others');
+assert.equal(named(row('hm_beta'), 'host-resource').length, 0);
+delete resourceFailures.alpha;
+
 // ---- a background refresh reads cached fields and keeps live readings ----
 entries = [...entries, remote('delta', 'hm_delta', 'DE')];
+RESOURCES.alpha = resourceBody({ percent: 160, severity: 'critical' }, { percent: 40, severity: 'ok' }, { percent: 55, severity: 'elevated' });
+const alphaReads = requests.filter((request) => request.path.startsWith('/api/on/alpha/host/resources')).length;
 await fetchAndRenderConfig();
-assert.equal(lastRequest().path, '/api/hosts?probe=false', 'the poll opens no SSH session');
+assert.equal(hostFileRequests().at(-1).path, '/api/hosts?probe=false', 'the poll opens no SSH session');
+assert.ok(requests.filter((request) => request.path.startsWith('/api/on/alpha/host/resources')).length > alphaReads, 'the refresh reads resources again');
+assert.equal(chipOf('hm_alpha', 'cpu').v, '1.6× cores', 'a later refresh shows the new load');
 assert.equal(textOf(row('hm_alpha'), 'host-reach')[0], 'yes', 'a cached row keeps its last live reading');
 assert.equal(textOf(row('hm_beta'), 'host-reach')[0], 'no · unreachable_destination');
 assert.equal(textOf(row('hm_delta'), 'host-reach')[0], 'not probed', 'a host added from the CLI appears on the next refresh');
+assert.equal(named(row('hm_delta'), 'host-health')[0].textContent, 'not probed');
+assert.equal(requests.filter((request) => request.path.includes('/api/on/delta/')).length, 0, 'a host that has not been probed is not asked for readings');
 
 // ---- a host file that fails to load is a banner over the last snapshot ----
 loadError = { code: 'task_prefix_conflict', message: "invalid host file: prefix 'AL' is used twice" };
@@ -268,8 +369,8 @@ type('host-input-ssh', 'epsilon');
 type('host-input-name', 'build-box');
 submit();
 await settle();
-assert.deepEqual(requests.at(-2), { path: '/api/hosts', method: 'POST', body: { ssh: 'epsilon', name: 'build-box' } });
-assert.equal(lastRequest().path, '/api/hosts?probe=false');
+assert.deepEqual(hostFileRequests().at(-2), { path: '/api/hosts', method: 'POST', body: { ssh: 'epsilon', name: 'build-box' } });
+assert.equal(hostFileRequests().at(-1).path, '/api/hosts?probe=false');
 assert.equal(editor(), undefined, 'a successful add closes the form');
 assert.match(textOf(body, 'host-notice')[0], /Added build-box \(hm_epsilon, prefix EP\)/);
 assert.equal(textOf(row('hm_epsilon'), 'host-reach')[0], 'yes', 'the added host keeps the live summary add returned');
@@ -318,7 +419,7 @@ assert.deepEqual(textOf(editor(), 'mono').filter(line => /replica|pull drain/.te
 assert.ok(focused('host-confirm') && document.activeElement.textContent === 'Force remove', 'the force confirmation takes focus');
 button(editor(), 'Force remove').click();
 await settle();
-assert.equal(requests.at(-2).path, '/api/hosts/hm_beta?force=true');
+assert.equal(hostFileRequests().at(-2).path, '/api/hosts/hm_beta?force=true');
 assert.equal(row('hm_beta'), undefined, 'a forced remove drops the row');
 assert.match(textOf(body, 'host-notice')[0], /Removed beta \(hm_beta\)\. These lost their owner route: replica checkout orbit/);
 assert.ok(focused('host-add-open'), 'focus lands on Add host when the row is gone');
@@ -326,13 +427,14 @@ assert.ok(focused('host-add-open'), 'focus lands on Add host when the row is gon
 // ---- Reload probes again ----
 button(controls, 'Reload').click();
 await settle();
-assert.equal(lastRequest().path, '/api/hosts', 'Reload probes every host');
+assert.equal(hostFileRequests().at(-1).path, '/api/hosts', 'Reload probes every host');
 
 // ---- without the operator capability the view is read-only ----
 hostEdit = { authorized: false, reason: "operation 'host.edit' requires operator capability" };
 await fetchAndRenderConfig();
 assert.equal(named(body, 'host-add-open').length, 0, 'no Add host without the operator capability');
 assert.equal(named(body, 'host-rename').length + named(body, 'host-remove').length, 0, 'no row edits without it');
+assert.ok(named(row('hm_alpha'), 'host-switch').length > 0, 'Show stays available without the operator capability');
 assert.match(textOf(body, 'host-read-only')[0], /Read-only: operation 'host.edit' requires operator capability/);
 assert.equal(rows().length, 5, 'the hosts stay listed');
 console.log('settings hosts: rows, freshness, load banner, inline add/rename/remove/force with focus, and read-only passed');
@@ -486,6 +588,18 @@ async function assertHostColumnsAlign() {
         const url = new URL(input, location.origin);
         if (url.pathname === '/api/hosts') {
           return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (url.pathname.endsWith('/host/resources')) {
+          return new Response(JSON.stringify({
+            cpu: { percent: 20, severity: 'ok', unknown_reason: null },
+            memory: { percent: 30, severity: 'ok', unknown_reason: null },
+            disk: { path: '/data', percent: 40, severity: 'ok', unknown_reason: null },
+            sample_age_seconds: 1, max_age_seconds: 30, stale: false, throttle: false, pressures: [],
+            reason: 'open', thresholds: { enabled: true },
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (url.pathname.endsWith('/workflows/auto/readiness')) {
+          return new Response(JSON.stringify({ capacity: { drain_phase: 'idle', drain_run_id: null, pull_drain_run_id: null } }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
         return new Response('not found', { status: 404 });
       };

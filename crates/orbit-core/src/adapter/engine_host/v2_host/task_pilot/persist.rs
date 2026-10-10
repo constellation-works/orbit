@@ -6,7 +6,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_common::{OrbitError, StorageLayer};
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskOsRequirement, TaskStatus, normalize_task_tags};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
@@ -159,6 +159,16 @@ pub(super) fn apply_task(
             } else {
                 snapshot.status
             };
+            // A finding that names one OS routes the task by its tag, but only
+            // when the task has no `os:` tag yet: an operator's choice of
+            // hosts stands, and the hold below still names a conflict.
+            let add_tags = super::routing_os(&task.required_os)
+                .filter(|_| TaskOsRequirement::from_tags(&current.tags).is_unrestricted())
+                .map(|os| vec![os.tag()])
+                .unwrap_or_default();
+            // Markers and holds below seal the material as written.
+            let tags_after =
+                normalize_task_tags(current.tags.iter().chain(&add_tags).cloned().collect());
             let mut history_summary = assessment_history_summary(&task.assessment);
             if task.after.is_empty() {
                 // Record the meaning *after* the atomic write. A marker made
@@ -166,6 +176,7 @@ pub(super) fn apply_task(
                 // pilot changes its complexity or status.
                 let mut assessed = current.clone();
                 assessed.context_files = task.after.clone();
+                assessed.tags = tags_after.clone();
                 assessed.complexity = Some(task.complexity);
                 assessed.status = target_status;
                 let fingerprint = crate::application::automation::preparation::pilot_fingerprint(
@@ -190,6 +201,7 @@ pub(super) fn apply_task(
                 .operator_requirements(&current);
             let mut assessed = current.clone();
             assessed.context_files = task.after.clone();
+            assessed.tags = tags_after.clone();
             let crew_redraw_history =
                 runtime.rerate_task_crew(&mut assessed, Some(task.complexity))?;
             assessed.complexity = Some(task.complexity);
@@ -207,11 +219,16 @@ pub(super) fn apply_task(
                     )
                 });
             // Recorded whatever the task's tags are now: admission compares it
-            // with the tags each time, so adding the matching `os:` tag
-            // satisfies it and removing that tag restores it.
-            let native_os_hold = (!task.required_os.is_empty()).then(|| {
-                crate::application::task::NativeOsHold::new(&assessed, task.required_os.clone())
-            });
+            // with the tags each time, so the matching `os:` tag satisfies an
+            // OS requirement and removing that tag restores it.
+            let native_os_hold = (!task.required_os.is_empty() || task.required_machine.is_some())
+                .then(|| {
+                    crate::application::task::NativeOsHold::new(
+                        &assessed,
+                        task.required_os.clone(),
+                        task.required_machine.clone(),
+                    )
+                });
             let mutation_params = AtomicTaskMutationParams {
                 actor: "task-pilot".to_string(),
                 operation_id: task.operation_id.clone(),
@@ -224,6 +241,7 @@ pub(super) fn apply_task(
                 crew_source: assessed.crew_source.clone(),
                 expected_context_creation: snapshot.context_creation_identity.clone(),
                 context_files: task.after.clone(),
+                add_tags,
                 status: target_status,
                 complexity: task.complexity,
                 event_type: "task_pilot_applied".to_string(),
@@ -658,10 +676,10 @@ pub(super) fn superseded_task(
         )));
     }
     if ci_sweep && current.status != snapshot.status {
-        // CI-sweep authority only treats operator rejection or archival as a
-        // benign race. Other status changes continue through admission and
-        // fail its proposed-status check unless this operation's receipt
-        // proves its own promotion already landed.
+        // Other status changes continue through admission: a promotion
+        // elsewhere settles superseded there unless this operation's receipt
+        // proves its own promotion already landed, and any other status fails
+        // its proposed-status check.
         return Ok(None);
     }
     if !ci_sweep

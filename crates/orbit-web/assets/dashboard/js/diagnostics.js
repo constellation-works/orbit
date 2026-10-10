@@ -25,8 +25,10 @@ const $ = (id) => document.getElementById(id);
 
 // ORB-10871: which incidents the operator has expanded. Module-scoped (like
 // audit.js's expandedAuditIds) so a refresh tick does not collapse the row
-// someone is reading.
+// someone is reading. Recurrence rows use their own set so opening a run
+// does not collapse the group, and a refresh keeps both.
 const expandedIncidents = new Set();
+const expandedRecurrences = new Set();
 let incidentClass = "unexpected";
 export function getIncidentClass() { return incidentClass; }
 let agentDiagnosticsOpen = false;
@@ -285,6 +287,8 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, 
 // problems happened", and every number it renders states what it is out of and
 // which window it was measured over. Nothing is hidden: each incident expands
 // to the exact audit rows it collapsed, and links out to the raw Audit view.
+// Stored incidents stay one per run. The list rolls identical signatures up
+// across runs so a routine that fails on every fire is one recurrence.
 
 function asCount(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -520,7 +524,15 @@ function incidentDetailNode(incident, ctx) {
   return detail;
 }
 
-function incidentRowNode(incident, ctx) {
+function incidentRunIds(incident) {
+  if (!Array.isArray(incident.run_ids)) return [];
+  return incident.run_ids
+    .map(id => (id == null ? "" : String(id).trim()))
+    .filter(Boolean);
+}
+
+function incidentRowNode(incident, ctx, options = {}) {
+  const nested = options.nested === true;
   const key = incident.incident_id || incident.signature || "";
   const expanded = expandedIncidents.has(key);
   const article = el("article", {
@@ -529,15 +541,21 @@ function incidentRowNode(incident, ctx) {
   article.dataset.key = `incident-${key}`;
   // Expansion is part of the row's identity: without it a keyed diff would
   // reuse the collapsed node and swallow the click that opened it.
-  article.dataset.hash = JSON.stringify([incident.event_count, incident.last_ts, expanded]);
+  article.dataset.hash = JSON.stringify([incident.event_count, incident.last_ts, expanded, nested]);
 
+  const runIds = incidentRunIds(incident);
   const header = el("button", {
     class: "incident-head",
-    title: "Show the exact audit events behind this incident",
+    title: nested
+      ? `Incident ${key || "-"} · show the audit events for this run`
+      : "Show the exact audit events behind this incident",
   }, [
     el("span", { class: "incident-caret", text: expanded ? "▾" : "▸" }),
     el("span", { class: `incident-class ${incident.class || "unexpected"}`, text: incidentClassLabel(incident.class, incident.class_label), title: incident.class_label || incident.class }),
     el("span", { class: "incident-surface mono", text: incident.surface || "-" }),
+    nested
+      ? el("span", { class: "incident-run mono", text: runIds.length ? runIds.join(" · ") : "no run recorded" })
+      : null,
     el("span", { class: "incident-actor", text: incident.actor ? auditActorLabel(incident.actor) : "unknown actor", title: incident.actor }),
     el("span", {
       class: "incident-count",
@@ -562,6 +580,237 @@ function incidentRowNode(incident, ctx) {
   return article;
 }
 
+// The store keys an incident by (run scope, signature), so the same failure in
+// a later run is a new incident. The signature is that shared identity. An
+// incident with no signature stays on its own: grouping those would merge
+// unrelated rows the server could not identify.
+function incidentGroupKey(incident) {
+  const signature = typeof incident.signature === "string" ? incident.signature.trim() : "";
+  if (!signature) return "";
+  return `${incident.class || "unexpected"}\u0000${signature}`;
+}
+
+function incidentInstant(incident, field) {
+  const time = Date.parse(incident[field] || "");
+  return Number.isFinite(time) ? time : null;
+}
+
+function groupIncidentsForRecurrence(incidents) {
+  const groups = [];
+  const byKey = new Map();
+  incidents.forEach((incident, index) => {
+    const key = incidentGroupKey(incident);
+    if (!key) {
+      groups.push({
+        key: `single:${index}:${incident.incident_id || ""}`,
+        incidents: [incident],
+        recurring: false,
+        order: index,
+      });
+      return;
+    }
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, incidents: [], recurring: false, order: index };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.incidents.push(incident);
+  });
+  for (const group of groups) group.recurring = group.incidents.length > 1;
+
+  const lastInstant = (group) => group.incidents.reduce((latest, incident) => {
+    const time = incidentInstant(incident, "last_ts");
+    return time == null ? latest : Math.max(latest, time);
+  }, 0);
+  const recurring = groups
+    .filter(group => group.recurring)
+    .sort((a, b) => lastInstant(b) - lastInstant(a) || a.key.localeCompare(b.key));
+  for (const group of recurring) {
+    group.incidents.sort((a, b) => {
+      const byTime = (incidentInstant(b, "last_ts") || 0) - (incidentInstant(a, "last_ts") || 0);
+      if (byTime !== 0) return byTime;
+      return String(a.incident_id || "").localeCompare(String(b.incident_id || ""));
+    });
+  }
+  const singles = groups
+    .filter(group => !group.recurring)
+    .sort((a, b) => a.order - b.order);
+  return [...recurring, ...singles];
+}
+
+function distinctRunCount(incidents) {
+  const ids = new Set();
+  for (const incident of incidents) {
+    for (const id of incidentRunIds(incident)) ids.add(id);
+  }
+  return ids.size;
+}
+
+function recurrenceCountLabel(incidents) {
+  const runs = distinctRunCount(incidents);
+  if (runs >= 2) return `${runs} runs`;
+  if (runs === 1) return `${incidents.length} incidents · 1 run`;
+  return `${incidents.length} incidents`;
+}
+
+const CADENCE_MINUTE_MS = 60 * 1000;
+const CADENCE_HOUR_MS = 60 * CADENCE_MINUTE_MS;
+const CADENCE_DAY_MS = 24 * CADENCE_HOUR_MS;
+
+function formatCadence(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  if (ms >= CADENCE_DAY_MS * 0.75) {
+    const days = Math.max(1, Math.round(ms / CADENCE_DAY_MS));
+    if (Math.abs(ms - days * CADENCE_DAY_MS) <= 30 * CADENCE_MINUTE_MS) return `every ${days} d`;
+  }
+  if (ms >= CADENCE_HOUR_MS * 0.75) {
+    const hours = Math.max(1, Math.round(ms / CADENCE_HOUR_MS));
+    if (Math.abs(ms - hours * CADENCE_HOUR_MS) <= 90 * 1000) return `every ${hours} h`;
+  }
+  if (ms >= CADENCE_MINUTE_MS * 0.75) {
+    const minutes = Math.max(1, Math.round(ms / CADENCE_MINUTE_MS));
+    return `every ${minutes} min`;
+  }
+  return `every ${Math.max(1, Math.round(ms / 1000))} s`;
+}
+
+function medianGap(gaps) {
+  const mid = Math.floor(gaps.length / 2);
+  if (gaps.length % 2 === 1) return gaps[mid];
+  return (gaps[mid - 1] + gaps[mid]) / 2;
+}
+
+// Cadence is the median gap between fires. A spread within 25% of that median
+// reads as a schedule (`every 20 min`); a wider spread is qualified.
+function cadenceLabel(incidents) {
+  const times = incidents
+    .map(incident => incidentInstant(incident, "last_ts") ?? incidentInstant(incident, "first_ts"))
+    .filter(time => time != null)
+    .sort((a, b) => a - b);
+  const gaps = [];
+  for (let index = 1; index < times.length; index += 1) {
+    const gap = times[index] - times[index - 1];
+    if (gap > 0) gaps.push(gap);
+  }
+  if (gaps.length === 0) return "";
+  gaps.sort((a, b) => a - b);
+  const median = medianGap(gaps);
+  const phrase = formatCadence(median);
+  if (!phrase) return "";
+  const tight = gaps[0] >= median * 0.75 && gaps[gaps.length - 1] <= median * 1.25;
+  return tight ? phrase : phrase.replace(/^every /, "about every ");
+}
+
+function recurrenceBounds(incidents) {
+  let first = null;
+  let last = null;
+  const consider = (current, candidate, earlier) => {
+    if (!candidate) return current;
+    const time = Date.parse(candidate);
+    if (!Number.isFinite(time)) return current;
+    if (!current) return { text: candidate, time };
+    const replace = earlier ? time < current.time : time > current.time;
+    return replace ? { text: candidate, time } : current;
+  };
+  for (const incident of incidents) {
+    first = consider(first, incident.first_ts || incident.last_ts, true);
+    last = consider(last, incident.last_ts || incident.first_ts, false);
+  }
+  return { first: first ? first.text : "", last: last ? last.text : "" };
+}
+
+function sharedIncidentActor(incidents) {
+  const actors = [...new Set(incidents.map(incident => (typeof incident.actor === "string" ? incident.actor : "")))];
+  if (actors.length === 1) return actors[0];
+  return null;
+}
+
+function recurrencePhrase(group, ctx, cap) {
+  const bounds = recurrenceBounds(group.incidents);
+  const count = recurrenceCountLabel(group.incidents);
+  const countText = cap.capped ? `${count} in the newest ${cap.shown}` : count;
+  const seen = `first ${bounds.first ? fmtRelativeValue(ctx, bounds.first) : "-"} · last ${bounds.last ? fmtRelativeValue(ctx, bounds.last) : "-"}`;
+  const cadence = cadenceLabel(group.incidents);
+  return {
+    text: ["recurring", countText, seen, cadence].filter(Boolean).join(" · "),
+    title: [
+      bounds.first ? `first seen ${formatDateTime(bounds.first)}` : "",
+      bounds.last ? `last seen ${formatDateTime(bounds.last)}` : "",
+      cap.capped ? `run count is among the newest ${cap.shown} of ${cap.matching} incidents` : "",
+    ].filter(Boolean).join(" · "),
+  };
+}
+
+function listCap(payload) {
+  const shown = asCount(payload && payload.shown_incident_count);
+  const matching = asCount(payload && payload.matching_incident_count);
+  return {
+    capped: shown > 0 && matching > shown,
+    shown,
+    matching,
+  };
+}
+
+function recurrenceRowNode(group, ctx, cap) {
+  const expanded = expandedRecurrences.has(group.key);
+  const sample = group.incidents[0];
+  const actor = sharedIncidentActor(group.incidents);
+  const phrase = recurrencePhrase(group, ctx, cap);
+  const article = el("article", {
+    class: ["incident-row", "incident-recurrence", sample.class || "unexpected", expanded ? "open" : ""].filter(Boolean).join(" "),
+  });
+  article.dataset.key = `recurrence-${group.key}`;
+  article.dataset.hash = JSON.stringify([
+    group.incidents.length,
+    phrase.text,
+    expanded,
+    group.incidents.map(incident => [
+      incident.incident_id,
+      incident.event_count,
+      incident.last_ts,
+      expandedIncidents.has(incident.incident_id || incident.signature || ""),
+    ]),
+  ]);
+
+  const header = el("button", {
+    class: "incident-head",
+    title: "Show each run of this recurring failure",
+  }, [
+    el("span", { class: "incident-caret", text: expanded ? "▾" : "▸" }),
+    el("span", {
+      class: `incident-class ${sample.class || "unexpected"}`,
+      text: incidentClassLabel(sample.class, sample.class_label),
+      title: sample.class_label || sample.class,
+    }),
+    el("span", { class: "incident-surface mono", text: sample.surface || "-" }),
+    el("span", {
+      class: "incident-actor",
+      text: actor == null ? "several actors" : (actor ? auditActorLabel(actor) : "unknown actor"),
+      title: actor || "",
+    }),
+    el("span", { class: "incident-recurrence-summary", text: phrase.text, title: phrase.title }),
+  ]);
+  header.type = "button";
+  header.setAttribute("aria-expanded", expanded ? "true" : "false");
+  header.addEventListener("click", () => {
+    if (expandedRecurrences.has(group.key)) expandedRecurrences.delete(group.key);
+    else expandedRecurrences.add(group.key);
+    renderDiagnostics(ctx);
+  });
+  article.appendChild(header);
+  article.appendChild(el("div", {
+    class: "incident-message",
+    text: truncateValue(ctx, incidentMessageText(sample), 220),
+  }));
+  if (expanded) {
+    const runs = el("div", { class: "incident-recurrence-runs" });
+    for (const incident of group.incidents) runs.appendChild(incidentRowNode(incident, ctx, { nested: true }));
+    article.appendChild(runs);
+  }
+  return article;
+}
+
 function renderIncidents(payload, ctx) {
   const body = $("diag-body");
   const incidents = (Array.isArray(payload && payload.incidents) ? payload.incidents : [])
@@ -574,8 +823,13 @@ function renderIncidents(payload, ctx) {
     ])]);
     return;
   }
+  const cap = listCap(payload);
   const list = el("div", { class: "incident-list" });
-  for (const incident of incidents) list.appendChild(incidentRowNode(incident, ctx));
+  for (const group of groupIncidentsForRecurrence(incidents)) {
+    list.appendChild(group.recurring
+      ? recurrenceRowNode(group, ctx, cap)
+      : incidentRowNode(group.incidents[0], ctx));
+  }
   syncNodes(body, [summary, list]);
 }
 
@@ -707,7 +961,7 @@ function formatCountRate(count, total) {
   const n = Number(count) || 0;
   const d = Number(total) || 0;
   if (d <= 0) return `${n} / ${d}`;
-  return `${n} / ${d} (${((n / d) * 100).toFixed(1)}%)`;
+  return `${n}·${((n / d) * 100).toFixed(1)}%`;
 }
 
 function complexityLabel(value) {

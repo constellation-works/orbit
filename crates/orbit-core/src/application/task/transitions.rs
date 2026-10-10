@@ -520,7 +520,9 @@ impl OrbitRuntime {
                 Some(super::PilotAdmissionHold::NativeOs(hold))
                     if task.status == TaskStatus::Backlog =>
                 {
-                    if let Some(wait) = hold.wait_on(&task, self.host_os()) {
+                    if let Some(wait) =
+                        hold.wait_on(&task, self.host_os(), self.automation_machine_identity())
+                    {
                         return Err(OrbitError::InvalidInput(wait));
                     }
                 }

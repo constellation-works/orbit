@@ -3,8 +3,10 @@
 //! A [`CompatibilityIdentity`] is compiled into every binary: for each state
 //! ledger it names the newest version the binary produces and the newest
 //! migration an older binary could not keep writing through
-//! (`writer_floor`) or reading (`reader_floor`). Feature schema ledgers fail
-//! closed on any newer version, so they must match exactly.
+//! (`writer_floor`) or reading (`reader_floor`). Each feature schema ledger
+//! names its version and its newest breaking migration ([`FeatureFloor`]):
+//! older binaries keep reading and writing across the additive and data-only
+//! migrations above it.
 //!
 //! The authority records the [`Envelope`] of every identity admitted since it
 //! last had no participant. A newcomer is compatible with the envelope when
@@ -62,6 +64,42 @@ pub struct CompatibilityIdentity {
     /// migrates them to.
     #[serde(default)]
     pub features: BTreeMap<String, u32>,
+    /// Each feature's newest migration older binaries cannot keep. A feature
+    /// named in `features` but absent here — as in every identity recorded
+    /// before feature migrations declared compatibility — counts as breaking
+    /// at its own version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub feature_floors: BTreeMap<String, FeatureFloor>,
+}
+
+/// The newest migration of one feature schema ledger that an older binary
+/// can neither keep reading nor keep writing through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureFloor {
+    /// That migration's version (0 when every migration keeps older
+    /// binaries working).
+    pub version: u32,
+    /// That migration's name, so a refusal can name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl CompatibilityIdentity {
+    /// One feature ledger as the generic ledger rules see it. A feature this
+    /// binary lacks is at version 0; an undeclared floor is the version itself.
+    fn feature_ledger(&self, feature: &str) -> (LedgerCompatibility, Option<&str>) {
+        let version = self.features.get(feature).copied().unwrap_or(0);
+        let (floor, name) = match self.feature_floors.get(feature) {
+            Some(floor) => (floor.version.min(version), floor.name.as_deref()),
+            None => (version, None),
+        };
+        let ledger = LedgerCompatibility {
+            version,
+            writer_floor: floor,
+            reader_floor: floor,
+        };
+        (ledger, name)
+    }
 }
 
 impl fmt::Display for CompatibilityIdentity {
@@ -137,11 +175,23 @@ impl LedgerEnvelope {
     /// may break an older one's reads. Rows written by the oldest writer must
     /// stay correct for everyone newer, and a newcomer that writes must be
     /// write-safe for every newer member.
-    fn refusal(&self, ledger: LedgerCompatibility, access: Access) -> Option<String> {
+    ///
+    /// `floor_name` names the newcomer's floor migration, when known.
+    fn refusal(
+        &self,
+        ledger: LedgerCompatibility,
+        access: Access,
+        floor_name: Option<&str>,
+    ) -> Option<String> {
+        let named = |version: u32| match floor_name {
+            Some(name) => format!("v{version} ({name})"),
+            None => format!("v{version}"),
+        };
         if ledger.reader_floor > self.min_version {
             return Some(format!(
-                "migration v{} cannot be read by a live participant at version {}",
-                ledger.reader_floor, self.min_version
+                "migration {} cannot be read by a live participant at version {}",
+                named(ledger.reader_floor),
+                self.min_version
             ));
         }
         if self.max_reader_floor > ledger.version {
@@ -154,9 +204,9 @@ impl LedgerEnvelope {
             && ledger.writer_floor > writer_min
         {
             return Some(format!(
-                "a live writer at version {writer_min} predates migration v{}, which older \
+                "a live writer at version {writer_min} predates migration {}, which older \
                  writers do not keep",
-                ledger.writer_floor
+                named(ledger.writer_floor)
             ));
         }
         if access == Access::Write && self.max_writer_floor > ledger.version {
@@ -175,27 +225,92 @@ impl LedgerEnvelope {
 pub(super) struct Envelope {
     store_schema: LedgerEnvelope,
     workspace_layout: LedgerEnvelope,
+    /// The newest version of each feature admitted. Binaries that predate
+    /// [`Self::feature_ledgers`] require their own features to equal this,
+    /// so they stay refused beside a newer feature schema they cannot open.
     #[serde(default)]
     features: BTreeMap<String, u32>,
+    /// Every feature ledger admitted. A feature in `features` but absent here
+    /// was recorded by such an older binary, and is read as one writer at that
+    /// version whose every migration is breaking.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    feature_ledgers: BTreeMap<String, LedgerEnvelope>,
 }
 
 impl Envelope {
     pub(super) fn of(identity: &CompatibilityIdentity, access: Access) -> Self {
+        let feature_ledgers = identity
+            .features
+            .keys()
+            .map(|feature| {
+                let (ledger, _) = identity.feature_ledger(feature);
+                (feature.clone(), LedgerEnvelope::of(ledger, access))
+            })
+            .collect();
         Self {
             store_schema: LedgerEnvelope::of(identity.store_schema, access),
             workspace_layout: LedgerEnvelope::of(identity.workspace_layout, access),
             features: identity.features.clone(),
+            feature_ledgers,
         }
     }
 
     pub(super) fn widened(&self, identity: &CompatibilityIdentity, access: Access) -> Self {
+        let feature_ledgers: BTreeMap<String, LedgerEnvelope> = self
+            .feature_names(identity)
+            .map(|feature| {
+                let (ledger, _) = identity.feature_ledger(feature);
+                let widened = self.feature_ledger(feature).widened(ledger, access);
+                (feature.to_string(), widened)
+            })
+            .collect();
+        let features = feature_ledgers
+            .iter()
+            .map(|(feature, ledger)| (feature.clone(), ledger.max_version))
+            .collect();
         Self {
             store_schema: self.store_schema.widened(identity.store_schema, access),
             workspace_layout: self
                 .workspace_layout
                 .widened(identity.workspace_layout, access),
-            features: self.features.clone(),
+            features,
+            feature_ledgers,
         }
+    }
+
+    /// Every feature either the envelope or `identity` knows.
+    fn feature_names<'a>(
+        &'a self,
+        identity: &'a CompatibilityIdentity,
+    ) -> impl Iterator<Item = &'a str> {
+        let mut names: Vec<&str> = self
+            .features
+            .keys()
+            .chain(self.feature_ledgers.keys())
+            .chain(identity.features.keys())
+            .map(String::as_str)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names.into_iter()
+    }
+
+    /// One feature's envelope. A feature only an older binary recorded is a
+    /// writer at that version that keeps nothing; one no participant knew is
+    /// at version 0, which every participant could have opened.
+    fn feature_ledger(&self, feature: &str) -> LedgerEnvelope {
+        if let Some(ledger) = self.feature_ledgers.get(feature) {
+            return *ledger;
+        }
+        let version = self.features.get(feature).copied().unwrap_or(0);
+        let ledger = LedgerCompatibility {
+            version,
+            writer_floor: version,
+            reader_floor: version,
+        };
+        let mut envelope = LedgerEnvelope::of(ledger, Access::Write);
+        envelope.writer_min_version = self.store_schema.writer_min_version.map(|_| version);
+        envelope
     }
 
     /// Why `identity` cannot join the live participants, if it cannot.
@@ -204,23 +319,30 @@ impl Envelope {
         identity: &CompatibilityIdentity,
         access: Access,
     ) -> Option<String> {
-        if let Some(reason) = self.store_schema.refusal(identity.store_schema, access) {
+        if let Some(reason) = self
+            .store_schema
+            .refusal(identity.store_schema, access, None)
+        {
             return Some(format!("store schema: {reason}"));
         }
         if let Some(reason) = self
             .workspace_layout
-            .refusal(identity.workspace_layout, access)
+            .refusal(identity.workspace_layout, access, None)
         {
             return Some(format!("workspace layout: {reason}"));
         }
-        if self.features != identity.features {
-            return Some(format!(
-                "feature schemas differ (live {}, this binary {})",
-                describe_features(&self.features),
-                describe_features(&identity.features)
-            ));
-        }
-        None
+        self.feature_names(identity).find_map(|feature| {
+            let (ledger, name) = identity.feature_ledger(feature);
+            self.feature_ledger(feature)
+                .refusal(ledger, access, name)
+                .map(|reason| {
+                    format!(
+                        "feature schema {feature} (live {}, this binary {}): {reason}",
+                        describe_features(&self.features),
+                        describe_features(&identity.features)
+                    )
+                })
+        })
     }
 
     /// Whether `identity` is at least as new as every live participant in
@@ -229,11 +351,9 @@ impl Envelope {
     pub(super) fn is_superseded_by(&self, identity: &CompatibilityIdentity) -> bool {
         identity.store_schema.version >= self.store_schema.max_version
             && identity.workspace_layout.version >= self.workspace_layout.max_version
-            && self.features.iter().all(|(feature, version)| {
-                identity
-                    .features
-                    .get(feature)
-                    .is_some_and(|candidate| candidate >= version)
+            && self.feature_names(identity).all(|feature| {
+                identity.feature_ledger(feature).0.version
+                    >= self.feature_ledger(feature).max_version
             })
     }
 }

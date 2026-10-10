@@ -74,7 +74,9 @@ anything else stays an ordinary review obligation.
   changed, validation and consumed
   budget. Indexed by final candidate tree when passed.
 - **Delivery coverage:** exact-tree exclusion of an already-reviewed landing
-  from after-landing review; never a rewrite of pending debt.
+  from after-landing review, or a `rebased_clean` exclusion when the reviewed
+  head merged cleanly onto a base that moved; never a rewrite of pending
+  debt.
 
 Scope covers admission, the reviewer invocation, settlement, budgets,
 managed completion under a gate, and coverage. It excludes granting merge

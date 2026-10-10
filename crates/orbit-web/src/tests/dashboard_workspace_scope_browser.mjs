@@ -129,6 +129,35 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         requests[index]?.path !== pathname || requests[index]?.workspace !== 'one')) {
         throw new Error(`Actions must succeed with workspace=one: ${JSON.stringify(requests)}`);
       }
+      if (workspaceCount > 1) {
+        await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/incidents'));
+        const railPositions = async () => page.locator('.rail .tab, .rail .subtab').evaluateAll(nodes =>
+          nodes.map(node => ({ route: node.dataset.tab || node.dataset.subtab, top: node.getBoundingClientRect().top })));
+        const initialRailPositions = await railPositions();
+        const note = page.locator('#workspace-scope-note');
+
+        await page.locator('#diag-subtabs [data-subtab="reliability"]').click();
+        await note.waitFor({ state: 'visible' });
+        if (!(await note.textContent()).includes('Workspace filter inactive')
+          || await note.getAttribute('aria-hidden') !== 'false') {
+          throw new Error('Reliability must expose the workspace-filter note visually and to assistive technology');
+        }
+        const reliabilityPositions = await railPositions();
+
+        await page.locator('#diag-subtabs [data-subtab="scoreboard"]').click();
+        await page.locator('#diag-subtabs [data-subtab="scoreboard"].active').waitFor({ state: 'visible' });
+        await note.waitFor({ state: 'hidden' });
+        if (await note.getAttribute('aria-hidden') !== 'true') {
+          throw new Error('The workspace-filter note must be hidden from assistive technology outside Reliability');
+        }
+        const scoreboardPositions = await railPositions();
+        for (const [label, positions] of [['Reliability', reliabilityPositions], ['Scoreboard', scoreboardPositions]]) {
+          if (positions.length !== initialRailPositions.length || positions.some((entry, index) =>
+            entry.route !== initialRailPositions[index].route || Math.abs(entry.top - initialRailPositions[index].top) > 0.1)) {
+            throw new Error(`Opening ${label} must not move dashboard rail entries: ${JSON.stringify({ initialRailPositions, positions })}`);
+          }
+        }
+      }
       if (errors.length) throw new Error(errors.join('\n'));
       fs.writeFileSync(path.join(evidence, `workspace-scope-${workspaceCount}.json`), JSON.stringify({ passed: true, workspaceCount, requests }, null, 2));
     } catch (error) {

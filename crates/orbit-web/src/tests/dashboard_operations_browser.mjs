@@ -296,6 +296,26 @@ try {
     await drainCheck(`state-${phase}`, 336);
   }
 
+  // A replica's pull drain with no owner window gets its own top-bar state:
+  // the indicator shows, reads as a pull drain (never idle), and says when
+  // admissions are stopped. Clearing the pull drain hides it again.
+  const pullIndicator = () => page.evaluate(() => ({
+    globalHidden: document.getElementById('global-drain-state').hidden,
+    global: document.getElementById('global-drain-state').textContent,
+    globalLabel: document.getElementById('global-drain-state').getAttribute('aria-label'),
+    state: document.getElementById('global-drain-state').dataset.drainState,
+    tabLabel: document.getElementById('dock-tab-drain').getAttribute('aria-label'),
+  }));
+  await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture' }));
+  let pulled = await pullIndicator();
+  if (pulled.globalHidden || pulled.state !== 'pulling' || pulled.global !== 'Pull drain' || pulled.tabLabel !== 'Drain: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
+  await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture', admissionsStopped: true }));
+  pulled = await pullIndicator();
+  if (pulled.globalHidden || pulled.global !== 'Pull drain · admissions stopped' || !pulled.globalLabel.includes('admissions stopped') || pulled.tabLabel !== 'Drain: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
+  await page.evaluate(() => globalThis.setDrainFixturePull({}));
+  const cleared = await pullIndicator();
+  if (!cleared.globalHidden || cleared.tabLabel !== 'Drain: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
+
   // ORB-14566: changing concurrency alters the readiness URL but must keep
   // the panel scope stable while that refresh is pending, then restore focus.
   await page.evaluate(() => {

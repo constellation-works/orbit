@@ -54,6 +54,8 @@ pub(super) struct ValidatedTask {
     /// The typed native-OS finding, persisted as the audit's
     /// `native_os_hold`.
     pub(super) required_os: Vec<crate::application::task::NativeOsRequirement>,
+    /// The typed owner-machine finding, persisted in the same hold.
+    pub(super) required_machine: Option<crate::application::task::MachineRequirement>,
 }
 
 /// One task's promotion decision, by the authority that requested it.

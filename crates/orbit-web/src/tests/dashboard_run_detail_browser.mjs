@@ -5,6 +5,8 @@ import fs from 'node:fs';
 // Drive the full app's actions and its actual scheduled polls. A new render
 // must keep feedback reachable, and its rebuilt buttons must use that host.
 export async function assertRunDetailActions(page, evidence) {
+  let replayPostCount = 0;
+  await page.exposeFunction('recordReplayPost', () => { replayPostCount += 1; });
   await page.evaluate(async () => {
     const { navigateToRun } = await import('/js/router.js');
     const { setWorkspace, describePullSettlements } = await import('/js/common.js');
@@ -13,6 +15,7 @@ export async function assertRunDetailActions(page, evidence) {
     const settlements = [{ outcome: 'settled' }, { outcome: 'pending_delivery' }, { outcome: 'pending_delivery' }];
     const fixture = globalThis.runActionFixture = {
       state: 'running', detailReads: 0, detailStatus: 200, cancelStatus: 200, requests: [],
+      activeRuns: [],
       cancelError: 'Cancel fixture refused', replayError: 'Replay fixture refused',
       expectedSettlements: describePullSettlements(settlements).text,
       holdAction: false, release: null, previousFetch,
@@ -22,12 +25,17 @@ export async function assertRunDetailActions(page, evidence) {
     });
     globalThis.fetch = async (input, options) => {
       const url = new URL(input, window.location.href);
+      if (url.pathname === '/api/job-runs' && url.searchParams.get('state') === 'active') {
+        fixture.requests.push({ action: 'active-runs', workspace: url.searchParams.get('workspace') });
+        return response({ items: fixture.activeRuns, total: fixture.activeRuns.length, truncated: false, state: 'active' });
+      }
       const match = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|events|logs))?$/);
       if (!match) return previousFetch(input, options);
       const [, runId, action] = match;
       fixture.requests.push({ runId, action: action || 'detail', workspace: url.searchParams.get('workspace') });
       if (action === 'events' || action === 'logs') return response([]);
       if (action === 'cancel' || action === 'replay') {
+        if (action === 'replay') await window.recordReplayPost();
         if (fixture.holdAction) await new Promise(resolve => { fixture.release = resolve; });
         if (action === 'replay') return response({ error: fixture.replayError }, 503);
         if (fixture.cancelStatus !== 200) return response({ error: fixture.cancelError }, fixture.cancelStatus);
@@ -36,7 +44,10 @@ export async function assertRunDetailActions(page, evidence) {
       }
       fixture.detailReads += 1;
       if (fixture.detailStatus !== 200) return response({ error: 'Detail fixture unavailable' }, fixture.detailStatus);
-      return response({ run: { run_id: runId, job_id: 'fixture', state: fixture.state, attempt: fixture.detailReads }, steps: [] });
+      return response({ run: {
+        run_id: runId, job_id: 'fixture', state: fixture.state, attempt: fixture.detailReads,
+        task_ids: ['ORB-42'], tasks: [{ id: 'ORB-42', title: 'Fixture task' }],
+      }, steps: [] });
     };
     navigateToRun('jrun-action-feedback');
     // The loading scenarios parked the scheduler on a captured timer. Restore
@@ -63,6 +74,22 @@ export async function assertRunDetailActions(page, evidence) {
   const clickCancel = async () => {
     page.once('dialog', dialog => dialog.accept());
     await cancel.click();
+  };
+  const clickReplay = async (expectedLiveRunId = null) => {
+    const replayPostsBefore = replayPostCount;
+    let prompt = null;
+    let replayPostsAtPrompt = null;
+    page.once('dialog', async dialog => {
+      prompt = dialog.message();
+      replayPostsAtPrompt = replayPostCount;
+      await dialog.accept();
+    });
+    await replay.click();
+    if (!prompt || !prompt.includes('fixture') || !prompt.includes('ORB-42')) {
+      throw new Error(`Replay confirmation must identify its job and task: ${prompt || 'no dialog'}`);
+    }
+    if (replayPostsAtPrompt !== replayPostsBefore) throw new Error('Replay POST must wait until after confirmation');
+    if (expectedLiveRunId && !prompt.includes(expectedLiveRunId)) throw new Error('Replay confirmation must name the existing live run for the task');
   };
   const expectError = async message => {
     await error.waitFor({ state: 'visible' });
@@ -113,10 +140,16 @@ export async function assertRunDetailActions(page, evidence) {
     if (await error.count() || await notice.count()) throw new Error('Action feedback leaked into a different run');
     await page.evaluate(() => { globalThis.runActionFixture.state = 'failed'; });
     await refresh();
-    await replay.click();
+    await clickReplay();
     await expectError('Replay fixture refused');
     await poll();
     await expectError('Replay fixture refused');
+    await page.evaluate(() => {
+      globalThis.runActionFixture.activeRuns = [{ run_id: 'jrun-live-task', state: 'running', task_ids: ['ORB-42'] }];
+    });
+    await clickReplay('jrun-live-task');
+    await expectError('Replay fixture refused');
+    await page.evaluate(() => { globalThis.runActionFixture.activeRuns = []; });
     await page.evaluate(() => { globalThis.runActionFixture.detailStatus = 503; });
     await refresh();
     await page.locator('#run-detail-meta .empty-state').waitFor({ state: 'visible' });
@@ -128,10 +161,10 @@ export async function assertRunDetailActions(page, evidence) {
     await error.locator('button').click();
     await refresh();
     if (await error.count()) throw new Error('Dismissed replay error returned after a refresh');
-    await replay.click();
+    await clickReplay();
     await expectError('Replay fixture refused');
     await page.evaluate(() => { globalThis.runActionFixture.holdAction = true; });
-    await replay.click();
+    await clickReplay();
     await page.waitForFunction(() => typeof globalThis.runActionFixture.release === 'function');
     if (await error.count()) throw new Error('Starting another replay must clear the previous error');
     await page.evaluate(async () => {
@@ -146,7 +179,8 @@ export async function assertRunDetailActions(page, evidence) {
     fs.writeFileSync(path.join(evidence, 'run-actions-result.json'), JSON.stringify({
       passed: true, scheduledPolls: 3,
       scenarios: ['settlement counts after cancel refresh and poll', 'cancel error after poll', 'replay error after poll',
-        'dismissal and next-action clearing', 'render during action', 'failed detail refresh and recovery', 'run and workspace isolation'],
+        'replay confirmation before POST', 'live task run warning', 'dismissal and next-action clearing',
+        'render during action', 'failed detail refresh and recovery', 'run and workspace isolation'],
     }, null, 2));
   } catch (failure) {
     fs.writeFileSync(path.join(evidence, 'run-actions-failure.json'), JSON.stringify(await page.evaluate(() => ({
@@ -183,6 +217,143 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunKnowledge();
     detail.renderRunGantt();
   }, { run, steps, logs });
+  const waitingRun = {
+    state: 'success', workspace_id: 'fixture-workspace',
+    env_pass_unset: ['CLAUDE_CODE_OAUTH_TOKEN'],
+    drain_last_pass: {
+      queued: 7,
+      deferred: [{ task_id: 'ORB-15181', reason: 'context_lock_conflict', blocked_by: ['ORB-15183'] }],
+      deferred_total: 1,
+      excluded: [
+        { task_id: 'ORB-15196', reason: 'active_pilot_preparation' },
+        { task_id: 'ORB-15071', reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' },
+      ],
+      excluded_total: 2,
+    },
+  };
+  await render(waitingRun, []);
+  const unsetNotice = page.locator('#run-detail-meta .child-dispatch-notice').first();
+  const unsetText = await unsetNotice.textContent();
+  if (!unsetText.includes('CLAUDE_CODE_OAUTH_TOKEN') || !unsetText.includes('execution.env.pass')) {
+    throw new Error(`Unset environment notice must preserve config and environment-name case: ${unsetText}`);
+  }
+  if (await unsetNotice.evaluate(node => getComputedStyle(node).textTransform) === 'uppercase') {
+    throw new Error('Run-detail notices must preserve the case of config keys and environment names');
+  }
+  const waitingNotice = page.locator('#run-detail-meta .still-waiting .child-dispatch-notice');
+  const waitingText = await waitingNotice.textContent();
+  if (!waitingText.includes('3 backlog tasks have recorded wait reasons (1 deferred, 2 excluded)')
+    || !waitingText.includes('6 additional admissible tasks were not started and are not listed below')) {
+    throw new Error(`Still-waiting summary must count reason rows and explain unlisted admissible tasks: ${waitingText}`);
+  }
+  if (await waitingNotice.evaluate(node => getComputedStyle(node).textTransform) === 'uppercase') {
+    throw new Error('Still-waiting notice must preserve normal sentence casing');
+  }
+  const waitingRows = page.locator('#run-detail-meta .still-waiting .waiting-task');
+  if (await waitingRows.count() !== 3) throw new Error('Still-waiting reason totals must match the rows shown');
+  const expectedReasons = await page.evaluate(async tasks => {
+    const { drainWaitBadge } = await import('/js/drain-waits.js');
+    return tasks.map(task => `: ${drainWaitBadge(task).text}`);
+  }, [...waitingRun.drain_last_pass.deferred, ...waitingRun.drain_last_pass.excluded]);
+  const renderedReasons = await waitingRows.locator('.waiting-task-reason').allTextContents();
+  if (JSON.stringify(renderedReasons) !== JSON.stringify(expectedReasons)) {
+    throw new Error(`Run-detail waits must use the Drain card's human reason labels: ${JSON.stringify(renderedReasons)}`);
+  }
+
+  const waitingLinks = await page.locator('#run-detail-meta .still-waiting .waiting-task-link').evaluateAll(nodes => nodes.map(node => ({
+    id: node.textContent.trim(), href: node.href,
+  })));
+  const expectedTaskIds = ['ORB-15181', 'ORB-15183', 'ORB-15196', 'ORB-15071'];
+  const linksMatchTasks = waitingLinks.every(link => {
+    const url = new URL(link.href);
+    const [route, query] = url.hash.slice(1).split('?');
+    const params = new URLSearchParams(query);
+    return url.searchParams.get('workspace') === 'fixture-workspace'
+      && route === 'tasks' && params.get('status') === 'all' && params.get('q') === link.id;
+  });
+  if (JSON.stringify(waitingLinks.map(link => link.id)) !== JSON.stringify(expectedTaskIds) || !linksMatchTasks) {
+    throw new Error(`Every waiting task and blocker ID must link to its task: ${JSON.stringify(waitingLinks)}`);
+  }
+
+  const localDeferred = ['ORB-15208', 'ORB-15209', 'ORB-15210'].map(task_id => ({
+    task_id, reason: 'context_lock_conflict', blocked_by: ['ORB-15183'],
+  }));
+  await render({
+    state: 'running', job_id: 'workspace_auto_pipeline',
+    drain_last_pass: { queued: 3, deferred: localDeferred, deferred_total: 3 },
+  }, []);
+  const localWaitingText = await page.locator('#run-detail-meta .still-waiting .child-dispatch-notice').textContent();
+  if (!localWaitingText.includes('3 backlog tasks have recorded wait reasons (3 deferred, 0 excluded)')
+    || localWaitingText.includes('6 additional admissible tasks')) {
+    throw new Error(`Local deferred tasks must be counted once in the run-detail banner: ${localWaitingText}`);
+  }
+
+  const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
+    child_run_id: `jrun-child-${index}`, job_name: 'task_auto_pipeline',
+    phase: 'submitted', child_status: 'running', parent_step_id: 'leaf_invoke', state,
+    started_at: state ? new Date(Date.now() - 120000).toISOString() : null,
+    duration_ms: state && state !== 'running' ? 125000 : null,
+  }));
+  await render({ state: 'success', child_dispatches: childDispatches }, []);
+  const summary = page.locator('.child-dispatch-summary');
+  const tally = await summary.textContent();
+  for (const outcome of ['6 admitted', '2 succeeded', '1 failed', '1 cancelled', '1 running', '1 unknown']) {
+    if (!tally.includes(outcome)) throw new Error(`Child tally lost ${outcome}: ${tally}`);
+  }
+  const rows = page.locator('.child-dispatch-row');
+  const childStates = await rows.evaluateAll(nodes => nodes.map(node => node.dataset.state));
+  if (JSON.stringify(childStates) !== JSON.stringify(['running', 'failed', 'success', 'success', 'cancelled', 'unknown'])) {
+    throw new Error(`Children must group current outcomes rather than dispatch checkpoints: ${JSON.stringify(childStates)}`);
+  }
+  if (!(await rows.locator('.state-label').allTextContents()).every((state, index) => state === childStates[index])) {
+    throw new Error('Child state labels must match their state dots');
+  }
+  const childColors = {};
+  for (const state of ['failed', 'cancelled']) {
+    childColors[state] = await page.locator(`.child-dispatch-row[data-state="${state}"] .state-label`).evaluate(node => ({
+      dot: getComputedStyle(node, '::before').backgroundColor, text: getComputedStyle(node).color,
+    }));
+    if (childColors[state].dot !== childColors[state].text) throw new Error(`Child ${state} dot and outcome must use their state color`);
+    if (await page.locator(`.child-dispatch-row[data-state="${state}"] .duration`).textContent() !== '2m 5s') throw new Error(`Child ${state} must show its final duration`);
+  }
+  if (childColors.failed.dot === childColors.cancelled.dot) throw new Error('Failed and cancelled children must be visually distinct');
+  if (!(await page.locator('.child-dispatch-row[data-state="running"] .duration').textContent()).endsWith('↻')) throw new Error('Running child must show live elapsed duration');
+  if (await page.locator('.child-dispatch-row[data-state="unknown"] .duration').textContent() !== '-') throw new Error('Unreadable child timing must be unavailable');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1100 });
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Child outcomes must fit at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `run-child-outcomes-${width}.png`), fullPage: true, animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.evaluate(() => {
+    globalThis.childOutcomePreviousFetch = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const url = new URL(input, window.location.href);
+      const match = url.pathname.match(/^\/api\/runs\/(jrun-child-\d+)(?:\/(events|logs))?$/);
+      if (!match) return globalThis.childOutcomePreviousFetch(input, options);
+      return new Response(JSON.stringify(match[2] ? [] : { run: { run_id: match[1], state: match[1] === 'jrun-child-1' ? 'cancelled' : 'failed' }, steps: [] }), { status: 200 });
+    };
+  });
+  try {
+    for (const [state, index] of [['failed', 2], ['cancelled', 1]]) {
+      await render({ state: 'success', child_dispatches: childDispatches }, []);
+      const link = page.locator(`.child-dispatch-row[data-state="${state}"] .back-action`);
+      await link.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(id => document.getElementById('run-detail-title').textContent === `Run ${id}`, `jrun-child-${index}`);
+    }
+  } finally {
+    await page.evaluate(() => {
+      globalThis.fetch = globalThis.childOutcomePreviousFetch;
+      delete globalThis.childOutcomePreviousFetch;
+    });
+  }
+  // A refreshed response changes both the outcome and its tally even when
+  // the parent is terminal and the dispatch checkpoint remains submitted.
+  await render({ state: 'success', child_dispatches: childDispatches.map(d => d.state === 'running' ? { ...d, state: 'success', duration_ms: 126000 } : d) }, []);
+  if (await page.locator('.child-dispatch-row[data-state="running"]').count()
+    || !(await summary.textContent()).includes('3 succeeded')) throw new Error('Refreshing child state must refresh the outcome tally');
+  fs.writeFileSync(path.join(evidence, 'run-child-outcomes-result.json'), JSON.stringify({ passed: true, childStates, childColors, tally, navigation: ['failed', 'cancelled'], widths: [1440, 390], refreshedTally: await summary.textContent() }, null, 2));
   const step = {
     step_index: 0, target_type: 'activity', target_id: 'agent_implement', state: 'failed',
     duration_ms: 125000, exit_code: 1, started_at: '2026-10-07T05:00:00Z', finished_at: '2026-10-07T05:02:05Z',
@@ -206,6 +377,9 @@ export async function assertRunDetailPresentation(page, evidence) {
     || await page.locator('.step-row .idx').textContent() !== '#1') {
     throw new Error('A failed single-step run must display one-based, singular step labels');
   }
+  if (await page.locator('.run-failure-root').count()) {
+    throw new Error('A run that failed on its own must not invent a root-cause line');
+  }
   if (await page.locator('.step-header > span').count() !== 5 || !(await page.locator('.step-header .exit').textContent())) throw new Error('Step columns must identify the exit code');
   await page.locator('.step-row').click();
   if (!(await page.locator('.step-logs-empty').isVisible())) throw new Error('Empty step expansion must explain that it has no logs');
@@ -224,6 +398,99 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunSteps();
   });
   if (!(await page.locator('.step-logs-empty').isVisible()) || await page.locator('.step-log-section').count()) throw new Error('A metadata-only log record must still show empty-log feedback');
+
+  const chainMessage = 'gate runs did not succeed: results[0] run jrun-20261010-0552-c2 status failed: result run jrun-20261010-0552-c3 status cancelled for ORB-15159; see ADR-12 and ORB-abc';
+  await render({
+    state: 'failed',
+    workspace_id: 'fixture-workspace',
+    error_message: chainMessage,
+    failure_root: {
+      run_id: 'jrun-20261010-0552-c3',
+      state: 'cancelled',
+      step: 'landing_review',
+      message: 'stopped for ORB-15178',
+    },
+  }, [step]);
+  const chain = await page.locator('.run-failure').evaluate(node => ({
+    message: node.querySelector('.run-failure-message').textContent,
+    root: node.querySelector('.run-failure-root').textContent,
+    links: [...node.querySelectorAll('.failure-id-link')].map(link => ({
+      tag: link.tagName,
+      text: link.textContent,
+      type: link.getAttribute('type'),
+      href: link.getAttribute('href'),
+    })),
+  }));
+  if (chain.message !== chainMessage) throw new Error(`Failure message must keep its text around the links: ${chain.message}`);
+  if (chain.root !== 'Root cause: jrun-20261010-0552-c3 cancelled at landing_review - stopped for ORB-15178') {
+    throw new Error(`Root cause line must name the deepest descendant: ${chain.root}`);
+  }
+  const linkedText = chain.links.map(link => link.text);
+  if (JSON.stringify(linkedText) !== JSON.stringify([
+    'jrun-20261010-0552-c2', 'jrun-20261010-0552-c3', 'ORB-15159', 'jrun-20261010-0552-c3', 'ORB-15178',
+  ])) throw new Error(`Failure ids must link in order: ${JSON.stringify(chain.links)}`);
+  if (chain.links.some(link => link.text.startsWith('jrun-') && (link.tag !== 'BUTTON' || link.type !== 'button'))) {
+    throw new Error(`Run ids in a failure must be buttons: ${JSON.stringify(chain.links)}`);
+  }
+  const taskLinksOk = chain.links.filter(link => link.text.startsWith('ORB-')).every(link => {
+    const url = new URL(link.href, 'http://127.0.0.1/');
+    const [route, query] = url.hash.slice(1).split('?');
+    const params = new URLSearchParams(query);
+    return link.tag === 'A' && url.searchParams.get('workspace') === 'fixture-workspace'
+      && route === 'tasks' && params.get('status') === 'all' && params.get('q') === link.text;
+  });
+  if (!taskLinksOk) throw new Error(`Task ids in a failure must link to the task: ${JSON.stringify(chain.links)}`);
+  if (chain.links.some(link => link.text === 'ADR-12' || link.text === 'ORB-abc') || !chain.message.includes('ADR-12') || !chain.message.includes('ORB-abc')) {
+    throw new Error('ADR ids and invalid task lookalikes stay plain text');
+  }
+  await page.screenshot({ path: path.join(evidence, 'run-failure-chain-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.evaluate(() => {
+    globalThis.failureChainFetch = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const url = new URL(input, window.location.href);
+      const match = url.pathname.match(/^\/api\/runs\/(jrun-20261010-0552-c\d+)(?:\/(events|logs))?$/);
+      if (!match) return globalThis.failureChainFetch(input, options);
+      const body = match[2] ? [] : { run: { run_id: match[1], state: 'cancelled' }, steps: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+  });
+  try {
+    await page.locator('.run-failure-message .failure-id-link', { hasText: 'jrun-20261010-0552-c2' }).click();
+    await page.waitForFunction(() => document.getElementById('run-detail-title').textContent === 'Run jrun-20261010-0552-c2');
+    const unnamed = await page.locator('.run-cancelled').evaluate(node => ({
+      label: node.getAttribute('aria-label'),
+      head: node.querySelector('.run-failure-head').textContent,
+      reason: node.querySelector('.run-cancelled-reason').textContent,
+    }));
+    if (unnamed.label !== 'Why this run was cancelled' || unnamed.head !== 'Cancelled' || unnamed.reason !== 'no reason recorded') {
+      throw new Error(`A cancelled run with no record must say so: ${JSON.stringify(unnamed)}`);
+    }
+  } finally {
+    await page.evaluate(() => {
+      globalThis.fetch = globalThis.failureChainFetch;
+      delete globalThis.failureChainFetch;
+    });
+  }
+  await render({
+    state: 'cancelled',
+    cancellation: {
+      actor: 'dashboard',
+      source: 'web',
+      reason: 'operator stopped the drain',
+      at: '2026-10-10T05:52:00Z',
+    },
+  }, []);
+  const named = await page.locator('.run-cancelled').evaluate(node => ({
+    label: node.getAttribute('aria-label'),
+    head: node.querySelector('.run-failure-head').textContent,
+    reason: node.querySelector('.run-cancelled-reason').textContent,
+    when: node.querySelector('.run-cancelled-when')?.textContent || '',
+  }));
+  if (named.label !== 'Why this run was cancelled' || !named.head.startsWith('Cancelled by dashboard')
+    || named.reason !== 'operator stopped the drain' || !named.when.trim()) {
+    throw new Error(`A cancelled run must name who, why, and when: ${JSON.stringify(named)}`);
+  }
+  await page.screenshot({ path: path.join(evidence, 'run-cancelled-1440.png'), fullPage: true, animations: 'disabled' });
 
   for (const knowledge_metrics of [undefined, null, {}]) {
     await render({ state: 'success', knowledge_metrics }, []);
@@ -247,6 +514,14 @@ export async function assertRunDetailPresentation(page, evidence) {
   for (const state of ['success', 'failed', 'timeout', 'cancelled', 'interrupted', 'held']) {
     await render({ state }, []);
     if (!(await page.locator('#run-detail-meta .run-replay').isEnabled())) throw new Error(`Terminal ${state} run must retain replay`);
+  }
+  const actionLayout = await page.locator('#run-detail-meta .run-replay').evaluate(replay => {
+    const back = document.querySelector('#run-detail-meta .run-detail-actions .back-action').getBoundingClientRect();
+    const button = replay.getBoundingClientRect();
+    return { backRight: back.right, replayLeft: button.left, primary: replay.classList.contains('approve') };
+  });
+  if (actionLayout.primary || actionLayout.replayLeft <= actionLayout.backRight + 8) {
+    throw new Error(`Replay must be secondary and visually separated from Runs: ${JSON.stringify(actionLayout)}`);
   }
 
   const states = ['success', 'running', 'pending', 'failed', 'skipped', 'held'];

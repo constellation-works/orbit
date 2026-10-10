@@ -161,6 +161,10 @@ Two behaviors keep it bounded on an always-on host [ORB-00423]:
   end, last refusal, and refused tick count, and says the executable changed
   under live Orbit processes. The active hold is kept in
   `~/.orbit/.generation-clock-hold.json` so separate tick processes can share it.
+- A tick refused outright because a breaking migration cannot run beside the live
+  processes is not quiet: each one logs `clock tick refused by upgrade admission`
+  with the run of refused ticks and the refusal, and the same hold record keeps the
+  latest refusal for `orbit doctor`'s `clock-unit` row.
 
 On Linux, the sweep unit logs to the journal, which rotates independently.
 

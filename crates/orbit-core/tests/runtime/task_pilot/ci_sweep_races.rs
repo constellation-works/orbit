@@ -1,8 +1,10 @@
-//! CI-sweep pilot races settle only when rejection or another active pilot
-//! makes this run's assessment unnecessary.
+//! CI-sweep pilot races settle only when rejection, a promotion elsewhere or
+//! another active pilot makes this run's assessment unnecessary.
 
+use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::Workspace;
@@ -192,6 +194,118 @@ fn ci_sweep_excluded_by_an_active_pilot_settles_with_holder_and_holder_applies()
 }
 
 #[test]
+fn concurrent_pilots_of_one_ci_sweep_task_invoke_one_agent_and_the_other_settles() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::ci_sweep_races::concurrent_pilots_of_one_ci_sweep_task_invoke_one_agent_and_the_other_settles",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = filed_task(&workspace, "two pilots start together");
+    let holder = workspace.live_run();
+    let sweep = workspace.live_run();
+
+    // Neither run has a prepare checkpoint yet, so only the reservation the
+    // first prepare wrote can keep the second from piloting the task too.
+    let holder_prepared = workspace.prepare_in_run(&holder, &[&task.id]);
+    let sweep_prepared = workspace.prepare_in_run(&sweep, &[&task.id]);
+    assert_eq!(
+        holder_prepared["partitions"],
+        json!([{"partition_index": 0, "task_ids": [task.id]}]),
+        "{holder_prepared}"
+    );
+    assert_eq!(sweep_prepared["partitions"], json!([]), "{sweep_prepared}");
+    assert_eq!(
+        sweep_prepared["excluded"],
+        json!([{"task_id": task.id, "reason": "already_preparing", "prepared_by_run_ids": [holder]}])
+    );
+    // A retried prepare in the holder keeps its own reservation.
+    assert_eq!(
+        workspace.prepare_in_run(&holder, &[&task.id])["task_count"],
+        1
+    );
+
+    let sweep_child = workspace.action(
+        "apply_task_pilot_results",
+        json!({
+            "workspace_path": workspace.repo,
+            "prepared": sweep_prepared,
+            "results": [],
+            "ci_sweep_filing": filing(&task),
+            "promotion_authorized": true,
+        }),
+    );
+    assert_eq!(sweep_child["status"], "succeeded", "{sweep_child}");
+    assert_eq!(
+        sweep_child["task_outcomes"][0]["reason"], "piloted_elsewhere",
+        "{sweep_child}"
+    );
+    assert_eq!(sweep_child["task_outcomes"][0]["run_id"], holder);
+    assert_child_and_sweep_succeed(&workspace, &sweep_child);
+
+    // The reservation ends with its run.
+    workspace
+        .jobs
+        .finalize_job_run(&holder, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    let later = workspace.live_run();
+    let later_prepared = workspace.prepare_in_run(&later, &[&task.id]);
+    assert_eq!(later_prepared["task_count"], 1, "{later_prepared}");
+}
+
+#[test]
+fn ci_sweep_task_promoted_elsewhere_settles_superseded_and_the_sweep_succeeds() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::ci_sweep_races::ci_sweep_task_promoted_elsewhere_settles_superseded_and_the_sweep_succeeds",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = filed_task(&workspace, "operator approved the CI finding");
+    let prepared = workspace.prepare(&[&task.id]);
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let promoted = workspace.runtime.get_task(&task.id).unwrap();
+    let output = workspace.action(
+        "apply_task_pilot_results",
+        json!({
+            "workspace_path": workspace.repo,
+            "prepared": prepared.clone(),
+            "results": [{
+                "partition_index": 0,
+                "task_ids": [task.id],
+                "tasks": [assessment(&json!(task.id), &prepared["tasks"][0])],
+            }],
+            "ci_sweep_filing": filing(&task),
+            "promotion_authorized": true,
+        }),
+    );
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["outcome"], "superseded", "{output}");
+    assert_eq!(output["applied_count"], 0, "{output}");
+    assert_eq!(output["task_outcomes"][0]["reason"], "promoted_elsewhere");
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), promoted);
+    assert!(
+        workspace
+            .runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "task_pilot_applied")
+    );
+    assert_child_and_sweep_succeed(&workspace, &output);
+}
+
+#[test]
 fn other_status_changes_and_missing_ci_sweep_tasks_still_fail() {
     if !super::super::dispatch_admission::isolated(
         "task_pilot::ci_sweep_races::other_status_changes_and_missing_ci_sweep_tasks_still_fail",
@@ -206,7 +320,7 @@ fn other_status_changes_and_missing_ci_sweep_tasks_still_fail() {
         .update_task_as_human(
             &task.id,
             TaskUpdateParams {
-                status: Some(TaskStatus::Backlog),
+                status: Some(TaskStatus::Someday),
                 ..Default::default()
             },
             "human:fixture".into(),
@@ -229,7 +343,7 @@ fn other_status_changes_and_missing_ci_sweep_tasks_still_fail() {
     assert_eq!(status_changed["status"], "failed", "{status_changed}");
     assert_eq!(
         workspace.runtime.get_task(&task.id).unwrap().status,
-        TaskStatus::Backlog
+        TaskStatus::Someday
     );
 
     let missing_workspace = Workspace::new();

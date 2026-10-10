@@ -43,7 +43,7 @@ use orbit_engine::{
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
-    TaskComment, TaskPriority, TaskStatus, TaskType,
+    TaskComment, TaskPriority, TaskStatus, TaskType, push_external_ref_if_missing,
 };
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{
@@ -1263,6 +1263,46 @@ fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
     );
 }
 
+/// Promotion records the published PR's page with its number, so the task
+/// links the pull request a reviewer must read. A provider URL that is not an
+/// https page is dropped rather than failing the promotion.
+#[test]
+fn pr_promote_records_the_pull_request_page_with_its_number() {
+    isolated(
+        "pr_promote_records_the_pull_request_page_with_its_number",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            let opened = action(&host, "pr_open", &input).expect("the candidate publishes");
+            let pr_url = opened["pr_url"].as_str().expect("pr_open reports the page");
+            assert!(pr_url.starts_with("https://"), "{opened}");
+
+            input["pr_number"] = opened["pr_number"].clone();
+            input["pr_url"] = json!(pr_url);
+            action(&host, "pr_promote", &input).expect("the published PR enters review");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert_eq!(
+                host.task(TASK_ID).external_refs,
+                vec![ExternalRef {
+                    system: GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
+                    id: PR_NUMBER.to_string(),
+                    url: Some(pr_url.to_string()),
+                }]
+            );
+
+            let unlinked = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            input["pr_url"] = json!("javascript:alert(1)");
+            action(&unlinked, "pr_promote", &input)
+                .expect("an unusable page does not fail the promotion");
+            let refs = unlinked.task(TASK_ID).external_refs;
+            assert_eq!(refs.len(), 1, "{refs:?}");
+            assert_eq!(refs[0].id, PR_NUMBER);
+            assert_eq!(refs[0].url, None, "only an https page is recorded");
+        },
+    );
+}
+
 /// A base with its own work merged into the landing branch remains obsolete
 /// at publication and on a resumed promotion, before any forge call or status
 /// transition.
@@ -1782,6 +1822,71 @@ fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
                 host.status(TASK_ID),
                 TaskStatus::InProgress,
                 "run finalization owns the hold"
+            );
+        },
+    );
+}
+
+/// An Orbit upgrade refused a reviewer's own `orbit` commands mid-step, and
+/// step recovery declared it. The host is mid-upgrade; the candidate was not
+/// judged. The handoff keeps it as a provider failure does: what the agent
+/// left is committed and carried to its durable ref, no PR is opened, the
+/// task is not blocked, and `candidate_resume` resumes the decision. Run
+/// finalization returns the task to the backlog.
+#[test]
+fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
+    isolated(
+        "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let head_before = fx.head();
+            let remote_before = fx.remote_tip(BRANCH);
+            fs::write(fx.repo.join("src/wip.txt"), "reviewer fix in progress\n").unwrap();
+            let blocker = orbit_types::workflow::AgentBlocker {
+                kind: "orbit.generation_switch_pending".to_string(),
+                evidence: "upgrade admission refused: cannot record the pending generation \
+                           switch: Operation not permitted (os error 1)"
+                    .to_string(),
+            };
+            let message = format!(
+                "{}\noriginal error before recovery: the review report was never recorded",
+                blocker.step_failure_message()
+            );
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "review",
+                    "error_code": "upgrade_pending",
+                    "error_message": message,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the upgrade refusal");
+
+            assert_eq!(handoff["decision"], "held_upgrade_pending");
+            assert_eq!(handoff["blocker_kind"], "orbit.generation_switch_pending");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(handoff["candidate_preserved"], true);
+            assert_ne!(fx.head(), head_before, "the reviewer's edit is committed");
+            assert_eq!(handoff["head_sha"], fx.head());
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(
+                fx.durable_candidate(&handoff),
+                fx.head(),
+                "the next run, on any host, can fetch the candidate"
+            );
+            assert_eq!(
+                host.status(TASK_ID),
+                TaskStatus::InProgress,
+                "the task is not blocked; run finalization requeues it"
             );
         },
     );
@@ -3851,6 +3956,10 @@ impl DeliveryHost {
         self.tasks.lock().unwrap().get_mut(id).unwrap().status = status;
     }
 
+    fn task(&self, id: &str) -> Task {
+        self.tasks.lock().unwrap()[id].clone()
+    }
+
     fn status(&self, id: &str) -> TaskStatus {
         self.tasks.lock().unwrap()[id].status
     }
@@ -4071,6 +4180,9 @@ impl RuntimeHost for DeliveryHost {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
         if let Some(status) = update.status {
             task.status = status;
+        }
+        for external_ref in update.external_refs {
+            push_external_ref_if_missing(&mut task.external_refs, external_ref);
         }
         self.status_events.lock().unwrap().push((
             task_id.to_string(),

@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -11,8 +11,9 @@ import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.j
 import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
-import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
+import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
+import { onDrainReadinessChange } from './js/drain-waits.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
@@ -1094,6 +1095,8 @@ function renderKnowledgeDetailPlaceholder(prefix) {
 function resetSummaryCounts() {
   setRailCount("rail-count-diag-runs", null);
   setRailCount("rail-count-audit", null);
+  const runsCount = $("rail-count-diag-runs");
+  if (runsCount) delete runsCount.dataset.window;
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1275,11 +1278,11 @@ function buildWorkspaceSelector() {
   });
 
   const note = el("span", {
-    class: "workspace-scope-note",
+    class: "workspace-scope-note is-inactive",
     text: "Workspace filter inactive",
   });
   note.id = "workspace-scope-note";
-  note.hidden = true;
+  note.setAttribute("aria-hidden", "true");
   note.title = "Reliability ignores the selected workspace";
 
   // ORB-10972: the selector moved from the header meta cluster into the rail
@@ -1315,6 +1318,10 @@ function activeRefreshJobs() {
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
   void peekDoctor().catch(error => console.error(error));
+  // Routines and Jobs already read this status in their active-panel request.
+  if (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate) {
+    void peekRoutineFailures().catch(error => console.error(error));
+  }
   const jobs = [];
   const add = (panel, request) => jobs.push({ panel, request });
   const subpanel = (group, name) => {
@@ -1456,20 +1463,24 @@ function activeRefreshJobs() {
 
 function fetchAndRenderRuns() {
   const requestedAggregate = isAggregateView();
-  const runFilter = getRunFilter();
-  return requestPanel("runs-body", runFilter, () => requestedAggregate
-    ? fetchJson(`/api/job-runs/all?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
+  // Stable scope: a filter or window change must not wipe the panel, or the
+  // segment the operator just clicked stays on the previous choice until the
+  // response arrives. Stale responses are still dropped by request identity.
+  const query = jobRunsQuery(jobRunLimit);
+  const signature = runsQueryKey();
+  return requestPanel("runs-body", "runs", () => requestedAggregate
+    ? fetchJson(`/api/job-runs/all?${query}`).then((payload) => ({
         runs: listItems(payload), frictionRows: [], meta: payload,
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
-        fetchJson(`/api/job-runs?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`),
+        fetchJson(`/api/job-runs?${query}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
       ]).then(([payload, frictionRows]) => ({
         runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
       })), ({ runs, frictionRows, meta, unavailable }) => {
     lastRuns = mergeRunsWithFriction(runs, frictionRows);
-    lastRunsMeta = meta;
+    lastRunsMeta = meta && typeof meta === "object" ? { ...meta, runsQuery: signature } : meta;
     lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
@@ -1611,7 +1622,12 @@ function renderSummaryCounts(data) {
   if (!data) return;
   const windowLabel = data.window || getWindow();
   setRailCount("rail-count-diag-runs", data.failed_runs, true,
-    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Runs' Failed filter lists the same outcomes with no time window.`);
+    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Click this count to open Runs on Failed for the same window.`);
+  const runsCount = $("rail-count-diag-runs");
+  if (runsCount) {
+    if (data.failed_runs) runsCount.dataset.window = String(windowLabel);
+    else delete runsCount.dataset.window;
+  }
   setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
 }
 
@@ -1681,6 +1697,8 @@ function selectHost(name) {
   workspacesWanted = true;
   refreshDashboard();
 }
+
+setHostSwitchHandler(selectHost);
 
 function showHostUnavailable(now) {
   $("conn-status").className = "status-dot red";
@@ -1756,6 +1774,11 @@ resetPanel("runs-body", "diag-count");
 resetPanel("diag-body", "diag-count");
 
 const tasksContext = taskContext();
+// The drain readiness snapshot arrives apart from the task list; repaint the
+// rows when it changes what they say about a backlog task's wait.
+onDrainReadinessChange(() => {
+  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+});
 buildChips(tasksContext);
 wireSearch(tasksContext);
 wireFrictionSearch();

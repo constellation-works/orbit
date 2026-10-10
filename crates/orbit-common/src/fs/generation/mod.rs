@@ -19,7 +19,8 @@
 //! - A newcomer compatible with that envelope joins as an ordinary writer (or
 //!   reader) whatever its digest, and widens it. A rebuild or patch release
 //!   with the same state versions, or one whose newer migrations are all
-//!   [additive](../../../orbit_store/contracts/enum.MigrationCompatibility.html),
+//!   [additive](../../../orbit_store/contracts/enum.MigrationCompatibility.html)
+//!   (for a feature schema, additive or data-only: see [`FeatureFloor`]),
 //!   runs — and migrates — beside the live processes.
 //! - An incompatible *newer* writer (a pending breaking migration) records a
 //!   [`PendingSwitch`] and waits, up to [`quiesce_bound`], for exclusive
@@ -29,6 +30,10 @@
 //!   role and start time.
 //! - An incompatible *older* binary is refused outright: it may not displace
 //!   newer participants.
+//! - A process inside an Orbit-managed activity ([`Participant::in_activity`])
+//!   never records a pending switch nor waits behind one: the drain that
+//!   started its step yields only at the step boundary. It is refused at once
+//!   with an `[upgrade_pending]` refusal, which the step settles as transient.
 //!
 //! Participants register PID, role and start time under
 //! `.generation-participants/`, each record held by its own lock. A live
@@ -125,13 +130,15 @@ pub use admission::{
     process_participation, quiesce_bound,
 };
 pub use clock_hold::{
-    finish_clock_generation_hold, is_clock_generation_hold, record_clock_generation_hold,
+    ClockGenerationHold, clock_generation_hold, finish_clock_generation_hold,
+    is_clock_generation_hold, is_clock_upgrade_refusal, record_clock_generation_hold,
+    record_clock_upgrade_refusal,
 };
 pub use handoff::{
     HandoverCandidate, RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO,
     candidate_supports, handover_target, reexec, replaced_installation,
 };
-pub use identity::{Access, CompatibilityIdentity, LedgerCompatibility};
+pub use identity::{Access, CompatibilityIdentity, FeatureFloor, LedgerCompatibility};
 pub use image::{executable_generation, process_generation};
 pub use paths::authority_root;
 pub use registry::{ParticipantRecord, ParticipantRole, PendingSwitch, pending_switch};

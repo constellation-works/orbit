@@ -14,6 +14,9 @@
 //! An updater waits for short-lived participants and refuses long-lived ones,
 //! except those a candidate-aware admission knows will hand over after the
 //! rename.
+//!
+//! A feature schema widens like the store schema: a newer binary whose newer
+//! feature migrations are all additive or data-only joins live older ones.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 orbit_common::isolate_test_process!();
@@ -28,8 +31,9 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use orbit_common::fs::generation::{
-    Access, CompatibilityIdentity, GenerationGuard, GenerationUpdate, HandoverCandidate,
-    LedgerCompatibility, Participant, ParticipantRole, RESUME_MCP_STDIO, pending_switch,
+    Access, CompatibilityIdentity, FeatureFloor, GenerationGuard, GenerationUpdate,
+    HandoverCandidate, LedgerCompatibility, Participant, ParticipantRole, RESUME_MCP_STDIO,
+    pending_switch,
 };
 use serde_json::{Value, json};
 
@@ -50,6 +54,7 @@ fn identity(version: u32, writer_floor: u32) -> CompatibilityIdentity {
             reader_floor: 0,
         },
         features: BTreeMap::new(),
+        feature_floors: BTreeMap::new(),
     }
 }
 
@@ -66,6 +71,7 @@ fn join(
         role,
         access,
         handover: None,
+        in_activity: false,
     };
     // A zero bound fails immediately if join decides to quiesce. Success
     // therefore means no live participant was asked to yield.
@@ -227,6 +233,99 @@ fn live_writer_is_not_treated_as_an_empty_authority() {
     drop(live);
 }
 
+/// A store-schema-10 identity carrying the automation feature schema at
+/// `version`, whose newest breaking migration is `floor` — or, with `None`,
+/// as a binary that predates feature floors recorded it.
+fn automation(version: u32, floor: Option<(u32, &str)>) -> CompatibilityIdentity {
+    let mut identity = identity(10, 0);
+    identity.features.insert("automation".into(), version);
+    if let Some((floor, name)) = floor {
+        identity.feature_floors.insert(
+            "automation".into(),
+            FeatureFloor {
+                version: floor,
+                name: Some(name.into()),
+            },
+        );
+    }
+    identity
+}
+
+/// The incident [ORB-15260]: a drain started by the old binary at automation
+/// 4 kept every command of a binary that only added a data-only automation 5
+/// waiting for it to yield. A data-only v5 joins beside it, and the envelope
+/// keeps binaries that compare feature versions exactly out; a breaking v5
+/// still refuses, naming the feature and the migration.
+#[test]
+fn a_data_only_feature_migration_joins_beside_an_older_live_participant() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path();
+    let drain = join(
+        root,
+        &digest(4),
+        &automation(4, None),
+        ParticipantRole::Drain,
+        Access::Write,
+    )
+    .expect("the pre-change drain holds the authority");
+    // Record the envelope as the pre-change binary wrote it: feature versions
+    // alone, with no feature ledgers.
+    let mut record = compat(root);
+    record["envelope"]
+        .as_object_mut()
+        .expect("envelope")
+        .remove("feature_ledgers");
+    std::fs::write(
+        root.join(".generation-compat.json"),
+        serde_json::to_string(&record).expect("record"),
+    )
+    .expect("rewrite the envelope as the pre-change binary");
+
+    let breaking = automation(5, Some((5, "release_misread_pilot_failures")));
+    let refused = refusal(join(
+        root,
+        &digest(51),
+        &breaking,
+        ParticipantRole::Command,
+        Access::Write,
+    ));
+    assert!(refused.contains("feature schema automation"), "{refused}");
+    assert!(
+        refused.contains("v5 (release_misread_pilot_failures)"),
+        "{refused}"
+    );
+    assert!(refused.contains("did not yield"), "{refused}");
+    assert!(pending_switch(root).is_none(), "{refused}");
+
+    let data_only = automation(5, Some((4, "release_stale_source_failures")));
+    let command = join(
+        root,
+        &digest(5),
+        &data_only,
+        ParticipantRole::Command,
+        Access::Write,
+    )
+    .expect("a data-only automation 5 joins beside the live automation 4 drain");
+    assert!(
+        pending_switch(root).is_none(),
+        "the live drain is not asked to yield"
+    );
+    let envelope = &compat(root)["envelope"];
+    assert_eq!(envelope["features"], json!({"automation": 5}));
+    assert_eq!(envelope["feature_ledgers"]["automation"]["min_version"], 4);
+
+    // An older binary that declares its floors widens the envelope too.
+    let older = join(
+        root,
+        &digest(41),
+        &automation(4, Some((4, "release_stale_source_failures"))),
+        ParticipantRole::Command,
+        Access::Write,
+    )
+    .expect("an automation 4 binary that declares its floor joins beside automation 5");
+    drop((older, command, drain));
+}
+
 fn join_within(
     root: &Path,
     digest: &str,
@@ -241,6 +340,7 @@ fn join_within(
         role: ParticipantRole::Command,
         access,
         handover: None,
+        in_activity: false,
     };
     GenerationGuard::join(root, &participant, bound, store_schema)
 }
@@ -629,6 +729,103 @@ fn a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield() {
     drop(upgraded);
 }
 
+/// A command inside an Orbit-managed activity (an agent's nested `orbit`)
+/// may resolve to a newer binary than the drain that started its step. It
+/// never records a pending switch, which that drain could yield to only at
+/// the step boundary this command holds up, nor waits behind one: it is
+/// refused at once, typed `[upgrade_pending]`, whichever generation it is.
+#[test]
+fn a_command_inside_an_activity_is_refused_typed_instead_of_switching_the_generation() {
+    let root = tempfile::tempdir().expect("authority");
+    let root = root.path().to_path_buf();
+    let old = identity(10, 0);
+    let newer = identity(12, 12);
+    let live = join(
+        &root,
+        &digest(10),
+        &old,
+        ParticipantRole::Drain,
+        Access::Write,
+    )
+    .expect("the drain holds the authority");
+    let nested = |digest: &str, identity: &CompatibilityIdentity| {
+        let participant = Participant {
+            digest,
+            identity,
+            role: ParticipantRole::Command,
+            access: Access::Write,
+            handover: None,
+            in_activity: true,
+        };
+        let started = Instant::now();
+        let refused = refusal(GenerationGuard::join(
+            &root,
+            &participant,
+            Duration::from_secs(30),
+            || Ok(10),
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "refused at once, not after the quiesce bound: {refused}"
+        );
+        assert!(
+            refused.contains(orbit_types::workflow::UPGRADE_PENDING_MARKER),
+            "{refused}"
+        );
+        refused
+    };
+
+    let refused = nested(&digest(12), &newer);
+    assert!(
+        refused.contains("would switch the store generation"),
+        "{refused}"
+    );
+    assert!(
+        pending_switch(&root).is_none(),
+        "the nested command records no pending switch"
+    );
+
+    // An upgrader outside any activity records the switch; a nested command
+    // of either generation is refused behind it rather than waiting.
+    let upgrader = std::thread::spawn({
+        let root = root.clone();
+        let newer = newer.clone();
+        move || {
+            join_within(
+                &root,
+                &digest(12),
+                &newer,
+                Access::Write,
+                Duration::from_secs(30),
+                || Ok(10),
+            )
+            .map_err(|error| error.to_string())
+        }
+    });
+    let waiting = Instant::now();
+    while pending_switch(&root).is_none() {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(10),
+            "the upgrader records a pending switch"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for (digest, identity) in [(digest(10), &old), (digest(12), &newer)] {
+        let refused = nested(&digest, identity);
+        assert!(
+            refused.contains("generation switch is pending"),
+            "{refused}"
+        );
+    }
+
+    drop(live);
+    let upgraded = upgrader
+        .join()
+        .expect("upgrader thread")
+        .expect("the upgrader takes over once the drain yields");
+    drop(upgraded);
+}
+
 /// A live participant registered in `role`, handing over with `handover`.
 fn holding_as(root: &Path, role: ParticipantRole, handover: Option<&str>) -> GenerationGuard {
     let identity = identity(10, 0);
@@ -639,6 +836,7 @@ fn holding_as(root: &Path, role: ParticipantRole, handover: Option<&str>) -> Gen
         role,
         access: Access::Write,
         handover,
+        in_activity: false,
     };
     GenerationGuard::join(root, &participant, Duration::ZERO, || Ok(10)).expect("joins")
 }
@@ -732,6 +930,7 @@ fn a_candidate_admission_pins_once_the_server_has_handed_over() {
             role: ParticipantRole::McpServe,
             access: Access::Write,
             handover: Some(RESUME_MCP_STDIO),
+            in_activity: false,
         },
         Duration::from_secs(10),
         || Ok(11),

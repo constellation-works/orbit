@@ -106,4 +106,8 @@ disk_resume_percent = 85
 # is enabled but cannot run.
 
 # [operation]
-# review_crew = "sol"          # crew for before-PR review and after-landing review tasks
+# review_crew = "sol"          # crew for before-PR, before-landing and after-landing review
+# review_crew = ["sol", "grok"] # or a pool (`name` or `name:weight`, like the complexity
+#                               # pools): each review draws one crew by weight, preferring one
+#                               # that did not implement the reviewed work and skipping
+#                               # disabled or provider-limited crews; [] unsets it

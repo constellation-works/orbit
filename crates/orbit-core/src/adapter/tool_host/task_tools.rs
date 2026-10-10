@@ -4,8 +4,9 @@ use orbit_common::protocol::tool_input::{
     optional_string_list_alias, required_string,
 };
 use orbit_types::task::{
-    TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, is_task_show_projection_field,
-    unknown_task_show_field_message, validate_relative_artifact_path,
+    TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, backlog_footprint_warning,
+    is_task_show_projection_field, unknown_task_show_field_message,
+    validate_relative_artifact_path,
 };
 use serde_json::{Value, json};
 
@@ -80,6 +81,7 @@ pub(super) fn add(
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default(),
             required_tools: raw_required_tools,
             plan: String::new(),
+            crew_source: None,
             comment: filed_by.map(|binding| {
                 format!(
                     "Filed by a claimed worker: claim {}, run {} on machine {}.",
@@ -487,10 +489,15 @@ fn write_response_with_unverified_context(
     unverified: Vec<String>,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let mut response = serialize_task_write_response(runtime, task, fields)?;
-    if !unverified.is_empty()
-        && let Some(obj) = response.as_object_mut()
-    {
-        obj.insert(CONTEXT_FILES_UNVERIFIED_KEY.to_string(), json!(unverified));
+    if let Some(obj) = response.as_object_mut() {
+        if !unverified.is_empty() {
+            obj.insert(CONTEXT_FILES_UNVERIFIED_KEY.to_string(), json!(unverified));
+        }
+        // [ORB-15191] A write that leaves the task in the backlog with no
+        // footprint says so as loudly as an add does.
+        if let Some(warning) = backlog_footprint_warning(task) {
+            obj.insert("warnings".to_string(), json!([warning]));
+        }
     }
     Ok(TaskWriteOutput {
         response,

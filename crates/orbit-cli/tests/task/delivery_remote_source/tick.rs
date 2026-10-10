@@ -211,6 +211,7 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
             anchor: after.commit.clone(),
             reference: "https://github.com/owner/repository/pull/42".into(),
             landed_at: Utc::now(),
+            head: None,
         };
         state.associations = commits
             .iter()

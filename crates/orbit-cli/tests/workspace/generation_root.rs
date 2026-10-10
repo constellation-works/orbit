@@ -12,10 +12,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::fs::generation::{
-    GenerationGuard, ParticipantRecord, ParticipantRole, executable_generation,
+    Access, GenerationGuard, Participant, ParticipantRecord, ParticipantRole, QUIESCE_TIMEOUT_ENV,
+    executable_generation,
 };
 use orbit_common::test_env;
 use serde_json::Value;
@@ -131,7 +133,7 @@ fn initialize_registered_root(work: &Path, home: &Path, root: &Path) {
 #[test]
 fn task_list_with_tilde_orbit_root_registers_its_participant_under_home() {
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("fixture tempdir");
     let home = temp.path().join("home");
@@ -237,6 +239,87 @@ fn clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume() {
     assert!(
         log.contains("started_at=") && log.contains("ended_at=") && log.contains("refused_ticks=4"),
         "{log}"
+    );
+}
+
+/// The incident [ORB-15260]: a clock tick refused because a breaking
+/// migration cannot run beside a live drain stopped routines and worktree GC
+/// with no alert. Each refused tick says so, and `orbit doctor` reports the
+/// run of refusals until the clock runs again.
+#[test]
+fn clock_ticks_refused_by_a_breaking_migration_are_reported_by_doctor() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    let root = temp.path().join("orbit-root");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&work).expect("work");
+    let root_arg = root.to_str().expect("utf-8 root");
+    let init = orbit(&work, &home)
+        .args([
+            "--root",
+            root_arg,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "qa-refused",
+            "--task-prefix",
+            "QXQR",
+        ])
+        .output()
+        .expect("init root");
+    assert!(init.status.success(), "{init:?}");
+
+    // A drain compiled before this binary's newest breaking review migration.
+    let mut older = orbit_core::composition::compiled_compatibility();
+    let review = older.features["review"];
+    older.features.insert("review".into(), review - 1);
+    let drain = GenerationGuard::join(
+        &root,
+        &Participant {
+            digest: FOREIGN_DIGEST,
+            identity: &older,
+            role: ParticipantRole::Drain,
+            access: Access::Write,
+            handover: None,
+            in_activity: false,
+        },
+        Duration::ZERO,
+        || Ok(0),
+    )
+    .expect("the older drain holds the authority");
+    for _ in 0..2 {
+        let refused = orbit(&work, &home)
+            .env(QUIESCE_TIMEOUT_ENV, "0")
+            .args(["--root", root_arg, "clock", "tick"])
+            .output()
+            .expect("refused clock tick");
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let log = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            log.contains("clock tick refused by upgrade admission")
+                && log.contains("a breaking migration is waiting"),
+            "a refused tick must say why on every tick: {log}"
+        );
+    }
+    drop(drain);
+
+    let doctor = orbit(&work, &home)
+        .args(["--root", root_arg, "doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let rows: Vec<Value> = serde_json::from_slice(&doctor.stdout)
+        .unwrap_or_else(|error| panic!("doctor JSON: {error}; {doctor:?}"));
+    let clock = rows
+        .iter()
+        .find(|row| row["check"] == "clock-unit")
+        .expect("clock-unit row");
+    assert_eq!(clock["status"], "error", "{clock}");
+    let message = clock["message"].as_str().expect("message");
+    assert!(
+        message.contains("upgrade admission refused 2 clock tick(s)")
+            && message.contains("feature schema review"),
+        "{message}"
     );
 }
 

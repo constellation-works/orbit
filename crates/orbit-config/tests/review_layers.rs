@@ -74,6 +74,59 @@ fn before_pr_and_before_landing_both_on_fail_the_load_naming_both_keys() {
     );
 }
 
+/// [ORB-15192] `review.before_landing_hosts` resolves through the layers
+/// trimmed and deduplicated, refuses a label that is not a machine id, and
+/// fails the load beside `review.before_pr`, naming both keys: a listed
+/// host's claims would otherwise get two review layers before landing.
+#[test]
+fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+
+    write_config(
+        workspace.path(),
+        "[review]\nbefore_landing_hosts = [\" hm_mac \", \"hm_mac\", \"hm_linux-2\"]\n",
+    );
+    let policy = ResolvedConfig::load(&roots)
+        .expect("config loads")
+        .operation;
+    let hosts = &policy.review_before_landing_hosts;
+    assert_eq!(hosts.value, ["hm_mac", "hm_linux-2"]);
+    assert_eq!(hosts.source, OperationLayerSource::Workspace);
+    assert!(policy.reviews_before_landing_for(Some("hm_mac")));
+    assert!(!policy.reviews_before_landing_for(Some("hm_other")));
+    assert!(!policy.reviews_before_landing_for(None));
+    admit_settable_config_key("review.before_landing_hosts").expect("live key");
+
+    write_config(
+        workspace.path(),
+        "[review]\nbefore_landing_hosts = [\"mac\"]\n",
+    );
+    let error = ResolvedConfig::load(&roots)
+        .expect_err("a label that is not a machine id is refused")
+        .to_string();
+    assert!(error.contains("review.before_landing_hosts[0]"), "{error}");
+
+    write_config(global.path(), "[review]\nbefore_pr = true\n");
+    write_config(
+        workspace.path(),
+        "[review]\nbefore_landing_hosts = [\"hm_mac\"]\n",
+    );
+    let error = ResolvedConfig::load(&roots)
+        .expect_err("before-PR review beside listed hosts is refused")
+        .to_string();
+    assert!(
+        error.contains("review.before_pr (global)")
+            && error.contains("review.before_landing_hosts (workspace)"),
+        "{error}"
+    );
+
+    // An empty list states nothing to conflict with.
+    write_config(workspace.path(), "[review]\nbefore_landing_hosts = []\n");
+    ResolvedConfig::load(&roots).expect("before-PR review with no listed hosts loads");
+}
+
 #[test]
 fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
     let global = tempfile::tempdir().expect("global tempdir");
@@ -259,4 +312,86 @@ fn global_validation_with_one_pinned_root_has_no_workspace_layer_to_check() {
     store
         .validate_global_with_workspace(root.path())
         .expect("one pinned root has no second layer");
+}
+
+/// [ORB-15195] `operation.review_crew` is one crew or a pool in the
+/// complexity-pool grammar. A string loads as a one-member pool, a pool loads
+/// canonical (trimmed, sorted), an empty array unsets the key even over a global value, and a
+/// crew the registry does not define fails the load naming the entry.
+#[test]
+fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let load = || ResolvedConfig::load(&roots);
+
+    write_config(workspace.path(), "[operation]\nreview_crew = \"grok\"\n");
+    let single = load().expect("a single crew still loads");
+    assert_eq!(single.operation.review_crew.value, vec!["grok".to_string()]);
+    assert_eq!(
+        single.operation.review_crew.source,
+        OperationLayerSource::Workspace
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\" sol \", \"grok\"]\n",
+    );
+    let pool = load().expect("a bare pool loads");
+    assert_eq!(
+        pool.operation.review_crew.value,
+        vec!["grok".to_string(), "sol".to_string()]
+    );
+    assert_eq!(
+        pool.snapshot.operation_review_crew.as_ref(),
+        Some(&pool.operation.review_crew.value)
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\"sol:3\", \"grok:1\"]\n",
+    );
+    assert_eq!(
+        load()
+            .expect("a weighted pool loads")
+            .operation
+            .review_crew
+            .value,
+        vec!["grok:1".to_string(), "sol:3".to_string()]
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\"sol:3\", \"grok\"]\n",
+    );
+    load().expect_err("bare and weighted entries do not mix");
+
+    write_config(global.path(), "[operation]\nreview_crew = \"sol\"\n");
+    write_config(workspace.path(), "[operation]\nreview_crew = []\n");
+    let unset = load().expect("an empty pool loads");
+    assert!(unset.operation.review_crew.value.is_empty());
+    assert_eq!(
+        unset.operation.review_crew.source,
+        OperationLayerSource::Workspace
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\"sol\", \"no-such-crew\"]\n",
+    );
+    let error = load()
+        .expect_err("an unknown pool member fails the load")
+        .to_string();
+    assert!(
+        error.contains("operation.review_crew") && error.contains("no-such-crew"),
+        "{error}"
+    );
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = \"no-such-crew\"\n",
+    );
+    let error = load()
+        .expect_err("an unknown single crew fails the load")
+        .to_string();
+    assert!(error.contains("no-such-crew"), "{error}");
 }

@@ -322,10 +322,10 @@
   opacity: 0.55;
 }
 
-/* On phones, the brand, workspace and icon actions share the first row.
-   Destinations and the open section's views scroll together on the next;
-   the host chips have their own single row below that. Actions
-   stay in the topbar DOM so their listeners and desktop layout are shared. */
+/* On phones, the brand and icon actions share the first row; the host and
+   workspace pickers get a second row, followed by scrolling destinations and
+   views. The host chips have their own topbar row. Actions stay in the topbar
+   DOM so their listeners and desktop layout are shared. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
@@ -334,8 +334,8 @@
   }
   .rail {
     display: grid;
-    grid-template-columns: 68px minmax(0, 1fr) minmax(0, 1fr) 34px 34px;
-    grid-template-rows: auto auto;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr) 34px 34px;
+    grid-template-rows: auto auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
@@ -343,15 +343,16 @@
     align-items: center;
     gap: 6px;
   }
-  .rail-brand { grid-column: 1; padding: 0; height: 34px; display: flex; align-items: center; align-self: start; }
+  .rail-brand { grid-column: 1; grid-row: 1; padding: 0; height: 34px; display: flex; align-items: center; align-self: start; }
   .rail-brand svg { width: 64px; height: auto; }
-  .rail-host { grid-column: 2; min-width: 0; margin-bottom: 0; }
+  .rail-host { grid-column: 1; grid-row: 2; min-width: 0; margin-bottom: 0; align-self: start; }
   .rail-host .rail-scope-label { display: none; }
-  .rail-workspace { grid-column: 3; min-width: 0; }
+  .rail-workspace { grid-column: 2; grid-row: 2; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
   .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
   .rail .tabs {
     grid-column: 1 / -1;
+    grid-row: 3;
     flex-direction: row;
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -359,7 +360,13 @@
     margin-top: 0;
     padding: 2px;
     gap: 2px;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
+  .rail .tabs::-webkit-scrollbar,
+  .rail .rail-subtabs::-webkit-scrollbar,
+  .topbar .host-resource-group::-webkit-scrollbar { display: none; }
   .rail-group { display: contents; }
   .rail-group-label { display: none; }
   .rail .tab {
@@ -380,6 +387,9 @@
     margin: 0;
     padding: 0 4px;
     gap: 2px;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
   .rail-subtabs .subtab {
     padding: 0 10px;
@@ -389,7 +399,13 @@
   .rail-foot { display: none; }
   .topbar { padding: 6px 8px; gap: 0; }
   .topbar-spacer { display: none; }
-  .topbar .host-resource-group { flex: 1 1 100%; padding: 2px; }
+  .topbar .host-resource-group {
+    flex: 1 1 100%;
+    padding: 2px;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  }
   /* Tighter chips keep all three readings in view at 375px. */
   .host-resource { gap: 4px; padding: 0 7px; }
   .host-resource[data-resource="cpu"] { min-width: 9.5rem; }
@@ -403,17 +419,15 @@
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    width: 34px;
     height: 34px;
-    padding: 0;
   }
-  .topbar .global-drain-state { right: 48px; }
+  .topbar .global-drain-state { right: 48px; min-width: 86px; padding: 0 8px; }
+  .topbar .refresh-btn { width: 34px; padding: 0; }
   .topbar .global-drain-state[hidden] { display: none; }
   .refresh-icon { display: block; width: 17px; height: 17px; }
   /* Keep the route heading and action names available to assistive tech. */
   .topbar .crumb,
-  .refresh-label,
-  .global-drain-label {
+  .refresh-label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -462,6 +476,7 @@
   padding: 3px 8px;
   white-space: nowrap;
 }
+.workspace-scope-note.is-inactive { visibility: hidden; }
 
 .scope-badge {
   display: inline-flex;
@@ -576,6 +591,11 @@ button.scope-chip:hover {
 .readiness-advisory {
   color: var(--fg-mute);
   border-color: var(--border);
+}
+/* A backlog task the drain readiness snapshot reports as waiting. */
+.drain-wait-badge {
+  color: var(--priority-medium);
+  border-color: var(--priority-medium);
 }
 .readiness-preparing {
   color: var(--fg-dim);

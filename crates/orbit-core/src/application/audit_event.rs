@@ -53,6 +53,8 @@ impl OrbitRuntime {
                 mcp_call_id: None,
                 job_run_id: None,
                 lease_id: None,
+                before_id: None,
+                exclude_unverified_success: false,
                 limit,
                 offset: 0,
             })

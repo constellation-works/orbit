@@ -5,7 +5,8 @@
 //! entry points exactly as the spawn path compiles it:
 //!
 //! - `macos/<case>.sbpl`: [`compile_macos_sandbox_profile`] followed by the
-//!   agent mask ([`append_macos_subpath_mask`]) or, for a plugin backend, the
+//!   agent mask ([`append_macos_subpath_mask`] over the plugin trees,
+//!   [`append_macos_file_mask`] over `clock.env`) or, for a plugin backend, the
 //!   read boundary and network clause. The SBPL compiler is plain text
 //!   generation, so these goldens are checked on every platform.
 //! - `linux/<case>.txt` (Linux only, because the credential masks read the
@@ -44,8 +45,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use orbit_exec::{
-    BuildPhaseNetwork, BuildSandboxSpec, MacosNetworkAccess, append_macos_network_access,
-    append_macos_read_boundary, append_macos_subpath_mask, compile_macos_sandbox_profile,
+    BuildPhaseNetwork, BuildSandboxSpec, MacosNetworkAccess, append_macos_file_mask,
+    append_macos_network_access, append_macos_read_boundary, append_macos_subpath_mask,
+    compile_macos_sandbox_profile,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -347,6 +349,7 @@ impl Fixture {
         }
         std::fs::write(home.join(".cargo/credentials.toml"), "").expect("cargo token");
         std::fs::write(global.join("orbit.db"), "").expect("global db");
+        std::fs::write(global.join("clock.env"), "").expect("clock credentials");
         std::fs::write(redirected_global.join("orbit.db"), "").expect("redirected db");
         std::fs::write(plugin_root.join("backend.sh"), "#!/bin/sh\n").expect("backend");
         std::fs::write(home.join(".cargo/bin/cargo"), "").expect("cargo proxy");
@@ -552,6 +555,10 @@ impl Fixture {
         ]
     }
 
+    fn mask_files(&self) -> Vec<PathBuf> {
+        vec![self.global.join("clock.env")]
+    }
+
     fn plugin_read_denies(&self) -> Vec<PathBuf> {
         [
             "state/plugin-callbacks",
@@ -571,6 +578,7 @@ impl Fixture {
             match case.kind {
                 CaseKind::Agent | CaseKind::ProviderPair(_) => {
                     append_macos_subpath_mask(&mut text, &self.mask_targets());
+                    append_macos_file_mask(&mut text, &self.mask_files());
                 }
                 CaseKind::PluginBackend => {
                     append_macos_read_boundary(
@@ -600,6 +608,7 @@ impl Fixture {
         let mask = orbit_exec::LinuxBwrapMask {
             sentinel: self.global.join("state/plugin-broker/masked"),
             targets: self.mask_targets(),
+            files: self.mask_files(),
         };
         let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
             &case.profile,

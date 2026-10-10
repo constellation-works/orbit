@@ -31,6 +31,7 @@ mod pilot_comments;
 mod reconcile_review;
 mod rescue_close_cli;
 mod review_after_landing_cli;
+mod review_crew_pool_cli;
 mod shared_root_task_isolation;
 mod task_admin_cli;
 mod task_eligible;

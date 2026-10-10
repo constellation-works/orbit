@@ -187,6 +187,20 @@ order. The parent and child wrapper errors remain in the usual run header and st
 `additional_root_causes`; `step` or `message` is null when a failed leaf has no corresponding
 step detail. The compact child-dispatch lines can still shorten wrapper errors.
 
+A gate or auto parent that failed only because a child did also records that leaf on itself. Its
+`--json` `root_cause` is `{leaf_run_id, task_id, step, code}`, and a nested parent inherits the
+leaf its child recorded. Its error names that leaf ("echoes leaf run …") rather than repeating the
+leaf's text. A run that failed on its own has `root_cause: null`. So one failed delivery no longer
+reads as three failures: `orbit run history --state failed --incidents` shows one row per
+incident, the leaf when it is listed, and the CASCADED column (`--json`: `cascaded_run_ids`)
+counts the parents folded into it. A parent whose waited-on children were all cancelled ends
+`cancelled`, not `failed`.
+
+The dashboard's run detail follows that same child-dispatch chain in one response.
+The failure box links every run id and task id in the message and adds a Root cause
+line for the deepest failed or cancelled descendant. Opening a cancelled run names
+who cancelled it, when, and the recorded reason, or says `no reason recorded`.
+
 An auto drain dispatches its leaves detached and never observes their outcomes, so the drain's
 own `State: success` only means the coordinator ran. `orbit run show <drain-run-id>` adds a
 `Leaves:` line (admitted, succeeded, failed, running, cancelled), a `WARNING:` with each failed
@@ -339,6 +353,15 @@ the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
 
+Resume also refuses before it creates a run when a task the source names is
+bound to a different run, or to the same run id on another machine. The error
+names that binding (run id and machine). Checkpoints, the worktree, and the
+validation input are not reused, and the foreign claim is left as it is.
+Continue the binding on the machine it names, or admit a new attempt after an
+authorized rebind. `orbit job resume` does not rebind a foreign claim. A task
+still bound to the source run, or to the checkpoint batch in its retry
+lineage, resumes as before: the new run keeps that batch id in its checkpoints.
+
 When a completion attempt was blocked after promotion, resume restores `review`
 only when its reused host promotion checkpoint names the task and its latest
 status history proves that this source run or an ancestor blocked it from
@@ -386,7 +409,9 @@ A run with no successful checkpoints degrades to a full replay.
 
 ## A task held for a red base
 
-Sometimes a run fails `validate` with `[baseline_red]`. That means a required
+Sometimes a run stops at `validate` with `[baseline_red]` and ends `held`, not
+`failed`; its diagnostic step carries code `baseline_red`, and the gate and auto
+parents waiting on it pass it as held. That means a required
 command also fails on the base, exactly as it fails on the candidate. Do not
 resume or replay that run, and do not unblock the task. No `[BLOCKED]` PR was
 opened. The task is in `backlog` under a `baseline_red_hold` history event, and

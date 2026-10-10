@@ -176,7 +176,16 @@ spec:
 
     You decide; you do not act on the task. Return exactly one decision. Orbit's
     deterministic applier performs every lifecycle change after re-checking it,
-    and refuses any decision if the task changed after the failure.
+    and refuses any decision if the task changed after the failure: a status
+    transition; an edit to its title, description, acceptance criteria, plan,
+    tags, required tools, context files, priority, complexity, type, relations
+    or dependencies, crew or orchestrator; or a comment by an operator or
+    agent. Writes your recovery is allowed to cause do not count as a change:
+    a friction you record with `orbit.friction.add` (on a claimed task, the
+    `claim_friction` history entry it adds), the context files Orbit widens
+    over paths you repair, comments Orbit itself writes for the run, and run
+    bookkeeping such as the execution summary, run link, external refs and
+    artifacts.
 
     Input:
     - task_id, run_id: the task and the failed run.

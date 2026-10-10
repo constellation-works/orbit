@@ -2,7 +2,8 @@
 //! [ORB-13896] [ORB-13992].
 //!
 //! The auto-task's own `enabled` flag is the switch. `operation.review_crew`,
-//! when set, is the crew of every review task it mints. Nothing else performs
+//! when set, is the crew of every review task it mints; a pool draws one
+//! crew per batch [ORB-15195]. Nothing else performs
 //! after-landing review, so [`after_landing_health`] states in one line
 //! whether that consumer can actually do it on this host and when its next
 //! batch is due; `orbit doctor` fails on anything less than healthy and the
@@ -14,10 +15,14 @@
 //! workspace that relied on the policy keeps its reviews until the operator
 //! toggles the auto-task themselves.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_config::OperationLayerSource;
-use orbit_types::workflow::automation::{AutomationState, CoverageClass, DeliveryTrigger};
+use orbit_types::workflow::automation::{
+    AutomationState, BatchAttempt, CoverageClass, Delivery, DeliveryTrigger,
+};
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 use serde::Serialize;
 
@@ -26,6 +31,8 @@ use super::{
     source::{RemoteObservation, Source},
 };
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::seeded_crew_ticket;
+use crate::application::review::crew::configured_pool_members;
 
 /// The auto-task definition after-landing review runs through.
 pub(crate) const AFTER_LANDING_CONSUMER: &str = "delivery-code-review";
@@ -60,17 +67,63 @@ impl OrbitRuntime {
     }
 }
 
-/// The crew a review task minted for `definition` must carry instead of the
-/// template's: `operation.review_crew`, when this is the after-landing
-/// consumer and the crew is set.
-pub(super) fn review_crew_override(
-    runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
-) -> Option<String> {
+/// The crews a review task minted for `definition` is drawn from instead of
+/// the template's crew: `operation.review_crew`, when this is the
+/// after-landing consumer and the crew is set. Empty otherwise.
+fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> Vec<String> {
     if definition.name != AFTER_LANDING_CONSUMER {
-        return None;
+        return Vec::new();
     }
     runtime.operation_policy().review_crew.value.clone()
+}
+
+/// The crew a one-member `operation.review_crew` names, parsed from its
+/// `name[:weight]` entry the way a pool's members are, so `sol:3` is `sol`.
+fn singleton_review_crew(
+    runtime: &OrbitRuntime,
+    pool: &[String],
+) -> Result<Option<String>, OrbitError> {
+    Ok(configured_pool_members(runtime, pool)?
+        .into_iter()
+        .next()
+        .map(|member| member.name))
+}
+
+/// The crew the review task minted for `attempt` carries, or `None` to keep
+/// the template's. A single `operation.review_crew` member is carried by its
+/// parsed name; a pool draws one member, preferring one that implemented none
+/// of the batch's deliveries [ORB-15195]. The draw is seeded by the attempt's
+/// action key, so a retried mint carries the same crew.
+pub(super) fn minted_review_crew(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    attempt: &BatchAttempt,
+) -> Result<Option<String>, OrbitError> {
+    let pool = review_crew_pool(runtime, definition);
+    match pool.as_slice() {
+        [] => Ok(None),
+        [_] => singleton_review_crew(runtime, &pool),
+        _ => {
+            let implementers = delivery_implementers(runtime, &attempt.batch.deliveries);
+            Ok(runtime
+                .select_review_crew(
+                    &implementers,
+                    &mut seeded_crew_ticket(format!("review:{}", attempt.action_key)),
+                )?
+                .map(|crew| crew.name))
+        }
+    }
+}
+
+/// The crews recorded on the tasks `deliveries` landed. A task this checkout
+/// cannot read adds nothing: independence is a preference, not a gate.
+fn delivery_implementers(runtime: &OrbitRuntime, deliveries: &[Delivery]) -> BTreeSet<String> {
+    deliveries
+        .iter()
+        .flat_map(|delivery| delivery.task_ids.iter())
+        .filter_map(|task_id| runtime.get_task(task_id).ok())
+        .filter_map(|task| task.crew)
+        .collect()
 }
 
 /// What turned after-landing review on or left it off.
@@ -150,9 +203,14 @@ pub struct AfterLandingHealth {
     pub stall: Option<String>,
     /// The consumer's scheduling state as `orbit auto-task show` reports it.
     pub state: Option<String>,
-    /// The crew its review tasks are minted with.
+    /// The crew its review tasks are minted with, when it is one crew.
     pub crew: Option<String>,
-    /// Why that crew cannot be resolved on this host, when it cannot.
+    /// The `operation.review_crew` pool each batch's review task draws its
+    /// crew from, when it names more than one [ORB-15195].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crew_pool: Vec<String>,
+    /// Why that crew, or every crew of the pool, cannot be resolved on this
+    /// host, when it cannot.
     pub crew_error: Option<String>,
     /// When the consumer's open batch was frozen and minted.
     pub last_batch_minted_at: Option<DateTime<Utc>>,
@@ -234,7 +292,11 @@ impl AfterLandingHealth {
             owner,
             progress,
             branch,
-            format!("crew `{}`", self.crew.as_deref().unwrap_or("-")),
+            if self.crew_pool.is_empty() {
+                format!("crew `{}`", self.crew.as_deref().unwrap_or("-"))
+            } else {
+                format!("crews [{}] drawn per batch", self.crew_pool.join(", "))
+            },
             format!("state {}", self.state.as_deref().unwrap_or("-")),
             minted,
             covered,
@@ -325,6 +387,7 @@ pub fn after_landing_health(
         stall: None,
         state: None,
         crew: None,
+        crew_pool: Vec::new(),
         crew_error: None,
         last_batch_minted_at: None,
         last_batch_covered_at: None,
@@ -381,14 +444,35 @@ pub fn after_landing_health(
         ));
     }
 
-    health.crew = review_crew_override(runtime, &definition).or(definition.template.crew.clone());
-    if let Some(crew) = &health.crew
-        && let Err(error) = runtime.resolve_crew_for_task(Some(crew), None)
-    {
-        health.crew_error = Some(error.to_string());
-        health
-            .problems
-            .push(format!("review crew `{crew}` does not resolve: {error}"));
+    let pool = review_crew_pool(runtime, &definition);
+    if pool.len() > 1 {
+        let candidates = configured_pool_members(runtime, &pool)
+            .and_then(|members| runtime.review_crew_candidates(&members));
+        if let Err(error) = candidates {
+            health.crew_error = Some(error.to_string());
+            health
+                .problems
+                .push(format!("no crew of the review pool resolves: {error}"));
+        }
+        health.crew_pool = pool;
+    } else {
+        match singleton_review_crew(runtime, &pool) {
+            Ok(crew) => health.crew = crew.or(definition.template.crew.clone()),
+            Err(error) => {
+                health.crew_error = Some(error.to_string());
+                health
+                    .problems
+                    .push(format!("no crew of the review pool resolves: {error}"));
+            }
+        }
+        if let Some(crew) = &health.crew
+            && let Err(error) = runtime.resolve_crew_for_task(Some(crew), None)
+        {
+            health.crew_error = Some(error.to_string());
+            health
+                .problems
+                .push(format!("review crew `{crew}` does not resolve: {error}"));
+        }
     }
 
     // Consumer state is keyed by this host's machine identity; without one

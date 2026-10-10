@@ -2,7 +2,7 @@
 title: Orbit MCP — Decisions
 owner: codex
 last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_validated: 2026-10-10
 status: Draft
 feature: mcp-bridge
 doc_role: decisions

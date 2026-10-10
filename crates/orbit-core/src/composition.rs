@@ -273,6 +273,7 @@ pub fn pin_executable_generation_as(
         role,
         handover,
         access,
+        crate::runtime::run_input::managed_run_context_from_env(),
         || Store::open_read_only(&root.join("orbit.db"))?.schema_version(),
     )
 }

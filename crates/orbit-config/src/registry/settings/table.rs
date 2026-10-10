@@ -212,11 +212,17 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 70,
         resolve: |raw: Option<u32>| resolve_worker_tasks_max(raw),
     },
-    operation_review_crew: Option<String> => String {
-        key: "operation.review_crew", value_type: "string",
-        description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). Before-PR and before-landing review refuse to start without it.",
+    machine_worker_cpu_quota: u32 => u32 {
+        key: "machine.worker_cpu_quota", value_type: "integer",
+        description: "CPUQuota= for each contained worker scope, as a percentage of one core (400 caps a run at four cores) so one run cannot saturate the host. 0 or unset sets no CPU limit. Linux only; enforced when the systemd user manager delegates the cpu controller.",
+        section: ConfigSection::Machine, order: 75,
+        resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(0)),
+    },
+    operation_review_crew: Option<Vec<String>> => operation::ReviewCrewSetting {
+        key: "operation.review_crew", value_type: "array<string>",
+        description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). One crew name, or a pool written like the complexity pools (`name` or `name:weight`, all bare or all weighted) from which each review draws one crew by weight, preferring a crew other than the one that implemented the reviewed work and skipping disabled or provider-limited crews. [] unsets it. Before-PR and before-landing review refuse to start without it.",
         section: ConfigSection::Review, order: 30,
-        resolve: |raw: Option<String>| operation::review_crew(raw),
+        resolve: operation::review_crew,
     },
     security_alert_sweep_min_severity: String => String {
         key: "security_alert_sweep.min_severity", value_type: "string",
@@ -259,6 +265,12 @@ define_config_settings! {
         description: "Open the PR first, then have a fresh reviewer review it and fix what it finds while hosted CI runs; the PR lands only at the head that review settled (default false). Any outcome other than an approve leaves the PR open and the task in review. Shares review.minutes and operation.review_crew with before-PR review, and is captured at submission like it. PR route only: refused for local-only delivery. Loading fails while it and review.before_pr are both on: there is one review layer before landing.",
         section: ConfigSection::Review, order: 15,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    review_before_landing_hosts: Vec<String> => Vec<String> {
+        key: "review.before_landing_hosts", value_type: "array<string>",
+        description: "Owner policy: machine ids (hm_...) whose claimed leaves review their open PR before it lands, as review.before_landing does, while this owner's own deliveries keep review.before_landing off. The probe and pull admission resolve it for the caller's machine label and the claim captures the result. Ignored for machines already covered by review.before_landing = true; loading fails while review.before_pr is on and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty.",
+        section: ConfigSection::Review, order: 16,
+        resolve: |raw: Option<Vec<String>>| operation::before_landing_hosts(raw).map(Option::unwrap_or_default),
     },
     review_minutes: u32 => u32 {
         key: "review.minutes", value_type: "integer",

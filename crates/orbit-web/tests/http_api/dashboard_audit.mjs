@@ -7,7 +7,13 @@ class Node {
   constructor(tag) {
     this.tagName = tag; this.children = []; this.dataset = {}; this.className = '';
     this.text = ''; this.listeners = new Map(); this.style = { setProperty() {} };
-    this.classList = { add: name => { this.className += ` ${name}`; } };
+    this.classList = {
+      add: name => { this.className += ` ${name}`; },
+      toggle: (name, on) => {
+        const names = this.className.split(' ').filter(n => n && n !== name);
+        this.className = (on ? [...names, name] : names).join(' ');
+      },
+    };
   }
   set textContent(value) { this.text = String(value); this.children = []; }
   set innerHTML(value) { assert.equal(value, ''); this.children = []; this.text = ''; }
@@ -41,11 +47,17 @@ const document = {
   getElementById: id => ({ 'audit-summary-body': container, 'audit-summary-title': title, 'scoreboard-body': scoreboardBody, 'scoreboard-count': scoreboardCount, 'scoreboard-agent-strip': scoreboardAgentStrip, 'diag-body': diagnosticsBody, 'diag-count': diagnosticsCount, 'audit-scope-chips': auditScopeChips, 'audit-filter': auditFilterChips })[id] || null,
   querySelectorAll: () => [],
 };
-const window = { location: { search: '?workspace=ws_fixture&window=24h', hash: '' } };
+const window = {
+  location: {
+    href: 'http://dashboard.test/?workspace=ws_fixture&window=24h',
+    search: '?workspace=ws_fixture&window=24h',
+    hash: '',
+  },
+};
 const requestedPaths = [];
 const context = vm.createContext({
-  URLSearchParams, window, document, console, AbortController, setTimeout, clearTimeout,
-  fetch: async path => { requestedPaths.push(path); return { ok: true, json: async () => [] }; },
+  URL, URLSearchParams, window, document, console, AbortController, setTimeout, clearTimeout,
+  fetch: async path => { requestedPaths.push(path); return { ok: true, headers: { get: () => null }, json: async () => [] }; },
 });
 const common = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/common.js', import.meta.url), 'utf8'), { context });
 const audit = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/audit.js', import.meta.url), 'utf8'), { context });
@@ -297,4 +309,157 @@ assert.match(
 incidentPayload.incidents[0].message = 'doctor reported findings: 1 failure (review), 0 warnings';
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
 assert.match(listedMessage(), /1 failure \(review\)/, 'a recorded message is shown as is');
-console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down and refresh passed');
+
+// Identical signatures across runs collapse to one recurring row. Each run
+// stays an incident underneath it, with its own id and links.
+const sweepMessage = 'execution failed: v2 job dispatch: deterministic action `file_ci_failure_tasks` failed: execution failed: ci_failure_sweep retryable: {"outcome":"retryable_error","stage":"collection_or_investigation"}';
+const sweepSignature = 'unexpected|role=human|surface=run-pipeline-worker|msg=ci_failure_sweep retryable';
+const sweepFires = [
+  ['2026-10-10T07:00:00Z', '2h', 'jrun-sweep-0700', 'inc-sweep-0700'],
+  ['2026-10-10T07:20:00Z', '1h', 'jrun-sweep-0720', 'inc-sweep-0720'],
+  ['2026-10-10T07:40:00Z', '53m', 'jrun-sweep-0740', 'inc-sweep-0740'],
+  ['2026-10-10T08:00:00Z', '33m', 'jrun-sweep-0800', 'inc-sweep-0800'],
+  ['2026-10-10T08:20:00Z', '13m', 'jrun-sweep-0820', 'inc-sweep-0820'],
+];
+const relativeLabels = Object.fromEntries(sweepFires.map(([ts, label]) => [ts, label]));
+relativeLabels['2026-10-10T08:40:00Z'] = '7m';
+relativeLabels['2026-10-10T08:50:00Z'] = '3m';
+const opened = [];
+diagnosticsContext.fmtRelative = (value) => relativeLabels[value] || value;
+diagnosticsContext.setActiveTab = (route) => { opened.push(route); };
+diagnosticsContext.navigateToRun = (runId) => { opened.push(`navigate:${runId}`); };
+const sweepIncident = (ts, runId, incidentId, signature = sweepSignature, surface = 'run-pipeline-worker') => ({
+  incident_id: incidentId,
+  signature,
+  class: 'unexpected',
+  class_label: 'unexpected failure',
+  surface,
+  actor: 'human',
+  message: sweepMessage,
+  event_count: 1,
+  first_ts: ts,
+  last_ts: ts,
+  run_ids: [runId],
+  task_ids: ['ORB-9001'],
+  has_tool_identity: false,
+  events: [{
+    id: 42,
+    ts,
+    status: 'failure',
+    actor: 'human',
+    surface,
+    run_id: runId,
+    task_id: 'ORB-9001',
+    workspace_id: 'ws_fixture',
+    message: sweepMessage,
+  }],
+});
+incidentPayload = {
+  window: '24h',
+  incident_count: 7,
+  shown_incident_count: 7,
+  matching_incident_count: 7,
+  raw_failed_events: 7,
+  total_events: 70,
+  incidents: [
+    sweepIncident('2026-10-10T08:40:00Z', 'jrun-one-off', 'inc-one-off', 'unexpected|role=human|surface=orbit.task.add|msg=other', 'orbit.task.add'),
+    ...sweepFires.map(([ts, , runId, incidentId]) => sweepIncident(ts, runId, incidentId)),
+    sweepIncident('2026-10-10T08:50:00Z', 'jrun-other-surface', 'inc-other-surface', 'unexpected|role=human|surface=orbit.doctor|msg=ci_failure_sweep retryable', 'orbit.doctor'),
+  ],
+};
+const incidentList = () => diagnosticsBody.children.find(node => node.className === 'incident-list');
+const topRows = () => incidentList().children.filter(node => String(node.className).includes('incident-row'));
+const recurrenceRow = () => topRows().find(node => String(node.className).includes('incident-recurrence'));
+const plainClick = (node) => node.listeners.get('click')({
+  stopPropagation() {},
+  preventDefault() {},
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  button: 0,
+});
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.equal(topRows().length, 3, 'five sweep fires, one newer one-off, and one same-message other signature are three rows');
+assert.equal(topRows().filter(node => String(node.className).includes('incident-recurrence')).length, 1, 'the sweep is one recurring entry');
+assert.equal(topRows()[0], recurrenceRow(), 'recurring signatures sort ahead of newer one-offs');
+assert.equal(topRows()[1].dataset.key, 'incident-inc-one-off', 'one-offs keep server order after the rollup');
+assert.equal(topRows()[2].dataset.key, 'incident-inc-other-surface', 'the same message with a different signature stays its own incident');
+const summaryText = () => descendants(recurrenceRow()).find(node => node.className === 'incident-recurrence-summary').textContent;
+assert.equal(summaryText(), 'recurring · 5 runs · first 2h · last 13m · every 20 min');
+assert.equal(
+  descendants(recurrenceRow()).find(node => node.className === 'incident-actor').textContent,
+  'human',
+  'the recorded actor stays on the recurring row',
+);
+assert.equal(recurrenceRow().children.filter(node => node.className === 'incident-message').length, 1);
+assert.match(recurrenceRow().children.find(node => node.className === 'incident-message').textContent, /ci_failure_sweep retryable/);
+assert.equal(recurrenceRow().textContent.includes('jrun-sweep-0820'), false, 'runs stay hidden until the recurrence is expanded');
+const recurrenceHead = () => recurrenceRow().children.find(node => node.className === 'incident-head');
+assert.equal(recurrenceHead()['aria-expanded'], 'false');
+recurrenceHead().listeners.get('click')();
+assert.equal(recurrenceHead()['aria-expanded'], 'true');
+const runRows = () => recurrenceRow().children.find(node => node.className === 'incident-recurrence-runs').children;
+assert.deepEqual(runRows().map(node => node.dataset.key), [
+  'incident-inc-sweep-0820',
+  'incident-inc-sweep-0800',
+  'incident-inc-sweep-0740',
+  'incident-inc-sweep-0720',
+  'incident-inc-sweep-0700',
+], 'expansion lists each run newest first, keeping the per-run incident id');
+assert.deepEqual(
+  runRows().map(node => descendants(node).find(child => child.className === 'incident-run mono').textContent),
+  ['jrun-sweep-0820', 'jrun-sweep-0800', 'jrun-sweep-0740', 'jrun-sweep-0720', 'jrun-sweep-0700'],
+);
+const oldest = runRows().at(-1);
+oldest.children.find(node => node.className === 'incident-head').listeners.get('click')();
+const openedOldest = () => runRows().at(-1);
+assert.match(openedOldest().children.find(node => node.className === 'incident-head').title, /inc-sweep-0700/);
+const openRun = descendants(openedOldest()).find(node => node.tagName === 'button' && node.textContent === 'Open run jrun-sweep-0700');
+assert.equal(typeof openRun.listeners.get('click'), 'function', 'the per-run incident still offers its run link');
+openRun.listeners.get('click')();
+assert.deepEqual(opened, ['runs/jrun-sweep-0700']);
+const runLink = descendants(openedOldest()).find(node => node.tagName === 'a' && node.textContent === 'jrun-sweep-0700');
+const taskLink = descendants(openedOldest()).find(node => node.tagName === 'a' && node.textContent === 'ORB-9001');
+assert.match(runLink.href, /#runs\/jrun-sweep-0700/);
+assert.match(runLink.href, /workspace=ws_fixture/);
+assert.match(taskLink.href, /#tasks\?status=all&q=ORB-9001/);
+plainClick(runLink);
+assert.deepEqual(opened, ['runs/jrun-sweep-0700', 'navigate:jrun-sweep-0700']);
+assert.equal(runRows().length, 5, 'opening one run leaves the other runs listed');
+recurrenceHead().listeners.get('click')();
+assert.equal(recurrenceRow().children.some(node => node.className === 'incident-recurrence-runs'), false, 'collapsing the recurrence hides the runs');
+
+incidentPayload = {
+  window: '24h', incident_count: 2, shown_incident_count: 2, matching_incident_count: 2,
+  incidents: [
+    { incident_id: 'bare-a', class: 'unexpected', message: sweepMessage, event_count: 1, last_ts: '2026-10-10T08:00:00Z', run_ids: ['jrun-bare-a'] },
+    { incident_id: 'bare-b', class: 'unexpected', message: sweepMessage, event_count: 1, last_ts: '2026-10-10T08:20:00Z', run_ids: ['jrun-bare-b'] },
+  ],
+};
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.equal(topRows().length, 2, 'incidents with no signature stay separate even when the message matches');
+assert.equal(topRows().some(node => String(node.className).includes('incident-recurrence')), false);
+
+incidentPayload = {
+  window: '24h', incident_count: 4, shown_incident_count: 4, matching_incident_count: 4,
+  incidents: ['2026-10-10T08:00:00Z', '2026-10-10T08:05:00Z', '2026-10-10T08:10:00Z', '2026-10-10T09:30:00Z']
+    .map((ts, index) => sweepIncident(ts, `jrun-irregular-${index}`, `inc-irregular-${index}`, 'unexpected|role=human|surface=run-pipeline-worker|msg=irregular')),
+};
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.match(summaryText(), /about every 5 min/, 'uneven gaps are not labelled as a fixed schedule');
+
+incidentPayload = {
+  window: '24h', incident_count: 80, shown_incident_count: 50, matching_incident_count: 80,
+  incidents: [
+    sweepIncident('2026-10-10T08:00:00Z', 'jrun-capped-a', 'inc-capped-a', 'unexpected|role=human|surface=run-pipeline-worker|msg=capped'),
+    sweepIncident('2026-10-10T08:20:00Z', 'jrun-capped-b', 'inc-capped-b', 'unexpected|role=human|surface=run-pipeline-worker|msg=capped'),
+  ],
+};
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.match(summaryText(), /2 runs in the newest 50/, 'a capped page says the run count is among the incidents shown');
+assert.match(
+  descendants(recurrenceRow()).find(node => node.className === 'incident-recurrence-summary').title,
+  /newest 50 of 80/,
+);
+console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down, recurrence rollup and refresh passed');

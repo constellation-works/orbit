@@ -115,10 +115,20 @@ const document = {
   getElementById: id => byId[id] || null,
 };
 
+const location = { search: '', hash: '#diagnostics/runs', href: 'http://localhost/#diagnostics/runs' };
+const history = {
+  replaceState(_data, _title, url) {
+    if (url == null) return;
+    const resolved = new URL(String(url), location.href);
+    location.href = resolved.href;
+    location.search = resolved.search;
+    location.hash = resolved.hash;
+  },
+};
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch: () => Promise.resolve(), document,
-  window: { location: { search: '', hash: '', href: 'http://localhost/#diagnostics/runs' } },
-  history: { replaceState() {} },
+  window: { location },
+  history,
   Date,
   Math,
 });
@@ -167,8 +177,9 @@ initRuns({
 renderRuns([]);
 const scopeNote = runsBody.querySelector('.runs-scope-note');
 assert.ok(scopeNote, 'scope note exists');
-assert.equal(scopeNote.textContent, 'Every job run, newest first, with no time window.', 'scope note text is shortened to one line');
-assert.ok(scopeNote.title && scopeNote.title.includes('selected window only'), 'extended details are in scope note title attribute');
+assert.match(scopeNote.textContent, /Every job run, newest first, in the 24h window/);
+assert.doesNotMatch(scopeNote.textContent, /no time window/);
+assert.match(scopeNote.title, /selected window/);
 
 // Test 2: Load more control when truncated
 const sampleRuns = [
@@ -286,5 +297,100 @@ assert.equal(cappedNote.querySelector('.runs-load-more'), null, 'no Load more bu
 limitCapped = false;
 renderRuns(sampleRuns);
 assert.ok(runsBody.querySelector('.runs-load-more'), 'Load more returns while the server can still return more');
+
+// Failed rows say where they stopped; the job cell's tooltip names the job.
+const longMessage = 'deterministic action `file_ci_failure_tasks` failed: ci_failure_sweep retryable stage collection_or_investigation after a very long tail of detail';
+const pipelineRun = (id, job, state, extra = {}) => ({
+  run_id: id, job_id: job, state, task_ids: ['ORB-1'], tasks: [{ id: 'ORB-1', title: 'T' }],
+  finished_at: new Date(Date.now() - 1000).toISOString(), ...extra,
+});
+const failedRun = pipelineRun('jrun-failed-1', 'ci_failure_sweep_pipeline', 'failed', {
+  task_ids: null, tasks: null,
+  steps: [
+    { target_id: 'collect', state: 'success' },
+    { target_id: 'file_ci_failure_tasks', state: 'failed', error_code: 'action_failed', error_message: longMessage },
+    { target_id: 'cleanup', state: 'skipped', error_message: 'when: false' },
+  ],
+});
+currentMeta = { limit: 25, total: 4, truncated: false };
+currentRunsList = [failedRun, { ...failedRun, run_id: 'jrun-timeout-1', state: 'timeout', steps: [{ target_id: 'wait', state: 'timeout' }] },
+  { ...failedRun, run_id: 'jrun-bare-1', state: 'interrupted', steps: [] }, sampleRuns[1]];
+renderRuns(currentRunsList);
+const failedRow = key => runsBody.querySelectorAll('.runs-row').find(r => r.dataset.key.endsWith(key));
+const failedAt = failedRow(':jrun-failed-1').querySelector('.run-failed-at');
+assert.equal(failedAt.querySelector('.run-failed-step').textContent, 'file_ci_failure_tasks', 'failed row names the step that errored, not the skipped one after it');
+const excerpt = failedAt.querySelector('.run-failed-excerpt').textContent;
+assert.ok(excerpt.startsWith('action_failed: deterministic action') && excerpt.endsWith('…') && excerpt.length <= 80, `excerpt is clipped to 80 chars: ${excerpt}`);
+assert.match(failedAt.title, /Message: deterministic action .*very long tail of detail/, 'tooltip carries the full error text');
+assert.equal(failedRow(':jrun-timeout-1').querySelector('.run-failed-step').textContent, 'wait', 'timeout rows show their step');
+assert.equal(failedRow(':jrun-bare-1').querySelector('.run-failed-at').textContent, 'no error recorded', 'interrupted run with nothing recorded says so');
+assert.equal(failedRow(':jrun-success-2').querySelector('.run-failed-at').children.length, 0, 'successful rows carry no failure detail');
+assert.ok(runsBody.querySelector('.runs-header .run-failed-at-header'), 'header names the Failed at column');
+assert.equal(failedRow(':jrun-failed-1').querySelector('.id').title, 'ci_failure_sweep_pipeline', 'job button tooltip is the full job name');
+
+// A task's auto/gate/pr pipeline runs fold into one expandable group.
+const triplet = [
+  pipelineRun('jrun-pr', 'task_pr_pipeline', 'failed', { steps: [{ target_id: 'open_pr', state: 'failed', error_code: 'gh_failed', error_message: 'no remote' }] }),
+  pipelineRun('jrun-gate', 'task_gate_pipeline', 'success'),
+  pipelineRun('jrun-auto', 'task_auto_pipeline', 'success'),
+];
+const lone = pipelineRun('jrun-lone', 'task_auto_pipeline', 'success', { task_ids: ['ORB-2'], tasks: [{ id: 'ORB-2', title: 'U' }] });
+currentRunsList = [...triplet, lone];
+renderRuns(currentRunsList);
+const runRowKeys = () => runsBody.querySelectorAll('.runs-row').filter(r => !classesOf(r).includes('runs-header')).map(r => r.dataset.key);
+assert.deepEqual(runRowKeys().length, 2, 'three runs of one task collapse into one group row beside the ungrouped run');
+const groupRow = runsBody.querySelector('.runs-group');
+assert.ok(groupRow, 'group row renders');
+const toggle = groupRow.querySelector('.run-group-toggle');
+assert.match(toggle.textContent, /3 pipeline runs/);
+assert.equal(toggle.getAttribute('aria-expanded'), 'false', 'groups start folded');
+assert.equal(groupRow.querySelector('[data-state]').dataset.state, 'failed', 'a group shows its worst state');
+assert.equal(groupRow.querySelector('.run-failed-step').textContent, 'pr › open_pr', 'a folded group still shows where it failed');
+assert.ok(groupRow.querySelector('.run-task-id').textContent === 'ORB-1');
+groupRow.click();
+const opened = runsBody.querySelector('.runs-group');
+assert.equal(opened.querySelector('.run-group-toggle').getAttribute('aria-expanded'), 'true', 'clicking the group opens it');
+assert.equal(runRowKeys().length, 5, 'opened group lists its three runs under the header');
+assert.equal(runsBody.querySelectorAll('.runs-group-child').length, 3, 'member runs are marked as group children');
+runsBody.querySelector('.runs-group').click();
+assert.equal(runRowKeys().length, 2, 'clicking again folds the group');
+
+// Filters update the address and the scope note before the next fetch returns.
+const filterButton = (label) => [...runsBody.querySelectorAll('.runs-filter-button')].find((button) => button.textContent === label);
+const windowButton = (value) => [...runsBody.querySelectorAll('.runs-filter-button')].find((button) => button.dataset.window === value);
+const searchParams = () => new URL(location.href).searchParams;
+currentMeta = { limit: 25, total: 2, truncated: false, state: 'all', runsQuery: 'all\n\n\n24h' };
+runsLoading = false;
+renderRuns(sampleRuns);
+filterButton('Failed').click();
+assert.ok(classesOf(filterButton('Failed')).includes('active'), 'Failed is selected as soon as it is clicked');
+assert.ok(!classesOf(filterButton('All')).includes('active'), 'All is no longer selected while the failed list loads');
+assert.equal(searchParams().get('run_state'), 'failed');
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /Failed, timed-out, and interrupted/);
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /24h/);
+assert.doesNotMatch(runsBody.querySelector('.runs-scope-note').textContent, /no time window/);
+windowButton('7d').click();
+assert.equal(searchParams().get('window'), '7d');
+assert.equal(searchParams().get('run_state'), 'failed');
+assert.ok(classesOf(windowButton('7d')).includes('active'));
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /7d/);
+windowButton('all').click();
+assert.equal(searchParams().get('window'), 'all');
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /no time window/);
+const query = runsBody.querySelector('.runs-query');
+query.value = 'ORB-15159';
+query.dispatch('input');
+assert.equal(searchParams().get('task_id'), 'ORB-15159');
+assert.equal(searchParams().get('job_id'), null);
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /ORB-15159/);
+query.value = 'ci_failure_sweep_pipeline';
+query.dispatch('input');
+assert.equal(searchParams().get('job_id'), 'ci_failure_sweep_pipeline');
+assert.equal(searchParams().get('task_id'), null);
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /ci_failure_sweep_pipeline/);
+query.value = 'orb-15159';
+query.dispatch('input');
+assert.equal(searchParams().get('job_id'), 'orb-15159');
+assert.equal(searchParams().get('task_id'), null, 'a lowercase id is a job id');
 
 console.log('All dashboard runs behavior assertions passed.');

@@ -23,7 +23,8 @@ use orbit_types::workflow::activity_job::{
     validate_job_retired_sessions,
 };
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
+    CHILD_CANCELLED_ERROR_CODE, HeldFailure, JobRun, JobRunStartOutcome, JobRunState,
+    JobRunTrigger, JobTargetType, PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -41,6 +42,9 @@ pub struct V2JobRunResult {
     pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
     /// A delivery push the forge kept refusing; the run holds for a resume.
     pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
+    /// A child the run waited on was cancelled and none failed: the run ends
+    /// `cancelled`, not `failed` [ORB-15202].
+    pub child_cancelled: bool,
     pub pipeline: Value,
     pub message: Option<String>,
     pub events_emitted: u64,
@@ -393,8 +397,15 @@ impl OrbitRuntime {
         let (outcome_str, error_message) = match &outcome_res {
             Ok(o) if o.evidence_hold.is_some() => ("held", None),
             Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
+            Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
             Ok(o) if o.success => ("success", None),
+            Ok(o) if HeldFailure::of(None, o.message.as_deref()).is_some() => {
+                ("held", o.message.clone())
+            }
             Ok(o) => ("failed", o.message.clone()),
+            Err(err) if HeldFailure::of(None, Some(&err.to_string())).is_some() => {
+                ("held", Some(err.to_string()))
+            }
             Err(err) => ("error", Some(err.to_string())),
         };
         writer.emit_lossy(V2AuditEventKind::RunFinished {
@@ -415,6 +426,7 @@ impl OrbitRuntime {
                 success: o.success,
                 evidence_hold: o.evidence_hold,
                 forge_hold: o.forge_hold,
+                child_cancelled: o.child_cancelled,
                 pipeline: o.pipeline,
                 message: o.message,
                 events_emitted: events_count,
@@ -541,6 +553,29 @@ impl OrbitRuntime {
                 );
                 JobRunState::Held
             }
+            Ok(result) if result.child_cancelled => {
+                // [ORB-15202] An operator cancelled the child this run waited
+                // on. The parent did not fail; it ends with its child.
+                log_best_effort(
+                    "persist cancelled run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Cancelled, options),
+                );
+                let fallback = "a child run this run waited on was cancelled";
+                log_best_effort(
+                    "record cancelled step",
+                    &run.run_id,
+                    self.record_pipeline_diagnostic_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        Some(CHILD_CANCELLED_ERROR_CODE),
+                        result.message.as_deref().unwrap_or(fallback),
+                        JobRunState::Cancelled,
+                    ),
+                );
+                JobRunState::Cancelled
+            }
             Ok(result) if result.success => {
                 // Summary persistence follows completed execution. Its failure
                 // must not replace success or escape before the terminal write.
@@ -565,21 +600,19 @@ impl OrbitRuntime {
                 JobRunState::Success
             }
             Ok(result) => {
-                log_best_effort(
-                    "persist failed run state",
-                    &run.run_id,
-                    self.persist_v2_run_state(run, input, result, JobRunState::Failed, options),
-                );
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
+                let held = HeldFailure::of(None, Some(message));
+                let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 log_best_effort(
-                    "record failure step",
+                    if held.is_some() {
+                        "persist held run state"
+                    } else {
+                        "persist failed run state"
+                    },
                     &run.run_id,
-                    self.record_pipeline_failure_step(run, started_at, finished_at, message),
+                    self.persist_v2_run_state(run, input, result, final_state, options),
                 );
-                JobRunState::Failed
-            }
-            Err(error) => {
                 log_best_effort(
                     "record failure step",
                     &run.run_id,
@@ -587,12 +620,36 @@ impl OrbitRuntime {
                         run,
                         started_at,
                         finished_at,
-                        matches!(error, OrbitError::ProtocolSkew(_)).then_some("protocol_skew"),
-                        &error.to_string(),
-                        JobRunState::Failed,
+                        held.map(HeldFailure::error_code),
+                        message,
+                        final_state,
                     ),
                 );
-                JobRunState::Failed
+                final_state
+            }
+            Err(error) => {
+                let message = error.to_string();
+                // [ORB-15202] A red base or a refusal awaiting a recorded
+                // decision kept its candidate: the run holds, it did not fail.
+                let held = HeldFailure::of(None, Some(&message));
+                let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
+                let code = match held {
+                    Some(held) => Some(held.error_code()),
+                    None => matches!(error, OrbitError::ProtocolSkew(_)).then_some("protocol_skew"),
+                };
+                log_best_effort(
+                    "record failure step",
+                    &run.run_id,
+                    self.record_pipeline_diagnostic_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        code,
+                        &message,
+                        final_state,
+                    ),
+                );
+                final_state
             }
         };
         self.finalize_job_run_with_reservation_cleanup(
@@ -783,13 +840,21 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
 }
 
 /// [ORB-10002] Re-key a source run's checkpoint state onto the resumed run.
-/// The step records are the source's; the identity and timestamp belong to
-/// the resumed run. Forge-hold expiry is run-local and starts unacknowledged.
+///
+/// Only the pipeline document's run id changes. Ownership fields inside step
+/// outputs and the copied input (`job_run_id`, `batch_id`) stay the batch that
+/// created the worktree: delivery and validation keep naming that owner, and
+/// lineage reconcile restamps the task onto it. Rewriting those fields onto
+/// the new run would make validation name a run that does not own the task.
+/// A binding outside the lineage never reaches this copy; planning refuses it.
+/// Forge-hold expiry is run-local and starts unacknowledged.
 pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) -> PipelineState {
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
     seeded.job_id = run.job_id.clone();
     seeded.forge_hold_expired_at = None;
+    // The resumed run's own outcome decides whether it echoes a child.
+    seeded.root_cause = None;
     seeded.updated_at = chrono::Utc::now();
     seeded
 }

@@ -69,7 +69,7 @@ not a rewrite of failed history.
 | `task_local_pipeline` | Implement in a worktree and merge to the configured local base without a PR; optional push. |
 | `task_auto_pipeline` | Discover ready backlog tasks and ship them. |
 | `task_gate_pipeline` | Gated shipment with windowing and starvation handling. Dispatches `task_<mode>_pipeline`, or the plugin delivery job a task selects with a `delivery:<job>` tag (the job must declare `spec.task_delivery.modes`); a selection whose plugin is disabled or uninstalled is refused, never defaulted. |
-| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. Invalid assessments and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
+| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. Invalid assessments and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. A task a review filed (tagged `code-review`, `delivery-code-review`, `qa-sweep` or `security-review`) keeps every evidence selector the assessment omits that still resolves at the pinned source, in the filed order (`context_evidence_retained`), so re-assessment cannot narrow it; only an operator narrows that scope. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
 | `workspace_ship_pipeline` / `workspace_auto_pipeline` | Workspace-scoped wrappers that resolve mode and base branch, then invoke the pipelines above. |
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
@@ -183,13 +183,21 @@ its nonzero process completion, up to 256 KiB (`kind: runner_command`,
 supply `kind: runner_failure_regions`, `complete: false`, with
 `command_complete: true` and `selection_complete: true`: the command boundaries
 and every recognized failure anchor were scanned, but the command was not fully
-retained. Regions keep the command header, anchored test failures, panics,
-assertions and compiler errors, their next 11 context lines, summaries and exit.
-Gaps carry byte-omission markers; large left/right assertion payloads retain a
-512-byte prefix and explicitly count omitted payload bytes. The structured
-`command_bytes`, `retained_source_bytes`, `omitted_bytes`,
-`assertion_payload_omitted_bytes` and `failure_anchor_count` make these limits
-auditable. A failure-anchor count includes repeated reports of the same test.
+retained. Regions keep the command header, every recognized failure anchor, summaries
+and the process exit. A failing test keeps its captured output from the anchor
+through the stdout/stderr block until the next test status line, the
+captured-output section end, or the summary. Compiler diagnostics and other
+`error:` anchors keep their next 11 context lines. The selection is bounded by
+64 KiB. When that bound cuts inside a failure block, the text marks the cut
+(`[... output block cut; N bytes not retained ...]`) so a reader cannot treat it
+as an ordinary gap between anchors. Regions that still cannot fit under the cap
+are withheld, as before. Gaps between retained regions carry byte-omission
+markers. Large left/right assertion payloads retain a 512-byte prefix.
+`assertion_payload_omitted_bytes` counts only those left/right payloads, not
+block cuts or ordinary gaps. The structured `command_bytes`,
+`retained_source_bytes`, `omitted_bytes`, `assertion_payload_omitted_bytes` and
+`failure_anchor_count` make these limits auditable. A failure-anchor count
+includes repeated reports of the same test.
 The standalone log tool exposes this alternative as `failure_regions`.
 
 Exactly one failing command and one known failed step are required; all primary

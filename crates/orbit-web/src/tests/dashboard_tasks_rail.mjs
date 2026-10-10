@@ -54,6 +54,7 @@ class Node {
     const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
     for (const fn of this.listeners[type] || []) fn(event);
   }
+  dispatchEvent(event) { for (const fn of this.listeners[event.type] || []) fn(event); return true; }
   removeChild(child) {
     const index = this.children.indexOf(child);
     if (index >= 0) this.children.splice(index, 1);
@@ -106,7 +107,7 @@ function matchesChain(path, chain) {
   return true;
 }
 
-const ids = ['tasks-body', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status'];
+const ids = ['tasks-body', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'host-select'];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
   activeElement: null,
@@ -117,8 +118,9 @@ const document = {
   getElementById: id => byId[id] || null,
 };
 const window = { location: { search: '', hash: '' }, confirm: () => true };
+class Event { constructor(type) { this.type = type; } }
 const context = vm.createContext({
-  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, document, window, Node,
+  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, document, window, Node, Event,
   fetch: () => new Promise(() => {}),
 });
 const modules = new Map();
@@ -266,3 +268,88 @@ common.setWorkspace('ws_orbit');
 served = null;
 renderTasks(matching.slice(0, 3).map(index => task(index)), taskContext);
 assert.equal(rail.textContent, '3', 'without metadata the rail counts the rows it has');
+
+// ORB-15216: a replica workspace with no local tasks names its owner and
+// switches the host picker to it. Any other empty workspace keeps the plain text.
+const picker = byId['host-select'];
+const emptyPage = { total: 0, limit: 50, offset: 0, next_cursor: null };
+const emptyText = () => byId['tasks-body'].querySelector('.empty-state .text').textContent;
+const hostRows = (role, ownerMachineId, ownerRegistered = true) => [
+  { name: 'box-a', machine_id: 'hm_local', local: true, workspaces: [{ id: 'ws_orbit', name: 'orbit', role, owner_machine_id: ownerMachineId, status: 'active' }] },
+  ...(ownerRegistered ? [{ name: 'dk-server-2', machine_id: 'hm_owner', local: false, reachable: true }] : []),
+];
+const pickerChanges = [];
+picker.addEventListener('change', () => pickerChanges.push(picker.value));
+
+common.setRegisteredHosts(hostRows('replica', 'hm_owner'));
+paint(emptyPage, []);
+assert.equal(emptyText(), 'This checkout is a pull replica of dk-server-2; its tasks live on the owner.');
+const showOnOwner = byId['tasks-body'].querySelector('.empty-state button');
+assert.equal(showOnOwner.textContent, 'Show on dk-server-2', 'a registered owner gets a switch control');
+showOnOwner.dispatch('click');
+assert.equal(picker.value, 'dk-server-2', 'the control switches the host picker to the owner');
+assert.deepEqual(pickerChanges, ['dk-server-2'], 'the picker change is what the host switcher acts on');
+
+common.setRegisteredHosts(hostRows('replica', 'hm_gone', false));
+paint(emptyPage, []);
+assert.equal(emptyText(), 'This checkout is a pull replica of hm_gone; its tasks live on the owner.', 'an unregistered owner is named by machine id');
+assert.equal(byId['tasks-body'].querySelector('.empty-state button'), null, 'no picker entry exists to switch to');
+
+common.setRegisteredHosts(hostRows('owner', 'hm_local'));
+paint(emptyPage, []);
+assert.equal(emptyText(), 'No tasks available.', 'a non-replica workspace keeps the plain empty state');
+assert.equal(byId['tasks-body'].querySelector('.empty-state button'), null);
+
+// ORB-15213: a backlog row says why the drain is not starting it, and the group
+// hint counts what is eligible versus waiting, from the same readiness snapshot
+// the Drain card renders. Rows without a wait stay as they were.
+const drainWaits = modules.get('drain-waits.js').namespace;
+const backlogContext = { ...taskContext, getActiveStatuses: () => new Set(['backlog']), statusOrder: ['backlog'] };
+const backlog = [31, 32, 33, 34, 35].map(index => task(index, { status: 'backlog' }));
+const paintBacklog = () => {
+  served = { total: backlog.length, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = backlog;
+  renderTasks(backlog, backlogContext);
+};
+const backlogBody = byId['tasks-body'];
+const rowFor = id => backlogBody.querySelectorAll('.row').find(row => row.dataset.key === `task-${id}`);
+const waitBadgeOf = id => rowFor(id).querySelector('.drain-wait-badge');
+const groupHintText = () => backlogBody.querySelector('.group-header .group-hint').textContent;
+const repaints = [];
+const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
+
+paintBacklog();
+assert.ok(!groupHintText().includes('eligible'), `without a snapshot the hint claims no eligibility: ${groupHintText()}`);
+assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'no snapshot, no wait badges');
+
+const snapshot = {
+  tasks: [
+    { task_id: 'ORB-31', status: 'backlog', eligible: true, reason: 'ready' },
+    { task_id: 'ORB-32', status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:docs/CONFIG.md', locking_task_id: 'ORB-77' }] },
+    { task_id: 'ORB-33', status: 'backlog', eligible: false, reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' },
+    { task_id: 'ORB-34', status: 'backlog', eligible: false, reason: 'resource_throttled', detail: 'cpu 91% over 80%' },
+    { task_id: 'ORB-99', status: 'backlog', eligible: false, reason: 'context_lock_conflict' },
+  ],
+};
+drainWaits.setDrainReadiness(snapshot);
+assert.equal(repaints.length, 1, 'a new snapshot repaints the list once');
+assert.equal(waitBadgeOf('ORB-31'), null, 'an eligible task shows no wait');
+assert.equal(waitBadgeOf('ORB-32').textContent, 'waits on ORB-77 · lock', 'a lock wait names the holder');
+assert.ok(waitBadgeOf('ORB-32').title.includes('Lock: file:docs/CONFIG.md') && waitBadgeOf('ORB-32').title.includes('context_lock_conflict'), `the lock detail is in the tooltip: ${waitBadgeOf('ORB-32').title}`);
+assert.equal(waitBadgeOf('ORB-33').textContent, 'needs macos host', 'a host wait names the OS');
+assert.ok(waitBadgeOf('ORB-33').title.includes('waits for a macos host (os:macos)'), 'the host detail is in the tooltip');
+assert.equal(waitBadgeOf('ORB-34').textContent, 'throttled', 'a throttle wait says so');
+assert.equal(waitBadgeOf('ORB-35'), null, 'a task the snapshot does not mention shows no wait');
+assert.equal(groupHintText(), '5 approved · 1 eligible now, 1 waiting on locks, 1 waiting on capacity, 1 waiting, other, 1 not in the drain snapshot');
+
+// The same snapshot again changes nothing, so the 30 s poll does not repaint.
+drainWaits.setDrainReadiness(JSON.parse(JSON.stringify(snapshot)));
+assert.equal(repaints.length, 1, 'an unchanged snapshot does not repaint');
+
+// A snapshot belongs to one workspace: leaving it drops every wait.
+common.setWorkspace('ws_other');
+assert.equal(repaints.length, 2, 'leaving the workspace repaints');
+assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'another workspace wears none of the previous waits');
+assert.ok(!groupHintText().includes('eligible'), 'and the hint stops counting');
+stopListening();
+common.setWorkspace('ws_orbit');

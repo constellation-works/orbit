@@ -104,16 +104,18 @@ impl crate::OrbitRuntime {
             boundary.lookup_admission(&identity, &request.request_id)?,
             AdmissionLookup::NotFound
         ) {
-            let owner = self.owner_ship_contract();
+            let mut owner = self.owner_ship_contract_for(Some(&identity.location().machine_id));
+            self.adopt_requested_review_crew(&mut owner, &request.ship);
             if request.ship != owner {
                 return Err(OrbitError::InvalidInput(format!(
                     "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
-                     '{}', review.before_pr {}, completion '{}'; re-read the probe before \
-                     sending a new request",
+                     '{}', review.before_pr {}, review.before_landing {}, completion '{}' for this \
+                     machine; re-read the probe before sending a new request",
                     owner.mode,
                     owner.base_branch,
                     owner.landing_branch,
                     super::contract::on_off(owner.before_pr),
+                    super::contract::on_off(owner.before_landing),
                     owner.completion
                 )));
             }
@@ -405,8 +407,10 @@ impl crate::OrbitRuntime {
         // bundle it read, so one applied after this read is still honoured.
         let backlog =
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?;
-        // A native-OS finding holds only an executor whose OS cannot produce
-        // the evidence, so it is judged against the requesting executor.
+        // A native-host finding holds only an executor whose OS or machine
+        // cannot produce the evidence, so it is judged against the requesting
+        // executor.
+        let machine_id = Some(identity.location().machine_id.as_str());
         for task in &backlog {
             let comments = self.get_task_comments(&task.id)?;
             match self
@@ -421,7 +425,7 @@ impl crate::OrbitRuntime {
                     admission_holds.insert(task.id.clone(), hold.detail());
                 }
                 Some(PilotAdmissionHold::NativeOs(hold)) => {
-                    if let Some(wait) = hold.wait_on(task, request.os) {
+                    if let Some(wait) = hold.wait_on(task, request.os, machine_id) {
                         admission_holds.insert(task.id.clone(), wait);
                     }
                 }
@@ -461,7 +465,9 @@ impl crate::OrbitRuntime {
             )? {
                 Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
                 Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::NativeOs(hold)) => Ok(hold.wait_on(task, request.os)),
+                Some(PilotAdmissionHold::NativeOs(hold)) => {
+                    Ok(hold.wait_on(task, request.os, machine_id))
+                }
                 _ => Ok(None),
             },
         )

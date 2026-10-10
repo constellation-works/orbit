@@ -26,9 +26,10 @@ use super::persist::{
 };
 use super::source::SourceSnapshot;
 use super::{
-    CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED, PILOT_NORMALIZATIONS,
-    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, normalize_evidence_gaps,
-    requested_workspace_root, required_os, required_string, required_string_array, string_array,
+    CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
+    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, action_failed, member_ready,
+    normalize_evidence_gaps, requested_workspace_root, required_machine, required_os,
+    required_string, required_string_array, retained_review_evidence, review_filed, string_array,
     string_array_value, unauthorized_missing_targets, validate_after_selectors,
     validate_recommendations,
 };
@@ -209,6 +210,8 @@ pub(in super::super) fn apply(
     };
     if let Some(outcome) = &piloted_elsewhere {
         carried_task_outcomes.push(outcome.clone());
+    } else if ci_sweep_filing.is_none() && mode == "explicit" {
+        carried_task_outcomes.extend(held_elsewhere(prepared_value));
     }
     let promotion_authorized = input
         .get("promotion_authorized")
@@ -521,6 +524,46 @@ pub(in super::super) fn apply(
                 .cloned()
                 .collect::<Vec<_>>();
             after.extend(retained.iter().cloned());
+            // A review-filed task's selectors are the review's evidence: the
+            // pilot may add modification targets but cannot erase evidence by
+            // proposing only what it would edit. Filed order is kept so an
+            // assessment that only omits evidence leaves the scope unchanged.
+            let evidence = if disposition == "selectors" && review_filed(&snapshot.tags) {
+                match retained_review_evidence(
+                    action,
+                    &snapshot.context_files,
+                    &after,
+                    &workspace_root,
+                    source.as_ref(),
+                ) {
+                    Ok(evidence) => {
+                        after = snapshot
+                            .context_files
+                            .iter()
+                            .filter(|selector| {
+                                after.contains(selector) || evidence.contains(selector)
+                            })
+                            .chain(
+                                after
+                                    .iter()
+                                    .filter(|selector| !snapshot.context_files.contains(selector)),
+                            )
+                            .cloned()
+                            .collect();
+                        evidence
+                    }
+                    Err(error) => {
+                        outcomes.push(task_outcome(
+                            task_id,
+                            "apply_failed",
+                            Some(error.to_string()),
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                Vec::new()
+            };
             let reauthorization = match unauthorized_missing_targets(
                 action,
                 &snapshot.context_files,
@@ -583,6 +626,19 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
+            let native_machine = match required_machine(
+                action,
+                task_id,
+                assessment,
+                current.acceptance_criteria.len(),
+                runtime.automation_execution_location(),
+            ) {
+                Ok(requirement) => requirement,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
             // The pilot never sees the deterministic findings — the lane's
             // validation-tool feasibility [ORB-11980] and this boundary's
             // over-attachment budget [ORB-12228] — so apply attaches them
@@ -619,6 +675,9 @@ pub(in super::super) fn apply(
                 if !retained.is_empty() {
                     fields.insert(CONTEXT_CREATION_RETAINED.to_string(), json!(retained));
                 }
+                if !evidence.is_empty() {
+                    fields.insert(CONTEXT_EVIDENCE_RETAINED.to_string(), json!(evidence));
+                }
                 if !reauthorization.is_empty() {
                     fields.insert(
                         CONTEXT_REAUTHORIZATION_REQUIRED.to_string(),
@@ -642,7 +701,18 @@ pub(in super::super) fn apply(
                                 // receipt; apply_task rechecks it under task locks.
                                 admission_task.status = snapshot.status;
                             }
-                            Ok(false) => {}
+                            Ok(false) => {
+                                // Another pilot, a drain or the operator
+                                // already admitted the filed task: the sweep's
+                                // purpose is met, so its stale assessment is
+                                // dropped without failing the sweep.
+                                outcomes.push(json!({
+                                    "task_id": task_id, "outcome": "superseded",
+                                    "reason": "promoted_elsewhere", "status": current.status,
+                                    "detail": "the CI-sweep task was promoted to backlog elsewhere before admission",
+                                }));
+                                continue;
+                            }
                             Err(error) => {
                                 outcomes.push(task_outcome(
                                     task_id,
@@ -716,6 +786,7 @@ pub(in super::super) fn apply(
                 complexity,
                 operation_id,
                 required_os: native_os,
+                required_machine: native_machine,
             };
 
             let outcome = apply_task(runtime, snapshot, &validated, prepared_value, &policy);
@@ -1051,4 +1122,29 @@ pub(in super::super) fn apply(
         "ci_sweep_admission": ci_sweep_admission,
         "drain_approval": drain_approval,
     }))
+}
+
+/// An explicit selection names tasks its caller wants assessed. Each one
+/// another live pilot holds settles superseded, naming the holder that
+/// applies it, so the caller's run neither fails nor leaves a claimed member
+/// without an outcome.
+fn held_elsewhere(prepared: &Value) -> Vec<Value> {
+    prepared
+        .get("excluded")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["reason"] == "already_preparing")
+        .filter_map(|entry| {
+            let run_ids = entry.get("prepared_by_run_ids")?.as_array()?;
+            Some(json!({
+                "task_id": entry.get("task_id")?.as_str()?,
+                "outcome": "superseded",
+                "reason": "piloted_elsewhere",
+                "run_id": run_ids.first()?,
+                "run_ids": run_ids,
+                "detail": "another active task-pilot run already prepared this task",
+            }))
+        })
+        .collect()
 }

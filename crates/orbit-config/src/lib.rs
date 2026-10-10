@@ -53,8 +53,9 @@
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
 //! - `operation` — typed review preferences (`[review]` and
-//!   `operation.review_crew`), their layered resolution and the translation
-//!   of deprecated review keys [ORB-11333] [ORB-13992].
+//!   `operation.review_crew`, one crew or a pool), their layered resolution
+//!   and the translation of deprecated review keys [ORB-11333] [ORB-13992]
+//!   [ORB-15195].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views, assembled in
 //!   `resolved/config.rs` with crew admission, compatibility checks and environment
 //!   projection in sibling named modules.
@@ -96,7 +97,7 @@ pub use layering::{
 pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
-    REVIEW_BEFORE_PR_KEY, REVIEW_MINUTES_KEY,
+    REVIEW_BEFORE_PR_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, ReviewCrewSetting,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{

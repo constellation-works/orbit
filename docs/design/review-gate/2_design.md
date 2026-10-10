@@ -193,9 +193,13 @@ trusted system writer; actor labels and tool input cannot grant that authority.
 This covers local puts, task updates, CLI and dashboard writes. The exception
 is the exact `review-report.json` name: a live reviewer may attach a report
 that passes the shared version and attempt validator, with its
-revision retained by the store. The claimed-worker broker uses the same
-namespace classifier and additionally requires the running reviewer's admitted
-attempt for report writes. External evidence cannot name this reserved namespace.
+revision retained by the store. The owner applies the same rule to a claimed
+worker's artifact writes, whatever route reaches it: a worker on the owner's
+machine arrives in process, past any broker. A claimed leaf's gate writes its
+records on the host-owned worker channel, which tool input cannot select. The
+claimed-worker broker uses the same namespace classifier and additionally
+requires the running reviewer's admitted attempt for report writes. External
+evidence cannot name this reserved namespace.
 
 Admission and settlement retry transient failures (three attempts,
 exponential backoff) and the reviewer step retries once; each then gets one
@@ -1045,7 +1049,27 @@ Delivery observation asks the host store for passed certificates whose final
 tree equals the landed tree, verifies the certificate objects still exist and
 every task still has the reviewed meaning, and lets
 `orbit_automation::review::exclusion` decide: same base tree, same final
-tree, no contradicting managed landing. Only a `landed_code_review_v1`
+tree, no contradicting managed landing. The exclusion carries the
+certificate's assurance.
+
+A landing whose base moved after review is covered by a second rule
+[ORB-15193], used only when the provider reports the landed pull request's
+head as the certificate's final candidate commit (`handoff_land` pins that
+head in the merge call, so the provider merged exactly what was reviewed).
+Observation records the head with the pull request's association and also
+looks up certificates by that head's tree. The reviewed base must be an
+ancestor of the landing's actual base, and a conflict-free
+`git merge-tree --write-tree --merge-base=<certificate base> <landing base>
+<final candidate>` must produce the landed tree exactly. Such a landing is
+excluded with the distinct assurance `rebased_clean`, readable in the
+consumer's `excluded` list beside the certificate's attempt. A base change
+the reviewed patch conflicts with (and any hand resolution of it), a head
+pushed after review, a rewritten base, or any other edit stays an ordinary
+obligation. An association recorded before the head was kept, or a landing
+with no pull request, gets the exact-tree rule only. A managed landing
+record that `complete_pr` wrote as uncovered still refuses the exclusion.
+
+Only a `landed_code_review_v1`
 consumer excludes; QA counts every landing. Excluded landings leave
 `pending`, live in the consumer's `excluded` list, do not count toward the
 threshold, and are absent from `examined_deliveries`. An exclusively excluded
@@ -1098,9 +1122,14 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 
 ## 10. Concerns & Honest Limitations
 
-- Coverage is exact-tree only: a landing that is semantically identical but
-  not byte-identical to the reviewed candidate stays an ordinary review
-  obligation. Content-equivalence coverage is not implemented.
+- Coverage is exact-tree, plus the `rebased_clean` rule (§7) for a reviewed
+  head merged cleanly onto a base that moved. A clean textual merge is not a
+  semantic review of the combination: a base change that interacts with the
+  reviewed patch without touching the same lines is covered unreviewed.
+  Any other landing that is semantically identical but not byte-identical
+  to the reviewed candidate, or to its clean merge onto the moved base,
+  stays an ordinary review obligation. Content-equivalence coverage is not
+  implemented.
 - Reviewer fixes are validated, not independently reviewed. An
   `accept_with_fixes` verdict carries the weaker assurance
   `independent_review_with_self_authored_repairs` and says so; owner

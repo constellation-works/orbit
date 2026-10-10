@@ -34,12 +34,15 @@ pub(super) fn association(
         .and_then(|merged_at| chrono::DateTime::parse_from_rfc3339(merged_at).ok())
         .map(|merged_at| merged_at.with_timezone(&chrono::Utc))
         .ok_or_else(invalid)?;
+    // Optional: before-PR coverage reads it, delivery identity does not.
+    let head = pr["head"]["sha"].as_str().map(ToOwned::to_owned);
 
     Ok(DeliveryAssociation {
         key: pull_request_key(repository, branch, number),
         anchor,
         reference,
         landed_at,
+        head,
     })
 }
 

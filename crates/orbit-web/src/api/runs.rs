@@ -584,7 +584,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         .filter_map(|dispatch| {
             runtime.show_job_run(&dispatch.child_run_id).map_or_else(
                 |error| {
-                    tracing::warn!(child_run_id = %dispatch.child_run_id, %error, "child run task labels unavailable");
+                    tracing::warn!(child_run_id = %dispatch.child_run_id, %error, "child run state and task labels unavailable");
                     None
                 },
                 Some,
@@ -604,9 +604,19 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
                 .find(|child| dispatch["child_run_id"] == child.run_id)
             {
                 super::run_tasks::add_tasks(dispatch, child, &titles);
+                // A fire-and-forget dispatch can stay submitted forever. Its
+                // checkpoint is lineage, not the child's current outcome.
+                dispatch["state"] = json!(child.state);
+                dispatch["started_at"] = json!(child.started_at);
+                dispatch["finished_at"] = json!(child.finished_at);
+                dispatch["duration_ms"] = json!(child.duration_ms);
             } else {
                 dispatch["task_ids"] = Value::Null;
                 dispatch["tasks"] = Value::Null;
+                dispatch["state"] = Value::Null;
+                dispatch["started_at"] = Value::Null;
+                dispatch["finished_at"] = Value::Null;
+                dispatch["duration_ms"] = Value::Null;
             }
         }
     }
@@ -618,6 +628,9 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             .and_then(|state| state.drain_last_pass.as_ref()),
     )
     .unwrap_or(Value::Null);
+    // The failure chain and the cancel record are detail-only. One response
+    // carries both, so the page does not fetch each child to find the cause.
+    crate::api::run_failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
     let stored_steps = full

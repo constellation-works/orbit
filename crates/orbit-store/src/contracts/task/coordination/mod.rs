@@ -7,12 +7,14 @@
 //! and result shapes, free of any persistence technology.
 
 mod admission;
+mod branch_observation;
 mod claim;
 mod handoff;
 mod journal;
 mod settlement;
 
 pub use admission::*;
+pub use branch_observation::*;
 pub use claim::*;
 pub use handoff::*;
 pub use journal::*;

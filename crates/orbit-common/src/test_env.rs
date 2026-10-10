@@ -36,6 +36,7 @@ use std::io::Write;
 mod fifo;
 #[cfg(unix)]
 pub use fifo::{create_fixture_fifo, release_fixture_fifo};
+mod orphan_watchdog;
 mod process_scrub;
 pub use process_scrub::{SCRUBBED_MARKER_ENV, scrub_inherited_authority};
 use std::sync::{
@@ -286,7 +287,9 @@ pub const CHILD_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_s
 /// Run a re-executed child test with its output in files under `output_dir`.
 ///
 /// Stdin is null and, on Unix, the child leads its own process group, which
-/// is killed once the child has exited or overrun. Pass the result to
+/// is killed once the child has exited or overrun, or by a watchdog process
+/// if this process dies first (nextest interrupting or timing out the test).
+/// Pass the result to
 /// [`assert_child_test_passed`]. A child still running at
 /// [`CHILD_TEST_DEADLINE`] fails the caller with the host's load and
 /// everything the child printed so far, so an overrun on a saturated host is
@@ -295,6 +298,17 @@ pub fn run_child_test(
     command: &mut std::process::Command,
     test_name: &str,
     output_dir: &std::path::Path,
+) -> crate::process::CapturedOutput {
+    run_child_test_within(command, test_name, output_dir, CHILD_TEST_DEADLINE)
+}
+
+/// [`run_child_test`] with an explicit `deadline`, so a test can exercise the
+/// overrun path by injecting a short one instead of waiting out five minutes.
+pub fn run_child_test_within(
+    command: &mut std::process::Command,
+    test_name: &str,
+    output_dir: &std::path::Path,
+    deadline: std::time::Duration,
 ) -> crate::process::CapturedOutput {
     let stdout_path = output_dir.join("child-test-stdout.log");
     let stderr_path = output_dir.join("child-test-stderr.log");
@@ -310,11 +324,12 @@ pub fn run_child_test(
     let mut child = command
         .spawn()
         .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}"));
+    let watchdog = orphan_watchdog::OrphanWatchdog::arm(child.id());
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() < CHILD_TEST_DEADLINE => {
+            Ok(None) if started.elapsed() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Ok(None) => break None,
@@ -325,6 +340,9 @@ pub fn run_child_test(
     if status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+    if let Some(watchdog) = watchdog {
+        watchdog.disarm();
     }
     let read = |path: &std::path::Path| std::fs::read(path).unwrap_or_default();
     let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
@@ -373,6 +391,54 @@ pub fn host_load() -> String {
 /// termination for a fixture that runs in process.
 pub const FIXTURE_PHASE_DEADLINE: std::time::Duration =
     CHILD_TEST_DEADLINE.saturating_sub(std::time::Duration::from_secs(30));
+
+/// How long one fixture step, a readiness wait, a single CLI command or HTTP
+/// request, may take before the fixture treats it as hung.
+///
+/// A hang guard, not a speed budget, for the reason [`CHILD_TEST_DEADLINE`]
+/// gives: a handover, server start or `orbit workspace init` that takes
+/// seconds on an idle host took over a minute on a saturated one, where fixed
+/// 5-, 30- and 60-second step bounds failed passing fixtures (ORB-15238).
+/// Inside [`FIXTURE_PHASE_DEADLINE`], so a step in an isolated child fails
+/// with its own message before the parent kills the child.
+pub const FIXTURE_STEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Poll `ready` until it holds.
+///
+/// Past [`FIXTURE_STEP_DEADLINE`] the fixture fails naming `what` it waited
+/// for, how long, and the host load, so a wait that overran on a saturated
+/// host is told apart from one that can never succeed.
+pub fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !ready() {
+        let waited = started.elapsed();
+        assert!(
+            waited < FIXTURE_STEP_DEADLINE,
+            "timed out after {waited:.1?} waiting for {what} ({})",
+            host_load()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Fail a fixture whose command `what` was killed at its
+/// [`FIXTURE_STEP_DEADLINE`] guard after running for `elapsed`.
+///
+/// Call it before asserting on the command's outcome: a killed command
+/// reports an interrupted status and empty output, which would otherwise read
+/// as a refusal or crash of the command under test.
+pub fn assert_step_finished(
+    what: &str,
+    elapsed: std::time::Duration,
+    status: &std::process::ExitStatus,
+) {
+    assert!(
+        status.success() || elapsed < FIXTURE_STEP_DEADLINE,
+        "`{what}` was still running at its {FIXTURE_STEP_DEADLINE:?} hang guard ({elapsed:.1?}, \
+         {}); killed with {status}",
+        host_load()
+    );
+}
 
 /// Phase progress for a large fixture, such as one that seeds thousands of
 /// tasks before it measures anything.

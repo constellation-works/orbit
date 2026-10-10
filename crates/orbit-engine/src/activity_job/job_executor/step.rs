@@ -41,6 +41,9 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
         Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
         Err(error @ DispatchError::ForgeUnavailableHold(_)) => ("held", Some(error.to_string())),
+        Err(error @ DispatchError::ChildRunCancelled { .. }) => {
+            ("cancelled", Some(error.to_string()))
+        }
         Err(err) => ("error", Some(err.to_string())),
     };
     emit_job_event_lossy(
@@ -101,9 +104,11 @@ pub(super) fn run_step_with_retry(
                 }
                 // [ORB-14269] An implementer blocker is not a flaky attempt.
                 // Another try would spend another provider invocation on a
-                // stop the agent already declared.
+                // stop the agent already declared. Nor is an upgrade refusal:
+                // the next attempt meets the same installed `orbit`.
                 if outcome.message.as_deref().is_some_and(|message| {
                     orbit_types::workflow::is_task_blocked_by_agent(None, Some(message))
+                        || orbit_types::workflow::is_upgrade_pending(None, Some(message))
                 }) {
                     return recover_or_return_original(
                         step,

@@ -1726,6 +1726,78 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
     );
 }
 
+/// A local admission pass counts deferred tasks inside `queued`; the CLI
+/// prints those tasks separately and subtracts them from the admissible count.
+#[test]
+fn run_show_counts_local_deferred_tasks_once() {
+    if !isolated_run_observation("run_observation::run_show_counts_local_deferred_tasks_once") {
+        return;
+    }
+    use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
+
+    let fixture = Fixture::init();
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let id = "jrun-cli-local-deferred";
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_auto_pipeline".into(),
+        serde_json::json!({}),
+    );
+    state.drain_last_pass = Some(DrainAdmissionPass {
+        capacity: None,
+        recorded_at: now,
+        queued: 3,
+        deferred: (1..=3)
+            .map(|number| DrainWaitingTask {
+                task_id: format!("ORB-1520{number}"),
+                reason: Some("context_lock_conflict".into()),
+                blocked_by: vec!["ORB-15183".into()],
+                detail: None,
+            })
+            .collect(),
+        deferred_total: 3,
+        excluded: Vec::new(),
+        excluded_total: 0,
+        waiting_recorded_at: None,
+        waiting_by_reason: Default::default(),
+        consecutive_idle_passes: 0,
+        resource_throttle: None,
+        last_pass_error_code: None,
+        last_pass_error: None,
+        consecutive_pass_failures: 0,
+        degraded: false,
+    });
+    runtime.write_run_state(id, &state).unwrap();
+
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let pass = &shown["pipeline_state"]["drain_last_pass"];
+    assert_eq!(pass["queued"], 3, "{pass}");
+    assert_eq!(pass["deferred_total"], 3, "{pass}");
+
+    let output = fixture
+        .orbit()
+        .args(["run", "show", id, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("Still waiting: 0 admissible, 3 deferred and 0 excluded backlog task(s) were never started at the last pass"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Still waiting: 3 admissible, 3 deferred"),
+        "local deferred tasks must not be counted twice: {text}"
+    );
+}
+
 /// [ORB-14475] A pull drain's recorded owner answer reaches `run show` as
 /// the same `Still waiting` lines a local drain prints: each kept-off task
 /// with its reason and the tasks it waits on, the age of the owner's answer,

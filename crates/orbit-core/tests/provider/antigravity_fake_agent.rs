@@ -483,6 +483,120 @@ exit 1"#;
     assert!(!message.contains("--print-timeout of"), "{message}");
 }
 
+/// An `agy` turn that ends right after a `manage_task` status report; `report`
+/// is the task line, `tail` whatever the stream closes with.
+fn background_task_body(report: &str, tail: &str) -> String {
+    format!(
+        r#"printf '%s\n' '{{"event":"init","conversation_id":"c1","init":{{"cwd":"/tmp","tools":[],"permission_mode":"always-proceed"}}}}'
+printf '%s\n' '{{"event":"tool_result","tool":"manage_task","output":"{report}"}}'
+{tail}
+exit 0"#
+    )
+}
+
+/// [ORB-15243] `agy` ends its headless turn with a background task it started
+/// still running and exits 0 well before its print-timeout. The step fails
+/// naming the task and the agent's last words, not the generic violation.
+#[test]
+fn exit_zero_with_a_running_background_task_names_the_task_and_last_message() {
+    let tail = r#"printf '%s\n' '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Waiting for the nextest run to finish.","usage":{"total_tokens":17}}}'"#;
+    let body = format!(
+        "printf 'partial\\n' > '{{EDIT_PATH}}'\n{}",
+        background_task_body("task-34 running: cargo nextest run", tail)
+    );
+    let harness = Harness::new(&body);
+    let outcome = dispatch(&harness, spec(60));
+
+    assert!(!outcome.success, "an unfinished turn must not succeed");
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("task-34"),
+        "names the running task: {message}"
+    );
+    assert!(
+        message.contains("still running") && message.contains("exited 0"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Last message: Waiting for the nextest run to finish."),
+        "bounded last message must be attached: {message}"
+    );
+    assert!(
+        !message.contains("provider exited 0 but stdout carried no valid"),
+        "specific diagnostic replaces the generic text: {message}"
+    );
+    assert!(
+        !message.contains(PROMPT_SECRET) && !message.contains("print-timeout of"),
+        "{message}"
+    );
+    assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
+    assert_eq!(
+        outcome.output["completion_envelope_satisfied"],
+        serde_json::Value::Bool(false)
+    );
+}
+
+/// The incident shape with no terminal wrapper at all: still named, with no
+/// last message to attach.
+#[test]
+fn exit_zero_with_a_running_background_task_and_no_terminal_result_is_still_classified() {
+    let body = background_task_body("task-34 running", "");
+    let outcome = dispatch(&Harness::new(&body), spec(60));
+    assert!(!outcome.success);
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("task-34") && !message.contains("Last message:"),
+        "{message}"
+    );
+}
+
+/// How `agy` words a task report varies by event shape; each still names the
+/// task that is running, and a task reported finished afterwards is not named.
+#[test]
+fn background_task_reports_classify_across_event_shapes() {
+    let sorted_keys = r#"{"event":"tool_result","name":"manage_task","result":{"status":"running","task_id":"task-7"}}"#;
+    let call_then_result = r#"{"event":"tool_call","tool":"manage_task","input":"status"}
+{"event":"tool_result","output":"task-9 is Running"}"#;
+    let superseded = r#"{"event":"tool_result","output":"manage_task: task-3 running"}
+{"event":"tool_result","output":"manage_task: task-4 running"}
+{"event":"tool_result","output":"manage_task: task-3 completed (exit 0)"}"#;
+    for (stream, running, finished) in [
+        (sorted_keys, "task-7", None),
+        (call_then_result, "task-9", None),
+        (superseded, "task-4", Some("task-3")),
+    ] {
+        let body = format!("cat <<'EOF'\n{stream}\nEOF\nexit 0");
+        let outcome = dispatch(&Harness::new(&body), spec(60));
+        assert!(!outcome.success, "{stream}");
+        let message = outcome.message.unwrap_or_default();
+        assert!(
+            message.contains(&format!("background task {running} was still running")),
+            "{stream}: {message}"
+        );
+        if let Some(finished) = finished {
+            assert!(!message.contains(finished), "{stream}: {message}");
+        }
+    }
+}
+
+#[test]
+fn exit_zero_after_background_tasks_finished_keeps_the_envelope_message() {
+    let body = background_task_body("task-34 completed (exit 0)", "");
+    let mut completion_only = spec(60);
+    completion_only.require_response_envelope = false;
+    let outcome = dispatch(&Harness::new(&body), completion_only);
+    assert!(
+        !outcome.success,
+        "exit 0 without an envelope is never completion"
+    );
+    let message = outcome.message.unwrap_or_default();
+    assert!(
+        message.contains("agent step did not complete: the provider exited 0")
+            && !message.contains("background task"),
+        "{message}"
+    );
+}
+
 #[test]
 fn wall_clock_timeout_cancels_the_agent_and_fails_the_step() {
     let outcome = dispatch(&Harness::new("sleep 30\nexit 0"), spec(1));

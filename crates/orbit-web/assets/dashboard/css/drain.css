@@ -30,6 +30,8 @@
 .global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: var(--radius); background: var(--bg); color: var(--state-running); padding: 5px 8px; cursor: pointer; font: 600 12px var(--font-sans); }
 .global-drain-state[hidden] { display: none; }
 .global-drain-state[data-drain-state="winding_down"] { color: var(--priority-medium); border-color: var(--priority-medium); }
+.global-drain-state[data-drain-state="pulling"] { color: var(--accent); border-color: var(--accent); border-style: dashed; }
+.global-drain-state[data-drain-state="pulling"] > .drain-dot { background: var(--accent); }
 .global-drain-state[data-drain-state="per-workspace"] { color: var(--fg-dim); border-color: var(--border); }
 .dock-seg[data-drain-state="per-workspace"] .dock-drain-state { color: var(--fg-dim); }
 .global-drain-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -124,6 +126,9 @@
 .drain-blocked-state.running { color: var(--state-running); }
 .drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); font-size: 11px; }
 .drain-blocked-more { color: var(--fg-dim); font-size: 11px; }
+.drain-blocked-more-toggle { padding: 0; border: 0; background: none; color: var(--fg-dim); font: inherit; cursor: pointer; }
+.drain-blocked-more-toggle:hover { color: var(--fg); text-decoration: underline; }
+.drain-blocked-more-toggle:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
 .drain-muted { color: var(--fg-dim); }
 .drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }
 

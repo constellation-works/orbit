@@ -24,8 +24,9 @@ use super::ownership::{
     refuse_foreign_rebase, release_review_attempts,
 };
 use super::preserve::{
-    hold_baseline_red_candidate, hold_provider_failure_candidate, preserve_agent_blocked_candidate,
-    preserve_validation_environment_candidate, recorded_spec_digest,
+    hold_baseline_red_candidate, hold_provider_failure_candidate, hold_upgrade_pending_candidate,
+    preserve_agent_blocked_candidate, preserve_validation_environment_candidate,
+    recorded_spec_digest,
 };
 use super::review_gate::preserve_review_gate_candidate;
 use super::{COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, REVIEW_GATE_STEPS};
@@ -95,7 +96,12 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         );
     }
 
+    // An agent an Orbit upgrade refused did not judge the published PR
+    // either; it is held below like any other candidate, not left in review.
+    let upgrade_pending =
+        orbit_types::workflow::is_upgrade_pending(Some(error_code), Some(error_message));
     if COMPLETION_STEPS.contains(&failed_step_id)
+        && !upgrade_pending
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
     {
         return preserve_completion_failure(
@@ -176,6 +182,23 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         Some(error_message),
     ) {
         return preserve_validation_environment_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &workspace_path,
+        );
+    }
+
+    // An Orbit upgrade refused the agent's own `orbit` commands mid-step:
+    // the host is mid-upgrade, and the candidate was not judged. Commit what
+    // the agent left, carry it to its durable ref and open no PR; run
+    // finalization returns the task to the backlog, and its next run resumes
+    // the candidate after the upgrade. Checked before the review-gate branch,
+    // because a reviewer is refused the same way.
+    if upgrade_pending {
+        return hold_upgrade_pending_candidate(
             host,
             &task,
             run_id,
@@ -295,7 +318,10 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             status: Some(TaskStatus::Blocked),
             status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
-            external_refs: vec![ExternalRef::github_pr(pr_number.clone())?],
+            external_refs: vec![ExternalRef::github_pr_with_url(
+                pr_number.clone(),
+                pr_url.as_deref(),
+            )?],
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),

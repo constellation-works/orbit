@@ -58,7 +58,7 @@ pub(crate) fn install_review_admission(
 
     let admission = match inherited {
         Some(admission) => admission,
-        None => snapshot(runtime),
+        None => snapshot(runtime)?,
     };
     if job_name == LOCAL_ROUTE_JOB && admission.timing == ReviewTiming::BeforePr {
         return Err(OrbitError::InvalidInput(
@@ -142,9 +142,20 @@ fn with_source(refusal: &str, key: &str, source: &str) -> String {
 
 /// Build the snapshot from the workspace's resolved review settings, keeping
 /// each field's provenance so diagnostics can explain where it came from.
-pub(crate) fn snapshot(runtime: &OrbitRuntime) -> ReviewAdmission {
+///
+/// A single review crew is captured as `crew`; a pool is captured whole as
+/// `crew_pool`, and the gate chooses one member per review [ORB-15195].
+pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitError> {
     let policy = runtime.operation_policy();
-    ReviewAdmission {
+    let mut crew_pool = runtime.review_crew_pool_members()?;
+    let crew = match crew_pool.as_slice() {
+        [only] => Some(only.name.clone()),
+        _ => None,
+    };
+    if crew.is_some() {
+        crew_pool.clear();
+    }
+    Ok(ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
         // Configuration never resolves both switches on.
@@ -160,8 +171,9 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> ReviewAdmission {
         } else {
             policy.review_before_pr.source.label().to_string()
         },
-        crew: policy.review_crew.value.clone(),
+        crew,
         crew_source: policy.review_crew.source.label().to_string(),
+        crew_pool,
         budget: policy.review_budget(),
         required_validation_commands: Some(
             runtime.workflow_required_validation_commands().to_vec(),
@@ -169,7 +181,7 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> ReviewAdmission {
         baseline_commands: runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
         captured_at: Utc::now(),
-    }
+    })
 }
 
 /// The review admission a running pipeline was admitted under, read from its
@@ -209,7 +221,10 @@ pub(crate) fn upgrade_resume_admission_mismatch(
         Ok(None) => return Some("run has no captured review admission".to_string()),
         Err(error) => return Some(error.to_string()),
     };
-    let current = snapshot(runtime);
+    let current = match snapshot(runtime) {
+        Ok(current) => current,
+        Err(error) => return Some(error.to_string()),
+    };
     let mut comparable_previous = previous;
     // Capture time is provenance, not part of the admission contract.
     comparable_previous.captured_at = current.captured_at;

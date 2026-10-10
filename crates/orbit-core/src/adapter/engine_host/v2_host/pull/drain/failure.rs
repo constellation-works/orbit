@@ -9,8 +9,9 @@ use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
     FinalRecoveryDecision, ForgeUnavailableHold, JobRunState, OWNER_ROUTE_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
-    ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER, VALIDATION_ENVIRONMENT_MARKER,
-    is_baseline_red_failure, is_forge_unavailable, is_provider_limit,
+    ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER, UPGRADE_PENDING_MARKER,
+    VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure, is_forge_unavailable,
+    is_provider_limit,
 };
 
 use super::super::candidate::{
@@ -292,7 +293,7 @@ fn leaf_failure(
 }
 
 /// Orbit's typed failure markers, which a failure's reason quotes without.
-const FAILURE_MARKERS: [&str; 8] = [
+const FAILURE_MARKERS: [&str; 9] = [
     FORGE_UNAVAILABLE_MARKER,
     PROVIDER_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_MARKER,
@@ -301,6 +302,7 @@ const FAILURE_MARKERS: [&str; 8] = [
     OWNER_ROUTE_UNAVAILABLE_MARKER,
     BASELINE_RED_MARKER,
     TRANSIENT_FAILURE_MARKER,
+    UPGRADE_PENDING_MARKER,
 ];
 
 /// The baseline hold a terminal leaf failed on: a failed step, or the

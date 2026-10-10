@@ -27,7 +27,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{EXECUTION_SUMMARY_DERIVED_EVENT, Task};
+use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, EXECUTION_SUMMARY_DERIVED_EVENT, Task};
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, CoverageEvidence, DeliveryVerdict};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -177,7 +177,7 @@ fn change_kind(index_state: char, worktree_state: char) -> &'static str {
 fn render_derived_summary(task_id: &str, run_id: &str, changes: &[WorktreeChange]) -> String {
     let mut lines = vec![
         format!(
-            "Execution summary derived by Orbit for {task_id} from the change delivered by run \
+            "{DERIVED_EXECUTION_SUMMARY_PREFIX} {task_id} from the change delivered by run \
              {run_id}; no execution summary was persisted by the implementing agent."
         ),
         String::new(),
@@ -202,7 +202,7 @@ fn render_derived_summary(task_id: &str, run_id: &str, changes: &[WorktreeChange
 fn render_coverage_summary(task_id: &str, run_id: &str, evidence: &CoverageEvidence) -> String {
     let mut lines = vec![
         format!(
-            "Execution summary derived by Orbit for {task_id} from the accepted coverage evidence \
+            "{DERIVED_EXECUTION_SUMMARY_PREFIX} {task_id} from the accepted coverage evidence \
              of run {run_id}; no execution summary was persisted by the implementing agent and \
              the worktree holds no change."
         ),

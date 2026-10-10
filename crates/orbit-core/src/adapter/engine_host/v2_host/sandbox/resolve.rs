@@ -160,7 +160,7 @@ pub(super) fn resolve_executor_sandbox_on(
                     allow_fallback: executor.allow_fallback,
                     managed_worktree: recovery_checkout.is_some(),
                     runtime_write_authority: Vec::new(),
-                    mask: Some(agent_plugin_mask(runtime)?),
+                    mask: Some(agent_sandbox_mask(runtime)?),
                 }))
             }
         }
@@ -240,7 +240,7 @@ pub(super) fn resolve_executor_sandbox_on(
                     allow_fallback: executor.allow_fallback,
                     managed_worktree,
                     runtime_write_authority,
-                    mask: Some(agent_plugin_mask(runtime)?),
+                    mask: Some(agent_sandbox_mask(runtime)?),
                 }))
             }
         }
@@ -297,23 +297,38 @@ fn sandbox_unavailable_message(provider: &str, kind: ExecutorSandboxKind, host_o
     )
 }
 
-/// Hide plugin state and the plugin secret store from the sandboxed process
-/// (design `docs/design/plugins/2_agent_call_broker.md` §6).
+/// Hide plugin state and the plugin secret store (design
+/// `docs/design/plugins/2_agent_call_broker.md` §6) and the clock credentials
+/// file from the sandboxed process.
 ///
 /// Every sandboxed launch gets the mask, whether or not its run's broker then
 /// binds: a broker that fails costs the run its plugin calls, never the mask.
 /// A host that cannot lay the mask refuses the launch rather than start the
 /// agent with the trees readable.
+///
+/// `clock.env` holds every credential the clock hands out; the tick passes a
+/// workspace only the names its `execution.env.pass` admits, so an agent must
+/// not read the file itself. It is resolved under the configured global root,
+/// which need not be `~/.orbit`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn agent_plugin_mask(
+pub(super) fn agent_sandbox_mask(
     runtime: &OrbitRuntime,
 ) -> Result<orbit_engine::SandboxMask, DispatchError> {
-    let prepared =
-        crate::runtime::plugin::sandbox_mask::prepare_plugin_mask(&runtime.global_root())
-            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let global_root = runtime.global_root();
+    let prepared = crate::runtime::plugin::sandbox_mask::prepare_plugin_mask(&global_root)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let global_root = global_root.canonicalize().map_err(|error| {
+        DispatchError::CliInvocationPermanent(format!(
+            "resolve the global root `{}` for the agent sandbox mask: {error}",
+            global_root.display()
+        ))
+    })?;
     Ok(orbit_engine::SandboxMask {
         sentinel: prepared.sentinel,
         targets: prepared.trees,
+        files: vec![orbit_common::security::operator_env::clock_env_file_path(
+            &global_root,
+        )],
     })
 }
 

@@ -77,6 +77,7 @@ mod no_diff;
 mod ordering;
 mod pilot;
 mod provider_limit;
+mod rebased_landing;
 mod recovery;
 mod settlement;
 mod single_pass;

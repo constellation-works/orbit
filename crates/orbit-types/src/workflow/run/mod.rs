@@ -6,12 +6,15 @@ mod held_candidate;
 mod id;
 mod implementer_findings;
 mod provider_hold;
+mod root_cause;
 mod state;
 
 pub use agent_blocker::{
-    AgentBlocker, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
-    TASK_BLOCKED_BY_AGENT_MARKER, agent_blocker_from_output, is_task_blocked_by_agent,
-    task_blocked_by_agent_kind, task_blocked_by_agent_message,
+    AgentBlocker, AgentBlockerClass, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
+    TASK_BLOCKED_BY_AGENT_MARKER, UPGRADE_PENDING_ERROR_CODE, UPGRADE_PENDING_MARKER,
+    UPGRADE_PENDING_REQUEUED_EVENT, agent_blocker_from_output, is_task_blocked_by_agent,
+    is_upgrade_pending, task_blocked_by_agent_kind, task_blocked_by_agent_message,
+    upgrade_pending_kind,
 };
 pub use baseline::{
     BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold,
@@ -32,6 +35,9 @@ pub use implementer_findings::{normalize_unfiled_findings, unfiled_findings_shap
 pub use provider_hold::{
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderFailureClass,
     ProviderFailureHold, ProviderLimitFailure, failed_provider, provider_failure_text,
+};
+pub use root_cause::{
+    CHILD_CANCELLED_ERROR_CODE, HeldFailure, REVIEW_DECISION_PENDING_ERROR_CODE, RunRootCause,
 };
 pub use state::{
     ActivityCrewDraw, ActivityCrewPoolMember, ClaimFailureClass, CrewExclusion,

@@ -6,6 +6,7 @@
 //! and the out-of-pipeline backstop both apply decisions through this one
 //! module, so a decision means the same thing whichever path produced it.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,10 +14,14 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{GIT_REMOTE_TIMEOUT, run_git, with_git_fetch_lock};
 use orbit_common::process::run_bounded_capped;
+use orbit_types::identity::MACHINE_ID_PREFIX;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskComment, TaskStatus};
+use orbit_types::task::{
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task, TaskComment,
+    TaskHistoryEntry, TaskStatus,
+};
 use orbit_types::workflow::FinalRecoveryDecision;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
@@ -32,25 +37,101 @@ const REMOTE_REF_REFRESH_OUTPUT_LIMIT: usize = 16 * 1024;
 
 /// The task as it stood when the failure was recorded.
 ///
-/// Any later write — an operator's transition, comment, or edit — changes
-/// this, and the applier then refuses the decision rather than overwrite a
-/// human's call with an agent's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A later lifecycle change — a transition, an operator's or orchestrator's
+/// comment, or an edit to what the task asks, who runs it, or what it
+/// relates to — changes this, and the applier then refuses the decision
+/// rather than overwrite a human's call with an agent's. Writes recovery is
+/// allowed to cause do not count: a friction it records (on a claimed task,
+/// the bridge's `claim_friction` history entry), the selectors Orbit widens
+/// over a recovery agent's repair, comments Orbit writes for a run, and run
+/// bookkeeping such as the execution summary, run link, external refs or
+/// artifacts.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalRecoveryTaskRevision {
     /// Status at the failure.
     pub status: TaskStatus,
     /// Last write at the failure.
     pub updated_at: DateTime<Utc>,
+    /// Digest of the task's lifecycle content at the failure. `None` on a
+    /// revision recorded before the digest existed, which compares by
+    /// `updated_at` instead.
+    pub lifecycle_digest: Option<String>,
 }
 
 impl FinalRecoveryTaskRevision {
-    /// The revision `task` is at now.
-    pub fn of(task: &Task) -> Self {
+    /// The revision `task` is at now, given its comments and history.
+    pub fn of(task: &Task, comments: &[TaskComment], history: &[TaskHistoryEntry]) -> Self {
         Self {
             status: task.status,
             updated_at: task.updated_at,
+            lifecycle_digest: Some(lifecycle_digest(task, comments, history)),
         }
     }
+
+    /// Whether this revision differs from `observed` by a lifecycle change.
+    pub fn changed_since(&self, observed: &Self) -> bool {
+        if self.status != observed.status {
+            return true;
+        }
+        match (&observed.lifecycle_digest, &self.lifecycle_digest) {
+            (Some(observed), Some(current)) => observed != current,
+            _ => self.updated_at != observed.updated_at,
+        }
+    }
+}
+
+/// Digest of what a lifecycle change alters: the task's content, scope,
+/// crew and relations, how many transitions its history holds, and every
+/// comment not written by Orbit for a run. Selectors widened over a
+/// recovery agent's changes are left out; they record recovery's own repair.
+fn lifecycle_digest(task: &Task, comments: &[TaskComment], history: &[TaskHistoryEntry]) -> String {
+    use sha2::{Digest, Sha256};
+    let recovery_widened = history
+        .iter()
+        .filter(|entry| entry.event == CONTEXT_FILES_WIDENED_EVENT)
+        .filter_map(|entry| {
+            entry
+                .note
+                .as_deref()
+                .and_then(ContextFilesWidening::from_note)
+        })
+        .filter(|widening| widening.step == ContextWideningStep::Recovery)
+        .flat_map(|widening| widening.selectors)
+        .collect::<HashSet<_>>();
+    let content = json!({
+        "title": task.title,
+        "description": task.description,
+        "acceptance_criteria": task.acceptance_criteria,
+        "plan": task.plan,
+        "tags": task.tags,
+        "required_tools": task.required_tools,
+        "context_files": task
+            .context_files
+            .iter()
+            .filter(|selector| !recovery_widened.contains(*selector))
+            .collect::<Vec<_>>(),
+        "priority": task.priority,
+        "complexity": task.complexity,
+        "task_type": task.task_type,
+        "relations": task.relations,
+        "crew": task.crew,
+        "orchestrator": task.orchestrator,
+        "transitions": history.iter().filter(|entry| entry.to_status.is_some()).count(),
+        "comments": comments
+            .iter()
+            .filter(|comment| !written_for_a_run(&comment.by))
+            .map(|comment| json!([comment.at, comment.by, comment.message]))
+            .collect::<Vec<_>>(),
+    });
+    format!("{:x}", Sha256::digest(content.to_string().as_bytes()))
+}
+
+/// Whether `by` is Orbit writing for a run — locally, or through a claimed
+/// worker's bridge under its machine id — rather than an operator or agent
+/// making a call about the task.
+fn written_for_a_run(by: &str) -> bool {
+    let by = by.trim();
+    by == SYSTEM_ACTOR_LABEL || by.starts_with(MACHINE_ID_PREFIX)
 }
 
 /// How far a verified `complete_no_diff` may take the task: the failed run's
@@ -157,8 +238,8 @@ impl OrbitRuntime {
     /// - a run whose comment the task already holds was applied before; its
     ///   recorded outcome is returned and nothing is written, so applying a
     ///   run's decision again is a no-op [ORB-13907];
-    /// - a task that is already terminal, or that changed after
-    ///   `request.observed`, is refused;
+    /// - a task that is already terminal, or whose lifecycle changed after
+    ///   `request.observed` ([`FinalRecoveryTaskRevision`]), is refused;
     /// - `complete_no_diff` completes only when `evidence_commit` is reachable
     ///   from `request.base_ref`, and otherwise escalates;
     /// - `requeue` past `request.requeue_bound` escalates;
@@ -190,7 +271,8 @@ impl OrbitRuntime {
                     return Ok(());
                 }
                 let task = self.get_task(&request.task_id)?;
-                let plan = match refusal(&task, request) {
+                let current = self.final_recovery_revision(&task)?;
+                let plan = match refusal(&task, &current, request) {
                     Some(reason) => Plan::refused(&task, request, &decision, reason),
                     None => self.plan(&task, request, &decision)?,
                 };
@@ -228,6 +310,19 @@ impl OrbitRuntime {
             );
         }
         Ok(outcome)
+    }
+
+    /// The revision `task` is at now, for a later [`Self::apply_final_recovery`]
+    /// to compare against.
+    pub fn final_recovery_revision(
+        &self,
+        task: &Task,
+    ) -> Result<FinalRecoveryTaskRevision, OrbitError> {
+        Ok(FinalRecoveryTaskRevision::of(
+            task,
+            &self.get_task_comments(&task.id)?,
+            &self.get_task_history(&task.id)?,
+        ))
     }
 
     /// The outcome the applier recorded on the task for `run_id`'s decision,
@@ -487,8 +582,13 @@ impl Plan {
     }
 }
 
-/// Why the decision may not be applied to `task` at all, if it may not.
-fn refusal(task: &Task, request: &FinalRecoveryRequest) -> Option<String> {
+/// Why the decision may not be applied to `task`, at `current`, at all, if
+/// it may not.
+fn refusal(
+    task: &Task,
+    current: &FinalRecoveryTaskRevision,
+    request: &FinalRecoveryRequest,
+) -> Option<String> {
     if matches!(
         task.status,
         TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
@@ -498,8 +598,7 @@ fn refusal(task: &Task, request: &FinalRecoveryRequest) -> Option<String> {
             task.status
         ));
     }
-    let current = FinalRecoveryTaskRevision::of(task);
-    if current != request.observed {
+    if current.changed_since(&request.observed) {
         return Some(format!(
             "task changed after the failure (was {} at {}, now {} at {}); the later decision \
              stands",

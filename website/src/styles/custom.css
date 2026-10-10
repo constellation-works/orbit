@@ -202,9 +202,24 @@ body {
 }
 
 @media (min-width: 1024px) {
+  /* Each key stays on one line at its natural width, and the description takes
+     the rest, so the provider-budget code keeps room in its cell. */
+  .sl-markdown-content table.orbit-config-keys {
+    table-layout: auto;
+  }
+
   .sl-markdown-content table.orbit-config-keys th:first-child,
   .sl-markdown-content table.orbit-config-keys td:first-child {
-    width: 66%;
+    width: 1%;
+    white-space: nowrap;
+  }
+
+  /* The key's <wbr> points still break under nowrap, so size the box to its
+     full width; the column then reserves the whole key. */
+  .sl-markdown-content table.orbit-config-keys td:first-child code:not(pre code) {
+    width: max-content;
+    max-width: none;
+    white-space: nowrap;
   }
 
   .sl-markdown-content table.orbit-config-keys th,
@@ -222,6 +237,41 @@ body {
   .sl-markdown-content table.orbit-config-keys th,
   .sl-markdown-content table.orbit-config-keys td {
     padding-inline: 0.5rem;
+  }
+}
+
+/* Phone widths stack each config row: the key sits above a full-width
+   description, because a two-column table cannot hold the provider-budget
+   code beside its key at 320 px. The header stays available to screen readers. */
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-config-keys thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .sl-markdown-content table.orbit-config-keys,
+  .sl-markdown-content table.orbit-config-keys tbody,
+  .sl-markdown-content table.orbit-config-keys tr,
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td,
+  .sl-markdown-content table.orbit-config-keys th:first-child,
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    display: block;
+    width: 100%;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td {
+    border-right: 0;
+  }
+
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    border-bottom: 0;
+    padding-bottom: 0.25rem;
   }
 }
 

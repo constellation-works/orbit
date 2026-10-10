@@ -18,6 +18,7 @@ use orbit_types::workflow::RunStateUpdate;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember, FINAL_RECOVERY_CREWS_KEY};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
 use crate::application::task::provider_limit::ProviderLimit;
@@ -717,7 +718,7 @@ fn permitted_candidates(
 /// Draw one ticket in `[0, total_weight)` and walk the cumulative weights.
 /// An all-bare pool weighs one ticket per member, so it draws exactly as the
 /// uniform selector it replaces did, on the same ticket.
-fn weighted_draw<'a>(
+pub(crate) fn weighted_draw<'a>(
     candidates: &'a [CrewCandidate],
     source: &str,
     random: &mut impl FnMut() -> Result<u64, OrbitError>,
@@ -774,4 +775,17 @@ fn random_ticket(
 
 pub(crate) fn random_crew_ticket() -> Result<u64, OrbitError> {
     getrandom::u64().map_err(|error| OrbitError::Execution(format!("draw automatic crew: {error}")))
+}
+
+/// Reproducible tickets for a draw that must come out the same when it is
+/// retried: each is the leading eight bytes of `sha256("<seed>:<round>")`.
+pub(crate) fn seeded_crew_ticket(seed: String) -> impl FnMut() -> Result<u64, OrbitError> {
+    let mut round: u64 = 0;
+    move || {
+        let digest = Sha256::digest(format!("{seed}:{round}").as_bytes());
+        round += 1;
+        let mut ticket = [0u8; 8];
+        ticket.copy_from_slice(&digest[..8]);
+        Ok(u64::from_be_bytes(ticket))
+    }
 }

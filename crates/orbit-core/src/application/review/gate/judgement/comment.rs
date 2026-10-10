@@ -424,7 +424,9 @@ fn retained_line(certificate: &ReviewCertificate) -> String {
 
 /// Write a gate artifact under the executor run's authority. A claimed leaf
 /// owns no task state: the artifact crosses its binding to the owner as
-/// claim evidence, like its validation logs [ORB-13908].
+/// claim evidence, like its validation logs [ORB-13908]. It crosses on the
+/// host's own channel: the owner refuses the reserved review names from any
+/// other claimed-worker write, an agent's included.
 pub(in crate::application::review::gate) fn write_artifact(
     runtime: &OrbitRuntime,
     task_id: &str,
@@ -433,7 +435,7 @@ pub(in crate::application::review::gate) fn write_artifact(
     content: &[u8],
 ) -> Result<(), OrbitError> {
     if runtime.worker_invocation().is_some() {
-        runtime.route_worker_tool(
+        runtime.route_worker_host_tool(
             "orbit.task.artifact.put",
             serde_json::json!({
                 "id": task_id,
@@ -443,7 +445,6 @@ pub(in crate::application::review::gate) fn write_artifact(
                     "media_type": "application/json",
                 }],
             }),
-            Default::default(),
         )?;
         return Ok(());
     }

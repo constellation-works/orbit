@@ -18,8 +18,8 @@
 //
 // Also exports parseHashRoute for symmetry (used only internally today).
 
-import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors } from './common.js';
-import { renderRuns } from './runs.js';
+import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
+import { renderRuns, showAllFailedRuns } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,7 +34,10 @@ function markWorkspaceSelectorScope(fleetWide) {
       : "Workspace";
   }
   const note = $("workspace-scope-note");
-  if (note) note.hidden = !fleetWide;
+  if (note) {
+    note.classList.toggle("is-inactive", !fleetWide);
+    note.setAttribute("aria-hidden", String(!fleetWide));
+  }
 }
 
 // ORB-10444: the top-level nav is exactly these tabs plus the hash-only
@@ -514,7 +517,22 @@ function initTabsImpl(ctx) {
     }
   });
   for (const tab of document.querySelectorAll(".tab")) {
-    tab.addEventListener("click", () => setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false }));
+    tab.addEventListener("click", (event) => {
+      const count = event.target && event.target.closest && event.target.closest("#rail-count-diag-runs");
+      // The badge is the windowed failure count. Open Failed for that window
+      // so the list total matches the number the operator clicked. The Runs
+      // label itself keeps the filter already on screen.
+      if (count && count.textContent.trim() && tab.dataset.tab === "runs") {
+        const counted = parseDashboardWindow(count.dataset.window);
+        const windowChanged = Boolean(counted) && setWindow(counted);
+        if (windowChanged) persistScopeToUrl();
+        showAllFailedRuns();
+        setActiveTabImpl(ctx, "diagnostics/runs", { refresh: false });
+        if (windowChanged) notifyScopeChange();
+        return;
+      }
+      setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false });
+    });
   }
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
     btn.addEventListener("click", () =>

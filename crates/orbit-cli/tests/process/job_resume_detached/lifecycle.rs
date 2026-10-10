@@ -10,9 +10,7 @@ use chrono::Utc;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::task::{
-    FinalRecoveryCompletion, FinalRecoveryRequest, FinalRecoveryTaskRevision,
-};
+use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRunState, PipelineState};
@@ -183,9 +181,10 @@ impl Delivery {
                 &FinalRecoveryRequest {
                     task_id: self.task.clone(),
                     run_id: run.into(),
-                    observed: FinalRecoveryTaskRevision::of(
-                        &self.runtime.get_task(&self.task).unwrap(),
-                    ),
+                    observed: self
+                        .runtime
+                        .final_recovery_revision(&self.runtime.get_task(&self.task).unwrap())
+                        .unwrap(),
                     repo_root: self.cli.repo.clone(),
                     base_ref: "agent-main".into(),
                     completion: FinalRecoveryCompletion::Done,
@@ -672,6 +671,57 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
         }
         fx.runtime.write_run_state(&fx.run, &state).unwrap();
         let before = fx.runtime.get_task(&fx.task).unwrap();
+        // A task bound to a run outside this lineage is a foreign claim.
+        // Resume refuses before it copies checkpoints; it does not start a
+        // run that would later fail while attaching validation evidence.
+        if case == "unrelated" {
+            let output = fx
+                .cli
+                .command()
+                .args(["job", "resume", &fx.run, "--json"])
+                .assert()
+                .failure()
+                .get_output()
+                .stderr
+                .clone();
+            let message = String::from_utf8(output).unwrap();
+            assert!(
+                message.contains("jrun-superseding") && message.contains(&before.id),
+                "{message}"
+            );
+            assert!(
+                message.contains("authorized rebind")
+                    && message.contains("does not overwrite a foreign claim"),
+                "{message}"
+            );
+            assert_eq!(
+                fx.runtime.get_task(&fx.task).unwrap(),
+                before,
+                "unrelated binding stays untouched"
+            );
+            let children: i64 = fx
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM job_runs WHERE retry_source_run_id=?1",
+                    [&fx.run],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(children, 0, "resume must not insert a run");
+            assert!(
+                fx.action("task_complete").is_err(),
+                "{case}: completion guard remains authoritative"
+            );
+            assert!(
+                !fx.runtime
+                    .get_task_history(&fx.task)
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry.event == "resume_review_restored"),
+                "{case}"
+            );
+            continue;
+        }
         fx.resume(&fx.run, "failed");
         let after = fx.runtime.get_task(&fx.task).unwrap();
         if case == "early" {
@@ -681,10 +731,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
             !matches!(after.status, TaskStatus::Review | TaskStatus::Done),
             "{case} gained review authority"
         );
-        if matches!(
-            case,
-            "unrelated" | "manual_block" | "proposed" | "archived" | "someday"
-        ) {
+        if matches!(case, "manual_block" | "proposed" | "archived" | "someday") {
             assert_eq!(after, before, "{case} must remain untouched");
         }
         assert!(

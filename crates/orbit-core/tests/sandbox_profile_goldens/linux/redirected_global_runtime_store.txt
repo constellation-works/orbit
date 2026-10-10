@@ -121,6 +121,7 @@ bwrap:
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
   --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugins
   --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugin-secrets
+  --dev-bind /dev/null <ROOT>/home/.orbit/clock.env
   --chdir <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
   --
   /usr/bin/true

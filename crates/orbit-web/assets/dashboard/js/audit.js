@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -9,9 +9,17 @@ const AUDIT_LIMIT = positiveIntParam("audit", 50);
 const INCIDENT_ID_BATCH_SIZE = 500;
 const AUDIT_STATUSES = ["success", "failure", "denied", "non_success"];
 const AUDIT_SUBTABS = ["events", "policy"];
+// Server header naming the `before` cursor that resumes the listing; absent
+// once the window is exhausted.
+const AUDIT_NEXT_BEFORE_HEADER = "x-audit-next-before";
 
 // Audit tab state (moved from app.js)
 let lastAudit = [];
+// Paging over `lastAudit`: the head page is re-fetched on every refresh, older
+// pages stay until the scope (filters, window, workspace) changes.
+let auditPaging = freshAuditPaging();
+// `events` of /api/audit/summary for `window`: the size of the selected window.
+let auditWindowTotal = null;
 let auditFilter = {
   status: null,
   q: "",
@@ -30,6 +38,8 @@ let auditFilter = {
   since: null,
   // Source metric from a scoreboard drill-down (display + hash only).
   metric: null,
+  // Hides successful calls from the unconfirmed caller (probe traffic).
+  hide_unverified: false,
   // Policy sub-tab only: scopes /api/diagnostics/denials to fs vs tool denials.
   policyKind: null,
 };
@@ -156,6 +166,7 @@ function buildAuditHash() {
     if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.q) sp.set("q", auditFilter.q);
+    if (auditFilter.hide_unverified) sp.set("hide_unverified", "1");
     if (auditFilter.metric) sp.set("metric", auditFilter.metric);
   }
   const path = activeAuditSubtab && activeAuditSubtab !== "events"
@@ -189,6 +200,11 @@ function syncAuditControls() {
   for (const chip of document.querySelectorAll("#audit-filter .chip")) {
     const status = chip.dataset.status;
     chip.classList.toggle("active", auditFilter.status === status);
+  }
+  const hideChip = Array.from($("audit-filter")?.children || []).find(chip => chip.dataset.toggle === "hide_unverified");
+  if (hideChip) {
+    hideChip.classList.toggle("active", auditFilter.hide_unverified);
+    hideChip.setAttribute("aria-pressed", String(auditFilter.hide_unverified));
   }
   renderScopeChips();
 }
@@ -258,6 +274,12 @@ function renderScopeChips() {
       window.location.hash = buildAuditHash();
     }));
   }
+  if (auditFilter.hide_unverified) {
+    host.appendChild(scopeChip("hiding", "unconfirmed-caller successes", () => {
+      auditFilter.hide_unverified = false;
+      window.location.hash = buildAuditHash();
+    }));
+  }
   if (auditFilter.eventIds.length > 0) {
     host.appendChild(scopeChip("incident events", `${auditFilter.eventIds.length} rows`, () => {
       auditFilter.eventIds = [];
@@ -289,6 +311,7 @@ function applyAuditHashQuery(query) {
   auditFilter.q = query.get("q") || "";
   auditFilter.since = query.get("since") || (getWindow() === "all" ? null : getWindow());
   auditFilter.metric = query.get("metric") || null;
+  auditFilter.hide_unverified = query.get("hide_unverified") === "1";
   const kindParam = query.get("kind");
   auditFilter.policyKind = kindParam === "fs" || kindParam === "tool" ? kindParam : null;
 }
@@ -307,6 +330,7 @@ function placeholdAuditAggregate() {
   renderPanelPlaceholder("audit-body");
   renderPanelPlaceholder("audit-policy-body");
   lastAudit = [];
+  auditPaging = freshAuditPaging();
   lastAuditPolicy = null;
   const count = $("audit-count");
   if (count) count.textContent = "—";
@@ -335,6 +359,7 @@ function fetchAndRenderAudit(ctx) {
     if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.q) sp.set("q", auditFilter.q);
+    if (auditFilter.hide_unverified) sp.set("hide_unverified", "true");
   }
   const path = `/api/audit?${sp.toString()}`;
   const requestEvents = eventIds.length > 0
@@ -347,15 +372,133 @@ function fetchAndRenderAudit(ctx) {
         events.push(...await fetchJson(`/api/audit?${batch.toString()}`));
       }
       // Each batch is newest-first; restore that order across batches.
-      return events.sort((a, b) => b.id - a.id);
+      return { events: events.sort((a, b) => b.id - a.id), nextBefore: null };
     }
-    : () => fetchJson(path);
+    : async () => {
+      const page = await fetchJsonPage(path);
+      return { events: page.body, nextBefore: page.header(AUDIT_NEXT_BEFORE_HEADER) };
+    };
   // A slower search or the previous workspace must not paint over the visit
   // now on screen, and must not become the snapshot row expansion re-renders.
-  return requestPanel("audit-body", path, requestEvents, (events) => {
-    lastAudit = events;
-    renderAudit(events, ctx);
+  return requestPanel("audit-body", path, requestEvents, (head) => {
+    mergeAuditHead(path, head, eventIds.length === 0);
+    renderAudit(lastAudit, ctx);
   }, "audit-count");
+}
+
+function freshAuditPaging() {
+  // `path` is the head request this paging belongs to; `epoch` changes
+  // whenever older pages are dropped, so a late "load older" can tell its
+  // cursor no longer continues what is on screen.
+  return { path: null, nextBefore: null, loading: false, error: null, epoch: 0 };
+}
+
+// Fold a freshly fetched newest page into the rows already on screen. Older
+// pages survive a refresh only when the new head reaches back to them: a head
+// that ends above the newest loaded row may have skipped events in between.
+function mergeAuditHead(path, head, pageable) {
+  const sameScope = auditPaging.path === path;
+  const prior = sameScope ? lastAudit : [];
+  let rows = head.events;
+  let nextBefore = head.nextBefore;
+  let keptTail = false;
+  if (pageable && sameScope && prior.length > rows.length && rows.length > 0) {
+    const headOldest = rows[rows.length - 1].id;
+    // A short head only proves it reaches the tail when the server reports the
+    // window exhausted (no cursor). A capped short head resumes below its oldest
+    // row, so it reaches the tail only by overlapping it.
+    const exhausted = rows.length < AUDIT_LIMIT && !head.nextBefore;
+    if (exhausted || headOldest <= prior[0].id) {
+      const tail = prior.filter(ev => ev.id < headOldest);
+      if (tail.length > 0) {
+        rows = rows.concat(tail);
+        nextBefore = auditPaging.nextBefore;
+        keptTail = true;
+      }
+    }
+  }
+  const droppedOlder = prior.length > head.events.length && !keptTail;
+  if (!sameScope) {
+    auditPaging = freshAuditPaging();
+  } else if (droppedOlder) {
+    auditPaging.epoch += 1;
+    auditPaging.loading = false;
+  }
+  auditPaging.path = pageable ? path : null;
+  auditPaging.nextBefore = pageable ? nextBefore : null;
+  auditPaging.error = null;
+  lastAudit = rows;
+}
+
+async function loadOlderAudit(ctx) {
+  const state = auditPaging;
+  const cursor = state.nextBefore;
+  if (state.loading || !cursor || !state.path) return;
+  const epoch = state.epoch;
+  const stale = () => auditPaging !== state || state.epoch !== epoch;
+  state.loading = true;
+  state.error = null;
+  renderAudit(lastAudit, ctx);
+  try {
+    const page = await fetchJsonPage(`${state.path}&before=${encodeURIComponent(cursor)}`);
+    if (stale()) return;
+    const seen = new Set(lastAudit.map(ev => ev.id));
+    lastAudit = lastAudit.concat(page.body.filter(ev => !seen.has(ev.id)));
+    state.nextBefore = page.header(AUDIT_NEXT_BEFORE_HEADER) || null;
+  } catch (error) {
+    if (stale()) return;
+    state.error = error.message;
+  }
+  state.loading = false;
+  renderAudit(lastAudit, ctx);
+}
+
+// The header count: rows on screen against the size of the selected window.
+// The window total is the summary's unfiltered event count, so it is only
+// comparable when the list and the summary cover the same window.
+function auditCountLabel() {
+  const shown = lastAudit.length;
+  if (auditFilter.eventIds.length > 0) return `${shown}`;
+  const window = effectiveAuditWindow();
+  const total = window && auditWindowTotal && auditWindowTotal.window === window
+    ? Math.max(auditWindowTotal.events, shown)
+    : null;
+  const hasMore = Boolean(auditPaging.nextBefore);
+  const narrowed = Boolean(auditFilter.status || auditFilter.tool || auditFilter.role
+    || auditFilter.agent_family || auditFilter.execution_id || auditFilter.profile
+    || auditFilter.q || auditFilter.hide_unverified);
+  if (total == null) return hasMore ? `${shown.toLocaleString()}+` : `${shown.toLocaleString()}`;
+  if (!narrowed) return `${shown.toLocaleString()} of ${total.toLocaleString()} in ${window}`;
+  return `${shown.toLocaleString()} ${hasMore ? "shown" : "matching"} · ${total.toLocaleString()} in ${window}`;
+}
+
+function updateAuditCount() {
+  const count = $("audit-count");
+  if (count && activeAuditSubtab === "events" && auditPaging.path) count.textContent = auditCountLabel();
+}
+
+function buildAuditFooter(ctx) {
+  if (!auditPaging.path) return null;
+  const { nextBefore, loading, error } = auditPaging;
+  const footer = el("div", { class: "audit-more" });
+  footer.dataset.key = "audit-more";
+  footer.dataset.hash = JSON.stringify([Boolean(nextBefore), loading, error]);
+  if (error) {
+    footer.appendChild(el("span", { class: "audit-more-error", text: `Could not load older events: ${error}` }));
+  }
+  if (nextBefore) {
+    const button = el("button", {
+      class: "audit-more-btn",
+      type: "button",
+      text: loading ? "Loading older events…" : "Load older events",
+    });
+    button.disabled = loading;
+    button.addEventListener("click", () => { void loadOlderAudit(ctx); });
+    footer.appendChild(button);
+  } else if (!error) {
+    footer.appendChild(el("span", { class: "audit-more-end", text: "No older events in the selected window." }));
+  }
+  return footer;
 }
 
 function isNamedTool(name) {
@@ -451,6 +594,9 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 }
 
 function renderAuditSummary(data, ctx) {
+  const events = Number(data && data.events);
+  auditWindowTotal = Number.isFinite(events) && data.window ? { events, window: data.window } : null;
+  updateAuditCount();
   const container = $("audit-summary-body");
   if (!container) return;
 
@@ -735,69 +881,89 @@ function fetchAndRenderPolicy(ctx) {
 
 onWorkspaceChange(() => {
   lastAudit = [];
+  auditPaging = freshAuditPaging();
+  auditWindowTotal = null;
   lastAuditPolicy = null;
 });
 
 function renderPolicy(data, ctx) {
   const body = $("audit-policy-body");
   if (!body) return;
-  $("audit-count").textContent = `${data && data.total ? data.total : 0}`;
+  const decisions = data && data.policy_decisions;
+  const canonicalTotal = Number.isFinite(decisions && decisions.total)
+    ? decisions.total
+    : Number(data && data.total) || 0;
+  $("audit-count").textContent = `${canonicalTotal}`;
 
   const sections = [];
-  if (data && data.policy_decisions) {
-    const decisions = data.policy_decisions;
+  let countExplanation = null;
+  if (decisions) {
     const filtered = auditFilter.policyKind || auditFilter.profile || auditFilter.role;
     const window = effectiveAuditWindow() || "24h";
     const scope = window === getWindow()
       ? ""
-      : `; this view has its own window, the rest of the dashboard uses ${getWindow()}`;
+      : ` This Policy view uses its own ${window} window; the rest of the dashboard uses ${getWindow()}.`;
     const note = el("div", { class: "policy-count-note" });
     const extra = !filtered && data.total < data.evidence_scan_limit && data.total >= decisions.total
-      ? ` (${data.total - decisions.total} additional evidence rows beyond the canonical decisions)`
+      ? `, including ${data.total - decisions.total} additional evidence ${data.total - decisions.total === 1 ? "row" : "rows"} beyond the canonical decisions`
       : "";
     note.appendChild(el("p", {
-      text: `${decisions.total} canonical policy decisions in ${window} (${decisions.sql} invocation decisions + ${decisions.v2} envelope decisions)${scope}.`,
-    }));
-    note.appendChild(el("p", {
-      text: `${data.total} denial evidence rows${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
-    }));
-    note.appendChild(el("p", {
-      class: "muted",
-      text: `Recent Denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
+      class: "policy-count-headline",
+      text: `${canonicalTotal} policy denials in ${window}.`,
     }));
     sections.push(note);
+
+    countExplanation = el("details", { class: "policy-count-details" });
+    countExplanation.appendChild(el("summary", { text: "How this is counted" }));
+    const explanation = el("div", { class: "policy-count-explanation" });
+    explanation.appendChild(el("p", {
+      text: `${decisions.total} canonical decisions: ${decisions.sql} invocation decisions and ${decisions.v2} envelope decisions.${scope}`,
+    }));
+    explanation.appendChild(el("p", {
+      text: `${data.total} denial evidence ${data.total === 1 ? "row" : "rows"}${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
+    }));
+    explanation.appendChild(el("p", {
+      text: `Recent denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
+    }));
+    countExplanation.appendChild(explanation);
   }
 
+  const recentRows = data && data.recent_denials || [];
   if (!data || (data.total || 0) === 0) {
+    const emptyText = canonicalTotal === 0
+      ? `No policy denials in the last ${effectiveAuditWindow() || "24h"}.`
+      : "No denial evidence matches the active filters.";
     sections.push(el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: `No denials in the last ${effectiveAuditWindow() || "24h"}.` }),
+      el("div", { class: "text", text: emptyText }),
     ]));
-    syncNodes(body, sections);
-    return;
+  } else {
+    const recent = buildRecentDenials(recentRows, ctx);
+    if (recent) sections.push(recent);
   }
+  if (countExplanation) sections.push(countExplanation);
 
-  const recent = buildRecentDenials(data.recent_denials || [], ctx);
-  const causes = buildTopCauses(data.top_causes || [], ctx);
-  if (recent) sections.push(recent);
-  if (causes) sections.push(causes);
+  if (data && (data.total || 0) > 0) {
+    const causes = buildTopCauses(data.top_causes || [], ctx);
+    if (causes) sections.push(causes);
 
-  const grid = el("div", { class: "policy-grid" });
-  for (const tbl of POLICY_TABLES) {
-    const cell = el("div", { class: "policy-cell" });
-    cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
-    const rawRows = (data[tbl.id] || []).slice();
-    const sortMode = policySort[tbl.id] || "count";
-    rawRows.sort((a, b) => {
-      if (sortMode === "name") {
-        return String(a[tbl.nameField] || "").localeCompare(String(b[tbl.nameField] || ""));
-      }
-      return (b.count || 0) - (a.count || 0);
-    });
-    cell.appendChild(buildPolicyTable(tbl, rawRows, sortMode, ctx));
-    grid.appendChild(cell);
+    const grid = el("div", { class: "policy-grid" });
+    for (const tbl of POLICY_TABLES) {
+      const cell = el("div", { class: "policy-cell" });
+      cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
+      const rawRows = (data[tbl.id] || []).slice();
+      const sortMode = policySort[tbl.id] || "count";
+      rawRows.sort((a, b) => {
+        if (sortMode === "name") {
+          return String(a[tbl.nameField] || "").localeCompare(String(b[tbl.nameField] || ""));
+        }
+        return (b.count || 0) - (a.count || 0);
+      });
+      cell.appendChild(buildPolicyTable(tbl, rawRows, sortMode, ctx));
+      grid.appendChild(cell);
+    }
+    sections.push(grid);
   }
-  sections.push(grid);
   syncNodes(body, sections);
 }
 
@@ -996,6 +1162,7 @@ function emptyAuditFilter() {
     eventIds: [],
     since: getWindow() === "all" ? null : getWindow(),
     metric: null,
+    hide_unverified: false,
     policyKind: null,
   };
 }
@@ -1056,6 +1223,19 @@ function buildAuditChips(ctx) {
     });
     container.appendChild(chip);
   }
+  const hideChip = el("button", {
+    class: "chip",
+    type: "button",
+    text: "hide unconfirmed successes",
+    title: "Hide successful calls from the unconfirmed caller (probe and federated reads). Their failures and denials stay listed.",
+  });
+  hideChip.dataset.toggle = "hide_unverified";
+  hideChip.addEventListener("click", () => {
+    auditFilter.hide_unverified = !auditFilter.hide_unverified;
+    syncAuditControls();
+    window.location.hash = buildAuditHash();
+  });
+  container.appendChild(hideChip);
   syncAuditControls();
 }
 
@@ -1080,13 +1260,15 @@ function wireAuditSearch(ctx) {
 function renderAudit(events, ctx) {
   const body = $("audit-body");
   if (!body) return;
-  $("audit-count").textContent = `${events.length}`;
+  const count = $("audit-count");
+  if (count) count.textContent = auditPaging.path ? auditCountLabel() : `${events.length}`;
+  const footer = buildAuditFooter(ctx);
 
   if (events.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
       el("div", { class: "text", text: "No audit events match the current filter." }),
-    ])]);
+    ]), ...(footer && auditPaging.nextBefore ? [footer] : [])]);
     return;
   }
 
@@ -1094,6 +1276,8 @@ function renderAudit(events, ctx) {
   let tbody;
   if (!table) {
     table = el("table", { class: "scoreboard-table card-table audit-table" });
+    table.dataset.key = "audit-table";
+    table.dataset.hash = "audit-table";
     const thead = el("thead");
     const headRow = el("tr");
     for (const col of AUDIT_COLUMNS) {
@@ -1103,7 +1287,6 @@ function renderAudit(events, ctx) {
     table.appendChild(thead);
     tbody = el("tbody");
     table.appendChild(tbody);
-    syncNodes(body, [table]);
   } else {
     tbody = table.querySelector("tbody");
   }
@@ -1126,7 +1309,7 @@ function renderAudit(events, ctx) {
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
     tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
-    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: cmd || "" }));
+    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: ev.tool_name || cmd || "" }));
     tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
     tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
     tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
@@ -1149,6 +1332,7 @@ function renderAudit(events, ctx) {
     }
   }
   syncNodes(tbody, Array.from(frag.children));
+  syncNodes(body, footer ? [table, footer] : [table]);
 }
 
 function buildAuditDetailRow(ev, ctx) {

@@ -14,7 +14,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::automation::members::{
     MaterialField, MemberAttempt, PreparationEligibility, PreparationPolicy, SourceSensitivity,
-    StateTrigger,
+    StateTrigger, StateTriggerKind,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -435,9 +435,10 @@ fn assignment_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, Aut
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}))
 }
 
-/// Tasks held by successful preparation checkpoints of active pilot runs.
-/// Reconcile stale owners before treating their checkpoints as holds; a
-/// terminal run no longer prevents another pilot from preparing its tasks.
+/// Tasks held by active pilot runs: by their prepare reservations and their
+/// successful preparation checkpoints. Reconcile stale owners before treating
+/// their checkpoints as holds; a terminal run no longer prevents another pilot
+/// from preparing its tasks.
 pub(crate) fn active_task_pilot_preparations(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
@@ -482,7 +483,57 @@ pub(crate) fn active_task_pilot_preparations(
             }
         }
     }
+    // A run holds its tasks from its reservation in prepare, before its
+    // checkpoint persists.
+    for (task_id, run_ids) in super::pilot_reservation::live_reservations(runtime)? {
+        prepared_by_task.entry(task_id).or_default().extend(run_ids);
+    }
     Ok(prepared_by_task)
+}
+
+/// The enabled state-triggered task pilots this host evaluates, read once per
+/// admission pass [ORB-15191]. Each entry is a pilot's eligibility and how
+/// long a task it would prepare waits for it: the trigger's admission window
+/// plus its run deadline, from the task's last change.
+pub(crate) struct FootprintPilots(Vec<(PreparationEligibility, chrono::Duration)>);
+
+impl FootprintPilots {
+    /// The routines this workspace declares that would prepare a task here:
+    /// enabled, `preparation_eligible`, and owned by this machine. A routine
+    /// that does not parse prepares nothing.
+    pub(crate) fn load(runtime: &OrbitRuntime) -> Self {
+        let identity = runtime.automation_machine_identity();
+        let pilots = declared_routine_names(&runtime.shared_root())
+            .into_values()
+            .filter_map(|path| {
+                let definition = parse_routine_yaml(&std::fs::read_to_string(path).ok()?).ok()?;
+                let trigger = definition.trigger.state.as_ref()?;
+                (definition.enabled
+                    && trigger.kind == StateTriggerKind::PreparationEligible
+                    && identity == Some(trigger.owner_machine.as_str()))
+                .then(|| {
+                    let wait = trigger
+                        .max_wait_minutes
+                        .saturating_add(trigger.deadline_minutes);
+                    (
+                        trigger.eligibility.clone(),
+                        chrono::Duration::minutes(i64::from(wait)),
+                    )
+                })
+            })
+            .collect();
+        Self(pilots)
+    }
+
+    /// Until when `task` waits for a pilot to prepare it, or `None` when no
+    /// pilot here would.
+    pub(crate) fn prepares_until(&self, task: &Task) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.0
+            .iter()
+            .filter(|(eligibility, _)| preparation::eligible(task, eligibility))
+            .map(|(_, wait)| task.updated_at + *wait)
+            .max()
+    }
 }
 
 impl OrbitRuntime {

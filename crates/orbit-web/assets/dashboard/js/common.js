@@ -116,6 +116,18 @@ export function setHost(name) {
   return true;
 }
 
+/// Settings › Hosts registers nothing itself. The dashboard wires this to the
+/// host picker's switch so a row's Show link does that same switch.
+let hostSwitchHandler = null;
+
+export function setHostSwitchHandler(handler) {
+  hostSwitchHandler = typeof handler === "function" ? handler : null;
+}
+
+export function requestHostSwitch(name) {
+  if (hostSwitchHandler) hostSwitchHandler(name);
+}
+
 // The host-file routes, `/api/hosts` and `/api/hosts/<host>/connection`,
 // always describe the serving host's own host file, and the forward refuses
 // them. Paths already addressed to a host are left as they are.
@@ -725,6 +737,12 @@ export function makeCopyButton(value, { class: className = "", text = value, tit
 }
 
 export async function fetchJson(path) {
+  return (await fetchJsonPage(path)).body;
+}
+
+// Like fetchJson, for an endpoint that also answers in response headers (a
+// paging cursor). `header(name)` reads one; most callers never need it.
+export async function fetchJsonPage(path) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
@@ -743,7 +761,7 @@ export async function fetchJson(path) {
       if (code) error.code = code;
       throw error;
     }
-    return await res.json();
+    return { body: await res.json(), header: (name) => res.headers.get(name) };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
     // Fetch and response-body transport failures are TypeErrors; HTTP and JSON

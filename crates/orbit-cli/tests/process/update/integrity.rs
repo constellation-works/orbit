@@ -28,9 +28,7 @@ use tempfile::TempDir;
 
 use super::output_of;
 
-const UPDATE_TIMEOUT: Duration = Duration::from_secs(30);
 const WAIT_SLICE: Duration = Duration::from_millis(20);
-const STALE_SLICE_DEADLINE: Duration = Duration::from_secs(15);
 
 struct Install {
     _root: TempDir,
@@ -83,7 +81,7 @@ impl Install {
     fn command(&self) -> assert_cmd::Command {
         let mut command = assert_cmd::Command::new(&self.executable);
         apply_env(&mut command, self);
-        command.timeout(UPDATE_TIMEOUT);
+        command.timeout(test_env::FIXTURE_STEP_DEADLINE);
         command
     }
 
@@ -135,7 +133,7 @@ impl Install {
     fn run(&self, args: &[&str]) -> Output {
         let mut command = self.command();
         command.args(args);
-        output_of(&mut command).expect("run orbit update")
+        bounded_output(&mut command, &format!("orbit {}", args.join(" ")))
     }
 
     fn assert_untouched(&self, label: &str) {
@@ -163,6 +161,16 @@ impl Install {
             backup.display()
         );
     }
+}
+
+/// Run `command`, which [`Install::command`] bounds by
+/// [`test_env::FIXTURE_STEP_DEADLINE`]. A command killed at that hang guard
+/// fails naming `what` and the host load, rather than as a refusal.
+fn bounded_output(command: &mut assert_cmd::Command, what: &str) -> Output {
+    let started = Instant::now();
+    let output = output_of(command).unwrap_or_else(|error| panic!("run `{what}`: {error}"));
+    test_env::assert_step_finished(what, started.elapsed(), &output.status);
+    output
 }
 
 fn apply_env(command: &mut assert_cmd::Command, install: &Install) {
@@ -442,7 +450,7 @@ fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
     let mut writer = open_fifo_writer(
         &latest,
         child.child.as_mut().expect("child"),
-        Instant::now() + STALE_SLICE_DEADLINE,
+        Instant::now() + test_env::FIXTURE_STEP_DEADLINE,
     );
     let preserved = install.executable.with_file_name("orbit.running");
     fs::rename(&install.executable, &preserved).expect("unlink running image");
@@ -456,7 +464,7 @@ fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
 
     let status = wait_exit(
         child.child.as_mut().expect("child"),
-        Instant::now() + STALE_SLICE_DEADLINE,
+        Instant::now() + test_env::FIXTURE_STEP_DEADLINE,
     );
     child.child = None;
     let stderr = fs::read_to_string(&stderr_path).expect("stale stderr");
@@ -506,6 +514,7 @@ fn clock_tick(install: &Install) -> GenerationGuard {
         role: ParticipantRole::Clock,
         access: Access::Write,
         handover: None,
+        in_activity: false,
     };
     GenerationGuard::join(
         &install.home.join(".orbit"),
@@ -533,7 +542,7 @@ fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
     command
         .env(QUIESCE_TIMEOUT_ENV, "60")
         .args(["update", "--json"]);
-    let output = output_of(&mut command).expect("run orbit update");
+    let output = bounded_output(&mut command, "orbit update beside a clock tick");
     let waited = began.elapsed();
     finishing.join().expect("clock tick thread");
 
@@ -564,7 +573,7 @@ fn an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound() {
     let began = Instant::now();
     let mut command = install.command();
     command.env(QUIESCE_TIMEOUT_ENV, "1").arg("update");
-    let output = output_of(&mut command).expect("run orbit update");
+    let output = bounded_output(&mut command, "orbit update beside an outlasting clock tick");
 
     assert_refused(
         &output,
@@ -597,6 +606,7 @@ fn idle_session(install: &Install) -> GenerationGuard {
         role: ParticipantRole::McpServe,
         access: Access::Write,
         handover: Some(RESUME_MCP_STDIO),
+        in_activity: false,
     };
     GenerationGuard::join(
         &install.home.join(".orbit"),
@@ -640,11 +650,9 @@ fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
     let executable = install.executable.clone();
     let installed = script.clone();
     let handing_over = std::thread::spawn(move || {
-        let deadline = Instant::now() + UPDATE_TIMEOUT;
-        while fs::read(&executable).ok().as_deref() != Some(installed.as_slice()) {
-            assert!(Instant::now() < deadline, "the release was never installed");
-            std::thread::sleep(WAIT_SLICE);
-        }
+        test_env::wait_until("the release to be installed", || {
+            fs::read(&executable).ok().as_deref() == Some(installed.as_slice())
+        });
         // Still holding the replaced generation after the rename: the update
         // must not pin until it is released.
         std::thread::sleep(Duration::from_millis(1500));
@@ -656,7 +664,7 @@ fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
     command
         .env(QUIESCE_TIMEOUT_ENV, "60")
         .args(["update", "--version", "99.0.0", "--json"]);
-    let output = output_of(&mut command).expect("run orbit update");
+    let output = bounded_output(&mut command, "orbit update beside a handing-over session");
     let finished = Instant::now();
     let released = handing_over.join().expect("session thread");
 
@@ -735,7 +743,7 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
         .spawn()
         .expect("spawn update");
     let mut child = ReapedChild { child: Some(child) };
-    let deadline = Instant::now() + STALE_SLICE_DEADLINE;
+    let deadline = Instant::now() + test_env::FIXTURE_STEP_DEADLINE;
     while !probing.exists() {
         assert_waiting(
             child.child.as_mut().expect("child"),
@@ -754,7 +762,7 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
 
     let status = wait_exit(
         child.child.as_mut().expect("child"),
-        Instant::now() + UPDATE_TIMEOUT,
+        Instant::now() + test_env::FIXTURE_STEP_DEADLINE,
     );
     child.child = None;
     let stderr = fs::read_to_string(&stderr_path).expect("update stderr");
@@ -815,7 +823,10 @@ pub(super) fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant
 fn assert_waiting(child: &mut Child, deadline: Instant, what: &str) {
     if Instant::now() >= deadline {
         let _ = child.kill();
-        panic!("timed out waiting for the update to {what}");
+        panic!(
+            "timed out waiting for the update to {what} ({})",
+            test_env::host_load()
+        );
     }
     if let Some(status) = child.try_wait().expect("poll update") {
         panic!("update exited before it could {what}: {status}");
@@ -828,7 +839,10 @@ pub(super) fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::E
         if Instant::now() >= deadline {
             let _ = child.kill();
             let status = child.wait().expect("reap timed-out update");
-            panic!("update did not finish before the deadline: {status}");
+            panic!(
+                "update did not finish before the deadline: {status} ({})",
+                test_env::host_load()
+            );
         }
         if let Some(status) = child.try_wait().expect("poll update") {
             return status;

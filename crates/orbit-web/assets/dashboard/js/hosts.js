@@ -8,11 +8,19 @@
 // each row's last live reading, so a host added from the CLI appears on the
 // next refresh without the dashboard opening SSH sessions every 30 seconds.
 //
+// Health is separate from that probe [ORB-15230]. While this view is open,
+// each refresh also reads `/host/resources` and drain capacity for every
+// reachable host through `/api/on/<host>/` (the serving host's own name is
+// answered locally). An unreachable host is not asked; its row shows the
+// probe error. One host's failure leaves the others up. Show uses the same
+// switch as the host picker.
+//
 // Editors are inline (the dashboard has no modals): they open with focus in
 // their first control, close on Escape as Cancel does unless a request is in
 // flight, and hand focus back to the button that opened them.
 
-import { captureFocus, el, fetchJson, getHost, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, fetchJson, getHost, requestHostSwitch, requestJson, requestPanel } from './common.js';
+import { describeResource, fetchHostResourcePayloadFor, hostVerdict } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,22 +36,32 @@ let probeNext = true;
 /// error, code, dependents}`. Operator state, so a refresh never discards it.
 let editing = null;
 let notice = "";
+/// Per-host resource snapshot and drain capacity, keyed by machine id.
+/// Replaced as a whole when a refresh's fan-out finishes.
+let health = new Map();
+/// Bumped when the view is left or a newer refresh starts, so a late fan-out
+/// cannot paint over the next one.
+let epoch = 0;
 
 /// Forget everything when the view is left, so reopening it probes again.
 export function resetHostsView() {
+  epoch += 1;
   lastPayload = null;
   live = new Map();
   probeNext = true;
   editing = null;
   notice = "";
+  health = new Map();
 }
 
 export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
+  const token = ++epoch;
   await requestPanel(
     "config-body",
     "hosts",
     () => fetchJson(probe ? "/api/hosts" : "/api/hosts?probe=false"),
     (payload) => {
+      if (token !== epoch) return;
       if (probe) {
         live = new Map();
         remember(payload.hosts || []);
@@ -54,6 +72,8 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
     },
     "config-count",
   );
+  if (token !== epoch) return;
+  await loadHealth(token);
 }
 
 function remember(rows) {
@@ -148,7 +168,8 @@ function view(payload) {
   list.setAttribute("role", "table");
   list.setAttribute("aria-label", "Registered hosts");
   list.appendChild(headRow());
-  for (const row of hosts) list.appendChild(hostRow(row));
+  const names = new Map(hosts.map((host) => [host.machine_id, host.name]));
+  for (const row of hosts) list.appendChild(hostRow(row, names));
   nodes.push(list);
   return nodes;
 }
@@ -168,14 +189,14 @@ function loadErrorBanner(payload) {
 
 function headRow() {
   const head = el("div", { class: "host-grid host-head col-head" }, [
-    "Host", "Reachable", "Version", "Protocol", "Skew", "Workspaces", "",
+    "Host", "Reachable", "Version", "Protocol", "Skew", "Workspaces", "Health", "",
   ].map((label) => el("span", { text: label })));
   head.setAttribute("role", "row");
   for (const cell of head.children) cell.setAttribute("role", "columnheader");
   return head;
 }
 
-function hostRow(row) {
+function hostRow(row, names) {
   const node = el("div", { class: `host-row${row.local ? " local" : ""}${row.reachable === false ? " unreachable" : ""}` });
   node.dataset.key = row.machine_id;
   const cells = el("div", { class: "host-grid" }, [
@@ -188,7 +209,8 @@ function hostRow(row) {
       title: row.protocol_fingerprint || "not probed",
     }),
     skewCell(row),
-    workspacesCell(row),
+    workspacesCell(row, names),
+    healthCell(row),
     actionsCell(row),
   ]);
   cells.setAttribute("role", "row");
@@ -209,12 +231,171 @@ function identityCell(row) {
       el("span", { class: "host-name-text", text: row.name }),
       row.local ? el("span", { class: "config-source workspace", text: "local · edited here" }) : null,
       row.legacy ? el("span", { class: "config-source unset", text: "legacy" }) : null,
+      hostSwitch(row),
     ]),
     el("span", {
       class: "host-facts mono",
       text: [row.machine_id, row.ssh ? `ssh ${row.ssh}` : null, `prefix ${row.task_prefix || "unknown"}`].filter(Boolean).join(" · "),
     }),
   ]);
+}
+
+/// Show switches the dashboard the way the host picker does. The href is the
+/// same `?host=` the picker writes, so the control still works as a link.
+function hostSwitch(row) {
+  const selected = getHost();
+  const showing = row.local ? !selected : !!selected && selected.toLowerCase() === String(row.name).toLowerCase();
+  if (showing) return el("span", { class: "host-showing", text: "showing" });
+  const name = row.local ? null : row.name;
+  const link = el("a", {
+    class: "host-switch",
+    text: "Show",
+    title: `Switch the dashboard to ${row.name}`,
+  });
+  link.href = hostSwitchHref(name);
+  link.setAttribute("aria-label", `Show ${row.name}`);
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    requestHostSwitch(name);
+  });
+  return link;
+}
+
+function hostSwitchHref(name) {
+  const params = new URLSearchParams(window.location.search || "");
+  if (name) params.set("host", name);
+  else params.delete("host");
+  const query = params.toString();
+  const path = window.location.pathname || "";
+  const hash = window.location.hash || "";
+  return `${path}${query ? `?${query}` : ""}${hash}`;
+}
+
+function healthCell(row) {
+  if (row.reachable === false) {
+    const error = row.error ? `${row.error.code}: ${row.error.message}` : "unreachable";
+    return el("span", { class: "host-health host-health-error", text: error });
+  }
+  if (row.reachable == null) return el("span", { class: "host-health host-health-pending", text: "not probed" });
+  const reading = health.get(row.machine_id);
+  if (!reading || reading.kind !== "ready") {
+    return el("span", { class: "host-health host-health-pending", text: "…" });
+  }
+  const verdict = reading.resources ? hostVerdict(reading.resources) : null;
+  const chips = reading.resources
+    ? el("span", { class: "host-health-readings" }, ["cpu", "memory", "disk"].map((resource) => resourceChip(reading.resources, resource)))
+    : el("span", { class: "host-health-error", text: reading.resourcesError || "resources unavailable" });
+  const drain = drainLine(reading, verdict);
+  const node = el("span", { class: "host-health" }, [chips, drain]);
+  const summary = [chips.textContent, drain.textContent].filter(Boolean).join("; ");
+  const throttle = verdict ? verdict.status : "unknown";
+  node.setAttribute("aria-label", `${row.name}: ${summary}. Throttle verdict: ${throttle}`);
+  return node;
+}
+
+function resourceChip(payload, resource) {
+  const { label, value, suffix, detail, severity, held } = describeResource(payload, resource);
+  const node = el("span", {
+    class: `host-resource ${severity}${held ? " throttled" : ""}`,
+    title: detail,
+  }, [
+    el("span", { class: "k", text: label }),
+    el("span", { class: "v", text: value }, suffix ? [el("span", { class: "unit", text: suffix })] : []),
+  ]);
+  node.dataset.resource = resource;
+  return node;
+}
+
+function drainLine(reading, verdict) {
+  const { text, active, title } = drainSummary(reading, verdict);
+  const throttled = verdict?.status === "held";
+  return el("span", {
+    class: `host-drain${active ? " active" : ""}${throttled ? " throttled" : ""}`,
+    text,
+    title,
+  });
+}
+
+/// One line for every workspace's drain capacity, plus the admission verdict
+/// the top bar states. A failed capacity read is named; it does not become "idle".
+function drainSummary(reading, verdict) {
+  const drains = reading.drains || [];
+  const known = drains.filter((drain) => !drain.error);
+  const failed = drains.filter((drain) => drain.error);
+  const parts = [];
+  const draining = known.some((drain) => drain.phase === "draining");
+  const winding = known.some((drain) => drain.phase === "winding_down");
+  const pulling = known.some((drain) => drain.pull);
+  if (draining) parts.push("Draining");
+  else if (winding) parts.push("Winding down");
+  if (pulling) {
+    const live = known.some((drain) => drain.pull && !drain.pullStopped);
+    parts.push(live ? "Pull drain" : "Pull drain · admissions stopped");
+  }
+  if (!parts.length && known.length) parts.push("idle");
+  if (!known.length && failed.length) parts.push(failed[0].error);
+  if (reading.workspaceCount === 0 && !parts.length) parts.push("idle");
+  if (verdict?.status === "held") parts.push("throttled");
+  else if (!reading.resources || verdict?.status === "unknown") parts.push("throttle unknown");
+  const lines = known.map((drain) => {
+    const phase = drain.phase === "draining" ? "Draining" : drain.phase === "winding_down" ? "Winding down" : "idle";
+    return `${drain.name}: ${phase}${drain.pull ? ", pull drain" : ""}`;
+  });
+  for (const drain of failed) lines.push(`${drain.name}: ${drain.error}`);
+  if (verdict) lines.push(`Throttle verdict: ${verdict.status}${reading.resources?.reason ? ` · ${reading.resources.reason}` : ""}`);
+  else lines.push("Throttle verdict: unknown");
+  return { text: parts.join(" · ") || "…", active: draining || winding || pulling, title: lines.join("\n") };
+}
+
+async function loadHealth(token) {
+  const payload = lastPayload;
+  if (!payload || token !== epoch) return;
+  const rows = (payload.hosts || []).map(withLiveFields);
+  const entries = await Promise.all(rows.map(async (row) => [row.machine_id, await readHealth(row)]));
+  if (token !== epoch) return;
+  health = new Map(entries);
+  render();
+}
+
+async function readHealth(row) {
+  if (row.reachable === false) return { kind: "unreachable" };
+  if (row.reachable == null) return { kind: "unprobed" };
+  const workspaces = Array.isArray(row.workspaces) ? row.workspaces : [];
+  const [resources, drains] = await Promise.all([
+    fetchHostResourcePayloadFor(row.name).then(
+      (body) => ({ resources: body, resourcesError: null }),
+      (error) => ({ resources: null, resourcesError: error.message || "resources unavailable" }),
+    ),
+    Promise.all(workspaces.map((workspace) => readDrain(row.name, workspace))),
+  ]);
+  return { kind: "ready", ...resources, drains, workspaceCount: workspaces.length };
+}
+
+async function readDrain(hostName, workspace) {
+  const id = workspace.id;
+  const path = `/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness?workspace=${encodeURIComponent(id)}`;
+  try {
+    const payload = await fetchJson(path);
+    const capacity = payload && payload.capacity ? payload.capacity : {};
+    return {
+      id,
+      name: workspace.name || id,
+      phase: capacity.drain_phase || (capacity.drain_run_id ? "draining" : "idle"),
+      pull: Boolean(capacity.pull_drain_run_id),
+      pullStopped: capacity.pull_drain_admissions_stopped === true,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      id,
+      name: workspace.name || id,
+      phase: null,
+      pull: false,
+      pullStopped: false,
+      error: error.message || "drain unavailable",
+    };
+  }
 }
 
 function reachableCell(row) {
@@ -231,14 +412,16 @@ function skewCell(row) {
   return el("span", { class: "host-skew warn", text: `skew: ${(row.skew_fields || []).join(", ")}` });
 }
 
-function workspacesCell(row) {
+// `names` maps each host's machine id to its registered name, so a replica
+// names its owner as the host file does; an unregistered owner keeps its id.
+function workspacesCell(row, names) {
   const workspaces = row.workspaces || [];
   if (!workspaces.length) return el("span", { class: "host-workspaces", text: NO_VALUE });
   return el("span", { class: "host-workspaces" }, workspaces.map((workspace) =>
     el("span", {
       class: "host-workspace",
       text: workspace.role === "replica"
-        ? `${workspace.name} (replica of ${workspace.owner_machine_id || "unknown"})`
+        ? `${workspace.name} (replica of ${names.get(workspace.owner_machine_id) || workspace.owner_machine_id || "unknown"})`
         : `${workspace.name} (owner)`,
       title: workspace.id,
     }),

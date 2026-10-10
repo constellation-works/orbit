@@ -13,6 +13,12 @@ use super::{ReviewBudget, ReviewConsumption, ReviewVerdict};
 /// on this marker.
 pub const REVIEW_ABANDONED_MARKER: &str = "review_abandoned:";
 
+/// What a before-landing review refusal says about its pull request: it
+/// awaits a recorded decision, so the run that refused it is held, not failed
+/// [ORB-15202].
+pub const REVIEW_LANDING_DECISION_PENDING: &str =
+    "the pull request stays open and unmerged until a recorded decision lands it";
+
 /// The state of one reviewer attempt in a lineage ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]

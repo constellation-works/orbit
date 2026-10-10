@@ -201,6 +201,7 @@ impl<'a> Source<'a> {
                         anchor: mapping.canonical.commit.clone(),
                         reference: delivery.evidence_reference.clone(),
                         landed_at: delivery.landed_at,
+                        head: None,
                     }),
                 );
                 continue;

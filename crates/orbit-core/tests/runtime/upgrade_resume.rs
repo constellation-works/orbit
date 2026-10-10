@@ -322,6 +322,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
                 reader_floor: 1,
             },
             features: BTreeMap::new(),
+            feature_floors: BTreeMap::new(),
         },
         requested_at: Utc::now(),
         deadline: Utc::now() + chrono::Duration::seconds(60),
@@ -494,7 +495,8 @@ fn review_admission(runtime: &OrbitRuntime) -> ReviewAdmission {
             ReviewTiming::None
         },
         timing_source: policy.review_before_pr.source.label().into(),
-        crew: policy.review_crew.value.clone(),
+        crew: policy.review_crew.value.first().cloned(),
+        crew_pool: Vec::new(),
         crew_source: policy.review_crew.source.label().into(),
         budget: policy.review_budget(),
         required_validation_commands: Some(

@@ -11,7 +11,7 @@ use orbit_automation::{
     },
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{EXECUTION_SUMMARY_DERIVED_EVENT, Task, TaskStatus};
+use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskStatus};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
@@ -22,9 +22,11 @@ pub(super) fn mint(
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
     let mut params = crate::application::auto_tasks::scheduler::template_params(definition);
-    // [ORB-13896] After-landing review is reviewed by `operation.review_crew`.
-    if let Some(crew) = super::after_landing::review_crew_override(runtime, definition) {
+    // [ORB-13896] After-landing review is reviewed by `operation.review_crew`,
+    // one crew drawn per batch when it is a pool [ORB-15195].
+    if let Some(crew) = super::after_landing::minted_review_crew(runtime, definition, attempt)? {
         params.crew = Some(crew);
+        params.crew_source = Some(orbit_config::REVIEW_CREW_KEY.to_string());
     }
 
     let invalid = |e: serde_json::Error| OrbitError::InvalidInput(e.to_string());
@@ -119,7 +121,7 @@ fn task_outcome(
             // Commit ids alone can be produced without reading anything. A
             // closed review whose agent wrote no summary is that stamp; an
             // open one may still write it.
-            if settling && agent_summary_missing(runtime, &task)? {
+            if settling && agent_summary_missing(&task) {
                 return Ok(if stopped {
                     ActionOutcome::Failed {
                         retryable: true,
@@ -348,15 +350,12 @@ fn changed_paths(
 }
 
 /// [ORB-15186] The review's agent persisted no execution summary: the task
-/// has none, or Orbit derived the one it carries.
-fn agent_summary_missing(runtime: &OrbitRuntime, task: &Task) -> Result<bool, AutomationError> {
-    if task.execution_summary.trim().is_empty() {
-        return Ok(true);
-    }
-    Ok(runtime
-        .get_task_history(&task.id)?
-        .iter()
-        .any(|entry| entry.event == EXECUTION_SUMMARY_DERIVED_EVENT))
+/// has none, or the one it carries is still the text Orbit derived. The
+/// derived-summary history event is not consulted: it survives an agent's
+/// later replacement, so the current text decides [ORB-15255].
+fn agent_summary_missing(task: &Task) -> bool {
+    let summary = task.execution_summary.trim();
+    summary.is_empty() || summary.starts_with(DERIVED_EXECUTION_SUMMARY_PREFIX)
 }
 
 fn evidence_owner(

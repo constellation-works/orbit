@@ -95,6 +95,7 @@ const PRESERVING_DECISIONS: &[&str] = &[
     "blocked_validation_environment",
     "held_baseline_red",
     "held_provider_failure",
+    "held_upgrade_pending",
 ];
 /// The settlement step whose failure is the review's verdict on the
 /// candidate, not a fault: the repair starts from its findings.

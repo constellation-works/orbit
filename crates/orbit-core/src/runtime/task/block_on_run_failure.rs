@@ -18,13 +18,19 @@
 //! backlog instead (`baseline_red_hold`): nothing about the work is wrong, and
 //! admission releases the hold once the required command passes on a new base.
 //! A task the run's failure
-//! handoff already held is left as it is.
+//! handoff already held is left as it is. Since [ORB-15202] such a run ends
+//! `held`, not `failed`, and its tasks are held exactly as before.
 //!
 //! [ORB-14266] A run that failed on its provider — `[provider_capacity]`,
 //! `[provider_unavailable]` or `[provider_refusal]` — did not judge the work
 //! either. Its tasks go back to the backlog under a `provider_failure_hold`
 //! that excludes the failing crews until a backoff passes, and admission
 //! draws another crew or defers (see `provider_hold`).
+//!
+//! A run whose agent an Orbit upgrade refused mid-step (`[upgrade_pending]`)
+//! did not judge the work either. Its failure handoff kept the candidate, so
+//! its tasks go back to the backlog (`upgrade_pending_requeued`), and the
+//! next run resumes that candidate once the upgrade settles.
 //!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
@@ -66,8 +72,9 @@ use orbit_engine::{
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, ProviderFailureClass,
-    is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HeldFailure, JobRun, JobRunState,
+    ProviderFailureClass, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
+    is_upgrade_pending,
 };
 
 use crate::OrbitRuntime;
@@ -101,6 +108,11 @@ pub struct InfraBlockedTask {
 /// resumable from its step checkpoints, but nothing resumes it on its own, so
 /// its task must not keep looking like live work. Resume re-admits the blocked
 /// task, so blocking it does not get in the way of the resume.
+///
+/// `Held` is included for a run held on a failure it did not cause
+/// [ORB-15202] (see [`HeldFailure`]): its tasks get the disposition the
+/// failure always had. A run held for review evidence or the forge is left to
+/// its own resumption.
 pub(crate) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
     matches!(
         state,
@@ -108,6 +120,7 @@ pub(crate) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
             | JobRunState::Timeout
             | JobRunState::Cancelled
             | JobRunState::Interrupted
+            | JobRunState::Held
     )
 }
 
@@ -282,6 +295,18 @@ impl OrbitRuntime {
             Some((code, message)) => (Some(code.to_string()), Some(message.to_string())),
             None => failed_run_error_context(&run),
         };
+        // [ORB-15202] A run held on a red base or an awaited decision couples
+        // out exactly as the failure it records; any other hold names its own
+        // resumption and leaves its tasks alone.
+        let state = match state {
+            JobRunState::Held
+                if HeldFailure::of(error_code.as_deref(), error_message.as_deref()).is_some() =>
+            {
+                JobRunState::Failed
+            }
+            JobRunState::Held => return Ok(()),
+            state => state,
+        };
         let blocked_update = if state == JobRunState::Interrupted {
             blocked_workflow_interruption_update
         } else {
@@ -308,6 +333,9 @@ impl OrbitRuntime {
         let provider_failure = (state == JobRunState::Failed && hold.is_none())
             .then(|| ProviderFailureClass::of(error_code.as_deref(), error_message.as_deref()))
             .flatten();
+        // Nor does a run whose agent an Orbit upgrade refused mid-step.
+        let upgrade_pending = state == JobRunState::Failed
+            && is_upgrade_pending(error_code.as_deref(), error_message.as_deref());
         let task_cancellation_policy = if state == JobRunState::Cancelled {
             self.read_run_state(run_id)?
                 .and_then(|state| state.task_cancellation_policy)
@@ -416,6 +444,23 @@ impl OrbitRuntime {
                         })
                     {
                         return Ok(());
+                    }
+                    if upgrade_pending && hold.is_none() && provider_failure.is_none() {
+                        return self.apply_task_automation_update(
+                            &task.id,
+                            TaskAutomationUpdate {
+                                status: Some(TaskStatus::Backlog),
+                                status_event: Some(UPGRADE_PENDING_REQUEUED_EVENT.to_string()),
+                                status_note: Some(format!(
+                                    "workflow run stopped by an Orbit upgrade: job={}, \
+                                     run_id={run_id}; an upgrade refused the step's agent, so \
+                                     the task is back in the backlog and its next run resumes \
+                                     the held candidate once the upgrade settles",
+                                    run.job_id
+                                )),
+                                ..TaskAutomationUpdate::default()
+                            },
+                        );
                     }
                     let update = if state == JobRunState::Cancelled
                         && let Some(policy) = task_cancellation_policy

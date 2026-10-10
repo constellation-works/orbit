@@ -309,7 +309,17 @@ fn invalid_severity_is_rejected_by_config_admission_with_its_key() {
     }
 }
 
-fn code_snapshot(number: u64, rule: &str, path: &str) -> Value {
+fn code_alert(number: u64, rule: &str, path: &str, line: u64) -> Value {
+    json!({
+        "number": number, "rule_id": rule, "rule_name": "Cleartext logging",
+        "security_severity": "high", "path": path, "start_line": line,
+        "end_line": line, "message": "Logs sensitive data",
+        "tool_name": "CodeQL", "tool_version": "2", "tool_guid": "codeql",
+        "ref": "refs/heads/main", "commit_sha": "fixture",
+    })
+}
+
+fn code_alerts_snapshot(alerts: Vec<Value>) -> Value {
     json!({
         "schema_version": 2, "collected": false,
         "repository": {"full_name": "acme/orbit"},
@@ -319,15 +329,34 @@ fn code_snapshot(number: u64, rule: &str, path: &str) -> Value {
             "collected": true,
             "collection_status": "fully_collected",
             "outcome_hint": "open_alerts",
-            "open_alerts": [{
-                "number": number, "rule_id": rule, "rule_name": "Cleartext logging",
-                "security_severity": "high", "path": path, "start_line": 12,
-                "end_line": 12, "message": "Logs sensitive data",
-                "tool_name": "CodeQL", "tool_version": "2", "tool_guid": "codeql",
-                "ref": "refs/heads/main", "commit_sha": "fixture",
-            }],
+            "open_alerts": alerts,
         },
     })
+}
+
+fn code_snapshot(number: u64, rule: &str, path: &str) -> Value {
+    code_alerts_snapshot(vec![code_alert(number, rule, path, 12)])
+}
+
+fn assert_rejected_owner(report: &Value, number: u64, owner: &str) {
+    let matched: Vec<_> = report["skipped_existing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["alert_number"] == number)
+        .collect();
+    assert_eq!(matched.len(), 1, "{report}");
+    assert_eq!(matched[0]["family"], "code_scanning");
+    assert_eq!(matched[0]["match_kind"], "rejected_owner");
+    assert_eq!(matched[0]["task_id"], owner);
+    assert!(
+        matched[0]["match_evidence"]["matched_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["field"] == "rejected_task_id" && field["value"] == owner),
+        "the audit must name the rejected task: {matched:?}"
+    );
 }
 
 fn code_tasks(runtime: &OrbitRuntime) -> usize {
@@ -404,6 +433,115 @@ fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
         assert_eq!(refiled["filed_count"], 1, "{refiled}");
         assert_eq!(refiled["skipped_existing"], json!([]));
     }
+}
+
+/// Rejection binds the alert's exact rule and path. A path or rule that differs
+/// only by punctuation or case is a different finding and files again, while a
+/// longer rule or line number sharing the recorded prefix does not inherit the
+/// suppression either.
+#[test]
+fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
+    if !isolated(
+        "security_alert_sweep::rejected_owner_distinguishes_punctuation_only_path_and_rule_changes",
+    ) {
+        return;
+    }
+    let rule = "rust/cleartext-logging";
+    let path = "crates/foo-bar/src/lib.rs";
+
+    let (_root, runtime) = fixture(None, None);
+    let first = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+    runtime
+        .reject_task(&owner, "false positive".to_string(), None)
+        .unwrap();
+
+    let unchanged = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(unchanged["filed_count"], 0, "{unchanged}");
+    assert_rejected_owner(&unchanged, 484, &owner);
+
+    for changed in [
+        code_snapshot(484, rule, "crates/foo_bar/src/lib.rs"),
+        code_snapshot(484, "rust/cleartext_logging", path),
+        code_snapshot(484, "Rust/Cleartext-Logging", path),
+        code_snapshot(484, "rust/cleartext-logging-v2", path),
+        code_alerts_snapshot(vec![code_alert(484, rule, path, 120)]),
+    ] {
+        let (_root, runtime) = fixture(None, None);
+        let first = file(&runtime, code_snapshot(484, rule, path), None);
+        let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+        runtime
+            .reject_task(&owner, "false positive".to_string(), None)
+            .unwrap();
+        let refiled = file(&runtime, changed, None);
+        assert_eq!(refiled["filed_count"], 1, "{refiled}");
+        assert_eq!(refiled["skipped_existing"], json!([]));
+    }
+}
+
+/// A rejected group records one ledger bullet per alert. Moving one alert onto
+/// a sibling's old location must file that alert again; the unchanged sibling
+/// stays suppressed by the same rejected task.
+#[test]
+fn rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location() {
+    if !isolated(
+        "security_alert_sweep::rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location",
+    ) {
+        return;
+    }
+    let (_root, runtime) = fixture(None, None);
+    let rule = "rust/cleartext-logging";
+    let original = code_alerts_snapshot(vec![
+        code_alert(484, rule, "crates/a/src/lib.rs", 12),
+        code_alert(485, rule, "crates/b/src/lib.rs", 12),
+    ]);
+
+    let first = file(&runtime, original.clone(), None);
+    assert_eq!(first["filed_count"], 1, "{first}");
+    assert_eq!(first["filed"][0]["alert_numbers"], json!([484, 485]));
+    assert_eq!(first["filed"][0]["alert_count"], 2);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+
+    let covered = file(&runtime, original.clone(), None);
+    assert_eq!(covered["filed_count"], 0, "{covered}");
+    for number in [484, 485] {
+        let matched: Vec<_> = covered["skipped_existing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["alert_number"] == number)
+            .collect();
+        assert_eq!(matched.len(), 1, "{covered}");
+        assert_eq!(matched[0]["match_kind"], "exact_key");
+        assert_eq!(matched[0]["task_id"], owner.as_str());
+    }
+
+    runtime
+        .reject_task(&owner, "false positive".to_string(), None)
+        .unwrap();
+
+    let suppressed = file(&runtime, original, None);
+    assert_eq!(suppressed["filed_count"], 0, "{suppressed}");
+    assert_eq!(suppressed["skipped_existing"].as_array().unwrap().len(), 2);
+    assert_rejected_owner(&suppressed, 484, &owner);
+    assert_rejected_owner(&suppressed, 485, &owner);
+    assert_eq!(code_tasks(&runtime), 1);
+
+    // Alert 484 now sits at alert 485's recorded location. The sibling's
+    // bullet must not certify 484.
+    let moved = code_alerts_snapshot(vec![
+        code_alert(484, rule, "crates/b/src/lib.rs", 12),
+        code_alert(485, rule, "crates/b/src/lib.rs", 12),
+    ]);
+    let refiled = file(&runtime, moved, None);
+    assert_eq!(refiled["filed_count"], 1, "{refiled}");
+    assert_eq!(refiled["filed"][0]["alert_numbers"], json!([484]));
+    assert_eq!(refiled["filed"][0]["alert_count"], 1);
+    assert_ne!(refiled["filed"][0]["task_id"], owner.as_str());
+    assert_eq!(refiled["skipped_existing"].as_array().unwrap().len(), 1);
+    assert_rejected_owner(&refiled, 485, &owner);
+    assert_eq!(code_tasks(&runtime), 2);
 }
 
 /// Consolidation and duplicate rejections point at another owner. They are not

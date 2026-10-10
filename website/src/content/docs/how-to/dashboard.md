@@ -115,9 +115,11 @@ expected on the default port, `7878`.
   [operator session](#authorization). Without one, a note reads `Read-only on
   <host>: <reason>` and write controls are disabled with the same reason.
 
-**Settings › Hosts** is not forwarded. With another host selected, it still
-edits the serving host's registry, and says so. The picker reads that same
-registry.
+**Settings › Hosts** edits the serving host's registry, including while
+another host is selected, and says so. The picker reads that same registry.
+Each reachable row also shows that host's load, memory, disk, admission
+throttle, and drain or pull-drain state, so those readings do not require a
+host switch. **Show** on a row switches the dashboard to that host.
 
 ## Workspace scope
 
@@ -144,11 +146,11 @@ prove that a particular task or run succeeded.
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
-| **Health** | Incidents, errors, reliability, step metrics, and the scoreboard. |
+| **Health** | Incidents, Doctor, Errors, Reliability, Metrics, and Scoreboard. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
-| **Settings** | The workspace's `config.toml`. |
+| **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
 
 The top bar shows live load, memory, and disk readings for the serving host,
 the drain state when a delivery window is active, and **Refresh**. Counts in
@@ -272,7 +274,12 @@ their owner and that cancelling one fails its claim. See
 ## Runs and errors
 
 **Runs** lists job runs for the selected workspace. Filter by **All**,
-**Live**, or **Failed**. Click a run for its metadata, steps, events, child
+**Live**, or **Failed**, narrow the list with a task id or job id, and use
+the same time window as the rest of the dashboard. The address keeps
+`run_state`, `task_id`, `job_id`, and `window`, so a shared link reopens the
+same list. A task id such as `ORB-15159` keeps that task's runs; any other
+id keeps one job. **Window all** lists every matching run with no time bound.
+Click a run for its metadata, steps, events, child
 runs, and a timing chart when one is recorded. A failed, timed-out, or
 interrupted run opens on the step it stopped at and the error it recorded.
 
@@ -298,8 +305,8 @@ These counts answer different questions:
 
 | Where | Counts |
 |---|---|
-| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the selected window. |
-| Runs **Failed** filter | Runs in the `Failed` state, with no time window. |
+| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
+| Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
 | **Audit** rail count | Audited events in the selected window. |
 | **Health → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 
@@ -394,6 +401,7 @@ layering and descriptions as `orbit config show`.
 | **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
 | **Crews** | The crew table. |
 | **Keys** | Every settable key with its type, section, description, and accepted values. |
+| **System** | Live resource readings, throttle marks, resume thresholds, and the host's current admission verdict. |
 | **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
 
 **Effective** opens with a strip naming both files, then one panel per section
@@ -463,10 +471,16 @@ Captured from Orbit 0.28.0 on 2026-10-08 with an isolated demo registry.
 
 The local host comes first, labelled **local · edited here**. Remote rows
 show their SSH target, task prefix, reachability, Orbit version, protocol,
-skew, and workspace roles. An unreachable host stays visible with its typed
-error. Opening the view and **Reload** probe every host. Periodic refreshes
-reread the file and retain the last probe results; they open no background
-SSH sessions. A CLI-added host appears on the next refresh.
+skew, and workspace roles. The Health column shows current load, memory, and
+disk for every reachable host, with the same severity as the top-bar chips,
+and whether a drain or pull drain is active and whether admissions are
+throttled. **Show** switches the dashboard to that host. An unreachable host
+stays visible with its typed error in place of those readings. Opening the
+view and **Reload** probe every host. Periodic refreshes reread the file and
+retain the last probe results; they open no background SSH sessions for that
+probe. The same refresh reads each reachable host's resources and drain
+capacity through the host forward. A CLI-added host appears on the next
+refresh, and its readings wait until it has been probed.
 
 - **Add host** opens an inline form for an SSH target and an optional name.
   Saving probes the host and registers its identity here, as `orbit host add`

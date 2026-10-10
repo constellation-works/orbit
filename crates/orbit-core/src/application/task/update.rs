@@ -4,7 +4,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskArtifact, TaskHistoryEntry, TaskStatus,
     canonical_artifact_path, is_system_identity_tag, is_valid_orb_task_id,
     normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
@@ -26,6 +26,32 @@ use super::params::TaskUpdateParams;
 use super::paths::{
     canonicalize_context_files_for_read, context_workspace_root, normalize_context_files_for_write,
 };
+
+/// Canonicalize an artifact a caller other than the review gate's system
+/// writer supplies, and refuse it in the reserved review namespace. Gate
+/// records are certificates and authority, not agent claims, so every
+/// agent-originated write applies this one rule: the ordinary task update and
+/// a claimed worker's claim evidence, which a remote owner's broker also
+/// reaches. The only exception is the live reviewer's schema-checked report;
+/// the store retains its revisions and settlement certifies it.
+pub(crate) fn admit_agent_artifact(artifact: &mut TaskArtifact) -> Result<(), OrbitError> {
+    artifact.path = canonical_artifact_path(&artifact.path)?;
+    if !is_reserved_review_artifact(&artifact.path) {
+        return Ok(());
+    }
+    if artifact.path != REVIEW_REPORT_ARTIFACT {
+        return Err(OrbitError::InvalidInput(format!(
+            "{} is reserved for the review gate's system writer",
+            artifact.path
+        )));
+    }
+    ReviewReport::parse_attachment(&artifact.content).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
+        ))
+    })?;
+    Ok(())
+}
 
 /// Which lifecycle rules a status change on this write must satisfy
 /// [ORB-12245].
@@ -330,21 +356,10 @@ impl OrbitRuntime {
         // or artifact/tool field cannot opt into that authority. Normalize
         // before checking exactly the key the store will persist.
         for artifact in &mut params.upsert_artifacts {
-            artifact.path = canonical_artifact_path(&artifact.path)?;
-            if !system_writer && is_reserved_review_artifact(&artifact.path) {
-                if artifact.path != REVIEW_REPORT_ARTIFACT {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "{} is reserved for the review gate's system writer",
-                        artifact.path
-                    )));
-                }
-                // The report is the live reviewer's schema-checked claim;
-                // the store retains revisions and settlement certifies it.
-                ReviewReport::parse_attachment(&artifact.content).map_err(|error| {
-                    OrbitError::InvalidInput(format!(
-                        "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
-                    ))
-                })?;
+            if system_writer {
+                artifact.path = canonical_artifact_path(&artifact.path)?;
+            } else {
+                admit_agent_artifact(artifact)?;
             }
         }
         if let Some(expected_status) = expected_status

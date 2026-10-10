@@ -15,6 +15,18 @@
 //! the grant's identity, apply refuses a task whose grant changed since, and
 //! the atomic write compares it again under the task lock. The pilot cannot
 //! drop a granted target: apply keeps any it omitted.
+//!
+//! A review-filed task's selectors are the review's evidence [ORB-15285]. On
+//! a `selectors` assessment apply keeps every one the pilot omitted that
+//! still resolves at the pinned source, in the filed order, so re-assessment
+//! cannot narrow it and an unchanged scope is not rewritten. Only an
+//! operator's `orbit.task.update` narrows it.
+//!
+//! A typed host finding routes the task in the same commit [ORB-15278]: a
+//! `required_os` finding naming one OS adds its `os:` tag to a task that
+//! carries none (an operator's `os:` tags are never touched), and a
+//! `required_machine` finding is recorded with the native-host hold, so pull
+//! admission refuses every other machine.
 
 mod admission;
 mod apply;
@@ -31,8 +43,8 @@ mod validation_tools;
 pub(super) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    normalize_evidence_gaps, required_os, unauthorized_missing_targets, validate_after_selectors,
-    validate_recommendations,
+    normalize_evidence_gaps, required_machine, required_os, retained_review_evidence, review_filed,
+    routing_os, unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
 };
 pub(super) use drain_promotion::{
     approval_disqualification, approved_by_drain, held_classification,
@@ -62,6 +74,10 @@ pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
 /// each naming the operator reauthorization path.
 pub(super) const CONTEXT_CREATION_RETAINED: &str = "context_creation_retained";
 pub(super) const CONTEXT_REAUTHORIZATION_REQUIRED: &str = "context_reauthorization_required";
+
+/// Assessment field apply attaches: a review-filed task's evidence selectors
+/// the pilot omitted and apply kept.
+pub(super) const CONTEXT_EVIDENCE_RETAINED: &str = "context_evidence_retained";
 
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.

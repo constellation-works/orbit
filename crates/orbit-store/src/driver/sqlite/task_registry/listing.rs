@@ -31,11 +31,15 @@ impl TaskRegistryStore {
     ) -> Result<BTreeMap<String, IndexedTaskRow>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
+        // The unary `+` keeps the planner off `(workspace_id, tag, task_id)`
+        // for the tag probe. With that index every task row rescanned all of
+        // the workspace's tags: about 2.4 s per call on a 4,700-task
+        // workspace, against about 15 ms through the `(task_id, tag)` key.
         let mut stmt = conn
             .prepare(
                 "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag
                  FROM task_bundle_index i
-                 LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND t.workspace_id = i.workspace_id
+                 LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND +t.workspace_id = i.workspace_id
                  WHERE i.workspace_id = ?1",
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;

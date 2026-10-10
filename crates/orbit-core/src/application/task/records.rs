@@ -221,4 +221,18 @@ impl crate::OrbitRuntime {
     ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
         self.stores().tasks().resolve_execution_claims()
     }
+
+    /// Retain a task-branch CI receipt or defer it under a protecting claim.
+    ///
+    /// The store checks the current claim inside the same boundary that queues
+    /// or retains the receipt. Settlement writes receipts still deferred.
+    pub(crate) fn record_deferred_branch_observation(
+        &self,
+        observation: &orbit_store::contracts::DeferredBranchObservation,
+    ) -> Result<orbit_store::contracts::BranchObservationOutcome, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.stores()
+            .tasks()
+            .record_deferred_branch_observation(observation)
+    }
 }

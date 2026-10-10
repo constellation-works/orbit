@@ -265,10 +265,12 @@ pub struct DrainAdmissionPass {
     /// records and in pull passes, which use owner-side admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity: Option<DrainCapacity>,
-    /// Admissible tasks the pass did not admit: no free slot, or a lock
-    /// conflict.
+    /// Admissible tasks the pass did not admit because no slot was free or
+    /// they were deferred. Local passes include deferred tasks in this count;
+    /// pull passes use the owner's queue depth, which excludes deferred tasks.
     pub queued: u64,
-    /// The subset of `queued` a lock conflict kept out.
+    /// Tasks a lock conflict or owner hold deferred. This is a subset of
+    /// `queued` for local passes and separate from `queued` for pull passes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deferred: Vec<DrainWaitingTask>,
     /// The full count behind `deferred`. A pull drain bounds that list; a

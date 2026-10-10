@@ -6,7 +6,8 @@
 //! This module owns the deterministic decisions over those facts: what a
 //! task's reviewable meaning is, whether a certificate is acceptable
 //! coverage at all, and whether an actual landing reproduced exactly the
-//! reviewed content. Uncertain content is never excluded.
+//! reviewed content, or carried it unchanged onto a base that moved.
+//! Uncertain content is never excluded.
 
 use orbit_types::task::Task;
 use orbit_types::workflow::automation::{Delivery, DeliveryExclusion};
@@ -27,6 +28,11 @@ pub use validation::{
     SkippedCheck, ValidationContext, ValidationDefect, in_scope, mutation_targets,
     same_host_command, validation_evidence, validation_limitations, validation_role_counts,
 };
+
+/// Assurance an exclusion carries when the landing is the reviewed final
+/// candidate cleanly carried onto a base that moved after review, rather
+/// than a byte-identical reproduction of the reviewed trees.
+pub const REBASED_CLEAN_ASSURANCE: &str = "rebased_clean";
 
 /// Contract label folded into every task-meaning digest.
 pub const TASK_MEANING_CONTRACT: &str = "review_task_meaning_v1";
@@ -118,14 +124,32 @@ pub struct LandingFacts {
     /// The managed landing record for this certificate, when completion
     /// wrote one.
     pub managed_landing: Option<ReviewLanding>,
+    /// The head commit the provider reports the landed pull request had.
+    /// `None` for a landing with no pull request identity, or one recorded
+    /// before the head was kept.
+    pub landed_head: Option<String>,
+    /// The tree of a conflict-free three-way merge of the certificate's
+    /// final candidate onto the delivery's actual base, with the
+    /// certificate's base as the merge base. `None` when the merge
+    /// conflicts, the reviewed base is not an ancestor of the actual base,
+    /// or Core did not compute it because the exact-tree rule applies.
+    pub rebased_tree: Option<String>,
 }
 
 /// Decide whether an actual delivery is covered by a certificate.
 ///
-/// V1 is exact-tree: the landing must start from the reviewed base tree and
-/// produce the reviewed final tree. Squash, merge, rebase, and fast-forward
-/// onto the same base all satisfy that; a different base, any later edit,
-/// or an unreviewed conflict repair changes a tree and stays uncovered.
+/// The exact-tree rule: the landing starts from the reviewed base tree and
+/// produces the reviewed final tree. Squash, merge, rebase, and fast-forward
+/// onto the same base all satisfy that, and the exclusion carries the
+/// certificate's own assurance.
+///
+/// The rebased-clean rule applies only when the base moved after review and
+/// the landed pull request's head is the certificate's final candidate
+/// commit, so the provider merged exactly what was reviewed. The landing
+/// must then equal, tree for tree, a conflict-free merge of the reviewed
+/// change onto the actual base ([`LandingFacts::rebased_tree`]); the
+/// exclusion carries [`REBASED_CLEAN_ASSURANCE`]. A conflicting base change,
+/// a head pushed after review, or any other edit stays uncovered.
 pub fn exclusion(
     delivery: &Delivery,
     certificate: &ReviewCertificate,
@@ -141,10 +165,19 @@ pub fn exclusion(
     if delivery.repository != certificate.repository {
         return Err(ReviewInvalidation::MappingUnknown);
     }
-    if delivery.before.tree != certificate.base.tree {
-        return Err(ReviewInvalidation::BaseChanged);
-    }
-    if delivery.after.tree != certificate.final_candidate.tree {
+    let rebased = delivery.before.tree != certificate.base.tree;
+    if rebased {
+        if facts.landed_head.as_deref() != Some(certificate.final_candidate.commit.as_str()) {
+            return Err(ReviewInvalidation::BaseChanged);
+        }
+        match facts.rebased_tree.as_deref() {
+            None => return Err(ReviewInvalidation::BaseChanged),
+            Some(tree) if tree != delivery.after.tree => {
+                return Err(ReviewInvalidation::CandidateChanged);
+            }
+            Some(_) => {}
+        }
+    } else if delivery.after.tree != certificate.final_candidate.tree {
         return Err(ReviewInvalidation::CandidateChanged);
     }
     if let Some(landing) = &facts.managed_landing
@@ -155,9 +188,14 @@ pub fn exclusion(
     let assurance = certificate
         .assurance
         .ok_or(ReviewInvalidation::VerdictNotPassed)?;
+    let assurance = if rebased {
+        REBASED_CLEAN_ASSURANCE
+    } else {
+        assurance.as_str()
+    };
     Ok(DeliveryExclusion {
         attempt_id: certificate.attempt_id.clone(),
-        assurance: assurance.as_str().to_string(),
+        assurance: assurance.to_string(),
         task_meaning_digest: certificate.task_meaning_digest.clone(),
         final_candidate_tree: certificate.final_candidate.tree.clone(),
     })

@@ -314,15 +314,18 @@ impl Fixture {
         let mut server = Server {
             process: Process(command.spawn().unwrap()),
             task_query_log: task_query_log.map(Path::to_owned),
+            // A hang guard on each request, including an SSE stream's reads.
+            // It outlasts the dashboard's own forward bound, so a forwarded
+            // request reports that typed failure instead of a client timeout.
             client: Client::builder()
                 .no_proxy()
-                .timeout(Duration::from_secs(5))
+                .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
                 .build()
                 .unwrap(),
             origin: String::new(),
             log,
         };
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let started = Instant::now();
         loop {
             let output = fs::read_to_string(server.log.path()).unwrap();
             assert!(
@@ -353,8 +356,10 @@ impl Fixture {
                 return server;
             }
             assert!(
-                Instant::now() < deadline,
-                "server readiness exceeded 10 seconds: {output}"
+                started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+                "server not ready after {:.1?} ({}): {output}",
+                started.elapsed(),
+                orbit_common::test_env::host_load()
             );
             thread::sleep(Duration::from_millis(20));
         }
@@ -454,16 +459,31 @@ impl Server {
     }
 
     pub(super) fn get(&self, path: &str) -> Response {
-        self.request("GET", path).send().unwrap()
+        sent("GET", path, self.request("GET", path))
     }
 
     pub(super) fn send(&self, method: &str, path: &str, body: Value) -> Response {
-        self.request(method, path)
-            .header("origin", &self.origin)
-            .json(&body)
-            .send()
-            .unwrap()
+        sent(
+            method,
+            path,
+            self.request(method, path)
+                .header("origin", &self.origin)
+                .json(&body),
+        )
     }
+}
+
+/// Send `request`; a failure, such as the client's hang guard expiring, names
+/// the request, how long it ran and the host load.
+pub(super) fn sent(method: &str, path: &str, request: RequestBuilder) -> Response {
+    let started = Instant::now();
+    request.send().unwrap_or_else(|error| {
+        panic!(
+            "{method} {path} failed after {:.1?} ({}): {error}",
+            started.elapsed(),
+            orbit_common::test_env::host_load()
+        )
+    })
 }
 
 pub(super) fn json_ok(response: Response) -> Value {

@@ -182,6 +182,7 @@ fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
         role: ParticipantRole::McpServe,
         access: Access::Write,
         handover: None,
+        in_activity: false,
     };
     let _old_client = GenerationGuard::join(
         &authority_root(&workspace),
@@ -320,9 +321,9 @@ fn persistent_client_hands_over_to_a_local_candidate_update() {
     );
     // The update pins only once the session has handed over; the resumed
     // image then joins the generation it pinned.
-    wait_until(
-        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+    test_env::wait_until(
         "the handed-over MCP server to join as the candidate",
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
     );
     assert_eq!(client.child.id(), pid);
     let after = client.call_tool_ok(
@@ -440,10 +441,9 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     install_over(&candidate, &installed);
 
     // The coordinator notices at its next admission pass and execs in place.
-    wait_until(
-        || running_digest(&workspace, drain.pid).as_deref() == Some(new_digest.as_str()),
-        "the drain to hand over to the installed executable",
-    );
+    test_env::wait_until("the drain to hand over to the installed executable", || {
+        running_digest(&workspace, drain.pid).as_deref() == Some(new_digest.as_str())
+    });
     // Same run, same owner: the new image adopted it rather than claiming it,
     // and it is still running a few admission passes later.
     std::thread::sleep(Duration::from_secs(3));
@@ -493,6 +493,7 @@ fn a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points() 
         role: ParticipantRole::Command,
         access: Access::Write,
         handover: None,
+        in_activity: false,
     };
     let root = authority_root(&workspace);
 
@@ -597,13 +598,10 @@ fn run_show(workspace: &McpWorkspace, run_id: &str) -> Value {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn poll_run_state(workspace: &McpWorkspace, run_id: &str, state: &str) -> Value {
     let mut last = Value::Null;
-    wait_until(
-        || {
-            last = run_show(workspace, run_id);
-            last["run"]["state"] == state
-        },
-        state,
-    );
+    test_env::wait_until(&format!("run {run_id} to be {state}"), || {
+        last = run_show(workspace, run_id);
+        last["run"]["state"] == state
+    });
     last
 }
 
@@ -646,7 +644,7 @@ fn cancel_drain(workspace: &McpWorkspace, drain: &Drain) {
         Path::new(env!("CARGO_BIN_EXE_orbit")),
         &["run", "cancel", &drain.run_id, "--confirm"],
     );
-    wait_until(|| !process_alive(drain.pid), "the cancelled drain to exit");
+    test_env::wait_until("the cancelled drain to exit", || !process_alive(drain.pid));
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -669,10 +667,9 @@ fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (ChildGuard, u16
         .spawn()
         .map(ChildGuard::new)
         .expect("spawn dashboard");
-    wait_until(
-        || TcpStream::connect(("127.0.0.1", port)).is_ok(),
-        "the dashboard to listen",
-    );
+    test_env::wait_until("the dashboard to listen", || {
+        TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
     (child, port)
 }
 
@@ -702,15 +699,6 @@ fn stop(child: &mut ChildGuard) {
             return;
         }
         std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -1100,9 +1088,9 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
 
     // Once the call is answered, a later idle check can resume on the new
     // image using the original process, pipes, and initialize parameters.
-    wait_until(
-        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+    test_env::wait_until(
         "the MCP session to hand over after completing the partial request",
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
     );
     assert_eq!(client.child.id(), pid);
     let tasks = client.call_tool_ok("orbit_task_list", json!({}));
@@ -1179,14 +1167,10 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
     install_over(&candidate, &installed);
 
     // The idle server notices within a lifecycle interval and execs itself.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    while running_digest(&workspace, pid).as_deref() != Some(new_digest.as_str()) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the idle server never handed over to the installed executable"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    test_env::wait_until(
+        "the idle server to hand over to the installed executable",
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+    );
 
     // Same process, same pipes, no second `initialize`: the session goes on.
     assert_eq!(client.child.id(), pid);
@@ -1257,6 +1241,7 @@ fn a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_re
             role: ParticipantRole::Dashboard,
             access: Access::Write,
             handover: None,
+            in_activity: false,
         },
         Duration::ZERO,
         || Ok(0),

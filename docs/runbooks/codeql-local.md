@@ -24,6 +24,12 @@ task-controlled path. The script does not install CodeQL or global toolchains.
 Rust downloads and any Cargo dependency fetches use only the executor's granted
 network access. Start in the checkout being validated.
 
+When validating a hosted alert, use the same CodeQL bundle version as the
+hosted analysis when possible. Record the local version from `codeql version`
+and the hosted analysis version shown with the alert or its analysis metadata.
+If they differ, record both versions in the evidence and treat the local result
+as limited evidence for that hosted alert.
+
 The default extractor toolchain is **Rust 1.97.0 plus rust-src**, confirmed for
 CodeQL **2.27.1**. This is separate from the repository's build toolchain. For
 another bundle, inspect its extractor's requested version and pass
@@ -120,6 +126,10 @@ archive. Attach only bounded log/listing excerpts (gzip when useful), each
 within the artifact tool's 1 MiB limit; never attach `src.zip`, another archive,
 or a full source listing. When practical, run the same query on the baseline to confirm it
 detects the finding.
+If that baseline run does not report the hosted alert, the local result is
+non-confirming evidence and cannot confirm a repair. Record that no baseline
+finding was reported along with the local and hosted CodeQL versions, and rely
+on a hosted rescan to confirm the repair.
 Source-side confirmation does not close hosted alerts; closure requires a
 hosted rescan.
 

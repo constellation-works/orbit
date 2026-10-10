@@ -30,6 +30,13 @@ spec:
           type: string
       workspace_path:
         type: string
+      owner_machine:
+        type: [object, "null"]
+        properties:
+          machine_id:
+            type: string
+          machine_name:
+            type: [string, "null"]
       base_branch:
         type: string
       source_revision:
@@ -147,6 +154,19 @@ spec:
                     enum: [linux, macos, windows]
                   evidence:
                     type: string
+            required_machine:
+              type: array
+              items:
+                type: object
+                required: [criterion, machine, evidence]
+                properties:
+                  criterion:
+                    type: integer
+                    minimum: 1
+                  machine:
+                    type: string
+                  evidence:
+                    type: string
       summary:
         type: string
   instruction: |
@@ -154,7 +174,9 @@ spec:
 
     Input contains `task_ids` (one to five exact IDs), `workspace_path`,
     `base_branch`, `inspection_revision` (null only for a non-Git workspace),
-    `source_revision` (the prepared landing-branch commit),
+    `source_revision` (the prepared landing-branch commit), `owner_machine`
+    (`{"machine_id","machine_name"}` of the machine that owns this workspace's
+    task store, or null when it has no machine identity),
     and `partition_index`. Work only on those task IDs and treat the
     workspace as read-only. The CLI host materializes `inspection_revision`
     in an invocation-owned checkout and binds `workspace_path`, `repo_root`,
@@ -197,6 +219,12 @@ spec:
        Keep each one exactly as recorded even though it does not exist yet.
        Never propose any other missing path; deterministic apply keeps
        declared targets you omit and rejects every undeclared missing anchor.
+       A task tagged `code-review`, `delivery-code-review`, `qa-sweep` or
+       `security-review` was filed by a review whose selectors are its
+       evidence: add the modification targets it lacks, but do not drop a
+       current selector that still exists at `source_revision`, even one you
+       would only read. Deterministic apply keeps any you omit
+       (`context_evidence_retained`); only an operator narrows that scope.
        Apply uses the host's prepared snapshot as `context_files_before`;
        do not echo that list in your assessment.
        Derive the modification targets from evidence, never by sweeping a
@@ -247,26 +275,43 @@ spec:
        example is not a requirement; report neither.
        Also check whether a criterion requires execution or evidence on a
        specific native operating system, such as a real macOS launch or
-       sandbox-exec result, a Linux Bubblewrap result, or a native Windows
-       integration check. Record each such requirement in `required_os` as
+       sandbox-exec result, a Linux Bubblewrap result, a native Windows
+       integration check, or a Linux-only semantic extraction. Record each
+       such requirement in `required_os` as
        `{"criterion":N,"os":"macos|linux|windows","evidence":"..."}`, where
        `N` is the criterion's 1-based position, whether or not the task
        already carries the matching tag. Admission reads only this typed
-       finding: until the task carries the matching tag, a host of another OS
-       does not start it. Then compare the requirement with the task's current
-       tags, ignoring case. If the required OS has no matching tag, also report a
-       `utility_warnings` finding citing the criterion and naming the exact
-       tag to add: `os:macos`, `os:linux`, or `os:windows`. A different OS tag
-       does not satisfy the requirement. Recommend adding the matching tag
-       before dispatch so admission can select a capable host; never edit
-       tags yourself. If the matching tag is already present, do not repeat
-       this warning merely because the inspecting host runs another OS.
-       A platform mention, cross-compilation target, mocked platform check,
-       or negative test of another OS's admission refusal does not by itself
-       require that native host, so it belongs in neither `required_os` nor
-       `utility_warnings`. Multiple OS tags admit any one of those
-       OSes; when evidence is required on every named OS, recommend separate
-       host-scoped validation tasks rather than claiming those tags arrange
+       finding, never warning prose: a host requirement stated only in
+       `utility_warnings` routes nothing, and a host that cannot meet it will
+       claim the task. When every requirement names one OS and the task has no
+       `os:` tag, apply adds that tag (`os:linux`, say) so admission routes the
+       task to a capable host; you never edit tags yourself. An `os:` tag the
+       task already carries is the operator's routing and is never replaced.
+       If it names a different OS than the requirement, report a
+       `utility_warnings` finding citing the criterion and the conflict;
+       admission keeps holding hosts that cannot meet the requirement until
+       an operator retags or re-scopes it.
+       Also check whether a criterion's evidence can come only from one
+       particular machine: its live task store, its running services, or its
+       data, such as timings measured on a named host against its workspace.
+       When that machine is `owner_machine` (it matches the criterion's host
+       by `machine_name` or `machine_id`), record each such criterion in
+       `required_machine` as
+       `{"criterion":N,"machine":"<owner machine_name or machine_id>","evidence":"..."}`;
+       pull admission then refuses a claim from every other machine and gives
+       that reason. Apply rejects a `machine` that does not name
+       `owner_machine`, so when the criterion needs another machine, or
+       `owner_machine` is null, leave `required_machine` empty and report the
+       requirement in `utility_warnings` for an operator to arrange.
+       Keep the bar high for both findings: record one only when the
+       criterion cannot be met anywhere else. A host or platform mention,
+       a measurement that any host could repeat on its own data, a
+       cross-compilation target, a mocked platform check, or a negative test
+       of another OS's admission refusal does not by itself require that
+       host, so it belongs in neither `required_os`, `required_machine`, nor
+       `utility_warnings`. Multiple OS tags admit any one of those OSes, so
+       requirements on several OSes add no tag; recommend separate
+       host-scoped validation tasks rather than claiming tags arrange
        execution on all hosts.
     6. Assess the bounded logical repair, not alert severity, alert count, file
        count, version increment, or expected wall-clock time. Evaluate repair
@@ -357,7 +402,8 @@ spec:
         "adr_conflicts":[],
         "utility_warnings":[],
         "surface_warnings":[],
-        "required_os":[]
+        "required_os":[],
+        "required_machine":[]
       }],
       "summary":"one short partition summary"
     },"error":null}

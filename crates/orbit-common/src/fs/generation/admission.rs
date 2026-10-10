@@ -13,8 +13,8 @@ use super::image::process_digest;
 use super::paths::{ADMISSION_LOCK, GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_compat, read_generation, write_compat};
 use super::refusal::{
-    SWITCH_PENDING, WRITES_WHILE_FOREIGN, contended, quiesce_timeout, refusal, switch_pending,
-    unwritable, upgrade_holds_admission,
+    INCOMPATIBLE, SWITCH_PENDING, WRITES_WHILE_FOREIGN, contended, quiesce_timeout, refusal,
+    switch_pending, unwritable, upgrade_holds_admission, upgrade_pending,
 };
 use super::registry::{
     self, ParticipantRecord, ParticipantRole, PendingClaim, PendingSwitch, Registration,
@@ -58,6 +58,14 @@ pub struct Participant<'a> {
     /// The resume capability it hands over with when a candidate is renamed
     /// over its executable, if it can (see [`ParticipantRecord::handover`]).
     pub handover: Option<&'a str>,
+    /// Whether it runs inside an Orbit-managed activity: an agent's nested
+    /// `orbit`, which may be a newer binary than the drain that started the
+    /// step. It never records a pending switch nor waits behind one, since
+    /// that drain yields only at the step boundary, which waits on this
+    /// process. It is refused at once, under
+    /// [`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER),
+    /// which the step settles as transient.
+    pub in_activity: bool,
 }
 
 /// The configured wait for a breaking upgrade, and for an updater waiting
@@ -299,12 +307,14 @@ impl GenerationGuard {
     /// remember the participation for [`pending_switch_for_this_process`] and
     /// [`process_handover`]. `handover` is the resume capability this process
     /// hands over with, if it can.
+    /// `in_activity` is [`Participant::in_activity`].
     pub fn for_process<F>(
         root: &Path,
         identity: &CompatibilityIdentity,
         role: ParticipantRole,
         handover: Option<&str>,
         access: Access,
+        in_activity: bool,
         store_schema: F,
     ) -> Result<Self, OrbitError>
     where
@@ -316,6 +326,7 @@ impl GenerationGuard {
             role,
             access,
             handover,
+            in_activity,
         };
         let guard = Self::join(root, &participant, quiesce_bound(), store_schema)?;
         let _ = PARTICIPATION.set(Participation {
@@ -463,10 +474,15 @@ impl GenerationGuard {
                 Ok(guard)
             }
             Some(reason) if access == Access::Write && envelope.is_superseded_by(identity) => {
+                if participant.in_activity {
+                    return Err(upgrade_pending(format!(
+                        "this binary ({identity}) would switch the store generation: {reason}"
+                    )));
+                }
                 Self::quiesce(root, admission, generation, participant, quiesce, &reason)
             }
             Some(reason) => Err(refusal(format!(
-                "this binary ({identity}) is incompatible with the live Orbit processes: {reason}"
+                "this binary ({identity}) {INCOMPATIBLE}: {reason}"
             ))),
         }
     }
@@ -689,10 +705,27 @@ fn admitted_past_pending(
     wait: Duration,
 ) -> Result<Record, OrbitError> {
     loop {
-        let held = admission(root, mode, wait, Some(participant.identity))?;
+        let held = match admission(root, mode, wait, Some(participant.identity)) {
+            Ok(held) => held,
+            // Whichever upgrade holds admission, a command inside an
+            // activity is refused typed rather than as contention.
+            Err(error) if participant.in_activity => {
+                return Err(match pending_switch(root) {
+                    Some(switch) => upgrade_pending(switch_pending(&switch)),
+                    None if upgrade_holding(root, None).is_some() => {
+                        upgrade_pending("an Orbit update or generation takeover holds admission")
+                    }
+                    None => error,
+                });
+            }
+            Err(error) => return Err(error),
+        };
         let Some(switch) = pending_switch(root) else {
             return Ok(held);
         };
+        if participant.in_activity {
+            return Err(upgrade_pending(switch_pending(&switch)));
+        }
         if switch.target != *participant.identity {
             return Err(refusal(switch_pending(&switch)));
         }

@@ -13,6 +13,7 @@ mod window;
 
 pub(super) use approvals::{record_proposed_approvals, select_proposed_approvals};
 pub(super) use classify::classify_workspace_auto_tasks;
+pub(super) use drains::read_live_leaf_runs;
 pub(super) use window::drain_window;
 
 fn action_failed(action: &str, message: String) -> DispatchError {

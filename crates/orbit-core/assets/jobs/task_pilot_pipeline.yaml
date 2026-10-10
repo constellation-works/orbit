@@ -31,8 +31,13 @@
 # Superseded members are observed and prepared afresh without failure records
 # or retrying the stale snapshot. A run with applied and superseded tasks succeeds.
 # The host-prepared before list is authoritative; legacy agent echoes are ignored.
-# Active successful preparation checkpoints withhold their tasks from local
+# Prepare reserves its final selection for this run inside the commit
+# boundary, checking live holders in the same critical section, so of two runs
+# preparing one task at once only one keeps it; an explicit loser settles that
+# task as superseded `piloted_elsewhere`. Reservations and successful
+# preparation checkpoints withhold their tasks from other pilots, local
 # delivery selection and owner pull admission until the pilot run terminates.
+# A claimed task edited between its claim and prepare settles superseded alone.
 # Bare relative file and
 # directory targets are normalized only from the pinned source tree. Selector
 # existence is validated against the prepared source revision, not a later
@@ -41,7 +46,8 @@
 # keeps every such target the assessment omits. Apply atomically persists context_files, assessed complexity, its
 # audit rationale/evidence, and a replay receipt. A CI sweep may pass its
 # exact filing record plus literal promotion authority; only then can apply
-# promote a warning-free, selector-backed proposed repair to backlog. An
+# promote a warning-free, selector-backed proposed repair to backlog. A filed
+# task another writer already promoted settles superseded `promoted_elsewhere`. An
 # `orbit run auto --approve-proposed` drain passes `drain_promotion` (its own
 # run ID) plus the same literal authority instead; apply verifies that the
 # drain is live, opted in, and dispatched this run before it approves any
@@ -116,6 +122,7 @@ spec:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            owner_machine: "{{ steps.prepare.output.owner_machine }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
@@ -150,6 +157,7 @@ spec:
             validation_errors: "{{ item.validation_errors }}"
             repair_attempt: true
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            owner_machine: "{{ steps.prepare.output.owner_machine }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"

@@ -47,6 +47,7 @@ spec:
     failed_run_id: ""
     observed_status: blocked
     observed_updated_at: ""
+    observed_lifecycle_digest: ""
 
   steps:
     - id: prepare
@@ -58,6 +59,7 @@ spec:
         failed_run_id: "{{ input.failed_run_id }}"
         observed_status: "{{ input.observed_status }}"
         observed_updated_at: "{{ input.observed_updated_at }}"
+        observed_lifecycle_digest: "{{ input.observed_lifecycle_digest }}"
 
     - id: recover
       when: "{{ steps.prepare.output.proceed }} == true"

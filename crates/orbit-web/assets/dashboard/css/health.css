@@ -137,7 +137,16 @@ td .rel-rate { font-size: 12px; }
 .incident-surface { font: 12px var(--font-mono); overflow-wrap: anywhere; }
 .incident-actor { color: var(--fg-dim); font: 11px var(--font-sans); }
 .incident-count { margin-left: auto; color: var(--fg); font: 11px var(--font-mono); white-space: nowrap; }
+.incident-recurrence-summary {
+  margin-left: auto; color: var(--fg); font: 11px var(--font-mono); white-space: normal; overflow-wrap: anywhere;
+}
 .incident-when { color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
+.incident-run { color: var(--fg-dim); font: 11px var(--font-mono); overflow-wrap: anywhere; }
+.incident-recurrence-runs {
+  display: flex; flex-direction: column; margin: 8px 0 0 14px; border-left: 1px solid var(--border);
+}
+.incident-recurrence-runs > .incident-row { border-bottom: 1px solid var(--border); padding: 8px 0 8px 10px; }
+.incident-recurrence-runs > .incident-row:last-child { border-bottom: 0; }
 .incident-message {
   margin-top: 4px; color: var(--fg-dim); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere;
 }
@@ -201,7 +210,7 @@ td .rel-rate { font-size: 12px; }
   .tool-health-grid { grid-template-columns: minmax(0, 1fr); }
   .health-card .card-header { flex-wrap: wrap; align-items: flex-start; }
   .health-card .tool-name { white-space: normal; overflow-wrap: anywhere; }
-  .incident-count { margin-left: 0; }
+  .incident-count, .incident-recurrence-summary { margin-left: 0; }
   .incident-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .incident-facts dt { margin-top: 6px; }
   .incident-evidence { display: block; overflow-x: auto; white-space: nowrap; }
@@ -209,6 +218,7 @@ td .rel-rate { font-size: 12px; }
 }
 @media (max-width: 520px) {
   .incident-row { padding: 10px; }
+  .incident-recurrence-runs { margin-left: 0; }
   .incident-head { align-items: flex-start; }
   .incident-surface { flex: 1 1 100%; }
   .incident-actions > * { flex: 1 1 100%; }

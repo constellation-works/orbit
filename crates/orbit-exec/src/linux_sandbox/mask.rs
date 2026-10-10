@@ -1,6 +1,8 @@
-//! Directories hidden from a Bubblewrap child behind a read-only stand-in.
+//! Directories and files hidden from a Bubblewrap child behind a read-only
+//! stand-in.
 //!
-//! A mask is a `--ro-bind <sentinel> <target>` emitted after every other
+//! A mask is a `--ro-bind <sentinel> <target>` for a directory, or a
+//! `--dev-bind /dev/null <file>` for a single file, emitted after every other
 //! mount of the plan, so no earlier policy grant or alias bind can expose the
 //! target again. A mount works on one path, so a target the child could also
 //! reach through a second path would stay readable there. The plan is refused
@@ -30,6 +32,7 @@ pub(super) fn append_mask_mounts(
         ))
     })?;
     let mounts = parse_mountinfo(&mountinfo);
+    let mut masked_dirs = Vec::new();
     for target in &mask.targets {
         let target = canonical_existing(target, "masked directory")?;
         if !target.is_dir() {
@@ -59,8 +62,59 @@ pub(super) fn append_mask_mounts(
             sentinel.display().to_string(),
             target.display().to_string(),
         ]);
+        masked_dirs.push(target);
+    }
+    for file in &mask.files {
+        let Some(file) = canonical_masked_file(file)? else {
+            continue;
+        };
+        // A file inside a masked directory is already hidden, and the mount
+        // point would no longer exist once the sentinel covers its parent.
+        if masked_dirs.iter().any(|dir| file.starts_with(dir)) {
+            continue;
+        }
+        let alias = plan_alias(out, &file).or(host_alias(&mounts, &file)?);
+        if let Some(alias) = alias {
+            return Err(OrbitError::PolicyDenied(format!(
+                "linux-bwrap cannot mask `{}`: the sandbox would also reach it at `{}`; \
+                 refusing to start with the mask incomplete",
+                file.display(),
+                alias.display()
+            )));
+        }
+        // `--dev-bind`, not `--ro-bind`: Bubblewrap mounts a plain bind
+        // `nodev`, and opening a device node on a `nodev` mount fails with
+        // `EACCES`, so the file would refuse to open instead of reading empty.
+        out.extend([
+            "--dev-bind".to_string(),
+            "/dev/null".to_string(),
+            file.display().to_string(),
+        ]);
     }
     Ok(())
+}
+
+/// The physical path of a masked file, or `None` when nothing exists there to
+/// hide. Anything other than a regular file refuses the plan, because a
+/// `/dev/null` bind cannot stand in for it.
+fn canonical_masked_file(file: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let canonical = match file.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::PolicyDenied(format!(
+                "linux-bwrap cannot resolve masked file `{}`: {error}",
+                file.display()
+            )));
+        }
+    };
+    if !canonical.is_file() {
+        return Err(OrbitError::PolicyDenied(format!(
+            "masked path `{}` is not a regular file",
+            canonical.display()
+        )));
+    }
+    Ok(Some(canonical))
 }
 
 /// A bind the plan itself makes from one path to another, whose source holds

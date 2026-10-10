@@ -10,7 +10,7 @@ use orbit_store::contracts::{FailureClass, classify};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewBudget, ReviewCertificate, ReviewTiming, ReviewerInvocationEvent,
+    ReviewBudget, ReviewCertificate, ReviewCrewPoolMember, ReviewTiming, ReviewerInvocationEvent,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -36,21 +36,34 @@ impl Fixture {
 
     /// The fixture with `review` appended to its `[review]` table.
     pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
-        Self::build(required, review, ReviewTiming::BeforePr, 10)
+        Self::build(required, review, ReviewTiming::BeforePr, 10, false)
     }
 
     /// The fixture whose captured `review.minutes` is `minutes` [ORB-15094].
     pub(super) fn new_with_review_minutes(minutes: u32) -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, minutes)
+        Self::build(&[], "", ReviewTiming::BeforePr, minutes, false)
     }
 
     /// The fixture for a run that captured `review.before_landing` instead
     /// [ORB-14849].
     pub(super) fn before_landing() -> Self {
-        Self::build(&[], "", ReviewTiming::BeforeLanding, 10)
+        Self::build(&[], "", ReviewTiming::BeforeLanding, 10, false)
     }
 
-    fn build(required: &[&str], review: &str, timing: ReviewTiming, review_minutes: u32) -> Self {
+    /// The fixture whose task the `implementer` crew implemented, for a run
+    /// that captured `operation.review_crew = ["implementer", "reviewers"]`
+    /// whole [ORB-15195].
+    pub(super) fn review_pool() -> Self {
+        Self::build(&[], "", ReviewTiming::BeforePr, 10, true)
+    }
+
+    fn build(
+        required: &[&str],
+        review: &str,
+        timing: ReviewTiming,
+        review_minutes: u32,
+        pool: bool,
+    ) -> Self {
         let switch = match timing {
             ReviewTiming::BeforeLanding => "before_landing",
             _ => "before_pr",
@@ -66,10 +79,18 @@ impl Fixture {
         } else {
             format!("required_validation_commands = {required:?}\n")
         };
+        let (implementer, review_crew) = if pool {
+            (
+                "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n",
+                "[\"implementer\", \"reviewers\"]",
+            )
+        } else {
+            ("", "\"reviewers\"")
+        };
         std::fs::write(
             workspace.join("config.toml"),
             format!(
-                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = \"reviewers\"\n[review]\n{switch} = true\n{review}"
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{switch} = true\n{review}"
             ),
         )
         .unwrap();
@@ -105,6 +126,7 @@ impl Fixture {
                 plan: "Review candidate.txt.".into(),
                 context_files: vec!["file:candidate.txt".into()],
                 status: Some(TaskStatus::InProgress),
+                crew: pool.then(|| "implementer".into()),
                 ..Default::default()
             })
             .unwrap();
@@ -117,7 +139,20 @@ impl Fixture {
                 ReviewTiming::BeforeLanding => policy.review_before_landing.source.label().into(),
                 _ => policy.review_before_pr.source.label().into(),
             },
-            crew: policy.review_crew.value.clone(),
+            crew: (!pool).then(|| policy.review_crew.value[0].clone()),
+            crew_pool: if pool {
+                policy
+                    .review_crew
+                    .value
+                    .iter()
+                    .map(|name| ReviewCrewPoolMember {
+                        name: name.clone(),
+                        weight: 1,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
             crew_source: policy.review_crew.source.label().into(),
             // A bounded fixture budget exercises exhaustion without depending
             // on the operational default.
@@ -232,6 +267,22 @@ impl Fixture {
             })
             .unwrap()
     }
+}
+
+/// [ORB-15195] A run that captured a review pool admits one member as its
+/// reviewer, not the crew that implemented its task, and the reviewer record
+/// names the pool as its source.
+#[test]
+fn a_captured_pool_reviews_with_a_crew_that_did_not_implement_the_task() {
+    let mut fixture = Fixture::review_pool();
+    fixture.admit();
+    let admission = &fixture.input["admission"];
+    assert_eq!(admission["applies"], true, "{admission}");
+    assert_eq!(admission["reviewer"]["crew"], "reviewers", "{admission}");
+    assert_eq!(
+        admission["reviewer"]["crew_source"], "workspace pool",
+        "{admission}"
+    );
 }
 
 #[test]

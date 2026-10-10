@@ -130,6 +130,11 @@ pub(super) fn attempt_final_recovery(
     if orbit_types::workflow::is_task_blocked_by_agent(None, Some(error_message)) {
         return skip("an agent declared a blocker; the candidate was not judged by another agent");
     }
+    // Nor judges a candidate whose agent an Orbit upgrade refused mid-step;
+    // the failure handoff keeps it for the run after the upgrade.
+    if orbit_types::workflow::is_upgrade_pending(None, Some(error_message)) {
+        return skip("an Orbit upgrade refused the step's agent; the candidate was not judged");
+    }
     // [ORB-14149] Nor does any decision give the provider's model capacity;
     // the candidate stays in the worktree for a resume.
     if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {

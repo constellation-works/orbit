@@ -135,6 +135,7 @@ pub struct TaskCommitBoundary {
 
 mod admission;
 mod boundary;
+mod branch_observation;
 mod commit;
 mod handoff;
 mod landing;

@@ -48,6 +48,34 @@
 .run-hold strong { color: var(--state-held); }
 .run-hold-message { border-color: #3c2c55; background: #0d0914; color: #dac8fa; }
 .run-hold p { margin: 0; font-size: 13px; line-height: 1.55; }
+.run-cancelled { border-color: var(--state-cancelled); }
+.run-cancelled .run-failure-head { color: var(--state-cancelled); }
+.run-cancelled-reason,
+.run-failure-root {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.run-cancelled-reason { color: #e7c7c2; }
+.run-failure-root { color: #ffd9d4; }
+button.failure-id-link,
+a.failure-id-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+button.failure-id-link:focus-visible,
+a.failure-id-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .run-meta-grid .value { color: var(--fg); }
 .run-meta-grid .duration { white-space: nowrap; }
 .run-meta-task { grid-column: 1 / -1; }
@@ -66,6 +94,13 @@
   letter-spacing: 0.08em;
   margin-bottom: 6px;
 }
+.child-dispatch-notice {
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.child-dispatch-notice strong { color: var(--fg); }
 .child-dispatch-row {
   display: flex;
   flex-wrap: wrap;
@@ -74,7 +109,13 @@
   margin-bottom: 4px;
 }
 .child-dispatch-meta { color: var(--fg-dim); }
+.waiting-task { color: var(--fg-dim); }
+.waiting-task-link { color: var(--accent); text-decoration: none; }
+.waiting-task-link:hover { text-decoration: underline; }
 .child-dispatch-error { color: var(--state-failed); }
+.child-dispatch-summary { margin-bottom: 8px; }
+.child-dispatch-row .state-label { color: var(--dot); }
+.child-dispatch-row .duration { white-space: nowrap; }
 
 /* ORB-12516: distributed claim provenance and the owner's handoff
    actions, rendered inside the existing task detail and run meta rather
@@ -368,6 +409,9 @@
   gap: 8px;
   padding: 8px 16px 0 16px;
   flex-wrap: wrap;
+}
+.run-detail-actions .run-replay {
+  margin-left: auto;
 }
 
 /* Run Detail — Gantt timeline */

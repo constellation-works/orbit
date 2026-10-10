@@ -76,6 +76,7 @@ fn a_finished_ci_sweep_stores_child_summaries_and_no_resume_state() {
         );
     }
     let guard = pipeline_success_guard(
+        &runtime,
         "pipeline_success_guard",
         &json!({"context": "ci-failure sweep pilot child", "results": summaries}),
     )

@@ -7,6 +7,8 @@ import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
 import { assertRunTaskLabels } from './dashboard_run_tasks_browser.mjs';
+import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
+import { assertPullRequestLinks } from '../../tests/http_api/dashboard_pull_request_links_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -299,7 +301,7 @@ async function assertRowKeyboard(page) {
       if (new URL(path, window.location.href).pathname !== '/api/tasks' || !response.ok) return response;
       const payload = await response.json();
       payload.items = payload.items.map(task => ({ ...task, title: `${task.title} (refreshed)` }));
-      return { ...response, json: async () => payload, text: async () => JSON.stringify(payload) };
+      return new Response(JSON.stringify(payload), { status: response.status, headers: response.headers });
     };
     document.getElementById('refresh-btn').click();
   });
@@ -551,7 +553,8 @@ async function assertStillWaiting(page) {
     if (!(await panel.isVisible())) throw new Error(`Still-waiting panel invisible at ${width}px`);
     const text = await panel.textContent();
     for (const expected of [
-      'still waiting: 9 admissible, 1 deferred and 2 excluded backlog task(s)',
+      '3 backlog tasks have recorded wait reasons (1 deferred, 2 excluded)',
+      '9 additional admissible tasks were not started and are not listed below',
       'Task ORB-101: context_lock_conflict blocked-by=ORB-900',
       'Task ORB-103: dependency_not_done blocked-by=ORB-901',
       'Task ORB-104: host_os_mismatch (waits for a linux host',
@@ -774,10 +777,11 @@ async function assertTopbarSingleRow(page) {
 // still scroll (Metrics, Scoreboard) keep their first column pinned and show a
 // scroll edge. Fixtures stay in this function so it owns its fetch.
 async function assertNarrowTableLayouts(page) {
+  const runsLayoutMeasurements = [];
   await page.evaluate(async () => {
     const now = Date.now();
     const iso = (minutes) => new Date(now - minutes * 60000).toISOString();
-    const response = payload => ({ ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) });
+    const response = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), { status, headers });
     const runs = ['failed', 'success', 'running'].map((state, index) => ({
       run_id: `jrun-20261007-0717-c${index}-with-a-long-identifier`, job_id: `a-job-with-a-long-name-${index}`, state,
       created_at: iso(index + 1), duration_ms: 90000,
@@ -795,12 +799,21 @@ async function assertNarrowTableLayouts(page) {
       ts: iso(index + 1), step: `step-with-a-long-name-${index}`, actor_identity: 'claude-sonnet-5-5',
       token_usage: 123456, tool_invocations: 77, step_duration_ms: 456000, retry_count: 1,
     }));
+    const olderAuditEvents = [{ ...events[0], id: 8998, timestamp: iso(3), target_id: 'TASK-OLDER' }];
+    const auditPageRequests = [];
     const fixtureFetch = globalThis.fetch;
     globalThis.narrowTableFixtureFetch = fixtureFetch;
+    globalThis.narrowAuditPageRequests = auditPageRequests;
     globalThis.fetch = async (path, options) => {
       const url = new URL(path, window.location.href);
       if (url.pathname === '/api/job-runs') return response({ items: runs, total: runs.length, limit: 50, truncated: false });
-      if (url.pathname === '/api/audit') return response(events);
+      if (url.pathname === '/api/audit') {
+        const cursor = url.searchParams.get('before');
+        auditPageRequests.push(cursor);
+        return cursor
+          ? response(olderAuditEvents)
+          : response(events, 200, { 'x-audit-next-before': 'older-audit-page' });
+      }
       if (url.pathname === '/api/diagnostics/errors') return response({ items: errors, since: iso(24 * 60), coverage_since: iso(24 * 60) });
       if (url.pathname === '/api/diagnostics/metrics') return response(metrics);
       return fixtureFetch(path, options);
@@ -837,7 +850,37 @@ async function assertNarrowTableLayouts(page) {
   await page.locator('#runs-body .runs-filter-button').first().click();
   await page.waitForFunction(() => document.querySelectorAll('#runs-body .runs-row[data-key^="run-"]').length === 3);
   if (await scrolls('runs-body') || await pageOverflow()) throw new Error('Runs must not scroll sideways at 375px');
-  await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
+  const phoneToolbar = await page.evaluate(() => {
+    const wrap = document.getElementById('runs-body');
+    const toolbar = wrap.querySelector('.runs-toolbar');
+    const rect = toolbar.getBoundingClientRect();
+    const style = getComputedStyle(toolbar);
+    const wrapRect = wrap.getBoundingClientRect();
+    return {
+      viewportWidth: window.innerWidth,
+      bodyClientWidth: wrap.clientWidth,
+      bodyScrollWidth: wrap.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      toolbarWidth: rect.width,
+      marginLeft: parseFloat(style.marginLeft),
+      marginRight: parseFloat(style.marginRight),
+      toolbarLeft: rect.left,
+      toolbarRight: rect.right,
+      bodyLeft: wrapRect.left + wrap.clientLeft,
+      bodyRight: wrapRect.left + wrap.clientLeft + wrap.clientWidth,
+      toolbarScrollWidth: toolbar.scrollWidth,
+      toolbarClientWidth: toolbar.clientWidth,
+    };
+  });
+  if (Math.abs(phoneToolbar.toolbarWidth + phoneToolbar.marginLeft + phoneToolbar.marginRight - phoneToolbar.bodyClientWidth) > 1) {
+    throw new Error(`Runs toolbar width and margins exceed the 375px body: ${JSON.stringify(phoneToolbar)}`);
+  }
+  if (phoneToolbar.toolbarLeft < phoneToolbar.bodyLeft - 1 || phoneToolbar.toolbarRight > phoneToolbar.bodyRight + 1) {
+    throw new Error(`Runs toolbar falls outside the 375px body: ${JSON.stringify(phoneToolbar)}`);
+  }
+  runsLayoutMeasurements.push(phoneToolbar);
+  await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-query', '.runs-window', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
   await page.screenshot({ path: path.join(evidence, 'runs-375.png'), fullPage: true });
 
   for (const width of [601, 700, 768]) {
@@ -849,21 +892,44 @@ async function assertNarrowTableLayouts(page) {
       wrap.scrollLeft = wrap.scrollWidth;
       const wrapRect = wrap.getBoundingClientRect();
       const rect = cell.getBoundingClientRect();
+      const toolbar = wrap.querySelector('.runs-toolbar');
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const toolbarStyle = getComputedStyle(toolbar);
       const topmost = document.elementFromPoint(rect.left + 4, (rect.top + rect.bottom) / 2);
       return {
+        viewportWidth: window.innerWidth,
         scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
         scrolled: wrap.scrollLeft > 0,
         stays: Math.abs(rect.left - wrapRect.left) < 1.5,
         painted: cell.contains(topmost),
         edge: getComputedStyle(wrap).backgroundImage.includes('gradient'),
+        bodyClientWidth: wrap.clientWidth,
+        bodyScrollWidth: wrap.scrollWidth,
+        pageClientWidth: document.documentElement.clientWidth,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        toolbarWidth: toolbarRect.width,
+        marginLeft: parseFloat(toolbarStyle.marginLeft),
+        marginRight: parseFloat(toolbarStyle.marginRight),
+        toolbarLeft: toolbarRect.left,
+        toolbarRight: toolbarRect.right,
+        bodyLeft: wrapRect.left + wrap.clientLeft,
+        bodyRight: wrapRect.left + wrap.clientLeft + wrap.clientWidth,
+        toolbarScrollWidth: toolbar.scrollWidth,
+        toolbarClientWidth: toolbar.clientWidth,
       };
     });
     if (!pinned.scrolls) throw new Error(`Runs must still scroll sideways at ${width}px for this check to mean anything`);
     if (!(pinned.scrolled && pinned.stays && pinned.painted && pinned.edge)) {
       throw new Error(`Runs first column or scroll edge missing at ${width}px: ${JSON.stringify(pinned)}`);
     }
+    if (Math.abs(pinned.toolbarLeft - pinned.bodyLeft) > 1.5 || pinned.toolbarRight > pinned.bodyRight + 1.5 || pinned.toolbarScrollWidth > pinned.toolbarClientWidth + 1) {
+      throw new Error(`Runs toolbar is not pinned within its body at ${width}px: ${JSON.stringify(pinned)}`);
+    }
+    await assertVisible(['.runs-filter', '.runs-filter-button.active', '.runs-query', '.runs-window'], '#runs-body', 'Runs toolbar', width);
+    runsLayoutMeasurements.push(pinned);
     await page.screenshot({ path: path.join(evidence, `runs-${width}.png`), fullPage: true });
   }
+  fs.writeFileSync(path.join(evidence, 'runs-layout-measurements.json'), `${JSON.stringify({ viewports: runsLayoutMeasurements }, null, 2)}\n`);
   for (const width of [769, 900, 1024, 1100]) {
     await page.setViewportSize({ width, height: 900 });
     const reachable = await page.evaluate(() => {
@@ -913,6 +979,19 @@ async function assertNarrowTableLayouts(page) {
   if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Audit events must not scroll sideways at 375px');
   await assertVisible(['tr.audit-row .c-status', 'tr.audit-row .c-command', 'tr.audit-row .c-time'], '#audit-body', 'Audit events', 375);
   await page.screenshot({ path: path.join(evidence, 'audit-375.png'), fullPage: true });
+  await page.locator('#audit-body .audit-more-btn').click();
+  await page.locator('#audit-body .audit-more-end').waitFor({ state: 'visible', timeout: 5000 });
+  const auditPaging = await page.evaluate(() => ({
+    requestCursors: globalThis.narrowAuditPageRequests,
+    rows: document.querySelectorAll('#audit-body tr.audit-row').length,
+  }));
+  const requestedOlderCursor = auditPaging.requestCursors.at(-1) === 'older-audit-page';
+  const requestedHeadPage = auditPaging.requestCursors.some(cursor => cursor === null);
+  if (!requestedHeadPage || !requestedOlderCursor || auditPaging.rows !== 3) {
+    throw new Error(`Audit paging must request the cursor and render its terminal page: ${JSON.stringify(auditPaging)}`);
+  }
+  if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Paged audit events must not scroll sideways at 375px');
+  await assertVisible(['tr.audit-row .c-status', 'tr.audit-row .c-command', 'tr.audit-row .c-time'], '#audit-body', 'Paged audit events', 375);
 
   await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/errors'));
   await refresh();
@@ -1156,6 +1235,8 @@ try {
     if (failures.length) throw new Error(failures.join('\n'));
     console.log('Chromium run-detail action feedback, scheduled polling, presentation and log wrapping passed.');
   } else {
+    await assertTaskTitleLayout(page, evidence);
+    await assertPullRequestLinks(page, evidence);
     await assertFrictionTaskLinks(page);
     await page.evaluate(() => globalThis.showTaskPaginationEvidence());
     await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');

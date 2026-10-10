@@ -147,7 +147,7 @@ next: false
     </a>
   </div>
 
-  <p class="orbit-walk-next">Turn on second-agent review with <code>review.before_pr</code> in your <a href="/reference/config/#settable-keys">workspace config</a>. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="/getting-started/first-task/">ship your first task by hand</a>.</p>
+  <p class="orbit-walk-next">Choose a second-agent review point: before PR with <code>review.before_pr</code>, before landing with <code>review.before_landing</code>, or after landing with <code>orbit auto-task toggle delivery-code-review on</code>. See <a href="concepts/tasks/#review-layers">Review layers</a> for when each runs and what it blocks. To merge yourself, leave off <code>--complete</code>: every run then stops at <code>review</code> with the pull request open. Or <a href="getting-started/first-task/">ship your first task by hand</a>.</p>
 </section>
 
 <section class="orbit-section">

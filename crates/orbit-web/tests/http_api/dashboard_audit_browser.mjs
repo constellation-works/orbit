@@ -39,8 +39,31 @@ const policy = {
     cause: index < 4 ? 'policy' : 'context refusal', denial_kind: 'tool_policy',
   })),
 };
+// When set, /api/audit pages through it like the real endpoint: newest first,
+// `before` keyset cursor, `x-audit-next-before` while a full page may have more.
+let pagedEvents = null;
+// When set, the newest page (no `before`) answers with these rows and cursor
+// even though it is short: a capped scan that stopped before the window ended.
+let cappedHead = null;
+const auditRequests = [];
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/audit' && pagedEvents) {
+    auditRequests.push(url.searchParams);
+    const limit = Number(url.searchParams.get('limit'));
+    const before = url.searchParams.get('before');
+    const rows = pagedEvents
+      .filter(event => before === null || event.id < Number(before))
+      .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status'))
+      .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
+      .slice(0, limit);
+    const capped = before === null && cappedHead;
+    const cursor = capped ? cappedHead.cursor : rows.length >= limit ? String(rows.at(-1).id) : null;
+    res.setHeader('content-type', 'application/json');
+    if (cursor) res.setHeader('x-audit-next-before', cursor);
+    res.end(JSON.stringify(capped ? cappedHead.rows : rows));
+    return;
+  }
   if (url.pathname.startsWith('/api/')) {
     let payload = events;
     if (url.pathname === '/api/diagnostics/denials') {
@@ -64,7 +87,7 @@ let page;
 const measurements = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#audit`);
@@ -133,7 +156,7 @@ try {
     measurements.push(layout);
     await page.screenshot({ path: path.join(evidence, `events-${width}.png`), fullPage: true, animations: 'disabled' });
   }
-  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   const shortEventCount = events.length;
   events = [...events, ...Array.from({ length: 60 }, (_, index) => ({
     ...events[index % shortEventCount], id: index + shortEventCount + 1,
@@ -169,29 +192,122 @@ try {
   assert.equal(await page.locator('#audit-detail-1').count(), 0);
   assert.equal(await page.locator('[data-key="duration-by-tool"] tbody tr').count(), 1);
   assert.equal(await page.locator('[data-key="duration-by-tool"] tbody tr td').first().textContent(), events[0].tool_name);
+  // Paging: the header separates rows shown from events in the window, older
+  // pages append, and the filters (and their URL) ride along on every page.
+  pagedEvents = Array.from({ length: 120 }, (_, index) => ({
+    ...events[1], id: 120 - index, execution_id: `paged-${120 - index}`,
+    status: index % 4 === 0 ? 'failure' : 'success',
+    role: index % 3 === 0 ? 'unverified' : 'codex',
+  }));
+  const countText = () => page.locator('#audit-count').textContent();
+  await page.evaluate(async (summary) => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+    auditFixture.renderAuditSummary({ ...summary, events: 120 }, auditContext);
+  }, summary);
+  assert.equal(await page.locator('.audit-row').count(), 50);
+  assert.equal(await countText(), '50 of 120 in 24h');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await countText(), '100 of 120 in 24h');
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'older pages continue where the last ended');
+  // A refresh re-fetches the newest page but keeps the older rows on screen.
+  pagedEvents.unshift({ ...pagedEvents[0], id: 121, execution_id: 'paged-121' });
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  assert.equal(await page.locator('.audit-row').count(), 101, 'refresh keeps loaded pages and adds the new event');
+  assert.equal(new Set(await page.locator('.audit-row').evaluateAll(rows => rows.map(row => row.title))).size, 101, 'no row is listed twice');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 121);
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no button once the window is exhausted');
+  assert.match(await page.locator('.audit-more-end').textContent(), /No older events/);
+  assert.equal(await countText(), '121 of 121 in 24h', 'the shown count never exceeds the window count');
+  auditRequests.length = 0;
   await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=success&hide_unverified=1'));
+    auditFixture.buildAuditChips(auditContext);
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  assert.equal(await page.evaluate(() => auditFixture.buildAuditHash()), '#audit?since=24h&status=success&hide_unverified=1', 'the hide choice is part of the URL');
+  assert.equal(auditRequests.at(-1).get('hide_unverified'), 'true');
+  assert.equal(await page.locator('.chip[data-toggle="hide_unverified"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.audit-row .c-role', { hasText: 'Unconfirmed caller' }).count(), 0, 'unconfirmed successes are hidden');
+  assert.match(await countText(), /^50 shown · 120 in 24h$/);
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length > 50);
+  const olderRequest = auditRequests.at(-1);
+  assert.ok(olderRequest.has('before'), 'paging sends the cursor');
+  assert.equal(olderRequest.get('status'), 'success', 'paging keeps the status filter');
+  assert.equal(olderRequest.get('hide_unverified'), 'true', 'paging keeps the probe filter');
+  assert.equal(await page.locator('.audit-row .audit-status:not(.success)').count(), 0, 'every page honours the status filter');
+  // A short capped head whose oldest match is newer than the loaded rows leaves
+  // a gap. The old tail must not be spliced on, and Load older must resume from
+  // the head's own cursor so the match inside the gap (event 9000) is reached.
+  const gapRow = (id) => ({ ...events[1], id, execution_id: `gap-${id}`, status: 'success', role: 'codex' });
+  pagedEvents = [9000, ...Array.from({ length: 100 }, (_, index) => 100 - index)].map(gapRow);
+  const rowTitles = () => page.locator('.audit-row').evaluateAll(rows => rows.map(row => row.title));
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=success'));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  cappedHead = { rows: [20000, 19000].map(gapRow), cursor: '10001' };
+  auditRequests.length = 0;
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  cappedHead = null;
+  assert.deepEqual(await rowTitles(), ['event 20000', 'event 19000'], 'a short capped head drops the disconnected older rows');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelector('.audit-row[title="event 9000"]') !== null);
+  assert.equal(auditRequests.at(-1).get('before'), '10001', 'Load older resumes from the head cursor');
+  assert.equal((await rowTitles())[2], 'event 9000', 'the gap match follows the new head');
+  pagedEvents = null;
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
     auditFixture.setAuditSubtab('policy');
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
   assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 8);
-  assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /^4\b.*3\b.*1\b/);
-  assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^8\b.*4\b/);
-  assert.equal(await page.locator('.policy-count-note').isVisible(), true);
+  const policyBadgeCount = Number(await page.locator('#audit-count').textContent());
+  const policyHeadline = await page.locator('.policy-count-headline').textContent();
+  assert.match(policyHeadline, new RegExp(`^${policyBadgeCount} policy denials\\b`));
+  assert.equal(policyBadgeCount, 4);
+  assert.equal(await page.locator('#audit-title').textContent(), 'Policy denials');
+  const countDetails = page.locator('.policy-count-details');
+  assert.equal(await countDetails.locator('summary').textContent(), 'How this is counted');
+  assert.equal(await countDetails.evaluate(details => details.open), false, 'count provenance is collapsed by default');
+  assert.equal(await countDetails.locator('.policy-count-explanation').isVisible(), false);
+  assert.match(await countDetails.locator('.policy-count-explanation').textContent(), /8 denial evidence rows/);
+  assert.match(await countDetails.locator('.policy-count-explanation').textContent(), /1000 rows per source/);
+  const recentTableLayout = await page.locator('.policy-recent-table').evaluate(table => {
+    const card = table.closest('.policy-section');
+    const tableBox = table.getBoundingClientRect();
+    const cardBox = card.getBoundingClientRect();
+    return {
+      tableLeft: tableBox.left, tableRight: tableBox.right,
+      cardLeft: cardBox.left, cardRight: cardBox.right,
+      cardClientWidth: card.clientWidth, cardScrollWidth: card.scrollWidth,
+    };
+  });
+  assert.ok(recentTableLayout.tableLeft >= recentTableLayout.cardLeft, `recent table starts inside its card: ${JSON.stringify(recentTableLayout)}`);
+  assert.ok(recentTableLayout.tableRight <= recentTableLayout.cardRight + 1, `recent table ends inside its card at 1440x900: ${JSON.stringify(recentTableLayout)}`);
+  assert.ok(recentTableLayout.cardScrollWidth <= recentTableLayout.cardClientWidth + 1, `recent table does not overflow its card at 1440x900: ${JSON.stringify(recentTableLayout)}`);
   await page.screenshot({ path: path.join(evidence, 'policy-1440.png'), fullPage: true, animations: 'disabled' });
   await page.evaluate(async () => {
     auditFixture.applyAuditHashQuery(new URLSearchParams('kind=fs'));
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
-  assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /^4\b/);
-  assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^2\b/);
+  assert.equal(Number(await page.locator('#audit-count').textContent()), 4, 'kind filters only restrict evidence, not canonical denials');
+  assert.match(await page.locator('.policy-count-headline').textContent(), /^4 policy denials\b/);
+  assert.match(await page.locator('.policy-count-explanation').textContent(), /2 denial evidence rows after the active filters/);
+  assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 2);
   await page.evaluate(async () => {
     auditFixture.applyAuditHashQuery(new URLSearchParams('role=absent&since=7d'));
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
   assert.equal(await page.locator('.policy-recent-table').count(), 0);
-  assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /7d.*3\b.*1\b/);
-  assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^0\b/);
-  assert.equal(await page.locator('.policy-count-note').isVisible(), true);
+  assert.match(await page.locator('.policy-count-headline').textContent(), /^4 policy denials in 7d\b/);
+  assert.match(await page.locator('#audit-policy-body .empty-state').textContent(), /No denial evidence matches the active filters/);
+  assert.equal(await page.locator('.policy-count-details').evaluate(details => details.open), false);
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, policy: { canonical: 4, evidence: 8, additional: 4 }, errors }, null, 2));
   console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, policy counts/filters/windows and keyboard expansion passed');

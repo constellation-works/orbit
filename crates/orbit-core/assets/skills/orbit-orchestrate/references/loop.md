@@ -133,13 +133,24 @@ routine, record and restore its previous state when the intervention ends.
 
 Inspect applied selectors and evidence behind duplicate/already-landed
 warnings. Resolve real ambiguity in the task, not by imposing a new agent
-output schema. Once preparation and promotion authorization are satisfied,
-update status to `backlog` immediately:
+output schema. Once the task carries verified `context_files` (or a
+`no-diff-expected` tag) and promotion is authorized, update status to
+`backlog`:
 
 ```bash
 orbit tool run orbit.task.show --input '{"workspace":"<selector>","id":"<task-id>","model":"<agent-family>"}'
 orbit tool run orbit.task.update --input '{"workspace":"<selector>","id":"<task-id>","status":"backlog","model":"<agent-family>"}'
 ```
+
+**Never file with `--status backlog`, or promote, a task whose
+`context_files` is empty while a drain is live.** File it as `proposed`, run
+the pilot (or set selectors yourself), then promote. Empty context holds no
+file lock. On 2026-10-10 three website tasks filed straight into the backlog
+of a live four-slot drain each edited `website/src/styles/custom.css`
+concurrently, and two of their runs had to be cancelled. A multi-slot drain
+now holds such a task (`awaiting_footprint`, then `awaiting_exclusive_slot`)
+and runs it only alone, which serializes the drain behind it. Task add and
+update warn when they leave one in the backlog.
 
 Use your own agent family for `model`. Ordinary pilot runs prepare context;
 they do not promote. The CI sweep has a separate, explicit admission path

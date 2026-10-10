@@ -1,5 +1,5 @@
-//! Forward-compatibility contract shared by Orbit's two state ledgers
-//! (ORB-12434).
+//! Forward-compatibility contract shared by Orbit's state ledgers
+//! (ORB-12434), and by the feature schema ledgers beside them.
 //!
 //! Both ledgers — the `.orbit/` workspace layout registry and the SQLite
 //! schema ledger ([`crate::maintenance::migration`]) — used to refuse *any* state whose
@@ -87,6 +87,8 @@ impl MigrationCompatibility {
 pub enum StateComponent {
     WorkspaceLayout,
     StoreSchema,
+    /// A feature crate's namespaced schema ledger.
+    FeatureSchema,
 }
 
 impl StateComponent {
@@ -95,6 +97,7 @@ impl StateComponent {
         match self {
             Self::WorkspaceLayout => "workspace layout",
             Self::StoreSchema => "store schema",
+            Self::FeatureSchema => "feature schema",
         }
     }
 }

@@ -15,6 +15,7 @@ fn settings(memory_high: MemoryLimit, memory_max: MemoryLimit) -> WorkerContainm
         memory_high,
         memory_max,
         tasks_max: 512,
+        cpu_quota_percent: 0,
     }
 }
 
@@ -107,6 +108,22 @@ fn scope_launch_carries_allowlisted_environment_and_honors_edits() {
             &["/worker/orbit", "job", "run-pipeline-worker", "run-1"]
         );
         assert_eq!(scoped.get_current_dir(), base.get_current_dir());
+        // `machine.worker_cpu_quota` of 0 (the unset default) adds no CPU
+        // property; a positive value adds `CPUQuota=<n>%` [ORB-15196].
+        assert!(
+            !args[..separator].iter().any(|arg| arg.contains("CPU")),
+            "an unset CPU quota must not reach the scope: {args:?}"
+        );
+        let limited = WorkerLimits::from_settings(&WorkerContainmentSettings {
+            cpu_quota_percent: 150,
+            ..settings(MemoryLimit::Infinity, MemoryLimit::Infinity)
+        })
+        .unwrap();
+        let limited = scoped_worker_command(&base, "orbit-worker-test.scope", &limited);
+        assert!(
+            command_args(&limited).contains(&"--property=CPUQuota=150%"),
+            "a configured CPU quota must reach the scope"
+        );
     }
 }
 

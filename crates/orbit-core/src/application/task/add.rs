@@ -6,10 +6,9 @@ use orbit_types::task::{
     Task, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags, validate_os_tags,
 };
-use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::random_crew_ticket;
+use crate::application::job::crew_pools::{random_crew_ticket, seeded_crew_ticket};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{
@@ -161,11 +160,19 @@ impl OrbitRuntime {
         // [ORB-12717] Crew is initially decided here, and never by a later status
         // transition. A caller-supplied crew is kept verbatim; otherwise the
         // complexity pools (then `default_crew`) choose one for this task.
-        let crew_assignment = self.creation_crew_assignment(
+        let mut crew_assignment = self.creation_crew_assignment(
             Some(params.complexity),
             params.crew.as_deref(),
             &mut creation_crew_ticket(action_key),
         )?;
+        // A crew the system chose from a setting records that setting rather
+        // than `explicit` [ORB-15195].
+        if let Some(assignment) = crew_assignment.as_mut()
+            && params.crew.is_some()
+            && let Some(source) = params.crew_source.take()
+        {
+            assignment.source = source;
+        }
         params.crew = crew_assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
@@ -278,16 +285,9 @@ impl OrbitRuntime {
 fn creation_crew_ticket(
     action_key: Option<&str>,
 ) -> impl FnMut() -> Result<u64, OrbitError> + use<> {
-    let action_key = action_key.map(ToOwned::to_owned);
-    let mut round: u64 = 0;
-    move || match &action_key {
-        Some(key) => {
-            let digest = Sha256::digest(format!("crew:{key}:{round}").as_bytes());
-            round += 1;
-            let mut ticket = [0u8; 8];
-            ticket.copy_from_slice(&digest[..8]);
-            Ok(u64::from_be_bytes(ticket))
-        }
+    let mut keyed = action_key.map(|key| seeded_crew_ticket(format!("crew:{key}")));
+    move || match &mut keyed {
+        Some(ticket) => ticket(),
         None => random_crew_ticket(),
     }
 }

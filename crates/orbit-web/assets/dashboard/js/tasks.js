@@ -1,9 +1,10 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
+import { backlogGroupHint, drainWaitFor, drainWaitSignature, onDrainReadinessChange } from './drain-waits.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -99,7 +100,6 @@ const GROUP_HINTS = {
   review: "Review the pull request, then approve to close",
   blocked: "Waiting on something the run cannot resolve",
   "in-progress": "Running now",
-  backlog: "Approved and eligible for Ship or a drain window",
 };
 
 function taskList(context) {
@@ -784,6 +784,16 @@ function buildReadinessBadge(task) {
   })];
 }
 
+// The row chip for a backlog task the drain readiness snapshot reports as
+// waiting: who or what holds it, with every detail the snapshot carries in the
+// tooltip. Absent when the snapshot has no wait for the task.
+function buildDrainWaitBadge(task) {
+  if (task.status !== "backlog") return [];
+  const wait = drainWaitFor(task.id);
+  if (!wait) return [];
+  return [el("span", { class: "readiness-badge drain-wait-badge mono", text: wait.text, title: wait.title })];
+}
+
 // The detail's Readiness block: each gap with its severity and its fix.
 function buildReadinessBlock(readiness) {
   const wrap = el("div", { class: "readiness-list" });
@@ -811,10 +821,23 @@ function buildReadinessBlock(readiness) {
   return wrap;
 }
 
+const GITHUB_PR_REF_SYSTEM = "github-pr";
+
+// The delivery pull request a row links: the task's github-pr ref, when it
+// carries an http(s) page. The server fills that page from the workspace's own
+// origin remote for a ref recorded with only its number.
+function pullRequestLink(task) {
+  const refs = Array.isArray(task.external_refs) ? task.external_refs : [];
+  const ref = refs.find((candidate) => candidate && candidate.system === GITHUB_PR_REF_SYSTEM && isHttpUrl(candidate.url));
+  return ref ? { number: String(ref.id || ""), url: ref.url } : null;
+}
+
 function buildExternalRefs(refs) {
   const wrap = el("div");
   for (const ref of refs) {
-    const label = `${ref.system || "external"}:${ref.id || ""}`;
+    const label = ref.system === GITHUB_PR_REF_SYSTEM
+      ? `PR #${ref.id || ""}`
+      : `${ref.system || "external"}:${ref.id || ""}`;
     const line = el("div", { class: "external-ref-line" });
     // Task records are agent-writable, so a non-http(s) URL stays text.
     if (isHttpUrl(ref.url)) {
@@ -2158,6 +2181,9 @@ const REJECT_STATUSES = new Set(["proposed", "review", "backlog"]);
 // Ship dispatches a task through the pipeline, which admits it out of backlog —
 // so backlog is the only status where the control means anything.
 const SHIP_STATUSES = new Set(["backlog"]);
+// Rows whose quick-action cell links the delivery pull request, when the task
+// has one and the cell holds nothing else.
+const PULL_REQUEST_LINK_STATUSES = new Set(["review", "in-progress"]);
 // Group heading for the status targets the lifecycle table refuses. Choosing one
 // is the operator override recorded in task history as `forced`.
 const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
@@ -2288,6 +2314,9 @@ function buildStatusUpdateControl(task, context) {
     applyTaskStatusChange(task, targetStatus, context);
   });
   cell.appendChild(select);
+  const chip = el("span", { class: "task-select-chip", text: task.status || "status" });
+  chip.setAttribute("aria-hidden", "true");
+  cell.appendChild(chip);
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskStatusChange(task, feedback.undo.previousValue, context);
   });
@@ -2361,6 +2390,16 @@ function buildCrewUpdateControl(task, context) {
   });
 
   cell.appendChild(select);
+  const crewLabel = staleCurrentValue ? `${currentValue} (missing)` : currentValue || defaultOption.textContent;
+  select.title += `: ${crewLabel}`;
+  const chip = el("span", {
+    class: "task-select-chip",
+    text: crews.length === 0 ? "unavailable" : staleCurrentValue
+      ? `${currentValue} (missing)`
+      : currentValue || resolvedCrewName(task),
+  });
+  chip.setAttribute("aria-hidden", "true");
+  cell.appendChild(chip);
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskCrewChange(task, feedback.undo.previousValue, context);
   });
@@ -2877,7 +2916,8 @@ function quickActionSignature(task) {
   const machine = task.job_run_machine;
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
-  return `${task.job_run_id || ""}-${navigable}-${host}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}` : ""}`;
+  const pullRequest = pullRequestLink(task);
+  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
@@ -2900,6 +2940,7 @@ function hasQuickAction(task) {
     if (task.job_run_navigable !== false) return true;
     if (summaryExecutionLocation(task.job_run_machine).known) return true;
   }
+  if (PULL_REQUEST_LINK_STATUSES.has(task.status) && pullRequestLink(task)) return true;
   return task.status === "proposed" || SHIP_STATUSES.has(task.status);
 }
 
@@ -2923,6 +2964,16 @@ function buildQuickAction(task, context) {
       cell.appendChild(buildExecutionProvenance(location, { runId: task.job_run_id, workspace: task.workspace_id }));
       return cell;
     }
+  }
+  const pullRequest = PULL_REQUEST_LINK_STATUSES.has(task.status) ? pullRequestLink(task) : null;
+  if (pullRequest) {
+    const link = el("a", { class: "task-quick-link", text: `PR #${pullRequest.number}`, title: `Open pull request #${pullRequest.number}` });
+    link.href = pullRequest.url;
+    link.rel = "noopener noreferrer";
+    link.target = "_blank";
+    link.addEventListener("click", (event) => event.stopPropagation());
+    cell.appendChild(link);
+    return cell;
   }
   let spec = null;
   if (task.status === "proposed") {
@@ -3014,6 +3065,35 @@ async function runQuickAction(task, kind, context) {
   }
 }
 
+// ORB-15216: a pull replica holds no tasks of its own; they live on its owner
+// host. The serving host's `/api/hosts` row lists each checkout's role, so this
+// reads what the host picker already has. A remote host's row lists checkouts
+// only after a probe, so replicas on a remote host are not named here.
+function replicaOwner() {
+  const workspaceId = getWorkspace();
+  if (!workspaceId) return null;
+  const row = getHost() ? findRegisteredHost(getHost()) : getRegisteredHosts().find((host) => host.local);
+  const checkout = (row?.workspaces || []).find((workspace) => workspace.id === workspaceId);
+  if (checkout?.role !== "replica") return null;
+  const owner = findRegisteredHost(checkout.owner_machine_id);
+  return {
+    name: owner ? owner.name : checkout.owner_machine_id || "an unknown host",
+    // Only a registered remote host has an entry in the picker to switch to.
+    switchable: Boolean(owner && !owner.local),
+  };
+}
+
+function showOnOwnerButton(name) {
+  const button = el("button", { class: "ghost", type: "button", text: `Show on ${name}` });
+  button.addEventListener("click", () => {
+    const picker = document.getElementById("host-select");
+    if (!picker) return;
+    picker.value = name;
+    picker.dispatchEvent(new Event("change"));
+  });
+  return button;
+}
+
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -3076,10 +3156,12 @@ export function renderTasks(tasks, context) {
   }
   renderFilterSummary(context);
   if (filtered.length === 0 && nodes.length === 0) {
+    const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const emptyState = el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: defaultText })
+      el("div", { class: "text", text: replica ? `This checkout is a pull replica of ${replica.name}; its tasks live on the owner.` : defaultText }),
+      replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
     syncNodes(body, notice ? [notice, emptyState] : [emptyState]);
     return;
@@ -3108,25 +3190,26 @@ export function renderTasks(tasks, context) {
   );
   for (const status of ordered) {
     const group = groups.get(status);
+    const hint = status === "backlog" ? backlogGroupHint(group) : GROUP_HINTS[status];
     const header = el("div", { class: "group-header" }, [
       el("span", { class: "group-dot" }),
       el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
       el("span", { class: "group-count", text: `${group.length}` }),
-      ...(GROUP_HINTS[status] ? [el("span", { class: "group-hint", text: GROUP_HINTS[status] })] : []),
+      ...(hint ? [el("span", { class: "group-hint", text: hint })] : []),
     ]);
     header.dataset.status = status;
     header.dataset.key = `header-${status}`;
-    header.dataset.hash = `${status}-${group.length}`;
+    header.dataset.hash = `${status}-${group.length}-${hint || ""}`;
     nodes.push(header);
     for (const t of group) {
       const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
         const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
-        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
+        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t), ...buildDrainWaitBadge(t)];
         // The title is the row's disclosure: the row holds the copy-id button,
         // the selects and the quick action, so it cannot be a button itself.
         const titleCell = (aggregate && t.workspace_name) || titleBadges.length > 0

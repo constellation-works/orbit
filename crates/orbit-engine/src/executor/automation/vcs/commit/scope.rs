@@ -22,19 +22,24 @@ const SCRATCH_DIR: &str = ".orbit/tmp";
 /// widens the task's selectors to cover what it accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NewPathPolicy {
-    /// An owner run: every untracked path outside scratch.
+    /// An owner run: every untracked path outside scratch, refusing any
+    /// candidate Git would stage as something other than a regular file.
     Owner,
     /// A claimed leaf: every untracked path outside scratch that the owner
     /// can accept as footprint widening at handoff — no traversal, Git or
     /// `.orbit` metadata, or environment-secret path. Protected names and
     /// environment patterns ignore ASCII case on every host.
     Claimed,
+    /// A step recovery's repair: every untracked path outside scratch. The
+    /// caller classifies protected and irregular paths itself before staging.
+    Recovery,
 }
 
 /// Resolve the concrete paths a task run delivers: every tracked change and
 /// every untracked path outside the scratch root. Gitignored output is never
-/// listed. Refusing a protected claimed path before staging preserves both
-/// its bytes and the exact index the worker left behind.
+/// listed. Refusing a protected claimed path, or an owner candidate that is
+/// not a regular file, before staging preserves both its bytes and the exact
+/// index the worker left behind.
 /// Rename detection stays off so both source deletions and destination
 /// additions are available for task attribution and path-scoped commits.
 pub(super) fn task_candidate_paths(
@@ -80,7 +85,49 @@ pub(super) fn task_candidate_paths(
     .into_iter()
     .collect::<BTreeSet<_>>();
     candidates.extend(untracked);
+    if policy == NewPathPolicy::Owner {
+        // A nested repository would be committed as a gitlink, and every later
+        // host status or diff could then run its own config (filters, fsmonitor)
+        // outside the sandbox.
+        let irregular = irregular_candidate_paths(workspace_path, &candidates);
+        if !irregular.is_empty() {
+            return Err(OrbitError::Execution(format!(
+                "task delivery refused non-regular candidate paths: {irregular:?}. Delivery \
+                 commits only regular files and removals, never a symlink, a nested Git \
+                 repository (gitlink) or a `.git` path. Orbit did not change the index or any \
+                 listed file"
+            )));
+        }
+    }
     Ok(candidates)
+}
+
+/// Candidates Git would not stage as a regular file or a removal: a path with
+/// a `.git` component (ASCII case ignored), a symlink, or a directory. Git
+/// lists an untracked nested repository as one directory path, which `add`
+/// turns into a gitlink.
+pub(super) fn irregular_candidate_paths<'a>(
+    workspace_path: &Path,
+    paths: impl IntoIterator<Item = &'a String>,
+) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|path| {
+            path.ends_with('/')
+                || path
+                    .split('/')
+                    .any(|part| part.eq_ignore_ascii_case(".git"))
+                || !regular_or_removed(workspace_path, path)
+        })
+        .cloned()
+        .collect()
+}
+
+fn regular_or_removed(workspace_path: &Path, path: &str) -> bool {
+    match std::fs::symlink_metadata(workspace_path.join(path)) {
+        Ok(metadata) => metadata.file_type().is_file(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 /// Independently read additions and tracked type changes (rename detection

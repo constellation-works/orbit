@@ -98,7 +98,9 @@ impl ReviewedLeaf {
         )
     }
 
-    fn admit_from(owner_config: &str, follower_config: &str) -> Self {
+    /// A leaf admitted from an owner whose workspace `config.toml` is
+    /// `owner_config`.
+    pub(super) fn admit_from(owner_config: &str, follower_config: &str) -> Self {
         let pair = Pair::with_configs(owner_config, follower_config, &[None]);
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
@@ -884,7 +886,9 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
 }
 
 /// A follower that cannot resolve the owner's captured review crew requests
-/// no claim: its pass stops at the probe with the reason.
+/// no claim: its pass stops at the probe with the reason. The owner defines
+/// the crew, since its own load refuses a review crew it does not
+/// [ORB-15195].
 #[test]
 fn a_follower_without_the_review_crew_claims_nothing() {
     if !isolated(
@@ -893,7 +897,14 @@ fn a_follower_without_the_review_crew_claims_nothing() {
     ) {
         return;
     }
-    let pair = Pair::with_owner_config(&before_pr_owner("ghost"), &[None]);
+    let pair = Pair::with_owner_config(
+        &format!(
+            "{}\n[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\n\
+             model = \"gpt-sol\"\n\n[crews.ghost]\nprovider = \"codex\"\nmodel = \"gpt-ghost\"\n",
+            before_pr_owner("ghost")
+        ),
+        &[None],
+    );
     let drain = pair.run_drain();
     let pass = pair.pass(&drain);
     let refusal = pass["refusal"].as_str().unwrap_or_default();

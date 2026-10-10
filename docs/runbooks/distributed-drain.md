@@ -97,7 +97,10 @@ Confirm:
   caller's key from `~/.ssh/authorized_keys`);
 - when before-PR or before-landing review is on at the owner
   (`review.before_pr = true` or `review.before_landing = true`), the owner sets `operation.review_crew`, the workspace ships through the PR route,
-  and every follower can run that crew.
+  and every follower can run that crew. When `operation.review_crew` is a pool
+  (`["sol", "grok"]`), the owner resolves it to one member each time it offers
+  a claim, and that crew is what the claim captures, so every follower must
+  be able to run each member it may be offered.
 
 ```bash
 orbit config get review.before_pr
@@ -205,19 +208,31 @@ assessment without another hold admits as before. `no-diff-expected` does not
 exempt host-operational work, even if an auto-task lane grants relevant tools.
 An operator decision releases admission only; task prose never grants tools.
 
-Task-pilot checks acceptance criteria for native OS evidence requirements.
-It records each one as a typed `required_os` finding (the one-based criterion
-and the OS), committed with the applied assessment as `native_os_hold`. When the
-matching tag is missing, the pilot also reports a `utility_warnings` finding
-citing the criterion and naming `os:macos`, `os:linux` or `os:windows` to add
-before dispatch. The pilot recommends the tag; it does not retag the task. A
-matching tag already present needs no warning, even when the pilot runs on
-another OS. Platform mentions, cross-compilation, mocked checks and negative
-admission tests alone do not require a native host. If evidence is required on
-every named OS, use separate host-scoped validation tasks: multiple tags allow
-any one OS.
+Task-pilot checks acceptance criteria for native host evidence requirements.
+It records each one as a typed finding, committed with the applied assessment
+as `native_os_hold`: `required_os` (the one-based criterion and the OS) for an
+OS requirement, `required_machine` (the criterion and the owner machine) for
+evidence only the owner's own store, services or data can produce. A
+requirement stated only in warning prose routes nothing. When every
+`required_os` entry names one OS and the task carries no `os:` tag, the pilot's
+atomic apply adds that tag, so tag routing sends the task to a host of that OS
+and a follower of another OS sees it as `host_os_mismatch`. An `os:` tag the
+task already carries is never removed or replaced; a conflicting one is
+reported in `utility_warnings`. Platform mentions, cross-compilation, mocked
+checks, negative admission tests and measurements any host could repeat do not
+require a native host. If evidence is required on every named OS, use separate
+host-scoped validation tasks: multiple tags allow any one OS, so the pilot adds
+none.
 
-Admission honours the finding while the task's `os:` tags do not name the
+A `required_machine` finding has no tag. The owner refuses a pull claim from
+every other machine (`deferred_conflicts`, shown as an `owner_hold` whose
+reason begins `Machine requirement:` and names the machine), while its own
+local drain may start the task. A pilot may name only the owner (by its
+registered machine name or id); a requirement on another machine stays a
+`utility_warnings` finding for an operator. The same re-scope, newer assessment
+or evidenced operator decision clears it.
+
+Admission honours an OS finding while the task's `os:` tags do not name the
 required OS. A local drain, ship discovery or `orbit run ship` on a host of
 another OS leaves the task in `backlog` as `native_os_required`, and the owner
 defers a pull from a follower of another OS (`deferred_conflicts`, shown as an
@@ -329,12 +344,14 @@ orbit task lint --restore-pruned
 ```
 
 `--restore-pruned` never invents scope. Unrestorable entries stay unrestorable;
-supply own `context_files` yourself. Context is optional for local auto, ship
-and distributed pull admission: selector-free backlog tasks are admitted on
-the next pass without a context lock. Undeclared edit conflicts are handled at
+supply own `context_files` yourself. Empty context holds no context lock.
+Distributed pull admission, an explicit ship and a single-slot local drain
+admit selector-free backlog tasks on the next pass. A local drain or ship with
+more than one slot waits for this host's task pilot to prepare one
+(`awaiting_footprint`), then runs it only alone (`awaiting_exclusive_slot`). Undeclared edit conflicts are handled at
 landing by rebase and conflict repair. Operator task-scope reservation still
-requires a declared surface. A live task-pilot preparation checkpoint still
-holds its tasks until that run settles.
+requires a declared surface. A live task-pilot preparation (its reservation
+from prepare, then its checkpoint) still holds its tasks until that run settles.
 
 Reservation TTL on a pulled claim is 14,400 seconds (four hours). Expiry does
 **not** revoke the claim, admit another worker, or shrink the frozen
@@ -627,7 +644,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   on the base exactly as on the candidate; the owner holds the task until the
   base passes), `transient` (validation could not reach the network after its
   reruns, the forge kept refusing the leaf's push past its retry window
-  (`[forge_unavailable]`), or the leaf's worker died) and `base_conflict` (the committed
+  (`[forge_unavailable]`), an Orbit upgrade refused the leaf's agent mid-step
+  (`[upgrade_pending]`, see [in-flight agent steps during a binary swap](upgrades.md#in-flight-agent-steps-during-a-binary-swap)),
+  or the leaf's worker died) and `base_conflict` (the committed
   candidate could not be synchronized onto a base that moved). The failure
   breaker does not count a release. When the forge refuses a claimed PR
   leaf's push for a server-side reason (`Internal Server Error`, `Service
@@ -829,6 +848,10 @@ orbit job resume <run-id>
 ```
 
 Expect a validation error naming deliberate recovery, not a new attempt.
+Resuming an older local run after another host has bound the task is the same
+refusal: the error names that host's run and machine, and it does not reuse
+the old checkpoints. Continue the binding on that machine, or admit a new
+attempt only after an authorized rebind.
 In-run step retries of the **same** bound run are different: they keep the
 claim. Crash recovery before launch may recover the same queued run; it must
 not restart a run whose execution became uncertain.
@@ -913,7 +936,8 @@ reconciliation then adopts the owner's `workflow.required_validation_commands`
 at submission as its own contract (`commands_source:
 owner_configuration_at_submission`, with `accepted_commands: []`) rather than
 claiming the delivery was held to it. `review_crew` is `operation.review_crew`
-at submission.
+at submission; a pool contributes one member, preferring one that did not
+implement the task, with `review_crew_source` naming the pool's layer.
 
 `submit` freezes that contract into the record and admits one run of
 `task_review_reconciliation_pipeline`: it runs every contract command at the
@@ -977,7 +1001,7 @@ when a request is replayed. Use the printed id with `--reconciliation`.
 
 On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
-be refused with `active execution claim requires a claim-scoped mutation`.
+be refused with `active execution claim requires a claim-scoped mutation`, which names the task and the claiming run.
 
 **Stopping or cancelling a follower drain** ([ORB-13663], [ORB-13892]). All
 three are safe; none strands a claim, and none fails a task that never ran.

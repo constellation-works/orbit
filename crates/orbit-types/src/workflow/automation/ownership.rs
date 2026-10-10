@@ -75,4 +75,9 @@ pub struct DeliveryAssociation {
     pub anchor: String,
     pub reference: String,
     pub landed_at: DateTime<Utc>,
+    /// The head commit the provider reports the merged pull request landed.
+    /// Absent on associations recorded before it was kept and on identities
+    /// rebuilt from a pending delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }

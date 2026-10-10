@@ -30,6 +30,7 @@ mod crew_selection;
 mod native_os;
 mod pilot_output;
 mod races;
+mod review_evidence;
 mod settlement;
 mod source_moves;
 
@@ -342,10 +343,20 @@ impl Workspace {
         )
     }
 
-    /// A live pilot with a real successful prepare checkpoint; another
-    /// invocation can observe this hold without starting a provider.
-    fn hold(&self, task_ids: &[&str]) -> String {
-        let prepared = self.prepare(task_ids);
+    /// Prepare `task_ids` as the prepare step of pilot run `run_id` does.
+    fn prepare_in_run(&self, run_id: &str, task_ids: &[&str]) -> Value {
+        self.action(
+            "prepare_task_pilot",
+            json!({
+                "task_ids": task_ids, "workspace_path": self.repo, "base_branch": "main",
+                "run_id": run_id,
+            }),
+        )
+    }
+
+    /// A running pilot run with no prepare checkpoint yet, as a run is while
+    /// its prepare step works.
+    fn live_run(&self) -> String {
         let run = self
             .jobs
             .insert_job_run("task_pilot_pipeline", 1, Utc::now(), None, None)
@@ -353,10 +364,18 @@ impl Workspace {
         self.jobs
             .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
             .unwrap();
-        let mut state = PipelineState::new(run.run_id.clone(), run.job_id, json!({}));
-        state.record_step(0, JobRunState::Success, Some(prepared), None);
-        self.runtime.write_run_state(&run.run_id, &state).unwrap();
         run.run_id
+    }
+
+    /// A live pilot with a real successful prepare checkpoint; another
+    /// invocation can observe this hold without starting a provider.
+    fn hold(&self, task_ids: &[&str]) -> String {
+        let prepared = self.prepare(task_ids);
+        let run_id = self.live_run();
+        let mut state = PipelineState::new(run_id.clone(), "task_pilot_pipeline".into(), json!({}));
+        state.record_step(0, JobRunState::Success, Some(prepared), None);
+        self.runtime.write_run_state(&run_id, &state).unwrap();
+        run_id
     }
 }
 

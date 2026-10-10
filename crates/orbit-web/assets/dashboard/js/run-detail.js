@@ -17,6 +17,7 @@
 
 import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock, elapsedDurationInfo } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
+import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
@@ -331,6 +332,8 @@ export function renderRunDetailMeta() {
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);
+  const cancelled = buildRunCancellation(run);
+  if (cancelled) wrap.appendChild(cancelled);
   if (run.state === "held") wrap.appendChild(buildRunHold(run));
   wrap.appendChild(grid);
   const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
@@ -339,7 +342,7 @@ export function renderRunDetailMeta() {
   if (crews) wrap.appendChild(crews);
   const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
   if (unsetEnv) wrap.appendChild(unsetEnv);
-  const waiting = buildStillWaiting(run.drain_last_pass || null);
+  const waiting = buildStillWaiting(run.drain_last_pass || null, run);
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
@@ -351,10 +354,10 @@ export function renderRunDetailMeta() {
 function buildUnsetEnvPass(names) {
   if (!Array.isArray(names) || names.length === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel" });
-  panel.appendChild(el("div", {
-    class: "label",
-    text: `unset env: ${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)`,
-  }));
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Unset env: " }),
+    el("span", { text: `${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)` }),
+  ]));
   return panel;
 }
 
@@ -438,7 +441,7 @@ function buildCrewWindow(window) {
   return panel;
 }
 
-// Reason codes whose `detail` is the sentence that names what clears the wait.
+// Reason codes whose `detail` adds useful context to the shared Drain card label.
 const WAITING_DETAIL_REASONS = new Set([
   "host_os_mismatch", "native_os_required", "local_route_before_pr", "local_route_before_landing", "crew_unavailable", "owner_hold",
   "invalid_candidate",
@@ -458,40 +461,75 @@ const KEPT_OFF_CAUSES = {
 // nothing. Mirrors the CLI's `idle:` line.
 const IDLE_SUMMARY_PASSES = 3;
 
-function waitingTaskText(task, fallback) {
-  let text = `Task ${task.task_id}: ${task.reason || fallback}`;
-  if (Array.isArray(task.blocked_by) && task.blocked_by.length > 0) text += ` blocked-by=${task.blocked_by.join(",")}`;
-  if (WAITING_DETAIL_REASONS.has(task.reason) && task.detail) text += ` (${task.detail})`;
-  return text;
+function waitingTaskLink(taskId, workspaceId) {
+  const link = el("a", { class: "waiting-task-link", text: taskId, title: `Open ${taskId}` });
+  const url = new URL(window.location.href);
+  url.searchParams.set("workspace", workspaceId || getWorkspace() || "");
+  url.hash = `tasks?status=all&q=${encodeURIComponent(taskId)}`;
+  link.href = `${url.search}${url.hash}`;
+  return link;
+}
+
+function waitingTaskRow(task, fallback, workspaceId) {
+  const taskId = typeof task.task_id === "string" && task.task_id.trim() ? task.task_id : null;
+  const reason = typeof task.reason === "string" && task.reason.trim() ? task.reason : fallback;
+  const row = el("div", { class: "child-dispatch-row waiting-task" }, [
+    el("span", { text: "Task " }),
+    taskId ? waitingTaskLink(taskId, workspaceId) : el("span", { text: "?" }),
+    el("span", { class: "waiting-task-reason", text: `: ${drainWaitBadge({ ...task, reason }).text}` }),
+  ]);
+  const blockedBy = Array.isArray(task.blocked_by) ? task.blocked_by.filter(id => typeof id === "string" && id.trim()) : [];
+  if (blockedBy.length > 0) {
+    row.appendChild(el("span", { text: " · blocked by " }));
+    blockedBy.forEach((id, index) => {
+      if (index > 0) row.appendChild(el("span", { text: ", " }));
+      row.appendChild(waitingTaskLink(id, workspaceId));
+    });
+  }
+  if (WAITING_DETAIL_REASONS.has(reason) && task.detail) {
+    row.appendChild(el("span", { class: "waiting-task-detail", text: ` (${task.detail})` }));
+  }
+  return row;
 }
 
 // The backlog a drain's last admission pass left unstarted, for local and pull
 // drains alike: each task with its reason and the tasks it waits on. A pull
 // drain's list is the owner's last answer, so it is dated. Mirrors the
 // `Still waiting:` lines of `orbit run show`.
-function buildStillWaiting(pass) {
+function buildStillWaiting(pass, run = {}) {
   if (!pass) return null;
   const deferred = Array.isArray(pass.deferred) ? pass.deferred : [];
   const excluded = Array.isArray(pass.excluded) ? pass.excluded : [];
-  const queued = pass.queued || 0;
-  const excludedTotal = pass.excluded_total || 0;
   const deferredTotal = Math.max(pass.deferred_total || 0, deferred.length);
+  const queued = pass.queued || 0;
+  const excludedTotal = Math.max(pass.excluded_total || 0, excluded.length);
   if (queued === 0 && deferredTotal === 0 && excludedTotal === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel still-waiting" });
   const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
-  panel.appendChild(el("div", {
-    class: "label",
-    text: `still waiting: ${queued} admissible, ${deferredTotal} deferred and ${excludedTotal} excluded backlog task(s) were never started at the last pass${answered}`,
-  }));
-  const rows = [
-    ...deferred.map((task) => waitingTaskText(task, "lock conflict")),
-    ...(deferredTotal > deferred.length ? [`... and ${deferredTotal - deferred.length} more deferred`] : []),
-    ...excluded.map((task) => waitingTaskText(task, "excluded")),
-  ];
-  if (excludedTotal > excluded.length) rows.push(`... and ${excludedTotal - excluded.length} more excluded`);
-  for (const text of rows) {
+  const reasonTaskTotal = deferredTotal + excludedTotal;
+  const pullDrain = run.job_id === "workspace_pull_pipeline";
+  const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
+  const additionalSummary = additionalAdmissible === 1
+    ? "1 additional admissible task was not started and is not listed below"
+    : `${additionalAdmissible} additional admissible tasks were not started and are not listed below`;
+  const summary = reasonTaskTotal > 0
+    ? `${reasonTaskTotal} backlog ${reasonTaskTotal === 1 ? "task has" : "tasks have"} recorded wait reasons (${deferredTotal} deferred, ${excludedTotal} excluded)${additionalAdmissible > 0 ? `; ${additionalSummary}` : ""}${answered}`
+    : `${queued === 1 ? "1 admissible task was" : `${queued} admissible tasks were`} not started and not listed individually${answered}`;
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Still waiting: " }),
+    el("span", { text: summary }),
+  ]));
+  const workspaceId = run.workspace_id || getWorkspace();
+  for (const task of deferred) panel.appendChild(waitingTaskRow(task, "lock conflict", workspaceId));
+  if (deferredTotal > deferred.length) {
     panel.appendChild(el("div", { class: "child-dispatch-row waiting-task" }, [
-      el("span", { class: "child-dispatch-meta", text }),
+      el("span", { class: "child-dispatch-meta", text: `... and ${deferredTotal - deferred.length} more deferred` }),
+    ]));
+  }
+  for (const task of excluded) panel.appendChild(waitingTaskRow(task, "excluded", workspaceId));
+  if (excludedTotal > excluded.length) {
+    panel.appendChild(el("div", { class: "child-dispatch-row waiting-task" }, [
+      el("span", { class: "child-dispatch-meta", text: `... and ${excludedTotal - excluded.length} more excluded` }),
     ]));
   }
   const byReason = pass.waiting_by_reason || {};
@@ -511,6 +549,75 @@ function buildStillWaiting(pass) {
 
 const FAILED_RUN_STATES = new Set(["failed", "timeout", "interrupted"]);
 const FAILED_STEP_STATES = new Set(["error", "failed", "timeout", "interrupted"]);
+// Task ids are a 2–5 letter prefix plus digits, outside the ADR, L, and F
+// artifact namespaces. Anything else that looks similar has no task to open.
+const NON_TASK_PREFIX = new Set(["ADR", "L", "F"]);
+const FAILURE_ID = /\bjrun-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b|\b[A-Z]{2,5}-\d+\b/g;
+
+function navigableTaskId(token) {
+  const match = /^([A-Z]{2,5})-(\d+)$/.exec(token);
+  return Boolean(match) && !NON_TASK_PREFIX.has(match[1]);
+}
+
+function failureRunLink(runId) {
+  const link = el("button", {
+    class: "failure-id-link",
+    type: "button",
+    text: runId,
+    title: `Open ${runId}`,
+  });
+  link.addEventListener("click", () => navigateToRun(runId));
+  return link;
+}
+
+function failureTaskLink(taskId, workspaceId) {
+  const link = el("a", { class: "failure-id-link", text: taskId, title: `Open ${taskId}` });
+  const url = new URL(window.location.href);
+  url.searchParams.set("workspace", workspaceId || getWorkspace() || "");
+  url.hash = `tasks?status=all&q=${encodeURIComponent(taskId)}`;
+  link.href = `${url.search}${url.hash}`;
+  return link;
+}
+
+// Run and task ids become links. A token with no run or task target (an ADR
+// id, a lowercase task lookalike) stays plain text. Strings are text nodes,
+// never HTML.
+function linkifyFailureText(text, workspaceId) {
+  const source = text == null ? "" : String(text);
+  const nodes = [];
+  const pattern = new RegExp(FAILURE_ID.source, "g");
+  let cursor = 0;
+  for (const match of source.matchAll(pattern)) {
+    const token = match[0];
+    const start = match.index;
+    if (start > cursor) nodes.push(source.slice(cursor, start));
+    if (token.startsWith("jrun-")) nodes.push(failureRunLink(token));
+    else if (navigableTaskId(token)) nodes.push(failureTaskLink(token, workspaceId));
+    else nodes.push(token);
+    cursor = start + token.length;
+  }
+  if (cursor < source.length) nodes.push(source.slice(cursor));
+  if (nodes.length === 0) nodes.push("");
+  return nodes;
+}
+
+function appendLinkified(parent, text, workspaceId) {
+  for (const node of linkifyFailureText(text, workspaceId)) parent.append(node);
+}
+
+function buildFailureRoot(root, workspaceId) {
+  if (!root || typeof root.run_id !== "string" || root.run_id === "") return null;
+  const line = el("p", { class: "run-failure-root" });
+  line.append(el("strong", { text: "Root cause: " }));
+  line.append(failureRunLink(root.run_id));
+  if (root.state) line.append(` ${root.state}`);
+  if (root.step) line.append(` at ${root.step}`);
+  if (root.message) {
+    line.append(" - ");
+    appendLinkified(line, root.message, workspaceId);
+  }
+  return line;
+}
 
 // A failed run leads with why: the step it stopped at and the error it
 // recorded, above the metadata, so nobody has to open Errors or expand every
@@ -533,8 +640,39 @@ function buildRunFailure(run, steps) {
   ]);
   const box = el("section", { class: "run-failure" }, [head]);
   box.setAttribute("aria-label", "Why this run failed");
-  if (message) box.appendChild(el("pre", { class: "run-failure-message mono", text: message }));
+  const workspaceId = run.workspace_id || getWorkspace();
+  if (message) {
+    const pre = el("pre", { class: "run-failure-message mono" });
+    appendLinkified(pre, message, workspaceId);
+    box.appendChild(pre);
+  }
+  const root = buildFailureRoot(run.failure_root, workspaceId);
+  if (root) box.appendChild(root);
   if (code === "protocol_skew") box.appendChild(el("p", { text: "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain." }));
+  return box;
+}
+
+// A cancelled run says who cancelled it, when, and why. The reason is the
+// recorded text, or the explicit phrase when the cancel record has none.
+function buildRunCancellation(run) {
+  if (run.state !== "cancelled") return null;
+  const record = run.cancellation || {};
+  const actor = typeof record.actor === "string" ? record.actor.trim() : "";
+  const at = record.at || "";
+  const reason = typeof record.reason === "string" && record.reason.trim() ? record.reason : "no reason recorded";
+  const head = el("div", { class: "run-failure-head" }, [
+    el("strong", { text: "Cancelled" }),
+    actor ? el("span", { class: "run-failure-where", text: ` by ${actor}` }) : null,
+    at ? el("span", { class: "run-cancelled-when", text: ` at ${fmtAbsTime(at)}` }) : null,
+  ]);
+  const box = el("section", { class: "run-failure run-cancelled" }, [head]);
+  box.setAttribute("aria-label", "Why this run was cancelled");
+  const workspaceId = run.workspace_id || getWorkspace();
+  const reasonNode = el("p", { class: "run-cancelled-reason" });
+  appendLinkified(reasonNode, reason, workspaceId);
+  box.appendChild(reasonNode);
+  const root = buildFailureRoot(run.failure_root, workspaceId);
+  if (root) box.appendChild(root);
   return box;
 }
 
@@ -556,8 +694,8 @@ function runExecutionLocation(run) {
   return { known: true, machine_id: location.machine_id, machine_name: location.machine_name || null };
 }
 
-// [ORB-10971] The child Runs this run dispatched, from the durable dispatch
-// checkpoint the API projects as `run.child_dispatches`.
+// Child lineage comes from the durable dispatch checkpoint; state and timing
+// come from the live child run joined into the same detail response.
 //
 // This is the answer to "the parent has been sitting on a dispatch step for an
 // hour — did it actually submit anything?", so it is rendered from the moment
@@ -567,11 +705,27 @@ function buildChildDispatches(run) {
   const dispatches = Array.isArray(run.child_dispatches) ? run.child_dispatches : [];
   if (dispatches.length === 0) return null;
 
-  const rows = dispatches.map((d) => {
-    const parts = [`job ${d.job_name || "?"}`, `phase ${d.phase || "?"}`];
+  const outcomes = [
+    ["running", "running"], ["pending", "pending"], ["retrying", "retrying"],
+    ["failed", "failed"], ["timeout", "timed out"], ["interrupted", "interrupted"],
+    ["held", "held"], ["success", "succeeded"], ["cancelled", "cancelled"],
+    ["skipped", "skipped"], ["unknown", "unknown"],
+  ];
+  const stateOf = (dispatch) => outcomes.some(([state]) => state === dispatch.state) ? dispatch.state : "unknown";
+  const counts = new Map(outcomes.map(([state]) => [state, 0]));
+  for (const dispatch of dispatches) {
+    const state = stateOf(dispatch);
+    counts.set(state, counts.get(state) + 1);
+  }
+  const tally = outcomes.filter(([state]) => counts.get(state) > 0)
+    .map(([state, label]) => `${counts.get(state)} ${label}`).join(", ");
+  const rank = (dispatch) => outcomes.findIndex(([state]) => state === stateOf(dispatch));
+  const rows = [...dispatches].sort((a, b) => rank(a) - rank(b)).map((d) => {
+    const state = stateOf(d);
+    const parts = [`job ${d.job_name || "?"}`, `dispatch ${d.phase || "?"}`];
     if (d.parent_step_id) parts.push(`step ${d.parent_step_id}`);
     if (d.queued) parts.push("queued");
-    if (d.child_status) parts.push(`status ${d.child_status}`);
+    if (d.child_status) parts.push(`checkpoint status ${d.child_status}`);
     if (d.cancellation) parts.push(`cancel ${d.cancellation.policy}/${d.cancellation.outcome}`);
 
     const link = el("button", {
@@ -582,10 +736,13 @@ function buildChildDispatches(run) {
     link.addEventListener("click", () => navigateToRun(d.child_run_id));
 
     const row = el("div", { class: "child-dispatch-row" }, [
+      stateCell(state),
       link,
       runTaskLinks({ ...d, workspace_id: run.workspace_id }),
+      el("span", { class: "duration", text: recordDurationText(d) }),
       el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
     ]);
+    row.dataset.state = state;
     if (d.error) {
       row.appendChild(el("span", { class: "child-dispatch-error", text: d.error }));
     }
@@ -594,6 +751,7 @@ function buildChildDispatches(run) {
 
   return el("div", { class: "child-dispatch-panel" }, [
     el("div", { class: "label", text: `child runs (${dispatches.length})` }),
+    el("div", { class: "child-dispatch-summary", text: `${dispatches.length} admitted: ${tally}` }),
     ...rows,
   ]);
 }

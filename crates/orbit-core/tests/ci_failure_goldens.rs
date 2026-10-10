@@ -1055,6 +1055,10 @@ fn ci_failure_fixture_goldens() {
         serde_json::from_str(&std::fs::read_to_string(fixtures().join("parsed.json")).unwrap())
             .unwrap()
     };
+    // Each case files through a fresh runtime. All of them can outlast the
+    // child's hang guard on a saturated host; name the case reached.
+    let mut progress = orbit_common::test_env::FixtureProgress::start("CI log goldens");
+    progress.phase("cases", cases.len());
     let mut rendered = serde_json::Map::new();
     for case in cases {
         let actual = if case["collect"] == true {
@@ -1070,7 +1074,9 @@ fn ci_failure_fixture_goldens() {
             );
         }
         rendered.insert(name.to_string(), actual);
+        progress.advance();
     }
+    progress.finish();
     if update {
         std::fs::write(
             fixtures().join("parsed.json"),
@@ -1275,6 +1281,638 @@ fn ci_failure_branch_routing_retains_evidence_for_configurable_task_prefixes() {
         assert_eq!(repeated["excluded_branch_failures"], json!([]));
         assert_eq!(runtime.get_task_artifacts(&owner.id).unwrap().len(), 1);
     }
+}
+
+fn protecting_branch_claim(
+    runtime: &OrbitRuntime,
+    owner_id: &str,
+) -> orbit_store::contracts::ExecutionClaim {
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_store::contracts::{
+        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    };
+    use orbit_types::task::TaskStatus;
+
+    let claim_id = format!("claim-{owner_id}");
+    let request_id = format!("request-{owner_id}");
+    let claiming_run = "jrun-follower-claim";
+    let machine_id = "follower-mac";
+    runtime
+        .apply_task_automation_update(
+            owner_id,
+            TaskAutomationUpdate {
+                expected_status: Some(TaskStatus::Proposed),
+                status: Some(TaskStatus::InProgress),
+                status_event: Some("pulled_by".into()),
+                status_note: Some(
+                    json!({
+                        "machine_id": machine_id,
+                        "run_context": {"run_id": claiming_run},
+                        "claim_id": claim_id,
+                        "request_id": request_id,
+                    })
+                    .to_string(),
+                ),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let claim = ExecutionClaim {
+        claim_id: claim_id.clone(),
+        task_id: owner_id.to_string(),
+        request_id: request_id.clone(),
+        executed_on: ExecutionLocation {
+            machine_id: machine_id.into(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: claiming_run.into(),
+            job_name: "task_claimed_pr_pipeline".into(),
+            machine_name: None,
+        },
+        footprint: Vec::new(),
+        reservation_id: format!("reservation-{owner_id}"),
+        reservation_expires_at: "2099-01-01T00:00:00Z".into(),
+        phase: ExecutionClaimPhase::Claimed,
+        repair: None,
+    };
+    let workspace_id = runtime.workspace_id().unwrap();
+    {
+        let connection =
+            rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+                 VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+                rusqlite::params![
+                    workspace_id,
+                    claim.claim_id,
+                    serde_json::to_string(&claim).unwrap(),
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )
+            .unwrap();
+    }
+
+    claim
+}
+
+/// A follower claim on the branch owner must not abort filing of the snapshot's
+/// landing failures. The observation is listed as deferred and written when
+/// that claim settles [ORB-15199].
+#[test]
+fn ci_failure_claimed_branch_defers_attribution_until_the_claim_settles() {
+    if !isolated("ci_failure_claimed_branch_defers_attribution_until_the_claim_settles") {
+        return;
+    }
+    use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+    use orbit_store::contracts::{
+        ClaimEvidence, ClaimInvocation, ClaimMutation, DEFERRED_BRANCH_OBSERVATION_KIND,
+        DeferredBranchObservation, ExecutionClaimPhase,
+    };
+    use orbit_types::task::TaskStatus;
+
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let owner = runtime
+        .add_task(TaskAddParams {
+            title: "Follower-claimed branch owner".into(),
+            plan: "Hold the branch while the follower runs.".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let claim = protecting_branch_claim(&runtime, &owner.id);
+    let claim_id = claim.claim_id.as_str();
+    let claiming_run = claim.run_context.run_id.as_str();
+    let machine_id = claim.executed_on.machine_id.as_str();
+    let workspace_id = runtime.workspace_id().unwrap();
+
+    let mut pr = failure("error: sandbox directory escaped", 0, &"3".repeat(40));
+    pr["event"] = json!("pull_request");
+    pr["head_branch"] = json!(format!("orbit/{}-ddb04571", owner.id));
+    pr["ref_kind"] = json!("pull_request");
+    let push = failure("error: independent landing regression", 1, &"4".repeat(40));
+
+    let deferred_for_owner = |output: &Value| {
+        output["deferred_attribution"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["task_id"] == owner.id
+                    && entry["run_id"] == pr["run_id"]
+                    && entry["reason"] == "claimed"
+            })
+    };
+    let queued = || -> Vec<DeferredBranchObservation> {
+        let connection =
+            rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT payload_json FROM task_coordination_rows
+                 WHERE workspace_id=?1 AND kind=?2 ORDER BY row_id",
+            )
+            .unwrap();
+        statement
+            .query_map(
+                rusqlite::params![workspace_id, DEFERRED_BRANCH_OBSERVATION_KIND],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+            .map(|payload| serde_json::from_str(&payload.unwrap()).unwrap())
+            .collect()
+    };
+
+    let only_pr = file(&runtime, vec![pr.clone()]);
+    assert_eq!(only_pr["filed_count"], 0, "{only_pr}");
+    assert_eq!(only_pr["outcome"], "current_failures", "{only_pr}");
+    assert!(deferred_for_owner(&only_pr), "{only_pr}");
+    assert_eq!(
+        only_pr["audit"]["deferred_attribution"],
+        only_pr["deferred_attribution"]
+    );
+    assert!(runtime.get_task_artifacts(&owner.id).unwrap().is_empty());
+    let rows = queued();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(!rows[0].applied);
+    assert_eq!(rows[0].claiming_run_id.as_deref(), Some(claiming_run));
+    assert_eq!(rows[0].task_id, owner.id);
+
+    let refused = runtime
+        .update_task_as_human(
+            &owner.id,
+            TaskUpdateParams {
+                comment: Some("operator note while the follower holds the claim".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap_err();
+    let message = refused.to_string();
+    assert!(
+        message.contains("active execution claim requires a claim-scoped mutation"),
+        "{message}"
+    );
+    assert!(message.contains(&owner.id), "{message}");
+    assert!(message.contains(claiming_run), "{message}");
+
+    let filed = file(&runtime, vec![pr.clone(), push.clone()]);
+    assert_eq!(filed["outcome"], "current_failures", "{filed}");
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    let filed_id = filed["filed"][0]["task_id"].as_str().unwrap();
+    assert_ne!(filed_id, owner.id);
+    assert!(deferred_for_owner(&filed), "{filed}");
+    assert_eq!(
+        filed["audit"]["deferred_attribution"],
+        filed["deferred_attribution"]
+    );
+    assert!(runtime.get_task_artifacts(&owner.id).unwrap().is_empty());
+    assert_eq!(queued().len(), 1);
+
+    let repeated = file(&runtime, vec![pr.clone(), push.clone()]);
+    assert_eq!(repeated["filed_count"], 0, "{repeated}");
+    assert_eq!(repeated["skipped_existing"].as_array().unwrap().len(), 1);
+    assert!(deferred_for_owner(&repeated), "{repeated}");
+    assert!(runtime.get_task_artifacts(&owner.id).unwrap().is_empty());
+    assert_eq!(queued().len(), 1);
+
+    runtime
+        .mutate_execution_claim(
+            Some(&ClaimInvocation::trusted_worker(
+                owner.id.clone(),
+                claim_id.into(),
+                machine_id.into(),
+                None,
+            )),
+            "release-orb-x",
+            &ClaimMutation::Release(ClaimEvidence {
+                summary: Some("follower finished".into()),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        runtime.get_task(&owner.id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    let settled = runtime
+        .inspect_execution_claims()
+        .unwrap()
+        .into_iter()
+        .find(|inspection| inspection.claim.claim_id == claim_id)
+        .unwrap();
+    assert_eq!(settled.claim.phase, ExecutionClaimPhase::Revoked);
+    let artifacts = runtime.get_task_artifacts(&owner.id).unwrap();
+    assert_eq!(artifacts.len(), 1, "{artifacts:?}");
+    assert!(artifacts[0].path.starts_with("ci-branch-observations/"));
+    let retained: Value = serde_json::from_slice(&artifacts[0].content).unwrap();
+    assert_eq!(retained["failure"], pr);
+    let applied = queued();
+    assert_eq!(applied.len(), 1);
+    assert!(applied[0].applied);
+    assert_eq!(applied[0].content.as_bytes(), artifacts[0].content);
+
+    let after = file(&runtime, vec![pr, push]);
+    assert!(
+        after["deferred_attribution"].as_array().unwrap().is_empty(),
+        "{after}"
+    );
+    assert_eq!(after["attributed"][0]["task_id"], owner.id);
+    assert_eq!(after["filed_count"], 0, "{after}");
+    assert_eq!(after["skipped_existing"].as_array().unwrap().len(), 1);
+    assert_eq!(runtime.get_task_artifacts(&owner.id).unwrap().len(), 1);
+}
+
+/// Settling one task's claim applies only that task's queued receipts, leaves
+/// another task's receipt queued, and a repeated sweep or settlement adds no
+/// artifact or row. A direct retention on an unclaimed owner leaves no row.
+#[test]
+fn ci_failure_deferred_receipts_settle_per_task_and_replay_without_growth() {
+    if !isolated("ci_failure_deferred_receipts_settle_per_task_and_replay_without_growth") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_store::contracts::{
+        ClaimEvidence, ClaimInvocation, ClaimMutation, DEFERRED_BRANCH_OBSERVATION_KIND,
+        DeferredBranchObservation,
+    };
+
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let workspace_id = runtime.workspace_id().unwrap();
+    let add = |title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                plan: "Hold the branch while the follower runs.".into(),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let first = add("First claimed branch owner");
+    let second = add("Second claimed branch owner");
+    let unclaimed = add("Unclaimed branch owner");
+    let first_claim = protecting_branch_claim(&runtime, &first.id);
+    let second_claim = protecting_branch_claim(&runtime, &second.id);
+
+    let pr_for = |owner: &str, index: usize| {
+        let mut pr = failure("error: sandbox directory escaped", index, &"3".repeat(40));
+        pr["event"] = json!("pull_request");
+        pr["head_branch"] = json!(format!("orbit/{owner}-ddb04571"));
+        pr["ref_kind"] = json!("pull_request");
+        pr
+    };
+    let runs = vec![
+        pr_for(&first.id, 0),
+        pr_for(&second.id, 1),
+        pr_for(&unclaimed.id, 2),
+    ];
+    let rows = || -> Vec<DeferredBranchObservation> {
+        let connection =
+            rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT payload_json FROM task_coordination_rows
+                 WHERE workspace_id=?1 AND kind=?2 ORDER BY row_id",
+            )
+            .unwrap();
+        statement
+            .query_map(
+                rusqlite::params![workspace_id, DEFERRED_BRANCH_OBSERVATION_KIND],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+            .map(|payload| serde_json::from_str(&payload.unwrap()).unwrap())
+            .collect()
+    };
+
+    for _ in 0..2 {
+        let output = file(&runtime, runs.clone());
+        assert_eq!(output["deferred_attribution"].as_array().unwrap().len(), 2);
+        assert_eq!(runtime.get_task_artifacts(&unclaimed.id).unwrap().len(), 1);
+        assert_eq!(rows().len(), 2, "only deferred receipts own a row");
+    }
+
+    runtime
+        .mutate_execution_claim(
+            Some(&ClaimInvocation::trusted_worker(
+                first.id.clone(),
+                first_claim.claim_id.clone(),
+                first_claim.executed_on.machine_id.clone(),
+                None,
+            )),
+            "release-first",
+            &ClaimMutation::Release(ClaimEvidence {
+                summary: Some("first follower finished".into()),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert_eq!(runtime.get_task_artifacts(&first.id).unwrap().len(), 1);
+    assert!(runtime.get_task_artifacts(&second.id).unwrap().is_empty());
+    let after_first = rows();
+    assert_eq!(after_first.len(), 2);
+    for row in &after_first {
+        assert_eq!(row.applied, row.task_id == first.id, "{row:?}");
+    }
+
+    // The settled task's sweep and rows replay without growth, and the other
+    // task's receipt stays queued.
+    let output = file(&runtime, runs.clone());
+    assert_eq!(output["deferred_attribution"].as_array().unwrap().len(), 1);
+    assert_eq!(runtime.get_task_artifacts(&first.id).unwrap().len(), 1);
+    assert!(runtime.get_task_artifacts(&second.id).unwrap().is_empty());
+    assert_eq!(rows().len(), 2);
+
+    runtime
+        .mutate_execution_claim(
+            Some(&ClaimInvocation::trusted_worker(
+                second.id.clone(),
+                second_claim.claim_id.clone(),
+                second_claim.executed_on.machine_id.clone(),
+                None,
+            )),
+            "release-second",
+            &ClaimMutation::Release(ClaimEvidence {
+                summary: Some("second follower finished".into()),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert_eq!(runtime.get_task_artifacts(&second.id).unwrap().len(), 1);
+    assert_eq!(runtime.get_task_artifacts(&first.id).unwrap().len(), 1);
+    assert!(rows().iter().all(|row| row.applied));
+
+    let output = file(&runtime, runs);
+    assert!(
+        output["deferred_attribution"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(rows().len(), 2);
+    for id in [&first.id, &second.id, &unclaimed.id] {
+        assert_eq!(runtime.get_task_artifacts(id).unwrap().len(), 1);
+    }
+}
+
+/// Deterministically replay the former sweep ordering: lookup the protecting
+/// claim, settle it with an empty queue, then submit the stale receipt.
+#[test]
+fn ci_failure_branch_receipt_retains_after_settlement_precedes_insertion() {
+    if !isolated("ci_failure_branch_receipt_retains_after_settlement_precedes_insertion") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_store::compose::workspace_coordinated_backends;
+    use orbit_store::contracts::{
+        BranchObservationOutcome, ClaimEvidence, ClaimInvocation, ClaimMutation,
+        DEFERRED_BRANCH_OBSERVATION_KIND, DeferredBranchObservation,
+    };
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    for already_queued in [false, true] {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let workspace = root.path().join("repo/.orbit");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+        let owner = runtime
+            .add_task(TaskAddParams {
+                title: "Branch owner settled before receipt insertion".into(),
+                plan: "Hold the branch while the follower runs.".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let claim = protecting_branch_claim(&runtime, &owner.id);
+        let snapshot = runtime.resolve_execution_claims().unwrap();
+        let observed = snapshot
+            .iter()
+            .find(|inspection| inspection.claim.task_id == owner.id)
+            .unwrap();
+        assert!(observed.claim.phase.protects_footprint());
+
+        let mut pr = failure(
+            "error: receipt arrived after settlement",
+            0,
+            &"3".repeat(40),
+        );
+        pr["event"] = json!("pull_request");
+        pr["head_branch"] = json!(format!("orbit/{}-ddb04571", owner.id));
+        pr["ref_kind"] = json!("pull_request");
+        let content = serde_json::to_string(&json!({
+            "schema_version": 1, "kind": "task_branch_ci_failure", "failure": pr,
+        }))
+        .unwrap();
+        let path = format!(
+            "ci-branch-observations/{}.json",
+            orbit_common::security::release::sha256_hex(content.as_bytes())
+        );
+        assert!(
+            runtime
+                .get_task_artifact(&owner.id, &path)
+                .unwrap()
+                .is_none()
+        );
+        let observation = DeferredBranchObservation {
+            schema_version: 1,
+            task_id: owner.id.clone(),
+            run_id: pr["run_id"].clone(),
+            job_id: pr["job_id"].clone(),
+            artifact_path: path.clone(),
+            content,
+            claiming_run_id: Some(observed.claim.run_context.run_id.clone()),
+            applied: false,
+        };
+        runtime
+            .mutate_execution_claim(
+                Some(&ClaimInvocation::trusted_worker(
+                    owner.id.clone(),
+                    claim.claim_id,
+                    claim.executed_on.machine_id,
+                    None,
+                )),
+                "release-before-receipt",
+                &ClaimMutation::Release(ClaimEvidence {
+                    summary: Some("follower finished before the receipt arrived".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let backends = workspace_coordinated_backends(
+            TaskRegistryStore::open(&task_registry_path(&global)).unwrap(),
+            runtime.workspace_id().unwrap(),
+            orbit_store::Store::open(&global.join("orbit.db")).unwrap(),
+        )
+        .unwrap();
+        if already_queued {
+            // An unapplied receipt from the former race must settle on replay too.
+            let connection = rusqlite::Connection::open(global.join("orbit.db")).unwrap();
+            connection.execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'fixture', ?5)",
+            rusqlite::params![
+                runtime.workspace_id().unwrap(), DEFERRED_BRANCH_OBSERVATION_KIND,
+                format!("{}:{}", owner.id, orbit_common::security::release::sha256_hex(observation.content.as_bytes())),
+                serde_json::to_string(&observation).unwrap(), chrono::Utc::now().to_rfc3339(),
+            ],
+        ).unwrap();
+        }
+        assert_eq!(
+            backends
+                .commit_boundary
+                .coordination_rows(DEFERRED_BRANCH_OBSERVATION_KIND)
+                .unwrap()
+                .len(),
+            usize::from(already_queued)
+        );
+        assert_eq!(
+            backends
+                .task
+                .task
+                .record_deferred_branch_observation(&observation)
+                .unwrap(),
+            BranchObservationOutcome::Retained
+        );
+        let artifacts = runtime.get_task_artifacts(&owner.id).unwrap();
+        assert_eq!(
+            artifacts.len(),
+            1,
+            "retention must not need another claim or sweep"
+        );
+        assert_eq!(artifacts[0].path, path);
+        assert_eq!(artifacts[0].content, observation.content.as_bytes());
+        let rows = backends
+            .commit_boundary
+            .coordination_rows(DEFERRED_BRANCH_OBSERVATION_KIND)
+            .unwrap();
+        // A fresh direct retention leaves no row; only a queued receipt is
+        // marked applied.
+        assert_eq!(rows.len(), usize::from(already_queued));
+        if already_queued {
+            let applied: DeferredBranchObservation =
+                serde_json::from_str(&rows[0].payload_json).unwrap();
+            assert!(applied.applied);
+            assert!(
+                applied.claiming_run_id.is_none(),
+                "the stale run cannot decide current protection"
+            );
+        }
+        let history = runtime.get_task_history(&owner.id).unwrap();
+        assert_eq!(
+            backends
+                .task
+                .task
+                .record_deferred_branch_observation(&observation)
+                .unwrap(),
+            BranchObservationOutcome::Retained
+        );
+        assert_eq!(runtime.get_task_artifacts(&owner.id).unwrap().len(), 1);
+        assert_eq!(runtime.get_task_history(&owner.id).unwrap(), history);
+        assert_eq!(
+            backends
+                .commit_boundary
+                .coordination_rows(DEFERRED_BRANCH_OBSERVATION_KIND)
+                .unwrap(),
+            rows
+        );
+        // The same receipt in the normal sweep is reported as retained.
+        let output = file(&runtime, vec![pr]);
+        assert_eq!(output["attributed"][0]["artifact"], path);
+        assert!(
+            output["deferred_attribution"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn ci_failure_branch_write_failure_does_not_abort_other_observations_or_landing_filing() {
+    if !isolated(
+        "ci_failure_branch_write_failure_does_not_abort_other_observations_or_landing_filing",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let owner = runtime
+        .add_task(TaskAddParams {
+            title: "Branch owner whose queue write fails".into(),
+            plan: "Hold the branch while the follower runs.".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    protecting_branch_claim(&runtime, &owner.id);
+    let other = runtime
+        .add_task(TaskAddParams {
+            title: "Independent branch owner".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let connection = rusqlite::Connection::open(global.join("orbit.db")).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_branch_observation BEFORE INSERT ON task_coordination_rows
+         WHEN NEW.kind = 'ci-branch-observation-deferred-v1'
+              AND json_extract(NEW.payload_json, '$.claiming_run_id') IS NOT NULL
+         BEGIN SELECT RAISE(ABORT, 'fixture branch observation write failure'); END;",
+        )
+        .unwrap();
+    let mut pr = failure("error: claimed branch failure", 0, &"3".repeat(40));
+    pr["event"] = json!("pull_request");
+    pr["head_branch"] = json!(format!("orbit/{}-ddb04571", owner.id));
+    pr["ref_kind"] = json!("pull_request");
+    let mut other_pr = failure("error: independent branch failure", 2, &"3".repeat(40));
+    other_pr["event"] = json!("pull_request");
+    other_pr["head_branch"] = json!(format!("orbit/{}-abcdef12", other.id));
+    other_pr["ref_kind"] = json!("pull_request");
+    let push = failure("error: independent landing regression", 1, &"4".repeat(40));
+    let output = file(&runtime, vec![pr, other_pr, push]);
+    assert_eq!(output["filed_count"], 1, "{output}");
+    assert_eq!(
+        output["attributed"].as_array().unwrap().len(),
+        1,
+        "{output}"
+    );
+    assert_eq!(output["attributed"][0]["task_id"], other.id);
+    assert!(
+        output["deferred_attribution"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let errors = output["audit"]["branch_observation_errors"]
+        .as_array()
+        .unwrap();
+    assert_eq!(errors.len(), 1, "{output}");
+    assert_eq!(errors[0]["task_id"], owner.id);
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fixture branch observation write failure"),
+        "{output}"
+    );
+    assert!(runtime.get_task_artifacts(&owner.id).unwrap().is_empty());
+    assert_eq!(runtime.get_task_artifacts(&other.id).unwrap().len(), 1);
 }
 
 /// The sweep routes each repair to a host that can reproduce it [ORB-14005]:

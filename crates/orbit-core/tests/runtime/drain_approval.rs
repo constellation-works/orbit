@@ -16,6 +16,9 @@ use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+mod required_tools;
+
 struct Workspace {
     _root: TempDir,
     runtime: OrbitRuntime,
