@@ -6,7 +6,7 @@ How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, si
 
 - `agent-main` is the dev branch. Releases are prepared and tagged here.
 - `main` is the production branch. It only receives release merges and hotfixes.
-- Every release ends with a fast-forward promotion of `agent-main` to `main` and a check that the two agree, in the same session.
+- Every release ends with a fast-forward promotion of the tagged release commit to `main` and a check that the two agree, in the same session.
 
 ## Before you start
 
@@ -223,13 +223,18 @@ After release CI is green, fast-forward `main` to the release commit. A fast-for
 
 ```sh
 git fetch origin
-git merge-base --is-ancestor origin/main origin/agent-main   # must exit 0
-git push origin origin/agent-main:refs/heads/main
+tag=v<X.Y.Z>
+release=$(git rev-parse --verify "refs/tags/$tag^{commit}") &&
+git merge-base --is-ancestor "$release" origin/agent-main &&   # release must be on agent-main
+git merge-base --is-ancestor origin/main "$release" &&         # main must fast-forward to it
+git push origin "$release:refs/heads/main"
 ```
+
+The `^{commit}` suffix peels the annotated tag to the commit it validated. Promote that commit, never `origin/agent-main`: development work that landed on `agent-main` after the tag was cut has not been through the release's checks or artifacts, so it waits for the next release. The chain stops at the first failing command, so nothing is pushed unless both ancestry checks pass.
 
 Why a fast-forward: the `agent-main` ruleset says "This branch must not contain merge commits". The old flow merged `agent-main` into `main` with a promotion-PR merge commit, then back-merged `main` into `agent-main` with `git merge --no-ff`. That back-merge (v0.28.1, `02b2e0aa2`) only landed because the pusher bypassed the rule. GitHub offers no PR merge method that fast-forwards, so promote with a direct push. A direct push to `main` needs the same release-operator rights the old `gh pr merge --admin` step already used. If the push is refused, don't push anything else to `agent-main`. Ask a repository admin to push, or to adjust the `main` ruleset for the release operator.
 
-If `is-ancestor` exits non-zero, `main` holds commits `agent-main` lacks, which is the case after a [hotfix](#hotfix-flow) whose back-merge was skipped. Don't force-push `main`. Complete the [hotfix back-merge](#hotfix-flow) first, then promote.
+If the first `is-ancestor` fails, the tag is missing or is not on `agent-main`: stop and find out why before pushing anything. If the second fails, `main` holds commits the release lacks, which is the case after a [hotfix](#hotfix-flow) whose back-merge was skipped. Don't force-push `main`. Complete the [hotfix back-merge](#hotfix-flow) first. The existing tag can never fast-forward `main` past those commits, so release again from the merged `agent-main` with a new tag.
 
 Never promote with a squash or rebase PR: it rewrites SHAs, so the release tag isn't reachable from `main`.
 
@@ -242,7 +247,7 @@ git fetch origin
 git merge-base --is-ancestor origin/main origin/agent-main && echo in-sync
 ```
 
-`in-sync` means `main` is the release commit or an ancestor of `agent-main`, so the next promotion is again a fast-forward. If it prints nothing, `main` holds commits `agent-main` lacks. Follow the [hotfix back-merge](#hotfix-flow), and never force-push either branch to make them match.
+`in-sync` means `main` is the release commit or another ancestor of `agent-main`, so the next promotion is again a fast-forward. `agent-main` may be ahead of `main` by development commits landed since the tag; that is expected. If it prints nothing, `main` holds commits `agent-main` lacks. Follow the [hotfix back-merge](#hotfix-flow), and never force-push either branch to make them match.
 
 The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and doesn't gate on CI. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
 
