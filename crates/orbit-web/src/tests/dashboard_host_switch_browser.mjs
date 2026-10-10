@@ -289,7 +289,10 @@ try {
   ]) {
     assert(logged(pattern), `expected a request matching ${pattern}: ${JSON.stringify(routeLog, null, 1)}`);
   }
-  const strays = routeLog.filter((entry) => !entry.path.startsWith('/api/on/hostb/') && !ALWAYS_SERVING.test(entry.path));
+  // Settings > Hosts reads each registered host's resource snapshot, including
+  // the serving host. This is independent of the selected dashboard scope.
+  const servingResources = entry => entry.method === 'GET' && entry.path === `/api/on/${SERVING}/host/resources`;
+  const strays = routeLog.filter((entry) => !entry.path.startsWith('/api/on/hostb/') && !ALWAYS_SERVING.test(entry.path) && !servingResources(entry));
   assert(strays.length === 0, `every request after selecting hostb goes to /api/on/hostb/: ${JSON.stringify(strays)}`);
   evidenceLog.hostbRoutes = routeLog;
 
@@ -384,17 +387,32 @@ try {
   await captureWidths('skewed');
   await page.close();
 
-  // 6. Remote runs link to their host; unregistered machines stay text.
-  await openPage('/', { fresh: true });
+  // 6. Remote runs link to their host; unregistered machines stay text. The
+  // page starts on a non-default window, so a link that drops it would show.
+  await openPage('/?window=7d', { fresh: true });
   const remoteLink = taskRow('alpha-RUN').locator('.task-quick-cell a.remote-run-link');
   await remoteLink.waitFor({ state: 'visible' });
-  assert(await remoteLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit#runs?run_id=jrun-remote-1', `in-progress row links to the run on hostb: ${await remoteLink.getAttribute('href')}`);
+  assert(await remoteLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit&window=7d#runs?run_id=jrun-remote-1', `in-progress row links to the run on hostb: ${await remoteLink.getAttribute('href')}`);
+  // Follow a copied run link in a separate tab. Its URL must override the
+  // remembered host and retain the selected time window on startup.
+  const linkedTab = await context.newPage();
+  try {
+    await linkedTab.goto(new URL(await remoteLink.getAttribute('href'), page.url()).href);
+    await linkedTab.waitForFunction(async () => {
+      const { getHost, getWorkspace, getWindow } = await import('/js/common.js');
+      return getHost() === 'hostb' && getWorkspace() === 'ws_orbit' && getWindow() === '7d'
+        && document.querySelector('.tab-pane.active')?.dataset.tab === 'run-detail';
+    });
+    await until('a new tab fetching the linked run on its named host', () => logged(/^GET \/api\/on\/hostb\/runs\/jrun-remote-1\?workspace=ws_orbit/));
+  } finally {
+    await linkedTab.close();
+  }
   assert(await taskRow('alpha-LOCAL').locator('.task-quick-cell a').count() === 0, 'an unregistered machine is not a link');
   assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .exec-origin').textContent()) === 'on laptop', 'an unregistered machine keeps its text');
   await page.locator('#tasks-body [data-key="task-alpha-ART"] > .title').click();
   const claimLink = page.locator('.distributed-block a.remote-run-link');
   await claimLink.waitFor({ state: 'visible' });
-  assert(await claimLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit#runs?run_id=jrun-claim-1', 'the claim panel links to the run on hostb');
+  assert(await claimLink.getAttribute('href') === '?host=hostb&workspace=ws_orbit&window=7d#runs?run_id=jrun-claim-1', 'the claim panel links to the run on hostb');
   await page.locator('#tasks-body [data-key="task-alpha-ART"] > .title').click();
   await page.locator('#tasks-body [data-key="task-alpha-LOCAL"] > .title').click();
   await page.locator('.distributed-block .exec-origin', { hasText: 'on laptop' }).waitFor({ state: 'visible' });
@@ -427,7 +445,9 @@ try {
   // 8. Keyboard: Tab reaches the picker, with the 2px focus ring.
   await openPage('/', { fresh: true });
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
-  await page.locator('body').focus();
+  // Anchor traversal at a focusable element; body.focus() is a no-op and
+  // leaves the browser's prior sequential focus position unchanged.
+  await page.locator('#skip-link').focus();
   let reached = false;
   for (let index = 0; index < 6 && !reached; index++) {
     await page.keyboard.press('Tab');

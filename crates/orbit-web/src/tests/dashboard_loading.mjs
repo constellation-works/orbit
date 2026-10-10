@@ -192,7 +192,9 @@ globalThis.fetch = async (path, options = {}) => {
 };
 await import('./app.js');
 await settle();
-const { persistScopeToUrl, setWorkspace, setWindow, getHost, getWorkspace, formatDateTime, fetchJsonPage } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace, setWindow, getHost, getServingHost, getWorkspace, formatDateTime, fetchJsonPage } = await import('./js/common.js');
+// Run links name the selected host, or the serving host when none is selected.
+const runLinkHost = () => getHost() || getServingHost()?.name || null;
 const { navigateToRun, setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -566,9 +568,9 @@ for (const selectedWindow of ['24h', '7d']) {
   const errorRunLink = node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a');
   const errorRunUrl = new URL(errorRunLink.href);
   const currentDashboardUrl = new URL(window.location.href);
-  check(errorRunUrl.hash === '#runs/jrun-health-fixture'
+  check(errorRunUrl.hash === '#runs?run_id=jrun-health-fixture'
     && errorRunUrl.searchParams.get('workspace') === getWorkspace()
-    && errorRunUrl.searchParams.get('host') === getHost(), 'Errors run link opens its run with the current host and workspace');
+    && errorRunUrl.searchParams.get('host') === runLinkHost(), 'Errors run link opens its run with the current host and workspace');
   if (selectedWindow === '7d') {
     const loadMore = node('diag-count').querySelector('.diagnostics-load-more');
     check(loadMore, 'coverage truncation exposes a Load more errors control');
@@ -633,11 +635,11 @@ const evidenceRunLink = evidenceRow.querySelector('td:nth-child(8) a');
 const evidenceTaskLink = evidenceRow.querySelector('td:nth-child(9) a');
 const evidenceRunUrl = new URL(evidenceRunLink.href);
 const evidenceTaskUrl = new URL(evidenceTaskLink.href);
-check(evidenceRunUrl.hash === '#runs/jrun-incident-fixture'
+check(evidenceRunUrl.hash === '#runs?run_id=jrun-incident-fixture'
   && evidenceTaskUrl.hash === '#tasks?status=all&q=ORB-123'
   && evidenceRunUrl.searchParams.get('workspace') === getWorkspace()
   && evidenceTaskUrl.searchParams.get('workspace') === getWorkspace()
-  && evidenceRunUrl.searchParams.get('host') === getHost()
+  && evidenceRunUrl.searchParams.get('host') === runLinkHost()
   && evidenceTaskUrl.searchParams.get('host') === getHost(), 'incident evidence links open the run and task while retaining host and workspace');
 click(evidenceTaskLink); await settle();
 check(document.querySelector('.tab-pane.active')?.dataset.tab === 'tasks', 'incident evidence task link opens the Tasks view');

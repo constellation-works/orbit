@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setWorkspace, statusPill } = await import('./js/common.js');
+const { setHost, setWorkspace, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
@@ -78,6 +78,8 @@ window.confirm = message => { confirmations.push(message); return true; };
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  // A selected host reaches the same fixture through the serving host's forward.
+  url.pathname = url.pathname.replace(/^\/api\/on\/[^/]+\//, '/api/');
   const workspace = url.searchParams.get('workspace');
   const body = options.body ? JSON.parse(options.body) : null;
   requests.push({ method: options.method || 'GET', path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
@@ -486,7 +488,7 @@ await fetchAndRenderOperations();
 drainRunId = 'jrun-20260923-0400-a1';
 drainPhase = 'draining';
 await fetchAndRenderOperations();
-const liveLink = descendants(get('auto-drain-live')).find(node => String(node.href || '').includes('#runs/'));
+const liveLink = descendants(get('auto-drain-live')).find(node => String(node.getAttribute?.('href') || '').includes('#runs?run_id='));
 assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
 assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
 assert(get('auto-drain-live').querySelector('.drain-window-count').textContent.includes('This window: 1 running of 3 admitted'), 'live counts label this window separately from workspace slots');
@@ -500,6 +502,42 @@ approvalsFixture = { enabled: true, drain_run_id: drainRunId };
 await fetchAndRenderOperations();
 assert(get('auto-drain-live').querySelector('.drain-approvals').textContent === 'Approving proposed tasks', 'a payload without counts shows only the flag');
 approvalsFixture = { enabled: false };
+await fetchAndRenderOperations();
+// Run links retain scope on every surface and let the browser open modified
+// clicks in a new tab instead of routing them in the current page.
+setHost('hostb');
+setWindow('7d');
+await fetchAndRenderOperations();
+for (const [surface, runId] of [
+  ['auto-drain-live', 'jrun-20260923-0400-a1'],
+  ['jobs-body', 'jrun-fixture-running'],
+  ['routines-body', 'jrun-fixture-done'],
+]) {
+  const link = Array.from(get(surface).querySelectorAll('a')).find(link => new URL(link.href).hash === `#runs?run_id=${runId}`);
+  assert(link, `${surface} links its run`);
+  const url = new URL(link.href);
+  assert(url.searchParams.get('host') === 'hostb' && url.searchParams.get('workspace') === 'one'
+    && url.searchParams.get('window') === '7d', `${surface} retains the selected host, workspace and window: ${url}`);
+  for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, [modifier]: true });
+    let intercepted;
+    link.addEventListener('click', observed => {
+      intercepted = observed.defaultPrevented;
+      // Prevent the harness itself from opening or navigating a tab.
+      observed.preventDefault();
+    }, { once: true });
+    link.dispatchEvent(event);
+    assert(intercepted === false, `${surface} preserves the browser default for ${modifier} clicks`);
+  }
+}
+setMultiWorkspace(true);
+setWorkspace(null);
+const aggregateRunUrl = new URL(runHref('jrun-aggregate'), window.location.href);
+assert(aggregateRunUrl.searchParams.get('workspace') === 'all', 'an aggregate run link retains All workspaces instead of silently selecting the default');
+setWorkspace('one');
+setMultiWorkspace(false);
+setWindow('24h');
+setHost(null);
 await fetchAndRenderOperations();
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');

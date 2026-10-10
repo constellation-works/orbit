@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
+import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, runHref, statusPill, fmtDuration } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
@@ -435,8 +435,9 @@ function outcomeDot(state) {
 
 function runLink(runId, workspaceId, text = runId) {
   const link = el("a", { class: "mono operation-run-link", text, title: `Open run ${runId}` });
-  link.href = `?workspace=${encodeURIComponent(workspaceId || "")}#runs/${encodeURIComponent(runId)}`;
+  link.href = runHref(runId, { workspace: workspaceId || null });
   link.addEventListener("click", (event) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
     event.preventDefault();
     navigateToRun(runId, workspaceId || null);
   });

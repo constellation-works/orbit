@@ -109,8 +109,11 @@ expected on the default port, `7878`.
   answers.
 - **Remote-run links.** Where a task's execution line says which machine ran
   it (`on build-box`) and that machine is registered on the serving host, the
-  name links to that run on that host, as `?host=<name>&workspace=<workspace>#runs?run_id=<run>`.
+  name links to that run on that host, as `?host=<name>&workspace=<workspace>&window=<window>#runs?run_id=<run>`.
   An unregistered machine stays plain text.
+- **Run links.** Every run link (Drain, Jobs, Routines, Tasks, Audit, Health) uses that
+  same form and carries the selected host, workspace and time window, so a link
+  opened in a new tab or copied shows the run in that scope.
 - **Read-only.** Writes to another host go through the serving dashboard's
   [operator session](#authorization). Without one, a note reads `Read-only on
   <host>: <reason>` and write controls are disabled with the same reason.
