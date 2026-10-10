@@ -423,7 +423,7 @@ const runLink = descendants(openedOldest()).find(node => node.tagName === 'a' &&
 const taskLink = descendants(openedOldest()).find(node => node.tagName === 'a' && node.textContent === 'ORB-9001');
 assert.match(runLink.href, /#runs\?run_id=jrun-sweep-0700/);
 assert.match(runLink.href, /workspace=ws_fixture/);
-assert.match(taskLink.href, /#tasks\?status=all&q=ORB-9001/);
+assert.match(taskLink.href, /#tasks\?open=ORB-9001$/);
 plainClick(runLink);
 assert.deepEqual(opened, ['runs/jrun-sweep-0700', 'navigate:jrun-sweep-0700']);
 assert.equal(runRows().length, 5, 'opening one run leaves the other runs listed');

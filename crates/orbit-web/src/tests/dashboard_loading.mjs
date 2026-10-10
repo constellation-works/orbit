@@ -636,7 +636,7 @@ const evidenceTaskLink = evidenceRow.querySelector('td:nth-child(9) a');
 const evidenceRunUrl = new URL(evidenceRunLink.href);
 const evidenceTaskUrl = new URL(evidenceTaskLink.href);
 check(evidenceRunUrl.hash === '#runs?run_id=jrun-incident-fixture'
-  && evidenceTaskUrl.hash === '#tasks?status=all&q=ORB-123'
+  && evidenceTaskUrl.hash === '#tasks?open=ORB-123'
   && evidenceRunUrl.searchParams.get('workspace') === getWorkspace()
   && evidenceTaskUrl.searchParams.get('workspace') === getWorkspace()
   && evidenceRunUrl.searchParams.get('host') === runLinkHost()

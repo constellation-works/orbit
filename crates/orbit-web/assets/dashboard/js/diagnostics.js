@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, getHost, getWorkspace, formatDateTime, listItems, runHref } from './common.js';
+import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatDateTime, listItems, runHref, bindTaskLink } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -115,20 +115,6 @@ function errorRunLabel(row) {
   if (row.job_run) return row.job_run;
   if (row.affiliation === "unaffiliated") return "unaffiliated";
   return "-";
-}
-
-function dashboardHref(hash, workspaceId = getWorkspace()) {
-  const url = new URL(window.location.href);
-  if (getHost()) url.searchParams.set("host", getHost());
-  if (workspaceId) url.searchParams.set("workspace", workspaceId);
-  url.hash = hash;
-  return url.href;
-}
-
-function dashboardLink(label, hash, workspaceId = getWorkspace()) {
-  const link = el("a", { class: "mono", text: label, title: `Open ${label}` });
-  link.href = dashboardHref(hash, workspaceId);
-  return link;
 }
 
 function runDashboardLink(runId, workspaceId) {
@@ -412,11 +398,9 @@ function incidentEvidenceTable(events, ctx) {
     tr.appendChild(runCell);
     const taskCell = el("td", { class: "mono" });
     if (event.task_id) {
-      taskCell.appendChild(dashboardLink(
-        event.task_id,
-        `tasks?status=all&q=${encodeURIComponent(event.task_id)}`,
-        event.workspace_id || getWorkspace(),
-      ));
+      const taskLink = el("a", { class: "mono", text: event.task_id, title: `Open ${event.task_id}` });
+      bindTaskLink(taskLink, event.task_id, { workspace: event.workspace_id || getWorkspace() });
+      taskCell.appendChild(taskLink);
     } else {
       taskCell.textContent = "-";
     }

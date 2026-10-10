@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, runHref, statusPill, fmtDuration } from './common.js';
+import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, runHref, statusPill, fmtDuration, bindTaskLink } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
@@ -263,7 +263,7 @@ async function runOperation({ selection, key, feedbackId, pending, failure, rend
     feedback(feedbackId, "success", success(result));
     if (result.task_id) {
       const link = el("a", { class: "mono operation-run-link operation-task-link operation-link", text: ` Open ${result.task_id} →` });
-      link.href = `?workspace=${encodeURIComponent(selection.workspace)}#tasks?status=all&q=${encodeURIComponent(result.task_id)}`;
+      bindTaskLink(link, result.task_id, { workspace: selection.workspace });
       $(feedbackId)?.appendChild(link);
     }
     try {
@@ -1079,7 +1079,7 @@ function autoTaskChip(text, tone = "") {
 
 function taskLink(taskId, workspaceId) {
   const link = el("a", { class: "mono operation-run-link operation-task-link operation-link", text: taskId, title: `Open ${taskId}` });
-  link.href = `?workspace=${encodeURIComponent(workspaceId || "")}#tasks?status=all&q=${encodeURIComponent(taskId)}`;
+  bindTaskLink(link, taskId, { workspace: workspaceId || "" });
   return link;
 }
 

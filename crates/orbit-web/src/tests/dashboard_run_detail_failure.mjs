@@ -210,8 +210,8 @@ for (const taskLink of described.filter(link => link.text.startsWith('ORB-'))) {
   const params = new URLSearchParams(query);
   assert.equal(url.searchParams.get('workspace'), 'ws-orbit');
   assert.equal(route, 'tasks');
-  assert.equal(params.get('status'), 'all');
-  assert.equal(params.get('q'), taskLink.text);
+  assert.equal(params.get('open'), taskLink.text);
+  assert.equal(params.has('status') || params.has('q'), false, 'a task link names the task, never a filter');
 }
 assert.equal(links.some(node => node.textContent === 'ADR-12' || node.textContent === 'ORB-abc'), false);
 assert.match(pre.textContent, /ADR-12/);
