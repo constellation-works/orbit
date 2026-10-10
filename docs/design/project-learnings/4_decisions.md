@@ -3,8 +3,8 @@ summary: "Project Learnings — Decisions: why the native learning subsystem was
 type: design
 title: "Project Learnings — Decisions"
 owner: claude
-last_updated: 2026-09-24
-last_validated: 2026-09-24
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Accepted
 feature: project-learnings
 doc_role: decisions
@@ -26,7 +26,7 @@ The native resource was justified primarily by automatic scope-matched delivery.
 
 ### Decision
 
-Remove the native project-learning subsystem and every executable or advertised surface that depends on it. Existing files under `.orbit/learnings/**` remain byte-for-byte inert historical data: they are not read, indexed, injected, migrated, rewritten, or copied elsewhere. Preserve the shipped SQLite migration ledger and append a forward migration that drops the retired tables and learning vector rows for both upgraded and freshly initialized databases. Unified search continues for tasks, docs, ADRs, and frictions; the retired kind is rejected.
+Remove the native project-learning subsystem and every executable or advertised surface that depends on it. Existing files under `.orbit/learnings/**` remain byte-for-byte inert historical data: they are not read, indexed, injected, migrated, rewritten, or copied elsewhere. Preserve the shipped SQLite migration ledger and append a forward migration that drops the retired tables and learning vector rows for both upgraded and freshly initialized databases. At the time, unified search covered tasks, docs, ADRs, and frictions and rejected the retired learning kind. The separate ADR search kind was later retired when decision bodies moved into the docs corpus (see [Design Doc Conventions §4b](../CONVENTIONS.md#4b-why-ids-and-lifecycle-records-were-retired)).
 
 ### Consequences
 
