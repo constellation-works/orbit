@@ -705,10 +705,12 @@ in the CLI `mcp` binary's `mcp_roundtrip` module exercises runtime, CLI/MCP disp
 sessions in a disposable child process with a 120-second deadline.
 
 CI collects workspace test coverage with
-[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on every open PR
-(the `Coverage (informational)` job in `.github/workflows/ci.yml`) and
-uploads an lcov report as the `coverage-lcov` workflow artifact. The job is
-**informational only — it never gates a merge**. It runs the tests through
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on agent-main
+every six hours and on demand (`.github/workflows/coverage.yml`; run it with
+`gh workflow run Coverage`), not on every push or PR, and uploads an lcov
+report as the `coverage-lcov` workflow artifact. The job is
+**informational only — it never gates a merge**. The host CI failure sweep
+files a red scheduled run like a red push. It runs the tests through
 `cargo llvm-cov nextest`, so each test gets its own process and the
 `.config/nextest.toml` test groups apply, as in the `Check / Clippy / Test` job.
 Both Linux jobs install ripgrep before running tests: provider inspection

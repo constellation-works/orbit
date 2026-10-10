@@ -1112,6 +1112,35 @@ fn ci_failure_branch_routing_retains_owner_evidence_and_only_files_landing_check
         );
     }
 
+    // A scheduled or dispatched run builds its branch tip as of the trigger,
+    // so like a push it files against the older landing commit it reports.
+    for (index, event) in [(8, "schedule"), (9, "workflow_dispatch")] {
+        let older = index.to_string().repeat(40);
+        let mut finding = failure(&format!("error: {event} landing regression"), index, &older);
+        finding["event"] = json!(event);
+        let output = file(&runtime, vec![finding]);
+        assert_eq!(output["filed_count"], 1, "event {event}: {output}");
+    }
+
+    // A newer green scheduled run of the same workflow supersedes a red one,
+    // as a newer green push does.
+    let mut red = failure("error: scheduled coverage regression", 10, &"1".repeat(40));
+    red["event"] = json!("schedule");
+    red["workflow"] = json!("Coverage");
+    let mut green = red.clone();
+    green["run_id"] = json!(30);
+    green["conclusion"] = json!("success");
+    green["created_at"] = json!("2026-09-07T07:54:42Z");
+    let output = runtime.run_deterministic("file_ci_failure_tasks", &json!({}), &json!({
+        "ci_evidence": {
+            "schema_version": 2, "collected": true,
+            "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+            "latest_runs": [red.clone(), green], "current_failures": [red],
+        }
+    }), ToolContext::default()).unwrap();
+    assert_eq!(output["filed_count"], 0, "{output}");
+    assert_eq!(output["already_repaired"][0]["run_id"], 20, "{output}");
+
     let mut orphan = failure("error: unmatched branch failure", 7, &"8".repeat(40));
     orphan["event"] = json!("pull_request");
     orphan["head_branch"] = json!("orbit/ORB-999999999-deadbeef");

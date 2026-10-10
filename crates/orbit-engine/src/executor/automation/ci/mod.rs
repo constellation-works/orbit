@@ -30,6 +30,7 @@ mod partition;
 mod pending;
 mod query;
 mod refs;
+pub mod run_event;
 
 pub(in crate::executor::automation) use query::AuthStatus;
 

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_engine::ci_run_event::is_branch_event;
 use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 
@@ -109,8 +110,8 @@ pub(super) fn split_deferred_failures(
     (complete, deferred)
 }
 
-/// A newer green push on the same branch is stronger evidence than an older
-/// red finding. The collector normally moves that red run to
+/// A newer green branch-event run (push, schedule or dispatch) of the same
+/// workflow on the same branch is stronger evidence than an older red finding. The collector normally moves that red run to
 /// `stale_or_superseded`; retaining this check at filing keeps a replayed or
 /// hand-constructed snapshot from filing a repair after the branch is already
 /// green.
@@ -121,7 +122,7 @@ pub(super) fn exclude_already_repaired(
     let mut remaining = Vec::new();
     let mut repaired = Vec::new();
     for failure in failures {
-        let Some(green) = newer_green_push_run(&failure, evidence) else {
+        let Some(green) = newer_green_branch_run(&failure, evidence) else {
             remaining.push(failure);
             continue;
         };
@@ -146,7 +147,7 @@ pub(super) fn exclude_already_repaired(
         if repaired_ids.contains(&run_id_key(stale).unwrap_or_default()) {
             continue;
         }
-        let Some(green) = newer_green_push_run(stale, evidence) else {
+        let Some(green) = newer_green_branch_run(stale, evidence) else {
             continue;
         };
         repaired.push(json!({
@@ -163,7 +164,7 @@ pub(super) fn exclude_already_repaired(
     (remaining, repaired)
 }
 
-fn newer_green_push_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a Value> {
+fn newer_green_branch_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a Value> {
     let workflow = value_string(failure, "workflow");
     let branch = value_string(failure, "head_branch");
     let failure_order = run_order(failure);
@@ -175,7 +176,7 @@ fn newer_green_push_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a 
     runs.filter(|run| {
         value_string(run, "workflow") == workflow
             && value_string(run, "head_branch") == branch
-            && value_string(run, "event") == "push"
+            && is_branch_event(&value_string(run, "event"))
             && run_order(run) > failure_order
             && run_is_completed_success(run)
     })
@@ -195,8 +196,9 @@ fn superseding_green_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a
             return None;
         }
         let superseded_by = entry.get("superseded_by")?;
-        (value_string(superseded_by, "event") == "push" && run_is_completed_success(superseded_by))
-            .then_some(superseded_by)
+        (is_branch_event(&value_string(superseded_by, "event"))
+            && run_is_completed_success(superseded_by))
+        .then_some(superseded_by)
     })
 }
 

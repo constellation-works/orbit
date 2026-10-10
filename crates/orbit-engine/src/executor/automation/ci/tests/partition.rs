@@ -279,6 +279,9 @@ fn landing_checkout_classification_requires_push_identity_or_observed_tip() {
     for (event, branch, checkout, expected) in [
         ("push", "topic", &old, true),
         ("push", "topic", &foreign, false),
+        ("schedule", "topic", &old, true),
+        ("workflow_dispatch", "topic", &old, true),
+        ("workflow_dispatch", "other", &old, false),
         ("pull_request", "topic", &foreign, false),
         ("pull_request", "orbit/ORB-13887-ddb04571", &foreign, false),
         (

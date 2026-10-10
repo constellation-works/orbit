@@ -4,6 +4,7 @@
 use serde_json::{Value, json};
 
 use super::refs::{CandidateProbeResults, RefKind, ScannedRef};
+use super::run_event::is_branch_event;
 use super::unsuccessful_conclusion;
 
 /// Where each run lands once it has been classified.
@@ -20,8 +21,8 @@ pub(super) struct RunPartition {
     /// favour of exactly such a successor, so once expansion shows the
     /// cancellation has no failed step it is superseded rather than evidence.
     pub(super) cancelled_successors: std::collections::BTreeMap<u64, Value>,
-    /// Current runs keyed by run id, mapped to every newer push run of the
-    /// same workflow on the same branch that is still queued or in progress
+    /// Current runs keyed by run id, mapped to every newer branch-event run of
+    /// the same workflow on the same branch that is still queued or in progress
     /// at a different commit, newest first. Whether one of them is at a
     /// descendant commit needs Git, so collection decides the deferral.
     pub(super) in_flight_successors: std::collections::BTreeMap<u64, Vec<Value>>,
@@ -169,7 +170,7 @@ pub(super) fn partition_runs(
                     continue;
                 }
                 out.current.push(run_summary(ref_for_run(refs, run), run));
-                let successors = in_flight_push_successors(ref_runs, run);
+                let successors = in_flight_branch_successors(ref_runs, run);
                 if let (Some(run_id), false) = (
                     run.get("run_id").and_then(Value::as_u64),
                     successors.is_empty(),
@@ -203,17 +204,20 @@ pub(super) fn partition_runs(
     }
 }
 
-/// Newer push runs of `run`'s workflow and branch that have not completed and
-/// carry a different event commit, newest first. `ref_runs` is already sorted
-/// newest first.
-fn in_flight_push_successors(ref_runs: &[&Value], run: &Value) -> Vec<Value> {
+/// Newer branch-event runs (push, schedule or dispatch) of `run`'s workflow
+/// and branch that have not completed and carry a different event commit,
+/// newest first. `ref_runs` is already sorted newest first.
+fn in_flight_branch_successors(ref_runs: &[&Value], run: &Value) -> Vec<Value> {
     let commit = run.get("reported_head_sha").and_then(Value::as_str);
     ref_runs
         .iter()
         .copied()
         .filter(|newer| {
             !run_is_completed(newer)
-                && newer.get("event").and_then(Value::as_str) == Some("push")
+                && newer
+                    .get("event")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_branch_event)
                 && run_order(newer) > run_order(run)
                 && newer
                     .get("reported_head_sha")
@@ -231,10 +235,11 @@ fn landing_branch_names(refs: &[ScannedRef]) -> std::collections::BTreeSet<&str>
         .collect()
 }
 
-/// Positive landing evidence: a push checks out its event commit on a landing
-/// ref, or an observed checkout equals a landing tip (including PR/merge queue).
-/// Missing checkout evidence keeps push candidates here for ordinary deferral;
-/// it never makes an unmerged PR a landing failure.
+/// Positive landing evidence: a branch-event run (push, schedule or dispatch)
+/// checks out its event commit on a landing ref, or an observed checkout equals
+/// a landing tip (including PR/merge queue). Missing checkout evidence keeps
+/// branch-event candidates here for ordinary deferral; it never makes an
+/// unmerged PR a landing failure.
 pub(super) fn is_landing_failure(refs: &[ScannedRef], failure: &Value) -> bool {
     let checkout = failure["actual_checkout_shas"]
         .as_array()
@@ -245,7 +250,7 @@ pub(super) fn is_landing_failure(refs: &[ScannedRef], failure: &Value) -> bool {
         .any(|scanned| {
             checkout.is_some_and(|sha| scanned.head_sha.as_deref() == Some(sha))
                 || (run_branch(failure) == scanned.branch
-                    && failure["event"] == "push"
+                    && failure["event"].as_str().is_some_and(is_branch_event)
                     && checkout
                         .is_none_or(|sha| failure["event_reported_head_sha"].as_str() == Some(sha)))
         })
