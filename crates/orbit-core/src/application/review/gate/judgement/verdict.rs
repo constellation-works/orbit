@@ -2,15 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use orbit_automation::review::{
-    ValidationContext, ValidationDefect, mutation_targets, validation_evidence,
-};
+use orbit_automation::review::{ValidationDefect, mutation_targets, validation_evidence};
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::path_changed_between;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    CommitIdentity, FindingDisposition, ReviewExternalEvidence, ReviewVerdict, ValidationOutcome,
-    ValidationRole,
+    CommitIdentity, FindingDisposition, ReviewEvidenceRequirement, ReviewExternalEvidence,
+    ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 
 use crate::OrbitRuntime;
@@ -38,7 +36,7 @@ impl Judgement {
     ) -> Result<(), OrbitError> {
         if context.task_ids.len() != 1
             || self.external_evidence.is_empty()
-            || open_findings(&self.findings).next().is_some()
+            || self.has_open_findings()
         {
             return Ok(());
         }
@@ -48,24 +46,7 @@ impl Judgement {
             return Ok(());
         };
         self.external_evidence = requirements;
-        let Some(validation) = super::super::super::evidence::with_external_checks_passed(
-            &self.validation,
-            &self.external_evidence,
-        ) else {
-            return Ok(());
-        };
-        if validation_evidence(
-            &validation,
-            &ValidationContext {
-                scope,
-                obligations: &self.retained_obligations,
-                retired: &self.retired_validation,
-                required_validation_commands: self.required_validation_commands.as_deref(),
-                baseline_commands: &self.baseline_commands,
-            },
-        )
-        .is_err()
-        {
+        if !self.evidence_would_complete(&self.external_evidence, scope) {
             return Ok(());
         }
         let mut satisfied = super::super::super::evidence::satisfied_external_evidence(
@@ -111,10 +92,7 @@ impl Judgement {
                         "External result {artifact}; log {}; tree {}{carried}",
                         evidence.log_artifact, candidate.tree,
                     );
-                    record.note = Some(match record.note.take() {
-                        Some(previous) => format!("{previous}; {note}"),
-                        None => note,
-                    });
+                    extend_note(&mut record.note, note);
                 }
             }
             false
@@ -123,14 +101,34 @@ impl Judgement {
             self.evidence_carried = carry.cloned();
         }
         if self.external_evidence.is_empty() {
-            self.verdict = if repair.is_some() {
-                ReviewVerdict::AcceptWithFixes
-            } else {
-                ReviewVerdict::Accept
-            };
-            self.escalation = None;
+            self.accept(repair);
         }
         Ok(())
+    }
+
+    /// Whether the report is otherwise evidence-only: with every check the
+    /// canonical `requirements` name counted as passed, the records of a
+    /// passing verdict establish the candidate over `scope`.
+    pub(in crate::application::review::gate) fn evidence_would_complete(
+        &self,
+        requirements: &[ReviewEvidenceRequirement],
+        scope: &[String],
+    ) -> bool {
+        super::super::super::evidence::with_external_checks_passed(&self.validation, requirements)
+            .is_some_and(|validation| {
+                validation_evidence(&validation, &self.validation_context(scope)).is_ok()
+            })
+    }
+
+    /// Settle as a pass with nothing left to escalate: `accept_with_fixes`
+    /// over the reviewer's `repair`, `accept` without one.
+    pub(in crate::application::review::gate) fn accept(&mut self, repair: Option<&CommitIdentity>) {
+        self.verdict = if repair.is_some() {
+            ReviewVerdict::AcceptWithFixes
+        } else {
+            ReviewVerdict::Accept
+        };
+        self.escalation = None;
     }
 
     /// [ORB-14616] What keeps a file a control says it temporarily mutated
@@ -209,14 +207,7 @@ impl Judgement {
     /// What keeps the records of a passing verdict from establishing the
     /// candidate over `scope`, if anything.
     fn validation_defect(&self, scope: &[String]) -> Option<ValidationDefect> {
-        let context = ValidationContext {
-            scope,
-            obligations: &self.retained_obligations,
-            retired: &self.retired_validation,
-            required_validation_commands: self.required_validation_commands.as_deref(),
-            baseline_commands: &self.baseline_commands,
-        };
-        validation_evidence(&self.validation, &context).err()
+        validation_evidence(&self.validation, &self.validation_context(scope)).err()
     }
 
     /// [ORB-14616] The defect a reviewer that just returned can still correct
@@ -257,6 +248,11 @@ impl Judgement {
             && self.retained_obligations.is_empty()
     }
 
+    /// Whether the reviewer left any finding open.
+    pub(in crate::application::review::gate) fn has_open_findings(&self) -> bool {
+        open_findings(&self.findings).next().is_some()
+    }
+
     pub(in crate::application::review::gate) fn downgrade(&mut self, reason: &str) {
         self.host_refused = true;
         self.verdict = ReviewVerdict::Incomplete;
@@ -271,6 +267,15 @@ impl Judgement {
             _ => reason.to_string(),
         });
     }
+}
+
+/// Append `note` to a record's note, after `; ` when it already has one. A
+/// blank previous note is kept as written.
+pub(in crate::application::review::gate) fn extend_note(slot: &mut Option<String>, note: String) {
+    *slot = Some(match slot.take() {
+        Some(previous) => format!("{previous}; {note}"),
+        None => note,
+    });
 }
 
 fn open_findings(

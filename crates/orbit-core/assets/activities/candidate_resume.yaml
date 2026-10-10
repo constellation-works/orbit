@@ -46,6 +46,15 @@ spec:
     is `resumed_repaired` with trigger `continuation` (`review` when the
     before-PR review refused it): the claimed implementer always runs and
     the leaf's own validation judges the result.
+    When that candidate's branch was pushed and its claim opened a pull
+    request (`published`, `pull_request`), a resumed candidate also renames
+    this checkout's branch to the candidate's, so the leaf's push replaces
+    the published head under a lease (`reused_head_sha`) and its `pr_open`
+    reuses that pull request. A local branch of that name held by a retained
+    worktree at the published head is renamed aside first; one at any other
+    commit is never moved. When the branch cannot be adopted the output says
+    why (`branch_reuse_refused`), and the leaf's `pr_open` closes
+    `prior_pull_request` once its own is open.
     When the task's prior run executed on another machine
     (`prior_foreign_run`, a claim's leaf), its id is never looked up in this
     machine's run store. An owner-local run continues the candidate the
@@ -93,7 +102,8 @@ spec:
         description: >
           Claimed mode only: the preserved candidate's `branch` and
           `head_sha`, with `source_run_id`, `failed_step_id` and, when its
-          leaf carried it to `origin`, `durable_ref`.
+          leaf carried it to `origin`, `durable_ref`; `published` and
+          `pull_request` when its leaf pushed the branch and opened one.
       claim_repair:
         type: [object, "null"]
         description: >
@@ -140,5 +150,24 @@ spec:
         type: [string, "null"]
       base_sha:
         type: string
+      prior_pull_request:
+        type: [string, "null"]
+        description: >
+          Claimed mode: the pull request the candidate's claim opened.
+      reused_branch:
+        type: [string, "null"]
+        description: >
+          Claimed mode: the candidate's branch, when this checkout now
+          continues on it.
+      reused_head_sha:
+        type: [string, "null"]
+        description: >
+          Claimed mode: the published head the leaf's push replaces under a
+          lease, set with `reused_branch`.
+      branch_reuse_refused:
+        type: [string, "null"]
+        description: >
+          Claimed mode: why a candidate with a pull request was not continued
+          on its branch.
   action: candidate_resume
   config: {}

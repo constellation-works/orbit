@@ -16,6 +16,11 @@
 //! to the same durable ref, and the task's next claim on another host resumes
 //! it; when that push is refused the task is still held, and says the
 //! candidate is host-local.
+//!
+//! [ORB-15308] A claim that pushed its candidate and opened a pull request,
+//! then failed in its before-landing review, is blocked; returned to the
+//! backlog, the task's next claim is handed that candidate with its pull
+//! request and continues on the same branch, so it republishes through it.
 
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskStatus};
@@ -165,6 +170,12 @@ fn committed_then_stopped(
 
 /// The release the owner recorded for `leaf`'s claim.
 fn released_candidate(pair: &Pair, leaf: &str) -> Value {
+    settled_candidate(pair, leaf, "Release")
+}
+
+/// The candidate `leaf`'s claim settlement of `kind` (`Release` or `Fail`)
+/// named for the owner to keep.
+fn settled_candidate(pair: &Pair, leaf: &str, kind: &str) -> Value {
     let claim_id = pair
         .admission(leaf)
         .receipt
@@ -176,8 +187,8 @@ fn released_candidate(pair: &Pair, leaf: &str) -> Value {
         .into_iter()
         .rev()
         .find(|settle| settle["claim_id"] == claim_id.as_str())
-        .map(|settle| settle["settlement"]["Release"]["failure"]["candidate"].clone())
-        .expect("the leaf's release was delivered")
+        .map(|settle| settle["settlement"][kind]["failure"]["candidate"].clone())
+        .expect("the leaf's settlement was delivered")
 }
 
 fn claim_candidate(pair: &Pair, leaf: &str) -> Option<orbit_store::contracts::ClaimCandidateRef> {
@@ -818,4 +829,131 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
     assert!(note.starts_with("fresh: "), "{note}");
     assert!(note.contains("reason=not_durable"), "{note}");
     assert!(note.contains(&head), "{note}");
+}
+
+/// [ORB-15308] The claim pushed its candidate, opened #41 and failed in its
+/// before-landing review: a candidate failure, so the owner blocks the task.
+/// On-call returns it to the backlog; the next claim on the same host is
+/// handed the kept candidate with its pull request, and its resume takes
+/// over the published branch from the earlier claim's retained checkout, so
+/// the leaf's push and `pr_open` go through #41 rather than a second PR.
+#[test]
+fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
+    if !isolated(
+        module_path!(),
+        "a_requeued_claim_continues_its_published_branch_and_pull_request",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    let first = host_checkout(&pair, &pair);
+    let branch = format!("orbit/{task}-aaaaaaaa");
+    git(&first, &["checkout", "-q", "-b", &branch]);
+    std::fs::write(first.join("src/f0.rs"), CARRIED).unwrap();
+    git(&first, &["commit", "-q", "-am", "candidate"]);
+    git(&first, &["push", "-q", "origin", &branch]);
+    let head = git(&first, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), task);
+    let steps = json!({
+        "worktree": {"workspace_path": first, "head_ref": branch, "base_sha": base},
+        "commit": {"commit_sha": head},
+        "prepare_branch": {"head": branch, "head_sha": head, "base": "main", "base_sha": base},
+        "sync_base": {"head": branch, "head_sha": head, "base": "main", "base_sha": base},
+        "review_gate_admit": {"applies": false},
+        "review_gate_settle": {"applies": false},
+        "validate": {"decision": "passed"},
+        "push": {"branch": branch, "local_sha": head},
+        "pr_open": {"pr_number": "41"},
+        "landing_review_gate_admit": {"admitted": true},
+    });
+    let mut state = pair.follower.read_run_state(&leaf).unwrap().unwrap();
+    for (step, output) in steps.as_object().unwrap() {
+        state.pipeline[step] = output.clone();
+    }
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(
+        &leaf,
+        "the before-landing review timed out with a partial report",
+    );
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked", "a candidate failure");
+    let kept = settled_candidate(&pair, &leaf, "Fail");
+    assert_eq!(kept["published"], true, "{kept}");
+    assert_eq!(kept["pull_request"], "41", "{kept}");
+    assert_eq!(
+        kept["failed_step_id"], "landing_review_gate_settle",
+        "{kept}"
+    );
+
+    returned_to_backlog(&pair, &task);
+    let drain = pair.run_drain();
+    let next = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
+    let offered = claim_candidate(&pair, &next).expect("the backlog move keeps the candidate");
+    assert_eq!(
+        (offered.branch.as_str(), offered.head_sha.as_str()),
+        (branch.as_str(), head.as_str())
+    );
+    assert!(offered.published);
+    assert_eq!(offered.pull_request.as_deref(), Some("41"));
+    let input = pair
+        .follower_jobs
+        .get_job_run(&next)
+        .unwrap()
+        .and_then(|run| run.input)
+        .expect("leaf input");
+
+    // The next leaf's worktree, on a branch named for its own run, beside
+    // the earlier claim's checkout that still holds the published branch.
+    let checkout = first.with_file_name("next-claim");
+    let ours = format!("orbit/{task}-bbbbbbbb");
+    git(
+        &first,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &ours,
+            checkout.to_str().unwrap(),
+            &base,
+        ],
+    );
+    let resumed = engine_action(
+        &pair.follower,
+        "candidate_resume",
+        &json!({
+            "job_run_id": next,
+            "task_ids": [task],
+            "workspace_path": checkout,
+            "base_sha": base,
+            "candidate": input["resume_candidate"],
+            "claimed": true,
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["source_sha"], head.as_str(), "{resumed}");
+    assert_eq!(resumed["prior_pull_request"], "41", "{resumed}");
+    assert_eq!(resumed["reused_branch"], branch.as_str(), "{resumed}");
+    assert_eq!(resumed["reused_head_sha"], head.as_str(), "{resumed}");
+    assert_eq!(
+        git(&checkout, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        branch,
+        "the leaf continues on the published branch"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("src/f0.rs")).unwrap(),
+        CARRIED,
+        "the candidate is applied for the implementer to continue"
+    );
+    assert_eq!(
+        git(&first, &["rev-parse", "HEAD"]).trim(),
+        head,
+        "the earlier checkout keeps its commit on a branch renamed aside"
+    );
 }

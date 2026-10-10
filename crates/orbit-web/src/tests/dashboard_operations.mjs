@@ -754,7 +754,7 @@ assert(requests.filter(r => r.path === '/api/auto-tasks/mint').length === 1, 'mi
 assert(get('auto-task-operation-feedback').textContent.includes('Minting'), 'mint pending feedback');
 assert(confirmations.at(-1).includes('An open instance already exists'), 'duplicate is clearly acknowledged');
 releasePost(); await tick(); await tick();
-const link = descendants(get('auto-task-operation-feedback')).find(node => String(node.href || '').includes('q=TEST-1'));
+const link = descendants(get('auto-task-operation-feedback')).find(node => String(node.href || '').includes('open=TEST-1'));
 assert(link && String(link.href).includes('workspace=one'), 'mint links to task in originating workspace');
 assert(requests.find(r => r.path.endsWith('/mint')).body.acknowledge_unconditional === true, 'mint acknowledges unconditional semantics');
 assert(!requests.some(r => r.path.includes('/ship')), 'mint never dispatches');

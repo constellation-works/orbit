@@ -223,10 +223,13 @@ impl NativeProbe {
     }
 }
 
-/// Long enough for the aggregate tick counters to advance on any host, and well
-/// inside the admission budget of `RESOURCE_CACHE_TTL`.
+/// XNU can serve identical cached counters to unrelated processes for a full
+/// second after the host-wide statistics quota is exhausted. Cross that window
+/// before the second first-admission read, rather than polling the shared quota.
+/// The margin lets ticks advance even when the baseline starts a cache window;
+/// the pair still fits inside `RESOURCE_CACHE_TTL`.
 #[cfg(target_os = "macos")]
-const CPU_BASELINE_WINDOW: std::time::Duration = std::time::Duration::from_millis(200);
+const CPU_BASELINE_WINDOW: std::time::Duration = std::time::Duration::from_millis(1100);
 
 #[cfg(target_os = "macos")]
 impl NativeProbe {

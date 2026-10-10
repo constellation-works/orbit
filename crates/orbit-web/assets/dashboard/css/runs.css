@@ -267,12 +267,26 @@
 }
 .runs-sort.active { color: var(--fg); }
 
-/* Where the runs grid overflows through tablet widths, keep its State column
-   pinned while the rest of the table scrolls under it. */
-@media (max-width: 1183px) {
+/* The runs card, not the viewport, decides when the grid overflows: the rail
+   and page padding make a 1280px window's card about 1038px. Chromium's
+   minimum scroll width is the track minimums, the 12px gaps and the 16px
+   start padding it counts: 1156px for the default grid and 1204px with the
+   Workspace column. Pin State and fade the scroll edges while the card is
+   narrower than that by more than the 1px overflow tolerance. A card that
+   can hold the tracks keeps the plain grid. */
+#diagnostics-panel { container: runs-card / inline-size; }
+@container runs-card (max-width: 1154px) {
   /* The grid's tracks overflow the row's auto-sized box at these widths.
      Give the row its table width so its sticky State cell stays pinned for
      the full scroll range. */
+  #runs-body {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-elev);
+  }
   .runs-row { min-width: 1272px; }
   .runs-row.workspace-attributed { min-width: 1374px; }
   .runs-row > :first-child {
@@ -294,6 +308,39 @@
     box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border);
   }
   .runs-row:not(.runs-header):hover > :first-child {
+    background: var(--bg-hover);
+  }
+}
+/* All-workspaces still overflows after the default grid fits. */
+@container runs-card (max-width: 1202px) {
+  #runs-body:has(.runs-row.workspace-attributed) {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-elev);
+  }
+  .runs-row.workspace-attributed { min-width: 1374px; }
+  .runs-row.workspace-attributed > :first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    box-shadow: inset -1px 0 0 var(--border);
+    z-index: 1;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    margin-top: -4px;
+    margin-bottom: -4px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .runs-row.workspace-attributed.runs-header > :first-child {
+    z-index: 3;
+    box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border);
+  }
+  .runs-row.workspace-attributed:not(.runs-header):hover > :first-child {
     background: var(--bg-hover);
   }
 }
@@ -340,7 +387,8 @@
     row-gap: 0;
     padding: 8px 16px;
   }
-  .runs-row > :first-child {
+  .runs-row > :first-child,
+  .runs-row.workspace-attributed > :first-child {
     position: static;
     background: transparent !important;
     box-shadow: none;
@@ -349,9 +397,11 @@
     margin: 0;
     padding: 0;
   }
-  .runs-row.runs-header > :first-child {
+  .runs-row.runs-header > :first-child,
+  .runs-row.workspace-attributed.runs-header > :first-child {
     box-shadow: none;
   }
+  #runs-body:has(.runs-row.workspace-attributed) { background: none; }
   .runs-row .state { grid-area: state; }
   .runs-row .when { grid-area: when; }
   .runs-row .id { grid-area: job; }

@@ -485,18 +485,54 @@ function selectedRunHost() {
   return currentHost || (servingHost ? servingHost.name : null);
 }
 
-/// The dashboard address of run `runId`, on `host` in `workspace`. Every run
-/// link is built here: the query names the host, the workspace (the reserved
-/// `all` token for the aggregate view) and the time window, so a link opened in
-/// a new tab, copied or reloaded shows the same run in the same scope.
-export function runHref(runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
+// A dashboard address for `hash`, scoped by `host`, `workspace` (the reserved
+// `all` token for the aggregate view) and the time window.
+function scopedHref(hash, { host, workspace }) {
   const query = new URLSearchParams();
   if (host) query.set("host", host);
   if (workspace) query.set("workspace", workspace);
   else if (isAggregateView() || isAggregateLinked()) query.set("workspace", ALL_WORKSPACES_TOKEN);
   query.set("window", currentWindow);
   const search = query.toString();
-  return `${search ? `?${search}` : ""}#runs?run_id=${encodeURIComponent(runId)}`;
+  return `${search ? `?${search}` : ""}${hash}`;
+}
+
+/// The dashboard address of run `runId`, on `host` in `workspace`. Every run
+/// link is built here: the query names the host, the workspace (the reserved
+/// `all` token for the aggregate view) and the time window, so a link opened in
+/// a new tab, copied or reloaded shows the same run in the same scope.
+export function runHref(runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
+  return scopedHref(`#runs?run_id=${encodeURIComponent(runId)}`, { host, workspace });
+}
+
+/// The dashboard address that opens task `taskId` expanded on the Tasks tab,
+/// scoped like `runHref`. The hash carries only `open`, so following it leaves
+/// the operator's status and search filter as it was. Every task link is built
+/// here.
+export function taskHref(taskId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
+  return scopedHref(`#tasks?open=${encodeURIComponent(taskId)}`, { host, workspace });
+}
+
+/// Make `link` open task `taskId` on the Tasks tab. The href is `taskHref`, so
+/// a new tab, a copy or a modified click lands on the same task. A plain click
+/// stays in the page, in `workspace`, and adds one history entry: the scope
+/// query in the href differs from the page's own, so following it as an address
+/// would reload the page and lose the operator's Tasks filter.
+export function bindTaskLink(link, taskId, { workspace = currentWorkspace } = {}) {
+  link.href = taskHref(taskId, { workspace });
+  link.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (workspace && workspace !== currentWorkspace) {
+      setWorkspace(workspace);
+      persistScopeToUrl();
+      const selector = document.getElementById("workspace-select");
+      if (selector) selector.value = workspace;
+    }
+    window.location.hash = `#tasks?open=${encodeURIComponent(taskId)}`;
+  });
+  return link;
 }
 
 export function positiveIntParam(name, fallback) {
@@ -1114,6 +1150,14 @@ export function formatDateTime(value, { seconds = false } = {}) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "-" : String(value);
   return `${dateTimeText(dateParts(date, false), seconds)} ${zoneName(date)}`;
+}
+
+/// "2026-10-06", using the browser's local calendar date.
+export function formatDate(value) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  const parts = dateParts(date, false);
+  return `${parts.y}-${pad2(parts.mo)}-${pad2(parts.d)}`;
 }
 
 /// A local wall-clock time, "23:32:57 PDT"; `zone: false` drops the zone for

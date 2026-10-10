@@ -58,6 +58,15 @@ spec:
           raw checks, and "Review validation limits" when an out-of-scope
           diagnostic failed. It is appended to the PR body, generated or
           supplied; empty adds nothing.
+      candidate_resume:
+        type: [object, "null"]
+        description: >
+          A claimed leaf's `candidate_resume` output. When its
+          `prior_pull_request` (the pull request an earlier claim opened for
+          the resumed candidate) is not the one this run opened or reused,
+          the earlier one is closed with a comment naming it, provided it is
+          still open and its head is the output's `source_branch`; a failed
+          close is reported in `superseded_pull_request`, not a step failure.
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.
@@ -79,5 +88,12 @@ spec:
         type: string
       pr_url:
         type: [string, "null"]
+      superseded_pull_request:
+        type: [object, "null"]
+        description: >
+          What happened to the resumed candidate's `prior_pull_request` when this run published
+          through another pull request: its `number`, a `decision`
+          (`closed`, `not_open`, `other_branch` or `close_failed`) and a
+          `detail`. Null when there was none or this run reused it.
   action: pr_open
   config: {}

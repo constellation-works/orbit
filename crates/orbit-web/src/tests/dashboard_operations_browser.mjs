@@ -817,16 +817,18 @@ try {
     const chips = [...strip.querySelectorAll('.host-resource')].map(node => (
       { resource: node.dataset.resource, box: node.getBoundingClientRect().toJSON(), clipped: node.scrollWidth > node.clientWidth }));
     return {
-      // Brand, Drain and Refresh share the bar's first row, above the pickers.
-      actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - refresh.top - refresh.height / 2) < 1)
-        && workspace.top >= refresh.bottom,
+      // The phone layout (ORB-15232) puts the brand, Drain and Refresh on the
+      // top bar's first row and gives the host and workspace pickers their own
+      // row below it.
+      actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - brand.top - brand.height / 2) < 1),
+      pickersBelowActions: workspace.width > 0 && workspace.top >= Math.max(brand.bottom, drain.bottom, refresh.bottom) && workspace.right <= innerWidth,
       chipsSingleRow: chips.length === 3 && chips.every(({ box }) => box.width > 0 && Math.abs(box.top - chips[0].box.top) < 1),
       // All three readings are in view at 375px without scrolling the row.
       chipsInView: chips.every(({ box, clipped }) => !clipped && box.left >= row.left - 0.5 && box.right <= Math.min(row.right, innerWidth) + 0.5),
       chips,
     };
   });
-  if (!header.actionsInHeader || !header.chipsSingleRow || !header.chipsInView) throw new Error(`Phone header or host chips wrapped or clipped: ${JSON.stringify(header)}`);
+  if (!header.actionsInHeader || !header.pickersBelowActions || !header.chipsSingleRow || !header.chipsInView) throw new Error(`Phone header or host chips wrapped or clipped: ${JSON.stringify(header)}`);
   await page.screenshot({ path: path.join(evidence, 'topbar-375x812.png') });
   for (const selector of ['#refresh-btn', '#global-drain-state', ...['cpu', 'memory', 'disk'].map(resource => `#host-resource-chips [data-resource="${resource}"]`)]) {
     await page.locator(selector).focus();

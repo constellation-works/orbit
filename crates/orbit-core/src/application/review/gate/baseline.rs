@@ -47,23 +47,20 @@
 //!   [ORB-15131] — is neither refuted nor confirmed: the review settles
 //!   `incomplete` under `baseline_not_comparable`.
 
-use orbit_automation::review::{
-    ValidationContext, in_scope, same_host_command, validation_evidence,
-};
+use orbit_automation::review::{in_scope, same_host_command, validation_evidence};
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{BaseFailureVerdict, verify_base_failure};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    BaselineRedHold, CommitIdentity, FindingDisposition, HostCandidateOverride,
-    REVIEW_BASELINE_ARTIFACT, ReviewBaselineClaim, ReviewValidation, ReviewVerdict,
-    ValidationOutcome, ValidationRole,
+    BaselineRedHold, CommitIdentity, HostCandidateOverride, REVIEW_BASELINE_ARTIFACT,
+    ReviewBaselineClaim, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
 use super::context::GateContext;
-use super::judgement::{Judgement, write_artifact};
+use super::judgement::{Judgement, extend_note, write_artifact};
 
 impl Judgement {
     /// Check every baseline claim in the report and return the holds the
@@ -241,12 +238,7 @@ impl Judgement {
             self.host_overrides.push(record);
         }
         if holds.is_empty() {
-            self.verdict = if repair.is_some() {
-                ReviewVerdict::AcceptWithFixes
-            } else {
-                ReviewVerdict::Accept
-            };
-            self.escalation = None;
+            self.accept(repair);
             return Ok(Vec::new());
         }
         self.escalate(&format!(
@@ -270,10 +262,7 @@ impl Judgement {
         if self.host_refused
             || self.verdict.passed()
             || !self.external_evidence.is_empty()
-            || self
-                .findings
-                .iter()
-                .any(|finding| finding.disposition == FindingDisposition::Open)
+            || self.has_open_findings()
         {
             return false;
         }
@@ -288,16 +277,7 @@ impl Judgement {
                 record
             })
             .collect::<Vec<_>>();
-        match validation_evidence(
-            &records,
-            &ValidationContext {
-                scope,
-                obligations: &self.retained_obligations,
-                retired: &self.retired_validation,
-                required_validation_commands: self.required_validation_commands.as_deref(),
-                baseline_commands: &self.baseline_commands,
-            },
-        ) {
+        match validation_evidence(&records, &self.validation_context(scope)) {
             Ok(()) => true,
             Err(defect) => {
                 self.escalate(&format!(
@@ -313,11 +293,7 @@ impl Judgement {
     /// reviewer's failed record, if anything: a host run never overrides an
     /// open finding, and evidence still owed elsewhere keeps the verdict open.
     fn override_blocker(&self) -> Option<&'static str> {
-        if self
-            .findings
-            .iter()
-            .any(|finding| finding.disposition == FindingDisposition::Open)
-        {
+        if self.has_open_findings() {
             Some("a finding is still open, so the host's run never accepts the review")
         } else if !self.external_evidence.is_empty() {
             Some("external evidence is still owed, so the host's run cannot settle the review")
@@ -347,10 +323,7 @@ impl Judgement {
             .filter(|record| *record == overridden)
         {
             record.outcome = ValidationOutcome::Passed;
-            record.note = Some(match record.note.take() {
-                Some(previous) => format!("{previous}; {note}"),
-                None => note.clone(),
-            });
+            extend_note(&mut record.note, note.clone());
         }
     }
 

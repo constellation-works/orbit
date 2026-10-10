@@ -24,6 +24,8 @@ pub(crate) const PR_VIEW: &str = "pr.view";
 pub(crate) const PR_MERGE: &str = "pr.merge";
 pub(crate) const PR_MERGE_CAPABILITIES: &str = "pr.merge_capabilities";
 pub(crate) const PR_STATUS: &str = "pr.status";
+/// [ORB-15308] Close a pull request a superseding run replaced.
+pub(crate) const PR_CLOSE: &str = "pr.close";
 
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const SLOW_TIMEOUT_MS: u64 = 30_000;

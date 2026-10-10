@@ -30,33 +30,10 @@ impl Judgement {
         context: &GateContext,
         attempt: &ReviewAttempt,
     ) -> Result<Self, OrbitError> {
-        let task_meaning_digest = context.task_digests.1.clone();
         let incomplete = |reason: &str| Self {
-            external_evidence: Vec::new(),
-            verdict: ReviewVerdict::Incomplete,
-            findings: Vec::new(),
-            validation: Vec::new(),
-            validation_complete: false,
-            required_validation_commands: context
-                .admission
-                .as_ref()
-                .and_then(|admission| admission.required_validation_commands.clone()),
-            baseline_commands: context
-                .admission
-                .as_ref()
-                .map(|admission| admission.baseline_commands.clone())
-                .unwrap_or_default(),
-            retained_obligations: Vec::new(),
-            retired_validation: Vec::new(),
             escalation: Some(reason.to_string()),
-            summary: String::new(),
-            task_meaning_digest: task_meaning_digest.clone(),
-            selectors_widened: Vec::new(),
-            evidence_carried: None,
             host_refused: true,
-            host_evidence: Vec::new(),
-            host_overrides: Vec::new(),
-            initial_report_only: false,
+            ..Self::empty(context)
         };
         let mut reports = Vec::new();
         let mut initial_only = true;
@@ -121,27 +98,12 @@ impl Judgement {
             verdict: report.verdict,
             findings: report.findings,
             validation: report.validation,
-            validation_complete: false,
-            required_validation_commands: context
-                .admission
-                .as_ref()
-                .and_then(|admission| admission.required_validation_commands.clone()),
-            baseline_commands: context
-                .admission
-                .as_ref()
-                .map(|admission| admission.baseline_commands.clone())
-                .unwrap_or_default(),
             retained_obligations,
             retired_validation: report.retired_validation,
             escalation: report.escalation,
             summary: report.summary,
-            task_meaning_digest,
-            selectors_widened: Vec::new(),
-            evidence_carried: None,
-            host_refused: false,
-            host_evidence: Vec::new(),
-            host_overrides: Vec::new(),
             initial_report_only: initial_only,
+            ..Self::empty(context)
         })
     }
 
@@ -159,26 +121,41 @@ impl Judgement {
             external_evidence: hold.requirements.clone(),
             findings: certificate.findings.clone(),
             validation: certificate.validation.clone(),
-            validation_complete: false,
-            required_validation_commands: context
-                .admission
-                .as_ref()
-                .and_then(|admission| admission.required_validation_commands.clone()),
-            baseline_commands: context
-                .admission
-                .as_ref()
-                .map(|admission| admission.baseline_commands.clone())
-                .unwrap_or_default(),
             retained_obligations: certificate.retained_obligations.clone(),
             retired_validation: certificate.retired_validation.clone(),
             escalation: certificate.escalation.clone(),
+            host_evidence: certificate.host_evidence.clone(),
+            host_overrides: certificate.host_overrides.clone(),
+            ..Self::empty(context)
+        }
+    }
+
+    /// The skeleton every constructor starts from: an incomplete verdict
+    /// with no records, under the owner's admitted commands and the task's
+    /// current meaning. Each constructor overrides what its source decides.
+    fn empty(context: &GateContext) -> Self {
+        let admission = context.admission.as_ref();
+        Self {
+            verdict: ReviewVerdict::Incomplete,
+            external_evidence: Vec::new(),
+            findings: Vec::new(),
+            validation: Vec::new(),
+            validation_complete: false,
+            required_validation_commands: admission
+                .and_then(|admission| admission.required_validation_commands.clone()),
+            baseline_commands: admission
+                .map(|admission| admission.baseline_commands.clone())
+                .unwrap_or_default(),
+            retained_obligations: Vec::new(),
+            retired_validation: Vec::new(),
+            escalation: None,
             summary: String::new(),
             task_meaning_digest: context.task_digests.1.clone(),
             selectors_widened: Vec::new(),
             evidence_carried: None,
             host_refused: false,
-            host_evidence: certificate.host_evidence.clone(),
-            host_overrides: certificate.host_overrides.clone(),
+            host_evidence: Vec::new(),
+            host_overrides: Vec::new(),
             initial_report_only: false,
         }
     }

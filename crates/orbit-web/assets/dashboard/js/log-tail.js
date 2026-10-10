@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router's `#auto-drain` redirect.
 
-import { el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -474,9 +474,7 @@ function renderLogEvent(ev, isFresh) {
   const taskId = LOG_TASK_ID.exec(mSpan.textContent || "")?.[1];
   let task = null;
   if (taskId) {
-    task = el("a", { class: "log-task", text: taskId, title: `Show ${taskId} in Tasks` });
-    task.href = `#tasks?status=all&q=${encodeURIComponent(taskId)}`;
-    task.addEventListener("click", (event) => event.stopPropagation());
+    task = bindTaskLink(el("a", { class: "log-task", text: taskId, title: `Open ${taskId} in Tasks` }), taskId);
   }
 
   row.appendChild(tSpan);

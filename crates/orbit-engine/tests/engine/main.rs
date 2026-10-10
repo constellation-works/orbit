@@ -2,7 +2,8 @@
 //! local-shell dispatch, provider capacity, limits and usage windows, name
 //! resolution, worktree lifecycle, PR and handoff landing, the shipped PR
 //! pipeline's before-PR review fixes, its before-landing review, completion
-//! re-review rounds and candidate resume, and history notes.
+//! re-review rounds and candidate resume, a re-claim's reuse of its earlier
+//! claim's pull request, and history notes.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -14,6 +15,8 @@
 mod before_landing_review;
 mod candidate_resume;
 mod claimed_candidate_paths;
+#[cfg(unix)]
+mod claimed_pr_reuse;
 mod commit_verifier;
 mod completion_review;
 #[cfg(unix)]

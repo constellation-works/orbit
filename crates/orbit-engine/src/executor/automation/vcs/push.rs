@@ -159,6 +159,20 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
                 "git_push: remote branch 'origin/{branch}' contains commits not present in local '{branch}'; refusing to overwrite remote-only history"
             )));
         }
+        // [ORB-15308] A claimed leaf that resumed a published candidate on
+        // its branch replaces exactly that published head, so the
+        // candidate's pull request carries the new one. The step output is
+        // read leniently: a run checkpointed before it named the field has
+        // none, and adopted no branch.
+        PushDecision::Diverged
+            if remote_sha.is_some()
+                && input
+                    .get("candidate_resume")
+                    .and_then(|resumed| input_string_field(resumed, "reused_head_sha"))
+                    == remote_sha =>
+        {
+            ("performed_force_with_lease", true)
+        }
         PushDecision::Diverged => {
             validate_rewrite_checkpoint(input, &branch, &local_sha, remote_sha.as_deref())?;
             ("performed_force_with_lease", true)

@@ -1,21 +1,20 @@
 //! Lexical search hydrates its hits from the task documents alone: a cold
-//! search over a large workspace whose matching bundles carry megabytes of
+//! search over a workspace whose matching bundles carry megabytes of
 //! artifacts neither reads nor verifies those payloads.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
 
 use orbit_common::test_env::{self, FixtureProgress};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitRuntime};
+use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitError, OrbitRuntime};
 use serde_json::json;
 use tempfile::TempDir;
 use tracing_subscriber::{Layer, layer::Context};
 
 /// Tasks in the workspace; only [`MATCHING`] of them carry the query term.
-const TASKS: usize = 4_000;
+const TASKS: usize = 40;
 /// Matching tasks, each carrying one [`ARTIFACT_BYTES`] artifact: 20 MB.
 const MATCHING: usize = 20;
 const ARTIFACT_BYTES: usize = 1_000_000;
@@ -28,7 +27,8 @@ fn cold_search_hits_skip_artifact_payloads() {
     ) {
         return;
     }
-    // Seeding fsyncs every task; keep it off a disk-backed `TMPDIR`.
+    // Keep the seed bounded: payload corruption proves the hydration contract
+    // without thousands of fsyncs or a machine-dependent CPU-time ceiling.
     let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
@@ -39,6 +39,7 @@ fn cold_search_hits_skip_artifact_payloads() {
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let scratch = workspace.join("tmp");
     std::fs::create_dir_all(&scratch).unwrap();
+    let mut matching_ids = Vec::new();
     progress.phase("seed tasks", TASKS);
     for index in 0..TASKS {
         let matching = index < MATCHING;
@@ -55,6 +56,7 @@ fn cold_search_hits_skip_artifact_payloads() {
             })
             .unwrap();
         if matching {
+            matching_ids.push(task.id.clone());
             let source = scratch.join(format!("payload-{index}.bin"));
             std::fs::write(&source, vec![b'a'; ARTIFACT_BYTES]).unwrap();
             runtime
@@ -87,8 +89,6 @@ fn cold_search_hits_skip_artifact_payloads() {
 
     progress.phase("search", 1);
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-    let started = Instant::now();
-    let work_before = work_clock();
     let response = runtime
         .global_search(GlobalSearchParams {
             query: Some(TERM.into()),
@@ -97,8 +97,6 @@ fn cold_search_hits_skip_artifact_payloads() {
             ..Default::default()
         })
         .unwrap();
-    let work = work_clock().saturating_sub(work_before);
-    let elapsed = started.elapsed();
     progress.advance();
     progress.finish();
     let titles: Vec<_> = response
@@ -111,37 +109,15 @@ fn cold_search_hits_skip_artifact_payloads() {
         titles.iter().all(|title| title.contains(TERM)),
         "only matching tasks: {titles:?}"
     );
+    // Negative control after the cold search: canonical reads still reject
+    // these same bytes. If hydration takes that path, the ten-hit assertion
+    // above fails, independently of the host's filesystem or CPU speed.
+    let error = runtime.get_task(&matching_ids[0]).unwrap_err();
     assert!(
-        work < Duration::from_millis(300),
-        "cold search over {TASKS} tasks used {work:?} of CPU ({elapsed:?} wall, {})",
-        orbit_common::test_env::host_load()
+        matches!(&error, OrbitError::TaskBundleCorrupt { reason, .. }
+            if reason.contains("artifact manifest sha256 mismatch")),
+        "canonical read must detect the corrupted payload: {error}"
     );
-}
-
-/// The clock the search's cost is bounded on. Reading and hashing 20 MB of
-/// payloads is work, so on Unix this is the process's user and system CPU
-/// time: a saturated host stretches wall-clock time without changing the work
-/// done. Elsewhere it is wall-clock time since first use.
-#[cfg(unix)]
-fn work_clock() -> Duration {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
-    // Safety: `getrusage` fills the `rusage` it is handed and reads nothing else.
-    assert_eq!(
-        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
-        0
-    );
-    // Safety: a zero return means the kernel filled `usage`.
-    let usage = unsafe { usage.assume_init() };
-    let time = |value: libc::timeval| {
-        Duration::from_secs(value.tv_sec as u64) + Duration::from_micros(value.tv_usec as u64)
-    };
-    time(usage.ru_utime) + time(usage.ru_stime)
-}
-
-#[cfg(not(unix))]
-fn work_clock() -> Duration {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    START.get_or_init(Instant::now).elapsed()
 }
 
 /// The stored artifact payloads, wherever and however the bundle layout

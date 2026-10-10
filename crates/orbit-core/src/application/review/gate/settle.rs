@@ -160,13 +160,7 @@ pub(crate) fn review_gate_settle(
                     .as_deref()
                     .unwrap_or("no escalation reason recorded"),
                 certificate.findings.len(),
-                if admission_output.get("timing").and_then(Value::as_str)
-                    == Some(ReviewTiming::BeforeLanding.as_str())
-                {
-                    REVIEW_LANDING_DECISION_PENDING
-                } else {
-                    "the candidate stays unpublished until a recorded decision resumes delivery"
-                }
+                candidate_standing(&admission_output)
             ),
         }),
         // Typed `[baseline_red]`, so the failure handoff keeps the candidate
@@ -184,16 +178,21 @@ pub(crate) fn review_gate_settle(
                  validation record, never updated); attempt {attempt_id} was released without a \
                  verdict, so the candidate's review is not spent and a reviewer is admitted again \
                  within its remaining minutes; {}",
-                if admission_output.get("timing").and_then(Value::as_str)
-                    == Some(ReviewTiming::BeforeLanding.as_str())
-                {
-                    REVIEW_LANDING_DECISION_PENDING
-                } else {
-                    "the candidate stays unpublished until a recorded decision resumes delivery"
-                }
+                candidate_standing(&admission_output)
             ),
         }),
         Err(error) => Err(failed(error.to_string())),
+    }
+}
+
+/// What a settled-without-approval review leaves the candidate waiting for.
+fn candidate_standing(admission_output: &Value) -> &'static str {
+    if admission_output.get("timing").and_then(Value::as_str)
+        == Some(ReviewTiming::BeforeLanding.as_str())
+    {
+        REVIEW_LANDING_DECISION_PENDING
+    } else {
+        "the candidate stays unpublished until a recorded decision resumes delivery"
     }
 }
 
@@ -538,15 +537,11 @@ fn settle(
                 .tasks
                 .first()
                 .map(orbit_types::task::Task::spec_digest),
-            published_ref: None,
-        };
-        let hold = orbit_types::workflow::ReviewEvidenceHold {
             published_ref: if context.claimed {
-                publish_held_candidate(context, &hold.candidate.commit)
+                publish_held_candidate(context, &certificate.final_candidate.commit)
             } else {
                 None
             },
-            ..hold
         };
         let bytes = serde_json::to_vec_pretty(&hold)
             .map_err(|error| OrbitError::Execution(format!("serialize evidence hold: {error}")))?;
