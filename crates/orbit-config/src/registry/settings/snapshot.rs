@@ -124,6 +124,7 @@ impl ConfigSnapshot {
             memory_high: self.machine_worker_memory_high,
             memory_max: self.machine_worker_memory_max,
             tasks_max: self.machine_worker_tasks_max,
+            cpu_quota_percent: self.machine_worker_cpu_quota,
         }
     }
 }

@@ -241,6 +241,14 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                     } else {
                         stdin
                     };
+                    // The mock executor sends the bare envelope; every real CLI
+                    // provider prefixes the shared response contract.
+                    assert!(
+                        case.provider == "mock" || prompt.contains("Never generate synthetic load"),
+                        "{} prompt dropped the no-synthetic-load rule; a worker's CPU burners \
+                         took a shared host to load 89.7 on 32 cores (ORB-15196)",
+                        case.provider
+                    );
                     let received: Value =
                         serde_json::from_str(prompt.lines().last().expect("stdin envelope"))
                             .expect("prompt contains intact JSON envelope");

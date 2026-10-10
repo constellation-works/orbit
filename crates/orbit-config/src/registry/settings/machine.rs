@@ -24,6 +24,9 @@ pub struct WorkerContainmentSettings {
     pub memory_max: MemoryLimit,
     /// `machine.worker_tasks_max` — process/thread ceiling.
     pub tasks_max: u32,
+    /// `machine.worker_cpu_quota` — CPU ceiling as a percentage of one core;
+    /// 0 sets no CPU limit.
+    pub cpu_quota_percent: u32,
 }
 
 /// The `[machine]` table, admitted on its own.

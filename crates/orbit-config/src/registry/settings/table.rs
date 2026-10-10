@@ -212,6 +212,12 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 70,
         resolve: |raw: Option<u32>| resolve_worker_tasks_max(raw),
     },
+    machine_worker_cpu_quota: u32 => u32 {
+        key: "machine.worker_cpu_quota", value_type: "integer",
+        description: "CPUQuota= for each contained worker scope, as a percentage of one core (400 caps a run at four cores) so one run cannot saturate the host. 0 or unset sets no CPU limit. Linux only; enforced when the systemd user manager delegates the cpu controller.",
+        section: ConfigSection::Machine, order: 75,
+        resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(0)),
+    },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
         description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). Before-PR and before-landing review refuse to start without it.",

@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use super::git_protection::git_protection_row;
 use super::permissions::state_directory_permissions_row;
+use super::worker_containment::worker_containment_row;
 use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
 /// The checks after the workspace ones, in report order.
@@ -21,6 +22,9 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         state_directory_permissions_row(runtime)
     }),
     DoctorProbe::one("git-protection", |runtime, _| git_protection_row(runtime)),
+    DoctorProbe::one("worker-containment", |runtime, _| {
+        worker_containment_row(runtime)
+    }),
     DoctorProbe::many("provider", |runtime, _| routed_provider_rows(runtime)),
     DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
     DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),

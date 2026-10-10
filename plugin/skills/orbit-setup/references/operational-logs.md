@@ -167,6 +167,7 @@ The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 | `machine.worker_memory_high` | `40%` | `MemoryHigh=`: the kernel throttles the run above it |
 | `machine.worker_memory_max` | `50%` | `MemoryMax=`: OOM kills stay inside the run |
 | `machine.worker_tasks_max` | `4096` | `TasksMax=`: processes plus threads before fork/clone fails |
+| `machine.worker_cpu_quota` | unset (`0`) | `CPUQuota=`: percent of one core (`400` = four cores); `0` or unset sets no CPU limit |
 
 Memory values take bytes with an optional `K`/`M`/`G`/`T` suffix, a
 percentage of physical RAM (resolved by systemd, so the defaults scale with
@@ -178,13 +179,24 @@ also sets `OOMPolicy=continue`: the kernel kills the largest process in the run
 rather than systemd stopping the whole scope, so the worker survives to record
 the cause.
 
+`machine.worker_cpu_quota` caps a run's CPU so a stress loop or runaway test
+loop in one leaf cannot take every core and starve the other leaves and the
+drain's admission control (2026-10-10 load average 89.7 on 32 cores). It is
+off by default; pick a value near cores ÷ drain concurrency, for example
+`orbit config set --global machine.worker_cpu_quota 400`. systemd enforces it
+only where the user manager delegates the cpu controller (check
+`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers`);
+otherwise the property is accepted and not enforced. macOS has no systemd
+scopes, so the setting does nothing there. `orbit doctor` (row
+`worker-containment`) shows the configured limits.
+
 Inspect a live run's scope:
 
 ```bash
 systemctl --user list-units --type=scope 'orbit-worker-*' --no-pager
 unit="$(systemctl --user list-units --type=scope --plain --no-legend 'orbit-worker-<run_id>-*' \
   | awk '{print $1}')"
-systemctl --user show -p MemoryHigh -p MemoryMax -p TasksMax -p MemoryCurrent -p TasksCurrent "$unit"
+systemctl --user show -p MemoryHigh -p MemoryMax -p TasksMax -p CPUQuotaPerSecUSec -p MemoryCurrent -p TasksCurrent "$unit"
 cat "/proc/<worker_pid>/cgroup"   # 0::/…/app.slice/orbit-worker-….scope
 scope_dir="/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/<worker_pid>/cgroup")"
 cat "$scope_dir"/{memory.max,pids.max,memory.events,pids.events}
