@@ -34,7 +34,10 @@ function markWorkspaceSelectorScope(fleetWide) {
       : "Workspace";
   }
   const note = $("workspace-scope-note");
-  if (note) note.hidden = !fleetWide;
+  if (note) {
+    note.classList.toggle("is-inactive", !fleetWide);
+    note.setAttribute("aria-hidden", String(!fleetWide));
+  }
 }
 
 // ORB-10444: the top-level nav is exactly these tabs plus the hash-only
