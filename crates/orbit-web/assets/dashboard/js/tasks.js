@@ -2288,6 +2288,9 @@ function buildStatusUpdateControl(task, context) {
     applyTaskStatusChange(task, targetStatus, context);
   });
   cell.appendChild(select);
+  const chip = el("span", { class: "task-select-chip", text: task.status || "status" });
+  chip.setAttribute("aria-hidden", "true");
+  cell.appendChild(chip);
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskStatusChange(task, feedback.undo.previousValue, context);
   });
@@ -2361,6 +2364,16 @@ function buildCrewUpdateControl(task, context) {
   });
 
   cell.appendChild(select);
+  const crewLabel = staleCurrentValue ? `${currentValue} (missing)` : currentValue || defaultOption.textContent;
+  select.title += `: ${crewLabel}`;
+  const chip = el("span", {
+    class: "task-select-chip",
+    text: crews.length === 0 ? "unavailable" : staleCurrentValue
+      ? `${currentValue} (missing)`
+      : currentValue || resolvedCrewName(task),
+  });
+  chip.setAttribute("aria-hidden", "true");
+  cell.appendChild(chip);
   const feedbackNode = buildMutationFeedback(feedback, () => {
     if (feedback && feedback.undo) applyTaskCrewChange(task, feedback.undo.previousValue, context);
   });

@@ -1,5 +1,5 @@
 /* Tasks tab: the page grid, filter chips, status groups, task rows with
-   their inline selects and quick actions, and pagination. */
+   their inline edit chips and quick actions, and pagination. */
 
 .main-col > .tab-pane[data-tab="tasks"] { overflow: hidden; }
 .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
@@ -101,10 +101,10 @@
 
 .row {
   display: grid;
-  grid-template-columns: 84px minmax(140px, 1fr) 124px 92px 84px;
-  gap: 12px;
-  min-height: 42px;
-  padding: 0 16px;
+  grid-template-columns: 76px minmax(140px, 1fr) 104px 72px 72px;
+  gap: 8px;
+  min-height: 58px;
+  padding: 8px 12px;
   margin: 0;
   border-radius: 0;
   align-items: center;
@@ -131,11 +131,23 @@
 .row .title {
   color: var(--fg);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  /* Reserve both lines even for a short title so rows stay aligned. */
+  height: 40px;
+  line-height: 20px;
   font-weight: 450;
   font-size: 13.5px;
   min-width: 0;
+}
+/* Inline badges must fit the title's line box so both lines remain visible. */
+.row .title :is(.os-badge, .readiness-badge, .ws-badge) {
+  line-height: 14px;
+  vertical-align: baseline;
 }
 .status-cell {
   display: grid;
@@ -233,7 +245,40 @@
 .row .task-crew-select { border-color: transparent; background-color: transparent; color: #c4c4cc; }
 .row .task-crew-select:hover:not(:disabled),
 .row .task-crew-select:focus { border-color: var(--border); background-color: var(--bg); }
-.row .task-crew-select:disabled { opacity: 1; }
+.row .task-crew-select:disabled { opacity: 0; }
+
+/* Keep the native select as the hit target and Tab stop. Its compact preview
+   gives the title more room; focus (including a click) reveals the editor in
+   the same grid cell without moving the row or adding another Tab stop. */
+.row .task-select-chip,
+.row .task-status-select { grid-area: 1 / 2; }
+.row .crew-cell .task-select-chip,
+.row .crew-cell .task-crew-select { grid-area: 1 / 1; }
+.row .task-select-chip {
+  justify-self: start;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  color: #c4c4cc;
+  font: 12px/20px var(--font-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.row .task-status-select,
+.row .task-crew-select {
+  opacity: 0;
+  font-size: 12px;
+  padding-left: 4px;
+  padding-right: 16px;
+}
+.row .status-cell:focus-within .task-select-chip,
+.row .crew-cell:focus-within .task-select-chip { visibility: hidden; }
+.row .status-cell:focus-within .task-status-select,
+.row .crew-cell:focus-within .task-crew-select { opacity: 1; }
 
 .task-quick-cell {
   display: flex;
@@ -405,7 +450,7 @@
   .task-pagination { justify-content: space-between; padding-inline: 10px; }
 }
 
-/* The one-line row needs about 610px (five columns and their gaps). The
+/* The five-column row needs about 610px (columns and their gaps). The
    panel's own width decides, not the window's: beside the dock on a laptop
    the panel is often narrower than that while the window is wide. */
 #tasks-panel { container: tasks-panel / inline-size; }
@@ -414,26 +459,16 @@
     /* The first column holds the ID over the status select, so it is sized to
        the select (status dot, `in-progress` and the chevron), not a share of
        the panel; the title takes the rest of line 1. The action column has the
-       same fixed width as in the one-line row, so the columns line up between
+       same fixed width as in the desktop row, so the columns line up between
        groups whose quick actions differ in width. */
-    grid-template-columns: 112px minmax(0, 1fr) 84px;
+    grid-template-columns: 112px minmax(0, 1fr) 72px;
     grid-template-areas:
       "id title title"
       "status crew quick";
     padding-block: 8px;
   }
   .row .id { grid-area: id; }
-  /* The title is the only description of the task on this row, so let it use
-     two lines before it is cut. */
-  .row .title {
-    grid-area: title;
-    white-space: normal;
-    overflow-wrap: anywhere;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-  }
+  .row .title { grid-area: title; }
   .row .status-cell { grid-area: status; }
   .row .crew-cell { grid-area: crew; }
   .row .task-quick-cell { grid-area: quick; }
@@ -458,7 +493,7 @@
    above places its action on its own line and is left alone. */
 @container tasks-panel (min-width: 621px) {
   #tasks-body[data-quick-actions="none"] .row {
-    grid-template-columns: 84px minmax(140px, 1fr) 124px 92px;
+    grid-template-columns: 76px minmax(140px, 1fr) 104px 72px;
   }
   #tasks-body[data-quick-actions="none"] .row .task-quick-cell { display: none; }
 }
@@ -468,6 +503,7 @@
   background: transparent;
   border-bottom: none;
   min-height: 32px;
+  padding-block: 0;
   pointer-events: none;
 }
 .row.header:hover {
@@ -487,6 +523,7 @@
   text-overflow: ellipsis;
   /* text-align + grid-area (in narrow) inherited from .row.* + @media rules so columns align with data rows */
 }
+.row.header .title { display: block; height: auto; }
 
 main.tasks-layout {
   align-items: stretch;
