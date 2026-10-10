@@ -2,15 +2,13 @@
 //!
 //! One owner being under an execution claim, or one write failing, must not
 //! abort filing of the rest of the snapshot. A protecting claim queues the
-//! receipt and reports it as deferred; settlement writes the artifact.
+//! receipt and reports it as deferred; settlement writes the artifact. The
+//! store makes that decision against the current claim inside its boundary.
 
-use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::TaskArtifact;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskUpdateParams;
 
 use super::evidence::bounded_error;
 
@@ -51,16 +49,6 @@ pub(super) fn retain_branch_observations(
             observation_errors,
         };
     }
-    let claims = match runtime.resolve_execution_claims() {
-        Ok(claims) => Some(claims),
-        Err(error) => {
-            orbit_common::tracing::warn!(
-                error = %error,
-                "execution claims could not be resolved; branch observations fall back to the write"
-            );
-            None
-        }
-    };
     for (owner, failure) in observations {
         let Some(content) = observation_content(failure) else {
             observation_errors.push(observation_error(
@@ -85,46 +73,29 @@ pub(super) fn retain_branch_observations(
                 continue;
             }
         }
-        let protecting = claims.as_ref().and_then(|claims| {
-            claims.iter().find(|inspection| {
-                inspection.claim.task_id == *owner && inspection.claim.phase.protects_footprint()
-            })
-        });
-        if let Some(inspection) = protecting {
-            queue_deferred(
-                runtime,
-                DeferredReceipt {
-                    owner,
-                    failure,
-                    path: &path,
-                    content: &content,
-                    claiming_run_id: Some(inspection.claim.run_context.run_id.clone()),
-                },
-                &mut deferred_attribution,
-                &mut observation_errors,
-            );
-            continue;
-        }
-        match runtime.update_task(
-            owner,
-            TaskUpdateParams {
-                upsert_artifacts: vec![TaskArtifact::from_text(path.clone(), content.clone())],
-                ..Default::default()
+        let outcome = runtime.record_deferred_branch_observation(
+            &orbit_store::contracts::DeferredBranchObservation {
+                schema_version: 1,
+                task_id: owner.to_string(),
+                run_id: failure.get("run_id").cloned().unwrap_or(Value::Null),
+                job_id: failure.get("job_id").cloned().unwrap_or(Value::Null),
+                artifact_path: path.clone(),
+                content,
+                claiming_run_id: None,
+                applied: false,
             },
-        ) {
-            Ok(_) => attributed.push(attributed_entry(owner, failure, &path)),
-            Err(error) if is_claim_refusal(&error) => queue_deferred(
-                runtime,
-                DeferredReceipt {
-                    owner,
-                    failure,
-                    path: &path,
-                    content: &content,
-                    claiming_run_id: claiming_run_from_refusal(&error.to_string()),
-                },
-                &mut deferred_attribution,
-                &mut observation_errors,
-            ),
+        );
+        match outcome {
+            Ok(orbit_store::contracts::BranchObservationOutcome::Retained) => {
+                attributed.push(attributed_entry(owner, failure, &path));
+            }
+            Ok(orbit_store::contracts::BranchObservationOutcome::Deferred { .. }) => {
+                deferred_attribution.push(json!({
+                    "task_id": owner,
+                    "run_id": failure.get("run_id").cloned().unwrap_or(Value::Null),
+                    "reason": "claimed",
+                }));
+            }
             Err(error) => {
                 observation_errors.push(observation_error(owner, failure, &error.to_string()));
             }
@@ -134,49 +105,6 @@ pub(super) fn retain_branch_observations(
         attributed,
         deferred_attribution,
         observation_errors,
-    }
-}
-
-struct DeferredReceipt<'a> {
-    owner: &'a str,
-    failure: &'a Value,
-    path: &'a str,
-    content: &'a str,
-    claiming_run_id: Option<String>,
-}
-
-fn queue_deferred(
-    runtime: &OrbitRuntime,
-    receipt: DeferredReceipt<'_>,
-    deferred: &mut Vec<Value>,
-    errors: &mut Vec<Value>,
-) {
-    let DeferredReceipt {
-        owner,
-        failure,
-        path,
-        content,
-        claiming_run_id,
-    } = receipt;
-    let queued = runtime.record_deferred_branch_observation(
-        &orbit_store::contracts::DeferredBranchObservation {
-            schema_version: 1,
-            task_id: owner.to_string(),
-            run_id: failure.get("run_id").cloned().unwrap_or(Value::Null),
-            job_id: failure.get("job_id").cloned().unwrap_or(Value::Null),
-            artifact_path: path.to_string(),
-            content: content.to_string(),
-            claiming_run_id,
-            applied: false,
-        },
-    );
-    match queued {
-        Ok(()) => deferred.push(json!({
-            "task_id": owner,
-            "run_id": failure.get("run_id").cloned().unwrap_or(Value::Null),
-            "reason": "claimed",
-        })),
-        Err(error) => errors.push(observation_error(owner, failure, &error.to_string())),
     }
 }
 
@@ -205,18 +133,4 @@ fn observation_error(owner: &str, failure: &Value, message: &str) -> Value {
         "job_id": failure.get("job_id").cloned().unwrap_or(Value::Null),
         "message": bounded_error(message),
     })
-}
-
-/// Prefix of the unscoped claim-write refusal. A claim that appears between
-/// the resolve and the write is deferred the same way as one seen up front.
-fn is_claim_refusal(error: &OrbitError) -> bool {
-    error
-        .to_string()
-        .contains("active execution claim requires a claim-scoped mutation")
-}
-
-fn claiming_run_from_refusal(message: &str) -> Option<String> {
-    let rest = message.split_once(", run ")?.1;
-    let run = rest.split(')').next()?.trim();
-    (!run.is_empty()).then(|| run.to_string())
 }

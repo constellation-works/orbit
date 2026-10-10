@@ -289,7 +289,13 @@ current, non-stale landing failure cluster as a proposed bug task carrying that 
 using the actual job checkout: a landing-ref push must test its event commit,
 while a PR or merge-queue checkout must match an observed landing tip.
 Unmerged `orbit/<task>` branch failures are recorded as idempotent evidence artifacts
-on the owning task, with no remediation task or pilot candidate. Missing task owners
+on the owning task, with no remediation task or pilot candidate. Retention checks
+for a protecting execution claim inside the same exclusive commit boundary as
+claim settlement: it queues the receipt while protection remains, or commits the
+artifact and applied receipt row immediately when the owner is unprotected.
+Settlement drains queued receipts in its own commit; replays retain one artifact.
+A receipt failure is recorded per observation and does not abort independent
+landing-failure filing. Missing task owners
 remain retryable, and other non-landing failures are explicitly excluded.
 The existing freshness selection still precedes routing; it also sets aside runs on
 branches whose pull request closed at the branch's current head with no open pull request,

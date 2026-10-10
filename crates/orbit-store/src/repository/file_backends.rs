@@ -87,7 +87,7 @@ impl TaskStoreBackend for TaskV2Store {
     fn record_deferred_branch_observation(
         &self,
         observation: &crate::contracts::DeferredBranchObservation,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::BranchObservationOutcome, OrbitError> {
         match self.coordination_boundary() {
             Some(boundary) => boundary.record_deferred_branch_observation(observation),
             None => Err(OrbitError::Store(

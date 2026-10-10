@@ -222,14 +222,14 @@ impl crate::OrbitRuntime {
         self.stores().tasks().resolve_execution_claims()
     }
 
-    /// Queue one task-branch CI receipt until the owner's claim settles.
+    /// Retain a task-branch CI receipt or defer it under a protecting claim.
     ///
-    /// Filing calls this instead of updating the task while a claim protects
-    /// it. The settlement commit writes the artifact.
+    /// The store checks the current claim inside the same boundary that queues
+    /// or retains the receipt. Settlement writes receipts still deferred.
     pub(crate) fn record_deferred_branch_observation(
         &self,
         observation: &orbit_store::contracts::DeferredBranchObservation,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<orbit_store::contracts::BranchObservationOutcome, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.stores()
             .tasks()
