@@ -2,7 +2,7 @@
 title: Orbit Core — Overview
 owner: codex
 last_updated: 2026-10-03
-last_validated: 2026-10-03
+last_validated: 2026-10-09
 status: Accepted
 feature: orbit-core
 doc_role: overview
