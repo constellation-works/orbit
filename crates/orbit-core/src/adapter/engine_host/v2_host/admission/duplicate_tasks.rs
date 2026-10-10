@@ -6,6 +6,11 @@
 //! every still-open task using caller-supplied, high-confidence fingerprints.
 //! A fingerprint must match in full; individual keywords never carry a
 //! duplicate decision.
+//!
+//! A candidate may also carry a rejected-owner fingerprint. An exact-key task
+//! that was rejected on its own merits then suppresses the candidate for as
+//! long as that fingerprint still matches the rejected task's text, so a
+//! finding an implementer correctly refused is not re-filed unchanged.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
@@ -15,6 +20,9 @@ use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{Task, TaskComment, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
+
+/// `match_kind` of a match that is a rejected owner, not an open one.
+pub(in crate::adapter::engine_host::v2_host) const MATCH_REJECTED_OWNER: &str = "rejected_owner";
 
 const MAX_EVIDENCE_FIELDS: usize = 6;
 const MAX_EVIDENCE_CHARS: usize = 160;
@@ -120,6 +128,7 @@ pub(in crate::adapter::engine_host::v2_host) struct DuplicateCandidate {
     exact_tag: String,
     fingerprints: Vec<CoverageFingerprint>,
     completed_fingerprints: Vec<CoverageFingerprint>,
+    rejected_owner_fingerprint: Option<CoverageFingerprint>,
 }
 
 impl DuplicateCandidate {
@@ -131,6 +140,7 @@ impl DuplicateCandidate {
             exact_tag,
             fingerprints,
             completed_fingerprints: Vec::new(),
+            rejected_owner_fingerprint: None,
         }
     }
 
@@ -139,6 +149,18 @@ impl DuplicateCandidate {
         fingerprints: Vec<CoverageFingerprint>,
     ) -> Self {
         self.completed_fingerprints = fingerprints;
+        self
+    }
+
+    /// Suppress the candidate while a task rejected under its exact key still
+    /// records everything `fingerprint` names. A rejection that points at a
+    /// covering owner is a duplicate verdict, not one on the finding, and never
+    /// suppresses.
+    pub(in crate::adapter::engine_host::v2_host) fn with_rejected_owner_fingerprint(
+        mut self,
+        fingerprint: CoverageFingerprint,
+    ) -> Self {
+        self.rejected_owner_fingerprint = Some(fingerprint);
         self
     }
 }
@@ -189,7 +211,8 @@ pub(in crate::adapter::engine_host::v2_host) struct DuplicateTaskMatch {
 /// exact generated key is deterministic and sufficient by itself, so a broad
 /// lookup is neither needed nor allowed to override it. Rejected exact-key
 /// tasks are not coverage on their own; they may point at one still-open
-/// owner through an explicit duplicate comment.
+/// owner through an explicit duplicate comment, or suppress the candidate when
+/// it opted into a rejected-owner fingerprint that still matches.
 pub(in crate::adapter::engine_host::v2_host) fn find_covering_task<L>(
     lookup: &L,
     candidate: &DuplicateCandidate,
@@ -241,6 +264,42 @@ where
         }
     }
 
+    rejected_owner_match(lookup, candidate, &exact_tasks)
+}
+
+fn rejected_owner_match<L>(
+    lookup: &L,
+    candidate: &DuplicateCandidate,
+    exact_tasks: &[Task],
+) -> Result<Option<DuplicateTaskMatch>, OrbitError>
+where
+    L: DuplicateTaskLookup + ?Sized,
+{
+    let Some(fingerprint) = &candidate.rejected_owner_fingerprint else {
+        return Ok(None);
+    };
+    let mut rejected = exact_tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Rejected)
+        .collect::<Vec<_>>();
+    rejected.sort_by(|left, right| left.id.cmp(&right.id));
+
+    for task in rejected {
+        let comments = lookup.get_task_comments(&task.id)?;
+        if covering_owner_from_comments(&task.id, &comments).is_some() {
+            continue;
+        }
+        if !fingerprint_matches(&searchable_task_text(task, &comments), fingerprint) {
+            continue;
+        }
+        let mut anchors = vec![CoverageAnchor::new("rejected_task_id", task.id.as_str())];
+        anchors.extend(fingerprint.anchors.iter().cloned());
+        return Ok(Some(DuplicateTaskMatch {
+            task_id: task.id.clone(),
+            match_kind: MATCH_REJECTED_OWNER,
+            evidence: bounded_evidence(fingerprint.name, &anchors),
+        }));
+    }
     Ok(None)
 }
 

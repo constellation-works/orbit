@@ -308,3 +308,126 @@ fn invalid_severity_is_rejected_by_config_admission_with_its_key() {
         );
     }
 }
+
+fn code_snapshot(number: u64, rule: &str, path: &str) -> Value {
+    json!({
+        "schema_version": 2, "collected": false,
+        "repository": {"full_name": "acme/orbit"},
+        "open_alerts": [],
+        "open_dependabot_pull_requests": [],
+        "code_scanning": {
+            "collected": true,
+            "collection_status": "fully_collected",
+            "outcome_hint": "open_alerts",
+            "open_alerts": [{
+                "number": number, "rule_id": rule, "rule_name": "Cleartext logging",
+                "security_severity": "high", "path": path, "start_line": 12,
+                "end_line": 12, "message": "Logs sensitive data",
+                "tool_name": "CodeQL", "tool_version": "2", "tool_guid": "codeql",
+                "ref": "refs/heads/main", "commit_sha": "fixture",
+            }],
+        },
+    })
+}
+
+fn code_tasks(runtime: &OrbitRuntime) -> usize {
+    runtime
+        .list_tasks()
+        .unwrap()
+        .iter()
+        .filter(|task| task.tags.iter().any(|tag| tag == "code-scanning-sweep"))
+        .count()
+}
+
+/// A rejected implementer verdict on an unchanged alert must stick: the sweep
+/// re-filed alert #484 thirteen minutes after its owner was rejected as a false
+/// positive (on-call ORB-15178, failure class B10).
+#[test]
+fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
+    if !isolated(
+        "security_alert_sweep::rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes",
+    ) {
+        return;
+    }
+    let (_root, runtime) = fixture(None, None);
+    let rule = "rust/cleartext-logging";
+    let path = "crates/a/src/lib.rs";
+
+    let first = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(first["filed_count"], 1);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+
+    // While the owner is open it covers the alert, as before.
+    let covered = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(covered["filed_count"], 0);
+    assert_eq!(covered["skipped_existing"][0]["match_kind"], "exact_key");
+
+    runtime
+        .reject_task(
+            &owner,
+            "false positive: trusted_* name heuristic".to_string(),
+            None,
+        )
+        .unwrap();
+
+    let suppressed = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(suppressed["filed_count"], 0, "{suppressed}");
+    assert_eq!(suppressed["clusters"], 1);
+    let skipped = suppressed["skipped_existing"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["family"], "code_scanning");
+    assert_eq!(skipped[0]["alert_number"], 484);
+    assert_eq!(skipped[0]["match_kind"], "rejected_owner");
+    assert_eq!(skipped[0]["task_id"], owner.as_str());
+    assert!(
+        skipped[0]["match_evidence"]["matched_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["field"] == "rejected_task_id" && field["value"] == owner.as_str()),
+        "the audit must name the rejected task: {skipped:?}"
+    );
+    assert_eq!(code_tasks(&runtime), 1);
+
+    // A changed location or rule is a different finding and files again.
+    for changed in [
+        code_snapshot(484, rule, "crates/b/src/lib.rs"),
+        code_snapshot(484, "rust/path-injection", path),
+    ] {
+        let (_root, runtime) = fixture(None, None);
+        let first = file(&runtime, code_snapshot(484, rule, path), None);
+        let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+        runtime
+            .reject_task(&owner, "false positive".to_string(), None)
+            .unwrap();
+        let refiled = file(&runtime, changed, None);
+        assert_eq!(refiled["filed_count"], 1, "{refiled}");
+        assert_eq!(refiled["skipped_existing"], json!([]));
+    }
+}
+
+/// Consolidation and duplicate rejections point at another owner. They are not
+/// a verdict on the alert, so a still-open alert whose covering task finished
+/// must be filed again.
+#[test]
+fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
+    if !isolated(
+        "security_alert_sweep::rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling",
+    ) {
+        return;
+    }
+    let (_root, runtime) = fixture(None, None);
+    let snapshot = || code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs");
+    let first = file(&runtime, snapshot(), None);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+    runtime
+        .reject_task(
+            &owner,
+            "Consolidated".to_string(),
+            Some("Consolidated into covering task ORB-1: one task owns the repair.".to_string()),
+        )
+        .unwrap();
+
+    let refiled = file(&runtime, snapshot(), None);
+    assert_eq!(refiled["filed_count"], 1, "{refiled}");
+}

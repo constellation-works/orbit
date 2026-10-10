@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
-    DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
+    DuplicateTaskLookup, DuplicateTaskMatch, MATCH_REJECTED_OWNER, find_covering_task,
 };
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
     bounded_u64, digest, display, truncate_chars,
@@ -239,6 +239,7 @@ where
     code_alerts.sort_by_key(alert_number);
     let mut uncovered_code_alerts = Vec::new();
     let mut covered_by_cause: BTreeMap<String, Vec<CoveredAlert>> = BTreeMap::new();
+    let mut suppressed_code_alerts = 0usize;
     for alert in code_alerts {
         let number = alert_number(&alert);
         if number == 0 {
@@ -269,13 +270,19 @@ where
         }) = find_covering_task(lookup, &code_duplicate_candidate(&key, &alert))
             .map_err(|error| duplicate_lookup_error("code_scanning", &key, &error))?
         {
-            covered_by_cause
-                .entry(cause_key(repository, &alert))
-                .or_default()
-                .push(CoveredAlert {
-                    number,
-                    task_id: task_id.clone(),
-                });
+            // A rejected owner suppresses re-filing but owns nothing: the
+            // alert's siblings must not be told open work covers it.
+            if match_kind == MATCH_REJECTED_OWNER {
+                suppressed_code_alerts += 1;
+            } else {
+                covered_by_cause
+                    .entry(cause_key(repository, &alert))
+                    .or_default()
+                    .push(CoveredAlert {
+                        number,
+                        task_id: task_id.clone(),
+                    });
+            }
             skipped_existing.push(json!({
                 "family": "code_scanning", "key": key, "task_id": task_id,
                 "alert_number": number,
@@ -289,7 +296,9 @@ where
     let code_groups = group_code_alerts(repository, uncovered_code_alerts);
     // A Code scanning candidate is one unit of work the sweep judged: a group
     // it can file, or an alert it found an owner for.
-    candidate_count += code_groups.len() + covered_by_cause.values().map(Vec::len).sum::<usize>();
+    candidate_count += code_groups.len()
+        + covered_by_cause.values().map(Vec::len).sum::<usize>()
+        + suppressed_code_alerts;
     let no_siblings: Vec<CoveredAlert> = Vec::new();
     for group in &code_groups {
         let alert_numbers = group_alert_numbers(group);
