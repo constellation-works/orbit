@@ -248,14 +248,16 @@ fn request(id: &str) -> AdmissionRequest {
     }
 }
 
-const PARTITION_TASKS: usize = 5_000;
+/// Large enough that scanning the full partition exceeds the 18-bundle read
+/// bound, without making this admission test spend minutes on durable seeding.
+const PARTITION_TASKS: usize = 128;
 const BACKLOG: usize = 40;
 const IN_PROGRESS: usize = 10;
 const REVIEW: usize = 5;
 /// Backlog tasks the selection itself rules out, ahead of the admitted one.
 const CONFLICTING: usize = 5;
 
-/// A 5,000-task partition shaped like the incident's: almost every task is
+/// A mostly completed partition shaped like the incident's: almost every task is
 /// done, about 40 are backlog — each depending on one done task, the first
 /// few overlapping an in-flight footprint — and 15 are in flight. One
 /// admission's exclusive section reads the in-flight tasks, the one
