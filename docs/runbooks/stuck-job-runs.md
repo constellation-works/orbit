@@ -339,6 +339,15 @@ the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
 
+Resume also refuses before it creates a run when a task the source names is
+bound to a different run, or to the same run id on another machine. The error
+names that binding (run id and machine). Checkpoints, the worktree, and the
+validation input are not reused, and the foreign claim is left as it is.
+Continue the binding on the machine it names, or admit a new attempt after an
+authorized rebind. `orbit job resume` does not rebind a foreign claim. A task
+still bound to the source run, or to the checkpoint batch in its retry
+lineage, resumes as before: the new run keeps that batch id in its checkpoints.
+
 When a completion attempt was blocked after promotion, resume restores `review`
 only when its reused host promotion checkpoint names the task and its latest
 status history proves that this source run or an ancestor blocked it from

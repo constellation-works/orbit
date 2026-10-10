@@ -783,8 +783,14 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
 }
 
 /// [ORB-10002] Re-key a source run's checkpoint state onto the resumed run.
-/// The step records are the source's; the identity and timestamp belong to
-/// the resumed run. Forge-hold expiry is run-local and starts unacknowledged.
+///
+/// Only the pipeline document's run id changes. Ownership fields inside step
+/// outputs and the copied input (`job_run_id`, `batch_id`) stay the batch that
+/// created the worktree: delivery and validation keep naming that owner, and
+/// lineage reconcile restamps the task onto it. Rewriting those fields onto
+/// the new run would make validation name a run that does not own the task.
+/// A binding outside the lineage never reaches this copy; planning refuses it.
+/// Forge-hold expiry is run-local and starts unacknowledged.
 pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) -> PipelineState {
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();

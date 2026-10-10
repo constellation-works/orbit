@@ -829,6 +829,10 @@ orbit job resume <run-id>
 ```
 
 Expect a validation error naming deliberate recovery, not a new attempt.
+Resuming an older local run after another host has bound the task is the same
+refusal: the error names that host's run and machine, and it does not reuse
+the old checkpoints. Continue the binding on that machine, or admit a new
+attempt only after an authorized rebind.
 In-run step retries of the **same** bound run are different: they keep the
 claim. Crash recovery before launch may recover the same queued run; it must
 not restart a run whose execution became uncertain.
