@@ -1,0 +1,289 @@
+schemaVersion: 1
+name: qa-full-sweep
+description: Whole-product hands-on QA at one pinned integration-branch commit, fanned out as one surface-QA chore per user-facing area
+enabled: false
+schedule:
+  cron: 0 3 15 * *
+template:
+  title: Coordinate a full QA sweep
+  description: |-
+    Coordinate a hands-on QA sweep of the whole product this workspace builds,
+    at one pinned commit of its integration branch. You do not perform QA
+    yourself: you pin the commit, inventory the product's user-facing surface,
+    partition it into bounded areas, file one surface-QA task per area, and
+    file one roll-up task that decides the sweep once every area is done. The
+    durable output is those filed tasks and the inventory artifact; the
+    execution summary is the audit trail. Narrative-only output does not count
+    as delivery.
+
+    This sweep runs the product. The incremental QA sweep validates only the
+    changes since its cursor, and the full code review reads the whole tree
+    without running it; neither replaces this sweep.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface. List sweep tasks already in flight with
+      `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["qa-full-sweep","no-diff-expected"],"model":"<agent-family>"}'`.
+      File an area task with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["qa-full-sweep","no-diff-expected"],"context_files":["dir:<source or documentation directory implementing the area>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      File the roll-up task with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"low","type":"chore","tags":["qa-full-sweep","qa-full-sweep-rollup","no-diff-expected","auto-task:qa-full-sweep"],"required_tools":["orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Do not use direct lifecycle CLI subcommands; they skip agent provenance.
+    - Area tasks carry exactly the tags `qa-full-sweep` and `no-diff-expected`,
+      complexity `hard` at most (never `xhard`), and no `crew`, so each is
+      routed by automatic selection. Give the roll-up no `crew` either.
+    - The roll-up carries this definition's `auto-task:qa-full-sweep`
+      provenance tag on purpose: the scheduler's open-instance dedupe then
+      refuses to mint another sweep until the roll-up is done, and the roll-up
+      waits for every area.
+    - If any task listed above other than this one is still open (area tasks
+      or a roll-up from an earlier sweep), do not file a second set. Record
+      their IDs in the execution summary and finish.
+    - Never repair what you find, dispatch agents or jobs, release, tag,
+      publish or deploy.
+
+    ## Pin the commit
+
+    Fetch the workspace's integration branch and record the full 40-character
+    SHA of its tip. Every area task and the roll-up name this SHA; testers
+    build and run the product as it stands there, so later merges cannot shift
+    an area under them.
+
+    ## Inventory the user-facing surface
+
+    If the repository ships its own full-QA runbook, scenario inventory or
+    harness, use it as the inventory and command source instead of deriving
+    one, and record which files you used. Otherwise derive the inventory from
+    the repository's own documentation and entry points at the pinned SHA:
+    the README, setup, install and run instructions, command-line help trees
+    (run `--help` on every command and subcommand of the built product),
+    HTTP or RPC API routes, UI pages, configuration surfaces and documented
+    workflows. List the surface as a user meets it, not as the source tree
+    is laid out.
+
+    For each surface record the scenarios a user depends on: the normal path,
+    failure and recovery paths, and boundary inputs. Mark each scenario
+    `required` unless the repository documents it as optional, and name any
+    capability it needs beyond a local build (authentication, an external
+    provider, a specific operating system, a browser, network access, or
+    public post-release state). Internal-only code with no user-facing entry
+    point, generated or vendored content, and surfaces the repository marks
+    deprecated may be excluded; record every exclusion and its reason.
+
+    ## Partition into bounded areas
+
+    Group the inventory into areas, each one coherent user-facing surface (one
+    command group, one API resource family, one UI section or one documented
+    workflow) holding **at most 20 required scenarios**. Split a larger
+    surface into smaller coherent parts; group small related surfaces only
+    when the result stays within the bound. Every inventoried scenario belongs
+    to exactly one area.
+
+    Write `.orbit/tmp/qa-full-sweep-inventory.json` with `schema_version: 1`,
+    `pinned_sha`, `integration_branch`, `sources` (the documents, entry points
+    or shipped harness the inventory came from), `areas` (each with `name`,
+    `surface`, `boundaries` exercised, `context_files`, and `scenarios`, each
+    scenario with `id`, `description`, `required` and `capabilities`) and
+    `exclusions` (each with the excluded surface and its `reason`). Attach it
+    to this coordinator task with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/qa-full-sweep-inventory.json","path":"qa-full-sweep-inventory.json","model":"<agent-family>"}'`.
+    After filing, add each area's `task_id` and the `rollup_task_id` to the
+    file and attach it again under the same name.
+
+    ## File one surface-QA task per area
+
+    Title each task `Full QA: <area name> @ <short SHA>`. Its description
+    carries the area brief below with the pinned SHA, integration branch, area
+    name, surface, boundaries and complete scenario list filled in. Set
+    `context_files` to the `dir:` / `file:` selectors of the source and
+    documentation that implement the area; the tester modifies none of them.
+    Use `hard` for areas that need isolated services, concurrency, persistence
+    or destructive operations, and `medium` otherwise.
+
+    Area brief:
+
+    > QA `<area name>` (`<surface>`) of this product as it stands at commit
+    > `<full SHA>` on `<integration branch>`, through its real boundaries
+    > (`<boundaries>`). The required scenarios are `<scenario list>`. This is
+    > a leaf QA mandate: never repair what you find, dispatch agents or jobs,
+    > release, tag, publish or deploy.
+    >
+    > Before starting, list this area's task artifacts with
+    > `orbit tool run orbit.task.show --input '{"id":"<this area task ID>","field":"artifacts","model":"<agent-family>"}'`.
+    > If `qa-progress.json` exists, retrieve it with
+    > `orbit tool run orbit.task.artifact.get --input '{"id":"<this area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > A resumed or re-crewed run continues from that artifact, keeping every
+    > recorded outcome and filed finding, instead of starting over. Verify its
+    > pinned SHA, area and scenario list match this task. A present but
+    > unreadable or mismatched artifact is `qa_incomplete`; do not overwrite
+    > it or pretend this is a new run.
+    >
+    > Build the candidate at the pinned SHA by following the repository's own
+    > build and run instructions. Exercise each scenario as a user would,
+    > through the product's real command line, API, UI or documented workflow,
+    > covering the normal path, failure and recovery, and boundary inputs.
+    > Re-running the test suite is not QA: a passing suite is supporting
+    > evidence at most, never a scenario result.
+    >
+    > Run anything that writes state against isolated, disposable roots,
+    > workspaces, accounts and repositories created for this run. Never use
+    > the product's live data root, the real task store or the operator's own
+    > configuration. In agent-executor sandboxes and linked job-run worktrees
+    > the managed `.git` mount is read-only by design; do not work around it
+    > by chmod or host-side gitdir writes. To build a revision other than the
+    > checkout, extract it to a writable scratch directory with
+    > `mkdir -p .orbit/tmp/qa-base && git archive <sha> | tar -x -C .orbit/tmp/qa-base`.
+    > Restore a modified tracked file with `git show HEAD:<path> > <path>`
+    > when `git checkout --` cannot take `index.lock`, and run read-only git
+    > inspection with `GIT_OPTIONAL_LOCKS=0`. Put build caches and scratch
+    > state in a writable scratch location sized for the build, never the
+    > machine's real home directory. Confirm every long build or command by a
+    > positive completion marker in its captured output (the tool's own final
+    > summary line); its absence means "did not run" regardless of the exit
+    > status.
+    >
+    > Write `.orbit/tmp/qa-progress.json` with `schema_version: 1`,
+    > `pinned_sha`, `area`, `candidate` (how the build was made and its
+    > identity) and `scenarios`. Each scenario records its `id`, `required`,
+    > `boundary`, the exact `command` or steps, an `outcome` of `PASS`,
+    > `FAIL`, `BLOCKED` or `NOT_RUN`, its `evidence` (captured output or a
+    > log artifact name), any `missing_capability`, and the `finding_task_id`
+    > for a filed failure. Attach it before the first scenario and again after
+    > each scenario and each filed finding with
+    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/qa-progress.json","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > Attach referenced logs the same way.
+    >
+    > A scenario that needs a capability this run lacks (authentication, an
+    > external provider, another operating system, a browser, network access
+    > or public post-release state) is `BLOCKED` or `NOT_RUN` with the missing
+    > capability named, never `PASS`. Evidence from one operating system does
+    > not verify another. A command that exits zero without the behaviour the
+    > scenario requires is `FAIL`, not `PASS`.
+    >
+    > For every `FAIL`, search open and closed tasks before filing with
+    > `orbit tool run orbit.search --input '{"query":"<scenario, exact error and boundary terms>","kind":"task","all":true,"model":"<agent-family>"}'`.
+    > Reuse an open task whose reproducer covers the same defect, and reassess
+    > a closed one against the pinned SHA rather than treating it as
+    > suppression. File each confirmed non-duplicate finding as its own task with
+    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    > Its description holds the exact reproducer, the pinned SHA, the
+    > environment, expected and observed results and the evidence artifact.
+    > Derive canonical `file:` selectors from the source that implements the
+    > failing behaviour and add the matching regression-test location. Use
+    > existing paths where possible; for a test file that must be created,
+    > set `allow_missing_context: true` and identify that intended path.
+    > Never file a finding without context selectors. Record each finding's
+    > task ID on its scenario.
+    >
+    > Finish only when every scenario has a recorded outcome; recording a
+    > `FAIL`, `BLOCKED` or `NOT_RUN` honestly completes this task, and the
+    > sweep's roll-up turns it into the release decision. If the run cannot
+    > record every scenario, attach the latest progress and return
+    > `result.blocker` with `kind: qa_incomplete` and evidence naming each
+    > unrecorded scenario. Put the same list in the task comment (return
+    > `comment` in claimed mode) and leave lifecycle transitions to the
+    > pipeline. A completed area is a no-op on the repository; follow the
+    > workspace's no-diff artifact and validation requirements. Record the
+    > SHA, candidate identity, per-scenario outcomes, the progress artifact
+    > and each filed task ID in the execution summary.
+
+    Give each area task these acceptance criteria: the candidate was built at
+    the pinned SHA and every scenario was exercised through the product's real
+    boundaries in isolated disposable roots; every scenario has a PASS, FAIL,
+    BLOCKED or NOT_RUN outcome with its command and evidence in
+    `qa-progress.json`, and resumed runs continued from it; no
+    capability-gated scenario is recorded as PASS; every failure maps to a
+    verified, non-duplicate `bug` tagged `qa-full-sweep` with a reproducer,
+    the pinned SHA and source/test context selectors, or to an existing task
+    that already covers it.
+
+    ## File the roll-up
+
+    After every area task is filed, file one roll-up task titled
+    `Full QA decision @ <short SHA>`. Its description carries the roll-up
+    brief below with the pinned SHA, integration branch and the area table
+    (area name and task ID) filled in. Then make it wait for every area by
+    setting its dependencies with
+    `orbit tool run orbit.task.update --input '{"id":"<roll-up task ID>","dependencies":["<area task ID>"],"model":"<agent-family>"}'`,
+    listing every area task ID. When `orbit.task.update` is unavailable (in
+    claimed mode), record in the returned `comment` that the roll-up's
+    dependencies must be set to the listed area IDs.
+
+    Roll-up brief:
+
+    > Decide the full QA sweep of commit `<full SHA>` on
+    > `<integration branch>` from its areas `<area table>`. File nothing,
+    > repair nothing, dispatch nothing.
+    >
+    > First confirm with `orbit.task.show` that every listed area task is
+    > `done`. If any is not, do not decide: return `result.blocker` with
+    > `kind: qa_areas_open` naming the open areas.
+    >
+    > For each area, retrieve its `qa-progress.json` with
+    > `orbit tool run orbit.task.artifact.get --input '{"id":"<area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > An area whose artifact is missing, unreadable, names another SHA or
+    > area, or leaves a listed scenario without an outcome counts as
+    > incomplete.
+    >
+    > The decision is `PASS` only when every area is complete and every
+    > required scenario in every area is `PASS`. Any required `FAIL`,
+    > `BLOCKED` or `NOT_RUN`, or any incomplete area, makes it `INCOMPLETE`.
+    > Write `.orbit/tmp/qa-full-sweep-decision.json` with `schema_version: 1`,
+    > `pinned_sha`, `decision`, and per area its task ID, the count of
+    > required scenarios by outcome, and every non-`PASS` required scenario
+    > with its outcome and finding task ID. Attach it with
+    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this roll-up task ID>","source_path":".orbit/tmp/qa-full-sweep-decision.json","path":"qa-full-sweep-decision.json","model":"<agent-family>"}'`.
+    > Then record the swept commit as this task's cursor:
+    > write `{"schema_version":1,"ref":"<integration branch>","cursor":"<full SHA>"}`
+    > to `.orbit/tmp/sweep-cursor.json` and attach it as `sweep-cursor.json`
+    > the same way, so the scheduler skips the next tick when nothing has
+    > landed since. Record the decision, the per-area table and the
+    > non-`PASS` scenarios in the execution summary.
+
+    Give the roll-up these acceptance criteria: every area task was `done`
+    before the decision; `qa-full-sweep-decision.json` records `PASS` only
+    when every required scenario in every area passed, and `INCOMPLETE`
+    otherwise, with each non-`PASS` required scenario named;
+    `sweep-cursor.json` records the pinned SHA.
+
+    ## Finish
+
+    Finish once every area task and the roll-up are filed and the roll-up's
+    dependencies are set. Record in the execution summary the integration
+    branch and pinned SHA, the inventory source, the area table (area name,
+    surface, required scenario count, complexity, task ID) with any
+    exclusions, and the roll-up task ID.
+  acceptance_criteria:
+  - One integration-branch commit was pinned by full SHA and every area task and the roll-up name it.
+  - '`qa-full-sweep-inventory.json` is attached to this task with `schema_version`, `pinned_sha`, the areas and their scenarios, and every exclusion with its reason; each area holds at most 20 required scenarios.'
+  - Each area has exactly one filed `chore` tagged `qa-full-sweep` and `no-diff-expected`, complexity `hard` at most, no crew, source or documentation context selectors, a `spawned_from` relation to this task, and the hands-on area brief.
+  - One roll-up chore tagged `qa-full-sweep`, `qa-full-sweep-rollup`, `no-diff-expected` and `auto-task:qa-full-sweep` was filed with a `spawned_from` relation to this task and dependencies on every area task.
+  - When tasks from an earlier sweep were still open, no new area tasks or roll-up were filed and their IDs are in the execution summary.
+  - The execution summary records the pinned SHA, the area table with every area task ID, the exclusions and the roll-up task ID.
+  task_type: chore
+  tags:
+  - qa-full-sweep
+  - no-diff-expected
+  required_tools:
+  - orbit.task.add
+  - orbit.task.list
+  - orbit.task.update
+  - orbit.task.artifact.put
+  priority: medium
+  complexity: medium
+  # The portable system lane is seeded per machine and compatibility-aliased
+  # for configs written before that crew existed.
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+skip_if_unchanged:
+  ref: __ORBIT_BASE_BRANCH__
+  cursor:
+    tags:
+    - qa-full-sweep
+    - qa-full-sweep-rollup
+    - auto-task:qa-full-sweep
+created_by: system
+created_at: 2026-10-10T00:00:00Z
+updated_by: system
+updated_at: 2026-10-10T00:00:00Z
