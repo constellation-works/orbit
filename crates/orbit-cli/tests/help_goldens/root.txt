@@ -1,4 +1,4 @@
-orbit 0.28.0
+orbit <VERSION>
 
 Usage: orbit [OPTIONS] <COMMAND>
 

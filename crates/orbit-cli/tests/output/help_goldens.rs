@@ -97,7 +97,9 @@ fn help_matches_the_shipped_surface() {
             args.join(" "),
             String::from_utf8_lossy(&output.stderr)
         );
-        let actual = String::from_utf8(output.stdout).expect("help is UTF-8");
+        let actual = String::from_utf8(output.stdout)
+            .expect("help is UTF-8")
+            .replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
         let path = golden_path(relative);
         if update {
             fs::write(&path, &actual)
