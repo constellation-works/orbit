@@ -43,6 +43,15 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
         Self::update(self, id, params)
     }
 
+    fn preflight_rehome(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+        edits: &FrictionUpdateParams,
+    ) -> Result<(), OrbitError> {
+        Self::preflight_rehome(self, id, params, edits)
+    }
+
     fn rehome(
         &self,
         id: &str,

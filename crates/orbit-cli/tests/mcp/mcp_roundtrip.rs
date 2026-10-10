@@ -736,6 +736,50 @@ fn mcp_friction_rehome_moves_a_record_into_its_registered_owner() {
     );
 }
 
+/// A re-home refused before the move (here: the target is the record's own
+/// workspace) must not leave the accompanying edits committed.
+#[test]
+fn mcp_friction_refused_rehome_leaves_the_edits_unapplied() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let added = client.call_tool_ok(
+        "orbit_friction_add",
+        json!({ "body": "original body", "tags": ["policy"], "model": "codex" }),
+    );
+    let id = added["id"].as_str().expect("friction id").to_string();
+    let show = |id: &str| -> Value {
+        let output = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["friction", "show", "--json", id]),
+        );
+        serde_json::from_slice(&output.stdout).expect("friction show JSON")
+    };
+    let before = show(&id);
+
+    let refused = client.call_tool_err(
+        "orbit_friction_update",
+        json!({
+            "id": id,
+            "title": "edited title",
+            "body": "edited body",
+            "status": "triaged",
+            "rehome_to": "mcp-roundtrip",
+        }),
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("already belongs to workspace")),
+        "{refused}"
+    );
+
+    let after = show(&id);
+    assert_eq!(
+        after, before,
+        "a refused re-home must not persist the edits"
+    );
+}
+
 #[test]
 fn mcp_search_without_query_or_tag_keeps_its_refusal_message() {
     let workspace = McpWorkspace::init();
