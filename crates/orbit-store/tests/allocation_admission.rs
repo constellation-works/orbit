@@ -927,6 +927,106 @@ fn retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not() {
     );
 }
 
+/// Record whether a claimed PR leaf's before-landing review applies, as its
+/// `landing_review_gate_admit` checkpoint does.
+fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applies: bool) {
+    let mut state = PipelineState::new(
+        run_id.into(),
+        "task_claimed_pr_pipeline".into(),
+        serde_json::json!({}),
+    );
+    state.record_pipeline_output(
+        "landing_review_gate_admit",
+        serde_json::json!({ "applies": applies }),
+    );
+    jobs.write_run_state(run_id, &state).unwrap();
+}
+
+/// [ORB-15194] A claimed leaf in its before-landing review keeps its slot in
+/// the occupancy reading but admits a replacement beside it, and no more than
+/// the drain's ceiling of reviewing leaves do.
+#[test]
+fn reviewing_claimed_leaves_admit_replacements_up_to_the_ceiling() {
+    if !isolated("reviewing_claimed_leaves_admit_replacements_up_to_the_ceiling") {
+        return;
+    }
+    const CEILING: usize = 2;
+    let root = TempDir::new().unwrap();
+    let jobs = workspace_job_run_store(Store::open(&root.path().join("pull.db")).unwrap(), "ws");
+    let parent = jobs
+        .insert_job_run("workspace_pull_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    jobs.write_run_state(
+        &parent.run_id,
+        &PipelineState::new(
+            parent.run_id.clone(),
+            parent.job_id.clone(),
+            serde_json::json!({}),
+        ),
+    )
+    .unwrap();
+    let destination = PullDestination {
+        owner_machine_id: "owner".into(),
+        owner_workspace_id: "ws".into(),
+        selector: "owner/ws".into(),
+        execution_machine_id: "owner".into(),
+    };
+    let leaf = |task: &str| {
+        jobs.insert_job_run(
+            "task_claimed_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(serde_json::json!({ "task_ids": [task] })),
+            None,
+        )
+        .unwrap()
+        .run_id
+    };
+    let mut requests = 0;
+    let mut admit = || {
+        requests += 1;
+        let request = pull_request(&parent.run_id, &format!("request-{requests}"));
+        jobs.allocate_pull_request(&destination, &request, CEILING)
+            .unwrap()
+            .is_some()
+    };
+
+    let implementing = leaf("ORB-IMPL");
+    checkpoint_landing_review(jobs.as_ref(), &implementing, false);
+    let reviewing = leaf("ORB-REVIEW");
+    checkpoint_landing_review(jobs.as_ref(), &reviewing, true);
+    let occupancy = jobs.drain_leaf_occupancy().unwrap();
+    assert_eq!(
+        (occupancy.occupied, occupancy.reviewing),
+        (CEILING, 1),
+        "the reviewing leaf still occupies its slot and is reported apart"
+    );
+    assert!(
+        admit(),
+        "a full drain admits a replacement beside its reviewing leaf"
+    );
+    assert!(!admit(), "only one replacement per reviewing leaf");
+
+    // The other leaf reaches its review too: one more replacement.
+    checkpoint_landing_review(jobs.as_ref(), &implementing, true);
+    assert!(admit(), "each reviewing leaf admits its own replacement");
+    assert!(!admit());
+
+    // A reviewing leaf past the ceiling's worth frees nothing more.
+    let third = leaf("ORB-REVIEW-3");
+    checkpoint_landing_review(jobs.as_ref(), &third, true);
+    let occupancy = jobs.drain_leaf_occupancy().unwrap();
+    assert_eq!(
+        (occupancy.occupied, occupancy.reviewing),
+        (CEILING + 3, 3),
+        "every live leaf and admission still occupies a slot"
+    );
+    assert!(
+        !admit(),
+        "at most the ceiling of reviewing leaves admit replacements"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Coordinated admission and handoff
 // ---------------------------------------------------------------------------

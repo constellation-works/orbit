@@ -18,6 +18,10 @@ use super::{
     PullAuthRecovery, PullCrewPreflight, PullSinglePass, TaskCancellationPolicy,
 };
 
+/// The PR leaf step that admits the before-landing review of its open pull
+/// request [ORB-14849]; its output's `applies` says whether that review runs.
+const LANDING_REVIEW_ADMIT_STEP: &str = "landing_review_gate_admit";
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -378,6 +382,17 @@ impl PipelineState {
     /// completed, has no entry.
     pub fn pipeline_step_output(&self, step_id: &str) -> Option<&Value> {
         self.pipeline.get(step_id)
+    }
+
+    /// Whether this PR leaf has reached its before-landing review [ORB-15194]:
+    /// the admission step after `pr_open` recorded that the review applies.
+    /// It stays true through the review, its revalidation and the handoff
+    /// that follow, so a reader pairs it with a live run state.
+    pub fn in_landing_review(&self) -> bool {
+        self.pipeline_step_output(LANDING_REVIEW_ADMIT_STEP)
+            .and_then(|output| output.get("applies"))
+            .and_then(Value::as_bool)
+            == Some(true)
     }
 
     /// Every recorded step output in step order, compacted or not.

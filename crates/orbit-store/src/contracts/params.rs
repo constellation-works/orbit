@@ -562,6 +562,11 @@ pub struct DrainLeafOccupancy {
     /// Occupied slots outside the requested coordinator's dispatch lineage or
     /// pull requests. Absent when no coordinator was requested.
     pub inherited: Option<usize>,
+    /// The part of `occupied` held by live claimed leaves in their
+    /// before-landing review [ORB-15194]. Pull admission admits a replacement
+    /// beside each, up to the drain's own ceiling of them; the legacy drain
+    /// still counts them as full slots.
+    pub reviewing: usize,
 }
 
 /// Immutable request and binding with a monotone local execution checkpoint.

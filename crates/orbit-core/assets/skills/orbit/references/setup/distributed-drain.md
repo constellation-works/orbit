@@ -234,7 +234,10 @@ returns.
   stale `Outcome: failed` needs no hand-clearing before re-dispatch.
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live. It is
   the only ceiling: the claimed leaf jobs declare no active-run limit of their
-  own, so size it to what the follower can carry.
+  own, so size it to what the follower can carry. A leaf in its before-landing
+  review admits a replacement beside it, up to N such leaves, so a drain may
+  carry N implementing plus N reviewing leaves; `orbit run show <run-id>`
+  splits its `Claimed leaves:` by stage.
 - Each iteration reclaims the `target/` build output of every settled leaf
   whose worker has exited (`reclaimed_build_bytes`) and keeps the checkout.
   `orbit gc worktrees --confirm` on the follower removes settled leaves'

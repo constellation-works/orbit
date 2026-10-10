@@ -29,6 +29,11 @@
 //! A stop or cancel recorded while a pass is requesting ends it before the
 //! next request.
 //!
+//! The free slots are the store's allocation reading [ORB-15194]: a claimed
+//! leaf in its before-landing review still holds its slot until it settles,
+//! but admits a replacement beside it, up to `max_active_leaf_runs` such
+//! leaves, so a one-to-two-hour review does not idle the slot.
+//!
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
 //! is zero, so a leaf that finishes after the window still has its handoff

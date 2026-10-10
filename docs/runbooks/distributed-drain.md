@@ -747,7 +747,14 @@ Operate it with the ordinary run commands: `orbit run show <run-id>`,
 `action: "resize"`), and `orbit run auto --stop` (closes the window; live
 leaves keep running and still settle). The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
-active-run limit of their own. `--for` is at most 24 hours. Ship-sweep
+active-run limit of their own. A leaf in its before-landing review (the owner's
+`review.before_landing`) runs no implementer but keeps its claim until it
+settles, so the drain admits a replacement beside it: at most `--concurrency`
+reviewing leaves free their slots this way, so one drain carries at most
+`--concurrency` implementing leaves plus as many reviewing ones. Build-budget
+slots still limit the compilers they run. `orbit run show <run-id>` counts the
+`Claimed leaves:` it carries as implementing and reviewing (`.claimed_leaves[].stage`),
+and so does the dashboard's run page. `--for` is at most 24 hours. Ship-sweep
 enablement is unchanged by any of this.
 
 To close the feature entirely, set `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
