@@ -28,6 +28,11 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Synthetic Claude worker credential for stub providers on macOS [ORB-15154].
+/// Not a real token. The guard refuses `claude` unless this name is both in
+/// `[execution.env] pass` and present on the server that launches the worker.
+const FIXTURE_CLAUDE_WORKER_TOKEN: &str = "fixture-claude-worker-token";
+const FIXTURE_CLAUDE_WORKER_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 /// Path of the checked-in `tools/list` snapshot, relative to the crate root.
 const SNAPSHOT_RELATIVE_PATH: &str = "tests/snapshots/mcp_tools_list.json";
 
@@ -73,6 +78,57 @@ fn plant_agent_stub_printing(bin: &Path, name: &str, stdout_line: &str) {
         format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{stdout_line}'\n"),
     )
     .expect("write response stub");
+}
+
+/// Admit the synthetic credential through the pass list the guard reads.
+///
+/// A distinct workspace `config.toml` makes `execution.env.pass` replace-only,
+/// so the name has to be restated there. Otherwise the global file written by
+/// `orbit init` is the list that reaches the provider.
+fn admit_fixture_claude_worker_token(workspace: &McpWorkspace) {
+    let workspace_config = workspace.work.join(".orbit").join("config.toml");
+    let global_config = workspace.home.join(".orbit").join("config.toml");
+    let path = if workspace_config.is_file() {
+        workspace_config
+    } else {
+        global_config
+    };
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let updated = ensure_pass_contains(&raw, FIXTURE_CLAUDE_WORKER_TOKEN_ENV);
+    if updated != raw {
+        std::fs::write(&path, updated).expect("write fixture claude worker pass list");
+    }
+}
+
+fn ensure_pass_contains(config: &str, name: &str) -> String {
+    let quoted = format!("\"{name}\"");
+    if let Some(start) = config.find("pass = [") {
+        let Some(end_rel) = config[start..].find(']') else {
+            return config.to_string();
+        };
+        let end = start + end_rel;
+        if config[start..end].contains(&quoted) {
+            return config.to_string();
+        }
+        let mut out = String::new();
+        out.push_str(&config[..end]);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("    ");
+        out.push_str(&quoted);
+        out.push_str(",\n");
+        out.push_str(&config[end..]);
+        return out;
+    }
+    let mut out = config.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "\n[execution.env]\npass = [\"HOME\", \"PATH\", \"CODEX_HOME\", \"TMPDIR\", \"USER\", \"__CF_USER_TEXT_ENCODING\", {quoted}]\n"
+    ));
+    out
 }
 
 /// `PATH` with the fixture's stub directory first, so agent detection sees the
@@ -204,6 +260,10 @@ impl McpWorkspace {
         let mut args = vec!["mcp", "serve"];
         args.extend_from_slice(extra_args);
         let mut command = Self::orbit_command(&self.work, &self.home);
+        // A real credential inherited from the test process must not satisfy
+        // the macOS guard. Callers that dispatch a stub set a synthetic token.
+        command.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+        command.env_remove("ANTHROPIC_API_KEY");
         for (key, value) in env {
             command.env(key, value);
         }
@@ -1431,10 +1491,14 @@ fn a_remote_operator_session_invokes_an_agent_end_to_end() {
     // host `claude` binary makes `opus` the default crew during fixture init.
     plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "codex");
     plant_agent_response_stub(&McpWorkspace::stub_bin_dir(&workspace.home), "claude");
+    admit_fixture_claude_worker_token(&workspace);
 
     let mut client = workspace.serve_with_args_and_env(
         &["--operator", "--remote-caller-machine-id", "hm_caller"],
-        &[("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22")],
+        &[
+            ("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22"),
+            (FIXTURE_CLAUDE_WORKER_TOKEN_ENV, FIXTURE_CLAUDE_WORKER_TOKEN),
+        ],
     );
 
     let submitted = client.call_tool_ok(
@@ -1575,7 +1639,11 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
             "I looked around and everything seems fine.",
         );
     }
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    admit_fixture_claude_worker_token(&workspace);
+    let mut client = workspace.serve_with_args_and_env(
+        &["--operator"],
+        &[(FIXTURE_CLAUDE_WORKER_TOKEN_ENV, FIXTURE_CLAUDE_WORKER_TOKEN)],
+    );
     let submitted = client.call_tool_ok(
         "orbit_agent_invoke",
         json!({
@@ -6180,7 +6248,11 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
         )
         .unwrap();
     }
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    admit_fixture_claude_worker_token(&workspace);
+    let mut client = workspace.serve_with_args_and_env(
+        &["--operator"],
+        &[(FIXTURE_CLAUDE_WORKER_TOKEN_ENV, FIXTURE_CLAUDE_WORKER_TOKEN)],
+    );
     let listed = client.request("tools/list", Value::Null);
     let tool = listed["result"]["tools"]
         .as_array()
