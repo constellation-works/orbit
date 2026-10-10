@@ -263,6 +263,9 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-running-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
 .operation-running-head strong { overflow-wrap: anywhere; }
 .operation-running-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--fg-dim); font-size: 10.5px; }
+.operation-running-task-title { min-width: 0; overflow: hidden; color: var(--fg-dim); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.operation-running-steps { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.operation-running-step { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--fg-dim); font-size: 10.5px; }
 .operation-state.running { color: var(--priority-medium); border-color: var(--priority-medium); }
 .operation-command {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; padding: 8px 10px;
