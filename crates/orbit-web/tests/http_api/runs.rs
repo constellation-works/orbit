@@ -17,6 +17,99 @@ fn operations(trace: &[Value], name: &str) -> usize {
 }
 
 #[test]
+fn child_dispatches_show_live_run_outcomes_and_timing_over_http() {
+    isolated(
+        "runs::child_dispatches_show_live_run_outcomes_and_timing_over_http",
+        || {
+            let fixture = Fixture::new();
+            let parent = fixture.seed_run(
+                "jrun-child-outcomes",
+                "workspace_auto_pipeline",
+                JobRunState::Success,
+            );
+            let mut pipeline =
+                PipelineState::new(parent.run_id.clone(), parent.job_id.clone(), json!({}));
+            let children = [
+                JobRunState::Running,
+                JobRunState::Success,
+                JobRunState::Failed,
+                JobRunState::Cancelled,
+                JobRunState::Pending,
+                JobRunState::Retrying,
+                JobRunState::Timeout,
+                JobRunState::Interrupted,
+                JobRunState::Held,
+                JobRunState::Skipped,
+            ]
+            .map(|state| {
+                let mut child =
+                    fixture.seed_run(&format!("jrun-child-{state}"), "task_auto_pipeline", state);
+                child.started_at = (state != JobRunState::Pending)
+                    .then_some(Utc::now() - chrono::Duration::seconds(120));
+                child.duration_ms = state.is_terminal().then_some(120_000);
+                fixture.save_run(&child);
+                let mut dispatch = ChildDispatch::submitted(
+                    child.run_id.clone(),
+                    child.job_id.clone(),
+                    "leaf_invoke".into(),
+                    false,
+                    false,
+                    Utc::now(),
+                );
+                dispatch.child_status = Some("running".into());
+                pipeline.record_child_dispatch(dispatch);
+                child
+            });
+            pipeline.record_child_dispatch(ChildDispatch::submitted(
+                "jrun-child-unavailable".into(),
+                "task_auto_pipeline".into(),
+                "leaf_invoke".into(),
+                false,
+                false,
+                Utc::now(),
+            ));
+            fixture
+                .runtime
+                .write_run_state(&parent.run_id, &pipeline)
+                .unwrap();
+            let server = fixture.server(false);
+            let detail = json_ok(server.get(&format!("/api/runs/{}", parent.run_id)));
+            let dispatches = detail["run"]["child_dispatches"].as_array().unwrap();
+            assert_eq!(dispatches.len(), children.len() + 1);
+            for (dispatch, child) in dispatches.iter().zip(&children) {
+                let stored = fixture.runtime.show_job_run(&child.run_id).unwrap();
+                assert_eq!(dispatch["child_run_id"], stored.run_id);
+                assert_eq!(dispatch["state"], json!(stored.state));
+                assert_eq!(dispatch["started_at"], json!(stored.started_at));
+                assert_eq!(dispatch["finished_at"], json!(stored.finished_at));
+                assert_eq!(dispatch["duration_ms"], json!(stored.duration_ms));
+                assert_eq!(dispatch["phase"], "submitted");
+                assert_eq!(dispatch["child_status"], "running");
+            }
+            let unavailable = dispatches.last().unwrap();
+            for field in ["state", "started_at", "finished_at", "duration_ms", "tasks"] {
+                assert!(unavailable.get(field).unwrap().is_null(), "{field}");
+            }
+
+            // The parent's durable checkpoint never changed, even after the
+            // child finishes. A fresh HTTP read must still see its new state.
+            let mut finished = children[0].clone();
+            finished.state = JobRunState::Success;
+            finished.finished_at = Some(Utc::now());
+            finished.duration_ms = Some(123_000);
+            fixture.save_run(&finished);
+            let refreshed = json_ok(server.get(&format!("/api/runs/{}", parent.run_id)));
+            let dispatch = &refreshed["run"]["child_dispatches"][0];
+            assert_eq!(dispatch["state"], "success");
+            assert_eq!(dispatch["duration_ms"], 123_000);
+            assert_eq!(dispatch["finished_at"], json!(finished.finished_at));
+            assert_eq!(dispatch["phase"], "submitted");
+            assert_eq!(dispatch["child_status"], "running");
+        },
+    );
+}
+
+#[test]
 fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
     isolated(
         "runs::run_tasks_are_projected_over_http_without_per_row_task_reads",

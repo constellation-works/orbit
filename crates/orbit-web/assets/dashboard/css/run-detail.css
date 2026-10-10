@@ -75,6 +75,9 @@
 }
 .child-dispatch-meta { color: var(--fg-dim); }
 .child-dispatch-error { color: var(--state-failed); }
+.child-dispatch-summary { margin-bottom: 8px; }
+.child-dispatch-row .state-label { color: var(--dot); }
+.child-dispatch-row .duration { white-space: nowrap; }
 
 /* ORB-12516: distributed claim provenance and the owner's handoff
    actions, rendered inside the existing task detail and run meta rather

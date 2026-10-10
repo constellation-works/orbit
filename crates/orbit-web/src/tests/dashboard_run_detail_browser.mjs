@@ -217,6 +217,72 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunKnowledge();
     detail.renderRunGantt();
   }, { run, steps, logs });
+  const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
+    child_run_id: `jrun-child-${index}`, job_name: 'task_auto_pipeline',
+    phase: 'submitted', child_status: 'running', parent_step_id: 'leaf_invoke', state,
+    started_at: state ? new Date(Date.now() - 120000).toISOString() : null,
+    duration_ms: state && state !== 'running' ? 125000 : null,
+  }));
+  await render({ state: 'success', child_dispatches: childDispatches }, []);
+  const summary = page.locator('.child-dispatch-summary');
+  const tally = await summary.textContent();
+  for (const outcome of ['6 admitted', '2 succeeded', '1 failed', '1 cancelled', '1 running', '1 unknown']) {
+    if (!tally.includes(outcome)) throw new Error(`Child tally lost ${outcome}: ${tally}`);
+  }
+  const rows = page.locator('.child-dispatch-row');
+  const childStates = await rows.evaluateAll(nodes => nodes.map(node => node.dataset.state));
+  if (JSON.stringify(childStates) !== JSON.stringify(['running', 'failed', 'success', 'success', 'cancelled', 'unknown'])) {
+    throw new Error(`Children must group current outcomes rather than dispatch checkpoints: ${JSON.stringify(childStates)}`);
+  }
+  if (!(await rows.locator('.state-label').allTextContents()).every((state, index) => state === childStates[index])) {
+    throw new Error('Child state labels must match their state dots');
+  }
+  const childColors = {};
+  for (const state of ['failed', 'cancelled']) {
+    childColors[state] = await page.locator(`.child-dispatch-row[data-state="${state}"] .state-label`).evaluate(node => ({
+      dot: getComputedStyle(node, '::before').backgroundColor, text: getComputedStyle(node).color,
+    }));
+    if (childColors[state].dot !== childColors[state].text) throw new Error(`Child ${state} dot and outcome must use their state color`);
+    if (await page.locator(`.child-dispatch-row[data-state="${state}"] .duration`).textContent() !== '2m 5s') throw new Error(`Child ${state} must show its final duration`);
+  }
+  if (childColors.failed.dot === childColors.cancelled.dot) throw new Error('Failed and cancelled children must be visually distinct');
+  if (!(await page.locator('.child-dispatch-row[data-state="running"] .duration').textContent()).endsWith('↻')) throw new Error('Running child must show live elapsed duration');
+  if (await page.locator('.child-dispatch-row[data-state="unknown"] .duration').textContent() !== '-') throw new Error('Unreadable child timing must be unavailable');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1100 });
+    if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error(`Child outcomes must fit at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `run-child-outcomes-${width}.png`), fullPage: true, animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.evaluate(() => {
+    globalThis.childOutcomePreviousFetch = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const url = new URL(input, window.location.href);
+      const match = url.pathname.match(/^\/api\/runs\/(jrun-child-\d+)(?:\/(events|logs))?$/);
+      if (!match) return globalThis.childOutcomePreviousFetch(input, options);
+      return new Response(JSON.stringify(match[2] ? [] : { run: { run_id: match[1], state: match[1] === 'jrun-child-1' ? 'cancelled' : 'failed' }, steps: [] }), { status: 200 });
+    };
+  });
+  try {
+    for (const [state, index] of [['failed', 2], ['cancelled', 1]]) {
+      await render({ state: 'success', child_dispatches: childDispatches }, []);
+      const link = page.locator(`.child-dispatch-row[data-state="${state}"] .back-action`);
+      await link.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(id => document.getElementById('run-detail-title').textContent === `Run ${id}`, `jrun-child-${index}`);
+    }
+  } finally {
+    await page.evaluate(() => {
+      globalThis.fetch = globalThis.childOutcomePreviousFetch;
+      delete globalThis.childOutcomePreviousFetch;
+    });
+  }
+  // A refreshed response changes both the outcome and its tally even when
+  // the parent is terminal and the dispatch checkpoint remains submitted.
+  await render({ state: 'success', child_dispatches: childDispatches.map(d => d.state === 'running' ? { ...d, state: 'success', duration_ms: 126000 } : d) }, []);
+  if (await page.locator('.child-dispatch-row[data-state="running"]').count()
+    || !(await summary.textContent()).includes('3 succeeded')) throw new Error('Refreshing child state must refresh the outcome tally');
+  fs.writeFileSync(path.join(evidence, 'run-child-outcomes-result.json'), JSON.stringify({ passed: true, childStates, childColors, tally, navigation: ['failed', 'cancelled'], widths: [1440, 390], refreshedTally: await summary.textContent() }, null, 2));
   const step = {
     step_index: 0, target_type: 'activity', target_id: 'agent_implement', state: 'failed',
     duration_ms: 125000, exit_code: 1, started_at: '2026-10-07T05:00:00Z', finished_at: '2026-10-07T05:02:05Z',
