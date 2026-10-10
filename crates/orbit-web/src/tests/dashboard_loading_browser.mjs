@@ -1057,28 +1057,134 @@ async function assertNarrowTableLayouts(page) {
   }
   await page.screenshot({ path: path.join(evidence, 'scoreboard-375-pinned.png'), fullPage: true });
 
-  // Desktop keeps the plain tables: no cards, no pinned column, no scroll edge.
-  await page.setViewportSize({ width: 1280, height: 900 });
+  // The runs grid overflows a 1280px card. While the card is narrower than the
+  // grid, State stays pinned, the scroll edge shows, and Duration and Actions
+  // can be scrolled into view. Once the card can hold the tracks the table is
+  // plain. All-workspaces mode adds a column, so that threshold is wider.
   await page.evaluate(async () => {
     document.getElementById('diagnostics-scoreboard-main').style.display = 'none';
     document.getElementById('diagnostics-main').style.display = '';
     (await import('/js/router.js')).setActiveTab('diagnostics/runs');
   });
-  await refresh();
-  await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
-  const runsDesktop = await page.evaluate(() => {
+  const renderRunsFixture = async (attributed) => {
+    await page.evaluate(async (attributed) => {
+      const { renderRuns } = await import('/js/runs.js');
+      const now = Date.now();
+      const iso = (minutes) => new Date(now - minutes * 60000).toISOString();
+      renderRuns(['failed', 'success', 'running'].map((state, index) => ({
+        run_id: `jrun-20261007-0717-c${index}-with-a-long-identifier`,
+        job_id: `a-job-with-a-long-name-${index}`,
+        state,
+        created_at: iso(index + 1),
+        duration_ms: 90000,
+        ...(attributed ? { workspace_id: `ws-${index}`, workspace_name: `workspace-name-${index}` } : {}),
+      })));
+    }, attributed);
+    await page.locator('#runs-body .runs-row[data-key^="run-"]').first().waitFor({ state: 'visible', timeout: 5000 });
+  };
+  const readRunsLayout = () => page.evaluate(() => {
     const wrap = document.getElementById('runs-body');
-    const row = wrap.querySelector('.runs-row[data-key^="run-"]');
-    const cell = row.querySelector('.state');
+    const cancel = wrap.querySelector('.run-cancel');
+    const row = cancel?.closest('.runs-row') ?? wrap.querySelector('.runs-row[data-key^="run-"]');
+    const state = row.querySelector('.state');
+    const duration = row.querySelector('.duration');
+    const actions = row.querySelector('.run-actions');
+    const inside = (node) => {
+      if (!node) return false;
+      const rect = node.getBoundingClientRect();
+      const bounds = wrap.getBoundingClientRect();
+      return rect.width > 0 && rect.left >= bounds.left - 0.5 && rect.right <= bounds.right + 0.5;
+    };
+    wrap.scrollLeft = 0;
+    const columnsInside = [...row.children].every((child) => getComputedStyle(child).display === 'none' || inside(child));
+    const overflows = wrap.scrollWidth > wrap.clientWidth + 1;
+    const position = getComputedStyle(state).position;
+    const edge = getComputedStyle(wrap).backgroundImage.includes('gradient');
+    wrap.scrollLeft = wrap.scrollWidth;
+    if (cancel) cancel.focus();
+    const stateRect = state.getBoundingClientRect();
+    const bounds = wrap.getBoundingClientRect();
+    const topmost = document.elementFromPoint(stateRect.left + 4, (stateRect.top + stateRect.bottom) / 2);
     return {
-      scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
-      cellPosition: getComputedStyle(cell).position,
-      edge: getComputedStyle(wrap).backgroundImage,
+      viewport: window.innerWidth,
+      clientWidth: wrap.clientWidth,
+      scrollWidth: wrap.scrollWidth,
+      overflows,
+      position,
+      edge,
+      columnsInside,
+      statePinned: Math.abs(stateRect.left - bounds.left) < 1.5,
+      statePainted: state.contains(topmost),
+      durationReached: inside(duration),
+      actionsReached: inside(actions),
+      cancelReached: !cancel || (document.activeElement === cancel && inside(cancel)),
+      attributed: row.classList.contains('workspace-attributed'),
     };
   });
-  if (runsDesktop.scrolls || runsDesktop.cellPosition !== 'static' || runsDesktop.edge !== 'none') {
-    throw new Error(`Desktop runs table changed or scrolls: ${JSON.stringify(runsDesktop)}`);
+  const assertRunsCard = async (attributed, widths) => {
+    await renderRunsFixture(attributed);
+    // Cards at or under this width are narrower than the grid's minimum tracks.
+    const overflowLimit = attributed ? 1202 : 1154;
+    const seen = [];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await readRunsLayout();
+      const expectOverflow = layout.clientWidth <= overflowLimit;
+      seen.push({ width, clientWidth: layout.clientWidth, overflows: layout.overflows, expectOverflow });
+      if (layout.attributed !== attributed || layout.overflows !== expectOverflow) {
+        throw new Error(`Runs overflow does not follow the card width: ${JSON.stringify({ ...layout, expectOverflow, seen })}`);
+      }
+      if (expectOverflow) {
+        if (layout.position !== 'sticky' || !layout.edge || !layout.statePinned || !layout.statePainted
+          || !layout.durationReached || !layout.actionsReached || !layout.cancelReached) {
+          throw new Error(`Overflowing runs table lost State, the scroll edge, or Duration and Actions: ${JSON.stringify(layout)}`);
+        }
+      } else if (layout.position !== 'static' || layout.edge || !layout.columnsInside) {
+        throw new Error(`Fitting runs table is not a plain grid: ${JSON.stringify(layout)}`);
+      }
+    }
+    if (!seen.some((sample) => sample.width === 1280 && sample.overflows)) {
+      throw new Error(`1280px runs card must overflow: ${JSON.stringify(seen)}`);
+    }
+    if (!seen.some((sample) => sample.overflows) || !seen.some((sample) => !sample.overflows)) {
+      throw new Error(`Runs threshold was not bracketed: ${JSON.stringify(seen)}`);
+    }
+    return seen;
+  };
+  const runsCardWidths = [1280, 1360, 1396, 1400, 1444, 1460, 1600];
+  await assertRunsCard(false, runsCardWidths);
+  await assertRunsCard(true, runsCardWidths);
+  await page.setViewportSize({ width: 375, height: 900 });
+  await renderRunsFixture(true);
+  if (await scrolls('runs-body') || await pageOverflow()) throw new Error('All-workspaces runs must not scroll sideways at 375px');
+  const workspacePhone = await readRunsLayout();
+  if (workspacePhone.position !== 'static' || workspacePhone.edge || workspacePhone.overflows || !workspacePhone.columnsInside) {
+    throw new Error(`All-workspaces runs are not cards at 375px: ${JSON.stringify(workspacePhone)}`);
   }
+  const workspaceToolbar = await page.evaluate(() => {
+    const wrap = document.getElementById('runs-body');
+    const toolbar = wrap.querySelector('.runs-toolbar');
+    const rect = toolbar.getBoundingClientRect();
+    const style = getComputedStyle(toolbar);
+    const wrapRect = wrap.getBoundingClientRect();
+    return {
+      toolbarLeft: rect.left,
+      toolbarRight: rect.right,
+      bodyLeft: wrapRect.left + wrap.clientLeft,
+      bodyRight: wrapRect.left + wrap.clientLeft + wrap.clientWidth,
+      toolbarWidth: rect.width,
+      marginLeft: parseFloat(style.marginLeft),
+      marginRight: parseFloat(style.marginRight),
+      bodyClientWidth: wrap.clientWidth,
+    };
+  });
+  if (Math.abs(workspaceToolbar.toolbarWidth + workspaceToolbar.marginLeft + workspaceToolbar.marginRight - workspaceToolbar.bodyClientWidth) > 1
+    || workspaceToolbar.toolbarLeft < workspaceToolbar.bodyLeft - 1
+    || workspaceToolbar.toolbarRight > workspaceToolbar.bodyRight + 1) {
+    throw new Error(`All-workspaces runs toolbar falls outside the 375px body: ${JSON.stringify(workspaceToolbar)}`);
+  }
+  await renderRunsFixture(false);
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('audit/events'));
   await refresh();
   await page.locator('#audit-body tr.audit-row').first().waitFor({ state: 'visible', timeout: 5000 });
@@ -1338,7 +1444,7 @@ try {
     });
     await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
     if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge at 601–768px, card layout at 375px, unchanged at 1280px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling and Metrics/Scoreboard pinned first column with scroll edge at 375px, unchanged tables at 1280px; Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips at 1024px, 1280px and 1440px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
   }
   }
