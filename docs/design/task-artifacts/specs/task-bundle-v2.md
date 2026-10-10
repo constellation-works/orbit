@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-09-28
+last_validated: 2026-10-09
 ---
 
 # Spec: Task Bundle V2
@@ -251,8 +251,9 @@ settled mismatch the rule above calls corruption.
 Readers must therefore observe the writer's coordination rather than infer
 intent from bytes:
 
-- A writer holds that task's exclusive bundle lock (`<bundle>/task.yaml`, via
-  its sibling lock file) for the whole multi-file publication.
+- A writer holds that task's exclusive bundle lock (the `<task-id>.bundle` file
+  beside the bundle directory, never unlinked) for the whole multi-file
+  publication.
 - A reader that assembles a **complete** bundle must hold the same lock in
   shared mode. It then observes only settled bundles, so a genuine mismatch
   still fails the read (`task_bundle_corrupt`) with no tolerance widened.
