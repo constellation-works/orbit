@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, supervise_child_cancellable};
+use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, spawn_supervised_cancellable};
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -191,14 +191,19 @@ impl PluginTool {
         };
         sandbox.validate(&request)?;
         secrets.record_delivery();
-        let mut child = sandbox.spawn(&request)?;
-        if let Err(error) = callback.bind_pid(child.id()) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-        let output = supervise_child_cancellable(
-            child,
+        // Signals are intercepted before the spawn and stay pending through
+        // `bind_pid`: a SIGTERM there would otherwise exit the host on its
+        // default disposition and orphan the backend's process group.
+        let output = spawn_supervised_cancellable(
+            || {
+                let mut child = sandbox.spawn(&request)?;
+                if let Err(error) = callback.bind_pid(child.id()) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                Ok(child)
+            },
             Some(timeout_ms),
             Some(stdin),
             ctx.broker_call.as_ref().map(|call| call.cancelled.as_ref()),

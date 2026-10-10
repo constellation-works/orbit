@@ -131,7 +131,8 @@ pub struct SupervisedOutcome {
 /// If pipe or signal-handler setup, or the supervised wait, fails, supervision
 /// kills the child's process group and reaps the child before returning the error.
 /// The caller owns the interval before this function receives the child;
-/// [`run_process`] also protects its own spawn operation from termination signals.
+/// [`run_process`] and [`spawn_supervised_cancellable`] also protect their own spawn
+/// operation from termination signals; prefer the latter when post-spawn work follows.
 pub fn supervise_child(
     child: Child,
     timeout_ms: Option<u64>,
@@ -151,7 +152,42 @@ pub fn supervise_child_cancellable(
     let started = Instant::now();
     let result =
         crate::supervision::wait_with_cancellation(child, timeout_ms, stdin_payload, cancelled)?;
-    Ok(SupervisedOutcome {
+    Ok(supervised_outcome(result, started))
+}
+
+/// Spawn and supervise a child, intercepting termination signals before
+/// `spawn` runs.
+///
+/// [`supervise_child_cancellable`] only protects a child once it receives it,
+/// so a SIGTERM that lands between the caller's spawn and that call takes the
+/// previous disposition (`SIG_DFL` for `orbit mcp listen`) and exits the
+/// process without touching the child's process group. Use this entry point
+/// when the caller does any work after spawning: `spawn` runs with the
+/// intercept installed, a signal during it stays pending, and supervision then
+/// terminates and reaps the child's group before the signal is re-raised.
+/// An error from `spawn` after it created a child must kill and reap that
+/// child itself, as the child never reaches supervision.
+pub fn spawn_supervised_cancellable(
+    spawn: impl FnOnce() -> Result<Child, OrbitError>,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<SupervisedOutcome, OrbitError> {
+    let started = Instant::now();
+    let result = crate::supervision::wait_with_spawn_cancellation(
+        spawn,
+        timeout_ms,
+        stdin_payload,
+        cancelled,
+    )?;
+    Ok(supervised_outcome(result, started))
+}
+
+fn supervised_outcome(
+    result: crate::supervision::WaitResult,
+    started: Instant,
+) -> SupervisedOutcome {
+    SupervisedOutcome {
         result: ExecutionResult {
             success: result.exit_success,
             timed_out: result.timed_out,
@@ -162,7 +198,7 @@ pub fn supervise_child_cancellable(
             output: None,
         },
         timed_out: result.timed_out,
-    })
+    }
 }
 
 /// Run a process while consuming stdout incrementally instead of retaining it.

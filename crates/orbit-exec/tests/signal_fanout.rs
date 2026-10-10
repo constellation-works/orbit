@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, Sandbox, StdinMode, run_process,
-    run_process_streaming_stdout,
+    run_process_streaming_stdout, spawn_supervised_cancellable,
 };
 use wait_timeout::ChildExt;
 
@@ -169,6 +169,88 @@ fn signals_in_the_spawn_window_are_pending_until_cleanup_and_reraised() {
                 );
             }
         }
+    }
+}
+
+/// ORB-15096: a caller that does work after spawning (the plugin callback
+/// bind) must hold the intercept across that work. A signal there is deferred,
+/// the child's group is terminated and reaped, and only then is it re-raised.
+#[test]
+fn signals_after_the_callers_spawn_are_deferred_until_the_group_is_reaped() {
+    let _lock = TEST_LOCK.lock().expect("signal test lock");
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        FORWARDED_SIGNAL.store(0, Ordering::SeqCst);
+        FORWARD_PROBE_PID.store(0, Ordering::SeqCst);
+        FORWARDED_CHILD_PROBE.store(0, Ordering::SeqCst);
+        install_previous_handler(signal);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (resume_tx, resume_rx) = mpsc::sync_channel::<()>(1);
+        let req = ExecRequest {
+            program: "/bin/sleep".to_string(),
+            args: vec!["60".to_string()],
+            current_dir: None,
+            timeout_ms: Some(15_000),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::Inherit,
+            debug: false,
+        };
+
+        let (outcome, forwarded_while_paused, pid) = thread::scope(|scope| {
+            let req = &req;
+            let runner = scope.spawn(move || {
+                let mut pid = 0;
+                let outcome = spawn_supervised_cancellable(
+                    || {
+                        let child = NoSandbox.spawn(req)?;
+                        pid = child.id();
+                        FORWARD_PROBE_PID.store(pid as i32, Ordering::SeqCst);
+                        ready_tx.send(()).expect("announce post-spawn work");
+                        resume_rx
+                            .recv_timeout(Duration::from_secs(30))
+                            .expect("release post-spawn work");
+                        Ok(child)
+                    },
+                    req.timeout_ms,
+                    None,
+                    None,
+                );
+                (outcome, pid)
+            });
+            ready_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("runner reached the post-spawn work");
+            // SAFETY: signal only this dedicated test process, whose previous
+            // handler records the eventual re-raise.
+            assert_eq!(unsafe { libc::raise(signal) }, 0, "signal runner");
+            let forwarded = FORWARDED_SIGNAL.load(Ordering::SeqCst);
+            resume_tx.send(()).expect("release post-spawn work");
+            let (outcome, pid) = runner.join().expect("runner thread");
+            (outcome, forwarded, pid)
+        });
+
+        assert_eq!(
+            forwarded_while_paused, 0,
+            "ORB-15096: a signal during post-spawn work must remain pending"
+        );
+        assert_eq!(
+            FORWARDED_SIGNAL.load(Ordering::SeqCst),
+            signal,
+            "re-raise after the child's cleanup"
+        );
+        assert_interrupted(&outcome.expect("interrupted outcome").result, signal);
+        assert_eq!(
+            FORWARDED_CHILD_PROBE.load(Ordering::SeqCst),
+            -1,
+            "ORB-15096: the previous handler must observe an already reaped child"
+        );
+        // SAFETY: signal zero probes the fixture's own process group.
+        let probe = unsafe { libc::killpg(pid as libc::pid_t, 0) };
+        assert_eq!(
+            (probe, std::io::Error::last_os_error().raw_os_error()),
+            (-1, Some(libc::ESRCH)),
+            "ORB-15096: no process group may survive the post-spawn interrupt"
+        );
+        FORWARD_PROBE_PID.store(0, Ordering::SeqCst);
     }
 }
 

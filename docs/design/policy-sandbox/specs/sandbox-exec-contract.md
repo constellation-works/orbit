@@ -7,7 +7,7 @@ last_validated: 2026-10-08
 
 # Spec: Sandboxed Exec Contract
 
-`orbit-exec::run_process` is the common validated-spawn primitive. Platform sandbox wrappers can instead create a child and pass it to `supervise_child`, which shares the supervision implementation. This spec names the invariants and failure modes those paths must preserve.
+`orbit-exec::run_process` is the common validated-spawn primitive. Platform sandbox wrappers can instead create a child and pass it to `supervise_child`, which shares the supervision implementation; a wrapper that does work after the spawn passes its spawn closure to `spawn_supervised_cancellable` so signals are intercepted before the child exists. This spec names the invariants and failure modes those paths must preserve.
 
 The ORB-11514 / ORB-11546 Linux read-boundary investigation below is historical. ORB-13689 removed the extra activity-scoped `proc.spawn` Landlock and argument-level read checks; that child now inherits its enclosing CLI worker sandbox. The investigation remains evidence about the retained Landlock primitive and possible future read boundaries, not the current `proc.spawn` contract.
 
