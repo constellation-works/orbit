@@ -133,7 +133,8 @@
 /* Each status group is a card. The list's nodes stay siblings (rows, open
    details, the column labels), so the card is drawn per node: the head has
    the top edge, every node inside has the sides, and the node marked
-   `group-end` closes it. */
+   `group-end` closes it. The closing edge is an inset shadow, not a border,
+   so the last row is as tall as the others. */
 #tasks-body > .group-header,
 #tasks-body > .group-readiness,
 #tasks-body > .col-head,
@@ -151,9 +152,10 @@
 }
 #tasks-body > :first-child { margin-top: 0; }
 #tasks-body > .group-end {
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px 0 var(--border);
   border-radius: 0 0 var(--radius-panel) var(--radius-panel);
 }
+#tasks-body > .group-end[data-group="blocked"] { box-shadow: inset 0 -1px 0 var(--danger-line); }
 /* Blocked work reads apart from the rest: a red-tinted card. */
 #tasks-body > [data-group="blocked"] { background: var(--danger-wash); border-color: var(--danger-line); }
 #tasks-body > [data-group="blocked"] .id { color: #c7b1ae; }

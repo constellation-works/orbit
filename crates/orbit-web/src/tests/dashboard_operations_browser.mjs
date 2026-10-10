@@ -817,7 +817,9 @@ try {
     const chips = [...strip.querySelectorAll('.host-resource')].map(node => (
       { resource: node.dataset.resource, box: node.getBoundingClientRect().toJSON(), clipped: node.scrollWidth > node.clientWidth }));
     return {
-      actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - workspace.top - workspace.height / 2) < 1),
+      // Brand, Drain and Refresh share the bar's first row, above the pickers.
+      actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - refresh.top - refresh.height / 2) < 1)
+        && workspace.top >= refresh.bottom,
       chipsSingleRow: chips.length === 3 && chips.every(({ box }) => box.width > 0 && Math.abs(box.top - chips[0].box.top) < 1),
       // All three readings are in view at 375px without scrolling the row.
       chipsInView: chips.every(({ box, clipped }) => !clipped && box.left >= row.left - 0.5 && box.right <= Math.min(row.right, innerWidth) + 0.5),

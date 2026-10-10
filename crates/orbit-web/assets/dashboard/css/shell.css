@@ -350,9 +350,9 @@
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
-    padding: 8px;
+    padding: 6px 8px;
     align-items: center;
-    gap: 6px;
+    gap: 4px 6px;
   }
   .rail-brand svg { width: 64px; height: auto; }
   .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
@@ -406,7 +406,7 @@
     white-space: nowrap;
     flex: 0 0 auto;
   }
-  .topbar { flex-wrap: wrap; height: auto; padding: 8px; row-gap: 6px; column-gap: 6px; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 6px 8px; row-gap: 4px; column-gap: 6px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
   .topbar .global-drain-state { order: 2; }

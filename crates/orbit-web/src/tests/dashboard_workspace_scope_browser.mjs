@@ -103,7 +103,7 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
 
       await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks'));
       await page.locator('#dock-mode-toggle [data-mode="drain"]').click();
-      const start = page.locator('#auto-drain-body .drain-start');
+      const start = page.locator('#auto-drain-start-body .drain-start');
       const stop = page.locator('#auto-drain-body .drain-stop');
       await start.waitFor({ state: 'visible' });
       if (!(await start.isEnabled()) || !(await stop.isEnabled())) throw new Error('Drain controls must remain enabled after chip interaction');

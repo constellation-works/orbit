@@ -67,12 +67,18 @@ export function renderHostResources(payload, host = document.getElementById('hos
     const node = el('span', { class: `host-resource ${severity}${held ? ' throttled' : ''}`, title, role: 'group', 'aria-label': title }, [
       el('span', { class: 'k', text: label }),
       el('span', { class: 'v', text: value }, suffix ? [el('span', { class: 'unit', text: suffix })] : []),
-      el('span', { class: 'host-resource-bar', 'aria-hidden': 'true' }, [el('span', { class: 'host-resource-fill', style: { width: `${fill}%` } })]),
+      el('span', { class: 'host-resource-bar', 'aria-hidden': 'true' }, [meterFill(fill)]),
       ...(held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
     ]);
     node.dataset.resource = resource;
     return node;
   }));
+}
+
+function meterFill(percent) {
+  const fill = el('span', { class: 'host-resource-fill' });
+  fill.setAttribute('style', `width: ${percent}%`);
+  return fill;
 }
 
 const listeners = new Set();

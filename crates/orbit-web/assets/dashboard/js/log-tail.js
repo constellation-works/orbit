@@ -447,7 +447,7 @@ function getLogClass(level, code) {
   return "info";
 }
 
-// The task a line is about, when its fields name one (`task_id=ORB-15317` in
+// The task a line is about, when its fields name one (`task_id=<id>` in
 // an agent relay's context); the row links it into the Tasks list.
 const LOG_TASK_ID = /\btask_id=([A-Z][A-Z0-9]*-\d+)\b/;
 

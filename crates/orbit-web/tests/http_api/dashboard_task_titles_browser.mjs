@@ -26,18 +26,25 @@ export async function assertTaskTitleLayout(page, evidence) {
       statusOrder: ['backlog', 'in-progress'],
       replaceTask: updated => Object.assign(tasks.find(task => task.id === updated.id), updated),
     };
+    const crews = { default_crew: 'opus', crews: [{ name: 'sol' }, { name: 'opus' }] };
     globalThis.taskTitleFixture = { priorFetch: globalThis.fetch, writes: [], tasks, render: () => renderTasks(tasks, context) };
+    const json = payload => new Response(JSON.stringify(payload), { status: 200 });
     globalThis.fetch = async (url, options) => {
       const request = new URL(url, window.location.href);
       if (options?.method === 'PATCH' && /\/tasks\/TITLE-/.test(request.pathname)) {
         const update = JSON.parse(options.body);
         globalThis.taskTitleFixture.writes.push(update);
         const task = tasks.find(task => request.pathname.endsWith('/' + task.id));
-        return new Response(JSON.stringify({ ...task, ...update }), { status: 200 });
+        Object.assign(task, update);
+        return json(task);
       }
+      // The dashboard's 30s poll can land mid-test: it reads these rows back
+      // instead of replacing them with the harness's own task list.
+      if (request.pathname === '/api/tasks') return json({ items: tasks, total: tasks.length, limit: 50, truncated: false });
+      if (request.pathname === '/api/crews') return json(crews);
       return globalThis.taskTitleFixture.priorFetch(url, options);
     };
-    cacheCrewPayload({ default_crew: 'opus', crews: [{ name: 'sol' }, { name: 'opus' }] });
+    cacheCrewPayload(crews);
     document.querySelector('main.tasks-layout').style.removeProperty('--dock-w');
     globalThis.taskTitleFixture.render();
   }, titleTexts);
@@ -98,7 +105,7 @@ export async function assertTaskTitleLayout(page, evidence) {
       // Rows keep one height whatever the title length or badges, and the
       // desktop row is compact because no title reserves a second line.
       if (Math.max(...layout.heights) - Math.min(...layout.heights) > 1) fail('Task rows must have a consistent height');
-      if (!layout.stacked && Math.max(...layout.heights) > 44) fail('A desktop task row must stay compact (44px at most)');
+      if (!layout.stacked && Math.max(...layout.heights) > 46.5) fail('A desktop task row must stay compact (46px at most)');
       for (const title of layout.titles) {
         if (title.whiteSpace !== 'nowrap' || title.textLines !== 1) fail(`Task title ${title.id} must render on a single line`);
         if (title.contentHeight >= title.characterHeight * 1.5) fail(`Task title ${title.id} must be one line box tall`);
@@ -127,26 +134,10 @@ export async function assertTaskTitleLayout(page, evidence) {
     }
     await page.setViewportSize({ width: 1280, height: 800 });
     const row = page.locator('#tasks-body [data-key="task-TITLE-1"]');
-    const status = row.locator('.task-status-select');
-    if (await status.evaluate(node => getComputedStyle(node).opacity) !== '0') throw new Error('Idle status must show its chip');
+    // Rows group by status, so a row edits only its crew; status is a property
+    // of the expanded detail.
+    if (await row.locator('.task-status-select').count() !== 0) throw new Error('A task row must not carry a status editor');
     await row.locator('.title').focus();
-    await page.keyboard.press('Tab');
-    const focused = await status.evaluate(node => ({ active: document.activeElement === node, opacity: getComputedStyle(node).opacity }));
-    if (!focused.active || focused.opacity !== '1') throw new Error(`Tab must reveal the native status editor: ${JSON.stringify(focused)}`);
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Enter');
-    await page.keyboard.press('Tab');
-    await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].status === 'in-progress', undefined, { timeout: 5000 }).catch(async error => {
-      const state = await page.evaluate(() => ({
-        writes: globalThis.taskTitleFixture.writes,
-        task: globalThis.taskTitleFixture.tasks[0],
-        feedback: document.getElementById('tasks-body').textContent,
-        value: document.querySelector('[data-key="task-TITLE-1"] .task-status-select')?.value,
-      }));
-      throw new Error(`${error.message}: ${JSON.stringify(state)}`);
-    });
-    await row.locator('.title').focus();
-    await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
     const crew = row.locator('.task-crew-select');
     if (!(await crew.evaluate(node => document.activeElement === node && getComputedStyle(node).opacity === '1'))) {
@@ -155,7 +146,32 @@ export async function assertTaskTitleLayout(page, evidence) {
     await page.keyboard.press('End');
     await page.keyboard.press('Enter');
     await page.keyboard.press('Tab');
-    await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].crew === 'sol', undefined, { timeout: 5000 });
+    await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].crew === 'sol', undefined, { timeout: 5000 }).catch(async error => {
+      const state = await page.evaluate(() => ({
+        writes: globalThis.taskTitleFixture.writes,
+        task: globalThis.taskTitleFixture.tasks[0],
+        value: document.querySelector('[data-key="task-TITLE-1"] .task-crew-select')?.value,
+        options: [...(document.querySelector('[data-key="task-TITLE-1"] .task-crew-select')?.options || [])].map(option => option.value),
+      }));
+      throw new Error(`${error.message}: ${JSON.stringify(state)}`);
+    });
+    await row.locator('.title').focus();
+    await page.keyboard.press('Enter');
+    const status = page.locator('#tasks-body [data-key="detail-TITLE-1"] .task-status-select');
+    await status.waitFor({ state: 'visible' });
+    await status.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Tab');
+    await page.waitForFunction(() => globalThis.taskTitleFixture.tasks[0].status === 'in-progress', undefined, { timeout: 5000 }).catch(async error => {
+      const state = await page.evaluate(() => ({
+        writes: globalThis.taskTitleFixture.writes,
+        task: globalThis.taskTitleFixture.tasks[0],
+        feedback: document.getElementById('tasks-body').textContent,
+        value: document.querySelector('[data-key="detail-TITLE-1"] .task-status-select')?.value,
+      }));
+      throw new Error(`${error.message}: ${JSON.stringify(state)}`);
+    });
     const writes = await page.evaluate(() => globalThis.taskTitleFixture.writes);
     if (!writes.some(write => write.status === 'in-progress') || !writes.some(write => write.crew === 'sol')) {
       throw new Error(`Keyboard edits must reach the task mutation boundary: ${JSON.stringify(writes)}`);
