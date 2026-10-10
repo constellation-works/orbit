@@ -5,6 +5,8 @@ import fs from 'node:fs';
 // Drive the full app's actions and its actual scheduled polls. A new render
 // must keep feedback reachable, and its rebuilt buttons must use that host.
 export async function assertRunDetailActions(page, evidence) {
+  let replayPostCount = 0;
+  await page.exposeFunction('recordReplayPost', () => { replayPostCount += 1; });
   await page.evaluate(async () => {
     const { navigateToRun } = await import('/js/router.js');
     const { setWorkspace, describePullSettlements } = await import('/js/common.js');
@@ -13,6 +15,7 @@ export async function assertRunDetailActions(page, evidence) {
     const settlements = [{ outcome: 'settled' }, { outcome: 'pending_delivery' }, { outcome: 'pending_delivery' }];
     const fixture = globalThis.runActionFixture = {
       state: 'running', detailReads: 0, detailStatus: 200, cancelStatus: 200, requests: [],
+      activeRuns: [],
       cancelError: 'Cancel fixture refused', replayError: 'Replay fixture refused',
       expectedSettlements: describePullSettlements(settlements).text,
       holdAction: false, release: null, previousFetch,
@@ -22,12 +25,17 @@ export async function assertRunDetailActions(page, evidence) {
     });
     globalThis.fetch = async (input, options) => {
       const url = new URL(input, window.location.href);
+      if (url.pathname === '/api/job-runs' && url.searchParams.get('state') === 'active') {
+        fixture.requests.push({ action: 'active-runs', workspace: url.searchParams.get('workspace') });
+        return response({ items: fixture.activeRuns, total: fixture.activeRuns.length, truncated: false, state: 'active' });
+      }
       const match = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|events|logs))?$/);
       if (!match) return previousFetch(input, options);
       const [, runId, action] = match;
       fixture.requests.push({ runId, action: action || 'detail', workspace: url.searchParams.get('workspace') });
       if (action === 'events' || action === 'logs') return response([]);
       if (action === 'cancel' || action === 'replay') {
+        if (action === 'replay') await window.recordReplayPost();
         if (fixture.holdAction) await new Promise(resolve => { fixture.release = resolve; });
         if (action === 'replay') return response({ error: fixture.replayError }, 503);
         if (fixture.cancelStatus !== 200) return response({ error: fixture.cancelError }, fixture.cancelStatus);
@@ -36,7 +44,10 @@ export async function assertRunDetailActions(page, evidence) {
       }
       fixture.detailReads += 1;
       if (fixture.detailStatus !== 200) return response({ error: 'Detail fixture unavailable' }, fixture.detailStatus);
-      return response({ run: { run_id: runId, job_id: 'fixture', state: fixture.state, attempt: fixture.detailReads }, steps: [] });
+      return response({ run: {
+        run_id: runId, job_id: 'fixture', state: fixture.state, attempt: fixture.detailReads,
+        task_ids: ['ORB-42'], tasks: [{ id: 'ORB-42', title: 'Fixture task' }],
+      }, steps: [] });
     };
     navigateToRun('jrun-action-feedback');
     // The loading scenarios parked the scheduler on a captured timer. Restore
@@ -63,6 +74,22 @@ export async function assertRunDetailActions(page, evidence) {
   const clickCancel = async () => {
     page.once('dialog', dialog => dialog.accept());
     await cancel.click();
+  };
+  const clickReplay = async (expectedLiveRunId = null) => {
+    const replayPostsBefore = replayPostCount;
+    let prompt = null;
+    let replayPostsAtPrompt = null;
+    page.once('dialog', async dialog => {
+      prompt = dialog.message();
+      replayPostsAtPrompt = replayPostCount;
+      await dialog.accept();
+    });
+    await replay.click();
+    if (!prompt || !prompt.includes('fixture') || !prompt.includes('ORB-42')) {
+      throw new Error(`Replay confirmation must identify its job and task: ${prompt || 'no dialog'}`);
+    }
+    if (replayPostsAtPrompt !== replayPostsBefore) throw new Error('Replay POST must wait until after confirmation');
+    if (expectedLiveRunId && !prompt.includes(expectedLiveRunId)) throw new Error('Replay confirmation must name the existing live run for the task');
   };
   const expectError = async message => {
     await error.waitFor({ state: 'visible' });
@@ -113,10 +140,16 @@ export async function assertRunDetailActions(page, evidence) {
     if (await error.count() || await notice.count()) throw new Error('Action feedback leaked into a different run');
     await page.evaluate(() => { globalThis.runActionFixture.state = 'failed'; });
     await refresh();
-    await replay.click();
+    await clickReplay();
     await expectError('Replay fixture refused');
     await poll();
     await expectError('Replay fixture refused');
+    await page.evaluate(() => {
+      globalThis.runActionFixture.activeRuns = [{ run_id: 'jrun-live-task', state: 'running', task_ids: ['ORB-42'] }];
+    });
+    await clickReplay('jrun-live-task');
+    await expectError('Replay fixture refused');
+    await page.evaluate(() => { globalThis.runActionFixture.activeRuns = []; });
     await page.evaluate(() => { globalThis.runActionFixture.detailStatus = 503; });
     await refresh();
     await page.locator('#run-detail-meta .empty-state').waitFor({ state: 'visible' });
@@ -128,10 +161,10 @@ export async function assertRunDetailActions(page, evidence) {
     await error.locator('button').click();
     await refresh();
     if (await error.count()) throw new Error('Dismissed replay error returned after a refresh');
-    await replay.click();
+    await clickReplay();
     await expectError('Replay fixture refused');
     await page.evaluate(() => { globalThis.runActionFixture.holdAction = true; });
-    await replay.click();
+    await clickReplay();
     await page.waitForFunction(() => typeof globalThis.runActionFixture.release === 'function');
     if (await error.count()) throw new Error('Starting another replay must clear the previous error');
     await page.evaluate(async () => {
@@ -146,7 +179,8 @@ export async function assertRunDetailActions(page, evidence) {
     fs.writeFileSync(path.join(evidence, 'run-actions-result.json'), JSON.stringify({
       passed: true, scheduledPolls: 3,
       scenarios: ['settlement counts after cancel refresh and poll', 'cancel error after poll', 'replay error after poll',
-        'dismissal and next-action clearing', 'render during action', 'failed detail refresh and recovery', 'run and workspace isolation'],
+        'replay confirmation before POST', 'live task run warning', 'dismissal and next-action clearing',
+        'render during action', 'failed detail refresh and recovery', 'run and workspace isolation'],
     }, null, 2));
   } catch (failure) {
     fs.writeFileSync(path.join(evidence, 'run-actions-failure.json'), JSON.stringify(await page.evaluate(() => ({
@@ -247,6 +281,14 @@ export async function assertRunDetailPresentation(page, evidence) {
   for (const state of ['success', 'failed', 'timeout', 'cancelled', 'interrupted', 'held']) {
     await render({ state }, []);
     if (!(await page.locator('#run-detail-meta .run-replay').isEnabled())) throw new Error(`Terminal ${state} run must retain replay`);
+  }
+  const actionLayout = await page.locator('#run-detail-meta .run-replay').evaluate(replay => {
+    const back = document.querySelector('#run-detail-meta .run-detail-actions .back-action').getBoundingClientRect();
+    const button = replay.getBoundingClientRect();
+    return { backRight: back.right, replayLeft: button.left, primary: replay.classList.contains('approve') };
+  });
+  if (actionLayout.primary || actionLayout.replayLeft <= actionLayout.backRight + 8) {
+    throw new Error(`Replay must be secondary and visually separated from Runs: ${JSON.stringify(actionLayout)}`);
   }
 
   const states = ['success', 'running', 'pending', 'failed', 'skipped', 'held'];
