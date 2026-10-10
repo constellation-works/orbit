@@ -2,7 +2,7 @@
 type: runbook
 summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up.
 tags: [operations, release, plugins, npm, signing]
-paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh", "scripts/cursor-marketplace-followup.sh"]
+paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh"]
 related_features: [orbit-docs-plugin]
 last_validated: 2026-10-09
 ---
@@ -129,9 +129,7 @@ an empty date remains optional.
      [linux-sandbox.md](linux-sandbox.md));
    - update the Homebrew tap;
    - smoke the tagged shell installer and search help on macOS and Ubuntu;
-   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
-   - post the Cursor marketplace follow-up reminder, which never blocks the
-     release (see [Cursor marketplace listing](#cursor-marketplace-listing)).
+   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04.
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
@@ -167,18 +165,13 @@ an empty date remains optional.
    before npm publish and is expected to fail its version assertion; the
    post-publish versioned run must be green.
 
-11. **Submit the Cursor marketplace follow-up.** This is not a package
-    publish. See [Cursor marketplace listing](#cursor-marketplace-listing).
+11. **Submit the Cursor marketplace listing manually.** See
+    [Cursor marketplace listing](#cursor-marketplace-listing).
 
 ## Cursor marketplace listing
 
-Cursor's curated catalog is human-reviewed and is not updated by the tag
-workflow, GitHub Release, Homebrew tap, or npm publish. The
-`cursor-marketplace-followup` job in
-[`.github/workflows/release.yml`](../../.github/workflows/release.yml) only
-reminds: it runs after `publish-release` with `continue-on-error: true`, so a
-missing acknowledgement cannot retract artifacts. It never submits forms,
-sends email, retags, or republishes npm.
+Cursor's curated catalog is human-reviewed. The tag workflow, GitHub Release,
+Homebrew tap, and npm publish do not submit or update the listing.
 
 Required procedure after the git tag and matching `@orbit-tools/cli`
 version exist:
@@ -196,22 +189,6 @@ version exist:
    `npx -y @orbit-tools/cli@<version> mcp serve`.
 4. If review stalls, escalate to `marketplace-publishing@cursor.com`. Do not
    send that mail from CI or assume a public catalog push API exists.
-5. When the version-specific submission is done, add
-   `.github/cursor-marketplace-followup/<version>.ack` containing
-   `version=<version>` to the maintained `agent-main` branch. Do not move the
-   immutable release tag to add this receipt. Re-run that tag's
-   `cursor-marketplace-followup` job after the receipt merges: the job checks
-   out `agent-main` for the receipt and passes the original tag version to the
-   validator. The ack records the follow-up; it does not mean the curated
-   listing is live.
-
-Local check without external writes:
-
-```bash
-./scripts/cursor-marketplace-followup.sh
-./scripts/test-cursor-marketplace-followup.sh
-```
-
 ## Publish the Official MCP Registry record
 
 After the GitHub Release and its matching `@orbit-tools/cli` version are
@@ -364,9 +341,8 @@ same acknowledgement and record format, and does not honor
 
 It also runs both plugin validators and the canonical-skill mirror drift check.
 Missing `npm` or `gh` skips that remote source with a stderr note. Local
-Cargo/npm/plugin/registry-metadata drift always fails. The Cursor marketplace
-acknowledgement is intentionally **not** part of `make release-check`; it is a
-post-publish reminder so tagging is not blocked on catalog review.
+Cargo/npm/plugin/registry-metadata drift always fails. Cursor marketplace
+submission remains a manual post-publish step.
 
 Claude Code installs through `/plugin marketplace add constellation-works/orbit` and
 `/plugin install orbit`; Codex installs through its Git marketplace commands.

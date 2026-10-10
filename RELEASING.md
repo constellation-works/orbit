@@ -273,15 +273,13 @@ EOF
 
 Set `status: done`, `implemented_by: <agent>`, and an `execution_summary` with the commit SHA and tag. The next release finds it by the `release` tag.
 
-### 12. Cursor marketplace follow-up
+### 12. Cursor marketplace listing
 
 Publishing a release does not update Cursor's curated marketplace, and there is no push API. After the tag and npm version exist:
 
 1. Submit or update the listing at <https://cursor.com/marketplace/publish> using `https://github.com/constellation-works/orbit` and the `plugin/` subdirectory. Don't add `.cursor-plugin`. The stale listing **2280865** (`danieljhkim/orbit` at 0.5.1) stays as-is.
 2. Install through Cursor plugin search and check the version and the `npx -y @orbit-tools/cli@<version> mcp serve` pin. If review stalls, email `marketplace-publishing@cursor.com` yourself, never from CI.
-3. Add `.github/cursor-marketplace-followup/<version>.ack` containing `version=<version>` to `agent-main`, then re-run the tag's `cursor-marketplace-followup` job. Never move the tag to add the receipt.
-
-The ack records that you did the follow-up. It doesn't mean the listing is live. Details are in the [runbook](docs/runbooks/release.md#cursor-marketplace-listing).
+Details are in the [runbook](docs/runbooks/release.md#cursor-marketplace-listing).
 
 ## Release CI
 
@@ -293,7 +291,6 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
-| `cursor-marketplace-followup` | A reminder with `continue-on-error`. It fails until the `.ack` exists, and it never gates or retracts anything |
 
 npm isn't published from CI. The separate `smoke-npm-install.yml` workflow runs weekly, on every tag, and on demand.
 
