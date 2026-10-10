@@ -235,6 +235,57 @@ try {
     }
   }
 
+  // ORB-15361: a task's running run with an unbreakable job id wraps inside its
+  // Running now card at the grid's 280px minimum. The grouped card keeps its
+  // task and run links, and an untasked card still fits its own layout.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.click('#operations-subtabs .subtab[data-subtab="jobs"]');
+  await page.waitForTimeout(200);
+  const longTaskJobId = 'task_' + 'a'.repeat(58);
+  const runningLayout = await page.evaluate((longJobId) => {
+    const grid = document.querySelector('#operations-jobs-main .operation-running-grid');
+    grid.style.gridTemplateColumns = '280px';
+    const lineCount = (node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return range.getClientRects().length;
+    };
+    const box = (node) => node.getBoundingClientRect();
+    const grouped = grid.querySelector('.operation-running-task[data-task="ORB-15001"]');
+    const untasked = Array.from(grid.querySelectorAll('.operation-running-card:not(.operation-running-task)'));
+    const token = Array.from(grouped.querySelectorAll('.mono')).find(node => node.textContent === longJobId);
+    const step = token.closest('.operation-running-step');
+    return {
+      grouped: {
+        clientWidth: grouped.clientWidth,
+        scrollWidth: grouped.scrollWidth,
+        tokenLines: lineCount(token),
+        tokenInsideCard: box(token).right <= box(grouped).right,
+        runs: grouped.querySelectorAll('.operation-running-step').length,
+        taskLinked: Boolean(grouped.querySelector('a[href*="open=ORB-15001"]')),
+        runLinked: Array.from(step.querySelectorAll('a')).some(link => link.textContent === 'jrun-task-long'),
+      },
+      untasked: {
+        cards: untasked.length,
+        overflowing: untasked.filter(card => card.scrollWidth > card.clientWidth).length,
+        runLinked: untasked.some(card => card.textContent.includes('jrun-fixture-running')),
+      },
+    };
+  }, longTaskJobId);
+  const { grouped, untasked } = runningLayout;
+  if (grouped.scrollWidth > grouped.clientWidth || !grouped.tokenInsideCard) {
+    throw new Error(`task-grouped job id overflows its Running now card at 280px: ${JSON.stringify(grouped)}`);
+  }
+  if (grouped.tokenLines < 2) throw new Error(`task-grouped job id does not wrap at 280px: ${JSON.stringify(grouped)}`);
+  if (grouped.runs !== 3 || !grouped.taskLinked || !grouped.runLinked) {
+    throw new Error(`task grouping or scoped links lost at 280px: ${JSON.stringify(grouped)}`);
+  }
+  if (untasked.overflowing || !untasked.runLinked) {
+    throw new Error(`untasked Running now card changed at 280px: ${JSON.stringify(untasked)}`);
+  }
+  await page.locator('#operations-jobs-main .operation-running').screenshot({ path: path.join(evidence, 'running-now-280.png') });
+  await page.evaluate(() => { document.querySelector('#operations-jobs-main .operation-running-grid').style.gridTemplateColumns = ''; });
+
   // ORB-12898: the retired #auto-drain destination opens Tasks with the Drain
   // dock, and the card fits the dock at its 336px minimum (and the narrower
   // mid-width column) with no horizontal scroll.
@@ -919,7 +970,7 @@ try {
   await triggerPage.waitForFunction(() => globalThis.routineTriggerTestsPassed, undefined, { timeout: 15000 });
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-triggers-browser.png') });
   if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, Running now task-grouped job id wrapping at 280px, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }
