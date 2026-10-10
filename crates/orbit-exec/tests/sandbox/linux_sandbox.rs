@@ -283,10 +283,14 @@ fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
     .expect("spawn");
     let output = child.wait_with_output().expect("wait");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
+    // The /dev/null cover opens empty where bwrap may open device nodes, and
+    // is refused where it binds without device access (the GitHub runner).
+    // Both keep the contents out; anything else means the cover is missing.
     assert!(
-        output.status.success(),
-        "the masked file must still open, as an empty file: {output:?}"
+        output.status.success() || stderr.contains("clock.env: Permission denied"),
+        "the masked file must open empty or be refused: {output:?}"
     );
     assert!(
         !stdout.contains("CLOCK-SECRET"),
