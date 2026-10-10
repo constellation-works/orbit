@@ -2,7 +2,7 @@
 title: Automation Triggers — Design
 owner: codex
 last_updated: 2026-09-25
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -286,11 +286,12 @@ references. Forward-only store migrations and a recoverable cross-store protocol
 are required: task bundles and scheduler SQLite are not one current transaction.
 
 The Automation boundary claims pending members through Store and writes batch intent with compare-
-and-swap plus unique keys. It releases database locks before external I/O. A
-routine's job submit and the common task creation path must accept a durable
-action key `(consumer, epoch, batch, attempt)` and return the previously created
-identity on replay. This is a prerequisite change, not a guarantee supplied by
-today's file lock, provenance tag, or routine fire intent.
+and-swap plus unique keys. It releases database locks before external I/O. Routine job submission
+and common task creation now use durable action keys: the job store maps a key and input to one run
+identity, while the task registry reserves a key, input digest and task ID before bundle I/O.
+Replaying the same input returns the existing identity; changing input under the same key is
+refused. This makes action admission idempotent, but does not make arbitrary worker side effects
+exactly once. The scheduler SQLite state and task bundles remain separate commit domains.
 
 SQLite consumer writes match the generation and decoded prior snapshot inside
 the write transaction, then use the raw stored JSON as the compare-and-swap
