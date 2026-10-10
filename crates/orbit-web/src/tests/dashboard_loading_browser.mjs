@@ -7,6 +7,7 @@ import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
 import { assertRunTaskLabels } from './dashboard_run_tasks_browser.mjs';
+import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -1156,6 +1157,7 @@ try {
     if (failures.length) throw new Error(failures.join('\n'));
     console.log('Chromium run-detail action feedback, scheduled polling, presentation and log wrapping passed.');
   } else {
+    await assertTaskTitleLayout(page, evidence);
     await assertFrictionTaskLinks(page);
     await page.evaluate(() => globalThis.showTaskPaginationEvidence());
     await page.waitForFunction(() => document.getElementById('tasks-count').textContent === '1–20 of 55');
