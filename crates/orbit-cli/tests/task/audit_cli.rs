@@ -76,6 +76,13 @@ impl Fixture {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("XDG_CONFIG_HOME", self.home.join("xdg"))
+            // The tracing feed is host-global, not root-scoped: the first
+            // event passing the file filter creates `$HOME/.orbit/state/logs`.
+            // On a loaded host a healthy command emits one (a task-commit
+            // section held past its 2 s threshold), and an inherited
+            // `RUST_LOG` can lower the filter, so a fixture that asserts its
+            // HOME stays empty has to switch the feed off.
+            .env("RUST_LOG", "off")
             .arg("--root")
             .arg(&self.root)
             .args(args);
@@ -105,24 +112,36 @@ impl Fixture {
     }
 }
 
+/// Re-executes `test` in a child process with its own HOME, after `configure`
+/// has adjusted the child's environment, and reports whether this call was
+/// that parent. The child (identified by the marker variable) returns `false`
+/// and runs the test body.
+fn run_in_child(test: &str, configure: impl FnOnce(&mut std::process::Command)) -> bool {
+    const CHILD: &str = "ORBIT_AUDIT_EXPORT_FIXTURE_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(test) {
+        return false;
+    }
+    let home = tempdir().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    child
+        .args(["--exact", test, "--nocapture"])
+        .env(CHILD, test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path());
+    configure(&mut child);
+    let output = test_env::run_child_test(&mut child, test, home.path());
+    test_env::assert_child_test_passed(test, output.status, &output.stdout, &output.stderr);
+    true
+}
+
 #[test]
 fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
     const TEST: &str = "audit_cli::audit_cli_round_trips_real_mutation_filters_stats_and_export";
-    const CHILD: &str = "ORBIT_AUDIT_EXPORT_FIXTURE_CHILD";
-    if std::env::var(CHILD).as_deref() != Ok(TEST) {
-        let home = tempdir().unwrap();
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|name| {
-            child.env_remove(name);
-        });
-        child
-            .args(["--exact", TEST, "--nocapture"])
-            .env(CHILD, TEST)
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .current_dir(home.path());
-        let output = test_env::run_child_test(&mut child, TEST, home.path());
-        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+    if run_in_child(TEST, |_| {}) {
         return;
     }
     let fixture = Fixture::new();
@@ -334,6 +353,40 @@ fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
     assert!(
         fs::read_dir(&fixture.home).unwrap().next().is_none(),
         "explicit root must keep isolated HOME untouched"
+    );
+}
+
+/// A command emitting log events must not reach the fixture's HOME, however
+/// chatty the inherited environment is. A load-induced warning (a task-commit
+/// section held past its threshold) is the same event class as the debug
+/// events forced here, but nondeterministic: it failed the audit export's
+/// "isolated HOME untouched" assertion only inside the full affected gate.
+#[test]
+fn audit_cli_fixture_keeps_isolated_home_untouched_by_log_events() {
+    const TEST: &str = "audit_cli::audit_cli_fixture_keeps_isolated_home_untouched_by_log_events";
+    if run_in_child(TEST, |child| {
+        child.env("RUST_LOG", "debug");
+    }) {
+        return;
+    }
+    assert_eq!(std::env::var("RUST_LOG").as_deref(), Ok("debug"));
+    let fixture = Fixture::new();
+    fixture.task_events();
+    assert!(
+        fs::read_dir(&fixture.home).unwrap().next().is_none(),
+        "fixture commands must not write the tracing feed under the isolated HOME"
+    );
+
+    // Control: without the fixture's override the same command does write the
+    // feed there, so the assertion above is not vacuous.
+    fixture
+        .command(&["audit", "list", "--json"])
+        .env("RUST_LOG", "debug")
+        .assert()
+        .success();
+    assert!(
+        fixture.home.join(".orbit/state/logs/orbit.jsonl").is_file(),
+        "a debug event from an explicit-root command lands in the HOME feed"
     );
 }
 
