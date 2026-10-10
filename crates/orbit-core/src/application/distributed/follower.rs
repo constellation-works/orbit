@@ -102,6 +102,7 @@ impl crate::OrbitRuntime {
                 let waiting = answer.clone().unwrap_or_else(|| PullWaiting {
                     queued: carried.map_or(0, |pass| pass.queued),
                     deferred: carried.map_or_else(Vec::new, |pass| pass.deferred.clone()),
+                    deferred_total: carried.map_or(0, |pass| pass.deferred_total),
                     excluded: carried.map_or_else(Vec::new, |pass| pass.excluded.clone()),
                     excluded_total: carried.map_or(0, |pass| pass.excluded_total),
                     by_reason: carried
@@ -124,6 +125,7 @@ impl crate::OrbitRuntime {
                     recorded_at: now,
                     queued: waiting.queued,
                     deferred: waiting.deferred,
+                    deferred_total: waiting.deferred_total,
                     excluded: waiting.excluded,
                     excluded_total: waiting.excluded_total,
                     waiting_recorded_at: if answer.is_some() {

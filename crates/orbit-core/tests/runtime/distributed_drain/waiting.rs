@@ -121,6 +121,7 @@ fn an_idle_pull_drain_records_what_its_owner_kept_off_this_host() {
         ]),
         "{recorded:#?}"
     );
+    assert_eq!(recorded.deferred_total, 2, "{recorded:#?}");
     assert_eq!(recorded.excluded_total, 3, "{recorded:#?}");
     assert_eq!(
         recorded.waiting_by_reason,
@@ -173,6 +174,7 @@ fn an_idle_pull_drain_records_what_its_owner_kept_off_this_host() {
         .drain_last_pass
         .unwrap();
     assert_eq!(kept.queued, 3, "{kept:#?}");
+    assert_eq!(kept.deferred_total, 2, "{kept:#?}");
     assert_eq!(kept.excluded_total, 3, "{kept:#?}");
     assert_eq!(by_task(&kept.deferred), by_task(&recorded.deferred));
     assert_eq!(by_task(&kept.excluded), by_task(&recorded.excluded));

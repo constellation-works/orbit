@@ -64,6 +64,9 @@ pub(super) struct WaitingBacklog {
     pub(super) queued: Option<u64>,
     /// The subset of `queued` a lock conflict kept out, with the blocking tasks.
     pub(super) deferred: Vec<WaitingTask>,
+    /// The full count behind `deferred`, which a pull drain bounds. Records
+    /// that predate it read 0, so use [`Self::deferred_count`].
+    pub(super) deferred_total: u64,
     /// Backlog tasks the drain could not admit at all, with the reason.
     pub(super) excluded: Vec<WaitingTask>,
     pub(super) excluded_total: u64,
@@ -135,6 +138,7 @@ impl DrainLeafSummary {
             "waiting": {
                 "queued": self.waiting.queued,
                 "deferred": tasks(&self.waiting.deferred),
+                "deferred_total": self.waiting.deferred_count(),
                 "excluded": tasks(&self.waiting.excluded),
                 "excluded_total": self.waiting.excluded_total,
             },
@@ -220,8 +224,13 @@ impl DrainLeafSummary {
 impl WaitingBacklog {
     fn has_starved_tasks(&self) -> bool {
         self.queued.is_some_and(|queued| queued > 0)
-            || !self.deferred.is_empty()
+            || self.deferred_count() > 0
             || self.excluded_total > 0
+    }
+
+    /// Deferred tasks in all, listed or not.
+    fn deferred_count(&self) -> u64 {
+        self.deferred_total.max(self.deferred.len() as u64)
     }
 
     /// The `Still waiting:` block, and for a pull drain that has found nothing
@@ -241,13 +250,21 @@ impl WaitingBacklog {
             })
             .unwrap_or_default();
         let mut lines = vec![format!(
-            "{} {} admissible and {} excluded backlog task(s) were never started at the last pass{answered}",
+            "{} {} admissible, {} deferred and {} excluded backlog task(s) were never started at the last pass{answered}",
             bold("Still waiting:"),
             self.queued.unwrap_or(0),
+            self.deferred_count(),
             self.excluded_total,
         )];
         for task in &self.deferred {
             lines.push(format!("  {}", waiting_line(task, "lock conflict")));
+        }
+        let deferred_listed = self.deferred.len() as u64;
+        if self.deferred_count() > deferred_listed {
+            lines.push(format!(
+                "  ... and {} more deferred",
+                self.deferred_count() - deferred_listed
+            ));
         }
         for task in &self.excluded {
             lines.push(format!("  {}", waiting_line(task, "excluded")));
@@ -502,6 +519,7 @@ fn waiting_backlog(pass: &DrainAdmissionPass) -> WaitingBacklog {
     WaitingBacklog {
         queued: Some(pass.queued),
         deferred: tasks(&pass.deferred),
+        deferred_total: pass.deferred_total,
         excluded: tasks(&pass.excluded),
         excluded_total: pass.excluded_total,
         resource_throttle: pass.resource_throttle.clone(),

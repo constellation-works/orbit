@@ -1659,6 +1659,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
         recorded_at: now,
         queued: 0,
         deferred: Vec::new(),
+        deferred_total: 0,
         excluded: Vec::new(),
         excluded_total: 0,
         waiting_recorded_at: None,
@@ -1796,6 +1797,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
                 Some("held for a red base: make ci-lint"),
             ),
         ],
+        deferred_total: 2,
         excluded: vec![
             waiting("ORB-103", "dependency_not_done", &["ORB-901"], None),
             waiting(
@@ -1863,7 +1865,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
     for expected in [
-        "Still waiting: 9 admissible and 4 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
+        "Still waiting: 9 admissible, 2 deferred and 4 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
         "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
         "Task ORB-102: owner_hold (held for a red base: make ci-lint)",
         "Task ORB-103: dependency_not_done blocked-by=ORB-901",
@@ -1890,6 +1892,98 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("Task ORB-101:"), "{text}");
     assert!(!text.contains("idle:"), "{text}");
+}
+
+/// A pull drain bounds the deferred list it records; the `Still waiting`
+/// block counts every deferred task and says how many the list left out.
+#[test]
+fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
+    const CHILD: &str = "ORBIT_TEST_PULL_DEFERRED_OVERFLOW_CHILD";
+    const TEST: &str = "run_observation::run_show_reports_deferred_tasks_beyond_the_listed_ones";
+    if std::env::var(CHILD).as_deref() != Ok("1") {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            std::time::Duration::from_secs(30),
+            64 * 1024,
+        )
+        .unwrap();
+        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+        return;
+    }
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-pull-deferred-overflow";
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        params![id, fixture.workspace_id(), now.to_rfc3339(), std::process::id()],
+    ).unwrap();
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_pull_pipeline".into(),
+        serde_json::json!({}),
+    );
+    state.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
+        capacity: None,
+        recorded_at: now,
+        queued: 0,
+        deferred: (0..20)
+            .map(|index| orbit_types::workflow::DrainWaitingTask {
+                task_id: format!("ORB-{}", 200 + index),
+                reason: Some("owner_hold".into()),
+                blocked_by: Vec::new(),
+                detail: Some("held by the owner".into()),
+            })
+            .collect(),
+        deferred_total: 25,
+        excluded: Vec::new(),
+        excluded_total: 0,
+        waiting_recorded_at: None,
+        waiting_by_reason: [("owner_hold".to_string(), 25)].into_iter().collect(),
+        consecutive_idle_passes: 1,
+        resource_throttle: None,
+        last_pass_error_code: None,
+        last_pass_error: None,
+        consecutive_pass_failures: 0,
+        degraded: false,
+    });
+    runtime.write_run_state(id, &state).unwrap();
+
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    let pass = &shown["pipeline_state"]["drain_last_pass"];
+    assert_eq!(pass["deferred_total"], 25, "{pass}");
+    assert_eq!(pass["deferred"].as_array().unwrap().len(), 20, "{pass}");
+
+    let output = fixture
+        .orbit()
+        .args(["run", "show", id, "--no-reconcile"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "Still waiting: 0 admissible, 25 deferred and 0 excluded backlog task(s) were never started at the last pass",
+        "Task ORB-219: owner_hold",
+        "... and 5 more deferred",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+    assert!(!text.contains("Task ORB-220"), "{text}");
 }
 
 /// A durable failed-pass record is visible through the actual CLI in text
@@ -1941,6 +2035,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
         recorded_at: now,
         queued: 0,
         deferred: Vec::new(),
+        deferred_total: 0,
         excluded: Vec::new(),
         excluded_total: 0,
         waiting_recorded_at: None,

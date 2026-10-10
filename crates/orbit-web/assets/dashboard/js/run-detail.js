@@ -446,15 +446,17 @@ function buildStillWaiting(pass) {
   const excluded = Array.isArray(pass.excluded) ? pass.excluded : [];
   const queued = pass.queued || 0;
   const excludedTotal = pass.excluded_total || 0;
-  if (queued === 0 && deferred.length === 0 && excludedTotal === 0) return null;
+  const deferredTotal = Math.max(pass.deferred_total || 0, deferred.length);
+  if (queued === 0 && deferredTotal === 0 && excludedTotal === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel still-waiting" });
   const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
   panel.appendChild(el("div", {
     class: "label",
-    text: `still waiting: ${queued} admissible and ${excludedTotal} excluded backlog task(s) were never started at the last pass${answered}`,
+    text: `still waiting: ${queued} admissible, ${deferredTotal} deferred and ${excludedTotal} excluded backlog task(s) were never started at the last pass${answered}`,
   }));
   const rows = [
     ...deferred.map((task) => waitingTaskText(task, "lock conflict")),
+    ...(deferredTotal > deferred.length ? [`... and ${deferredTotal - deferred.length} more deferred`] : []),
     ...excluded.map((task) => waitingTaskText(task, "excluded")),
   ];
   if (excludedTotal > excluded.length) rows.push(`... and ${excludedTotal - excluded.length} more excluded`);
