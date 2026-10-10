@@ -219,6 +219,12 @@ spec:
        Keep each one exactly as recorded even though it does not exist yet.
        Never propose any other missing path; deterministic apply keeps
        declared targets you omit and rejects every undeclared missing anchor.
+       A task tagged `code-review`, `delivery-code-review`, `qa-sweep` or
+       `security-review` was filed by a review whose selectors are its
+       evidence: add the modification targets it lacks, but do not drop a
+       current selector that still exists at `source_revision`, even one you
+       would only read. Deterministic apply keeps any you omit
+       (`context_evidence_retained`); only an operator narrows that scope.
        Apply uses the host's prepared snapshot as `context_files_before`;
        do not echo that list in your assessment.
        Derive the modification targets from evidence, never by sweeping a

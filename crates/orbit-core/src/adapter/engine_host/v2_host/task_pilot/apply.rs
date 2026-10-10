@@ -26,11 +26,12 @@ use super::persist::{
 };
 use super::source::SourceSnapshot;
 use super::{
-    CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED, PILOT_NORMALIZATIONS,
-    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, normalize_evidence_gaps,
-    requested_workspace_root, required_machine, required_os, required_string,
-    required_string_array, string_array, string_array_value, unauthorized_missing_targets,
-    validate_after_selectors, validate_recommendations,
+    CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
+    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, action_failed, member_ready,
+    normalize_evidence_gaps, requested_workspace_root, required_machine, required_os,
+    required_string, required_string_array, retained_review_evidence, review_filed, string_array,
+    string_array_value, unauthorized_missing_targets, validate_after_selectors,
+    validate_recommendations,
 };
 
 pub(in super::super) fn apply(
@@ -523,6 +524,46 @@ pub(in super::super) fn apply(
                 .cloned()
                 .collect::<Vec<_>>();
             after.extend(retained.iter().cloned());
+            // A review-filed task's selectors are the review's evidence: the
+            // pilot may add modification targets but cannot erase evidence by
+            // proposing only what it would edit. Filed order is kept so an
+            // assessment that only omits evidence leaves the scope unchanged.
+            let evidence = if disposition == "selectors" && review_filed(&snapshot.tags) {
+                match retained_review_evidence(
+                    action,
+                    &snapshot.context_files,
+                    &after,
+                    &workspace_root,
+                    source.as_ref(),
+                ) {
+                    Ok(evidence) => {
+                        after = snapshot
+                            .context_files
+                            .iter()
+                            .filter(|selector| {
+                                after.contains(selector) || evidence.contains(selector)
+                            })
+                            .chain(
+                                after
+                                    .iter()
+                                    .filter(|selector| !snapshot.context_files.contains(selector)),
+                            )
+                            .cloned()
+                            .collect();
+                        evidence
+                    }
+                    Err(error) => {
+                        outcomes.push(task_outcome(
+                            task_id,
+                            "apply_failed",
+                            Some(error.to_string()),
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                Vec::new()
+            };
             let reauthorization = match unauthorized_missing_targets(
                 action,
                 &snapshot.context_files,
@@ -633,6 +674,9 @@ pub(in super::super) fn apply(
                 }
                 if !retained.is_empty() {
                     fields.insert(CONTEXT_CREATION_RETAINED.to_string(), json!(retained));
+                }
+                if !evidence.is_empty() {
+                    fields.insert(CONTEXT_EVIDENCE_RETAINED.to_string(), json!(evidence));
                 }
                 if !reauthorization.is_empty() {
                     fields.insert(
