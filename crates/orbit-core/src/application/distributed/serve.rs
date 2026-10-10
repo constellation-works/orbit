@@ -43,10 +43,10 @@ use orbit_types::workflow::{
     handoff::{HandoffCandidate, HandoffDelivery, TaskHandoff},
 };
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::application::automation::source::Source;
 use crate::application::task::PilotAdmissionHold;
+use crate::runtime::run_input::recorded_task_ids;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
@@ -526,11 +526,8 @@ impl crate::OrbitRuntime {
             let task_ids = run
                 .input
                 .as_ref()
-                .and_then(|input| input.get("task_ids"))
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str);
+                .map(recorded_task_ids)
+                .unwrap_or_default();
             for task_id in task_ids {
                 carried
                     .entry(task_id.to_string())

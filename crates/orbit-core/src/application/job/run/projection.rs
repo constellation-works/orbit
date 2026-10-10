@@ -1,9 +1,9 @@
 //! Shared JSON projection for persisted job runs.
 
-use std::collections::BTreeSet;
-
 use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, PipelineState, run_id_role};
 use serde_json::{Value, json};
+
+use crate::runtime::run_input::carried_task_ids;
 
 /// Durable provider/model evidence for one completed agent invocation.
 ///
@@ -23,19 +23,7 @@ pub fn job_run_task_ids(run: &JobRun) -> Vec<String> {
     let Some(input) = run.input.as_ref() else {
         return Vec::new();
     };
-    input
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .chain(input.get("task_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    carried_task_ids(input).into_iter().collect()
 }
 
 /// The step whose error explains a run's outcome [ORB-13016].

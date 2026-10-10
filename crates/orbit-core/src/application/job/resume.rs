@@ -62,6 +62,7 @@ use crate::application::job::pipeline::{
 };
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
+use crate::runtime::run_input::carried_task_ids;
 use crate::runtime::task::resumed_task_run_id;
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
@@ -788,17 +789,7 @@ fn foreign_binding_message(
 /// Task ids the run input explicitly targets, if any. An auto-discovery run
 /// names none, in which case lineage ownership is the only scope.
 pub(super) fn task_ids_from_input(input: &Value) -> Option<BTreeSet<String>> {
-    let ids: BTreeSet<String> = input
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .chain(input.get("task_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
+    let ids = carried_task_ids(input);
     (!ids.is_empty()).then_some(ids)
 }
 

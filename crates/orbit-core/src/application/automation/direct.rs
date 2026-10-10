@@ -2,6 +2,7 @@
 
 use super::source::Source;
 use crate::OrbitRuntime;
+use crate::runtime::run_input::recorded_task_ids;
 use orbit_automation::{AutomationError, automation_error_to_orbit, delivery::digest};
 use orbit_common::OrbitError;
 use orbit_store::contracts::AutomationStoreBackend;
@@ -46,15 +47,11 @@ pub(crate) fn record_direct_landing_intent(
             .show_job_run(&request.run_id)?
             .input
             .as_ref()
-            .and_then(|input| input.get("task_ids"))
-            .and_then(serde_json::Value::as_array)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
+            .map(recorded_task_ids)
             .unwrap_or_default()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     } else {
         request.task_ids.clone()
     };
