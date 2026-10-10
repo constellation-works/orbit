@@ -35,7 +35,7 @@ allowed_internal_deps() {
       echo "orbit-common orbit-exec orbit-policy orbit-types"
       ;;
     orbit-agent)
-      echo "orbit-common orbit-tools orbit-types"
+      echo "orbit-common orbit-types"
       ;;
     orbit-engine)
       echo "orbit-agent orbit-common orbit-exec orbit-store orbit-tools orbit-types"
@@ -46,19 +46,20 @@ allowed_internal_deps() {
     orbit-core)
       # ORB-10617: Linux sandbox regression tests compose Core with Exec; this
       # remains test-only and does not widen Core's production dependency graph.
-      echo "orbit-automation orbit-common orbit-config orbit-search orbit-engine orbit-exec orbit-policy orbit-store orbit-tools orbit-types"
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-automation orbit-common orbit-config orbit-core orbit-search orbit-engine orbit-exec orbit-policy orbit-store orbit-tools orbit-types"
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
       # machine-local Registry state for CLI and dashboard consumers.
-      echo "orbit-common orbit-config orbit-core orbit-engine orbit-mcp orbit-registry orbit-store orbit-tools orbit-types"
+      echo "orbit-common orbit-config orbit-core orbit-mcp orbit-registry orbit-store orbit-tools orbit-types"
       ;;
     orbit-mcp)
       # MCP owns framing, canonical discovery, and direct SSH stdio transport.
       echo "orbit-common orbit-registry orbit-tools orbit-types"
       ;;
     orbit-web)
-      echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types"
+      echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types orbit-store"
       ;;
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
@@ -73,11 +74,16 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-web)
+      echo "orbit-store"
+      ;;
     orbit-cli)
       echo "orbit-engine orbit-exec orbit-tools"
       ;;
     orbit-core)
-      echo ""
+      # Core's own integration tests enable its `test-support` feature to
+      # substitute the detached pipeline worker; no other crate is reached.
+      echo "orbit-core"
       ;;
     *)
       echo ""

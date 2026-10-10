@@ -50,9 +50,9 @@ pub struct TailArgs {
     #[arg(long)]
     pub since: Option<String>,
 
-    /// Emit each event as one raw JSON line instead of the four-column view.
-    #[arg(long)]
-    pub json: bool,
+    /// Stream rendering, derived from the output sink rather than argv.
+    #[arg(skip)]
+    pub(super) json_lines: bool,
 
     /// Override the JSONL path. Falls back to `$ORBIT_LOG_PATH`, then
     /// `$HOME/.orbit/state/logs/orbit.jsonl`. Provided primarily for tests.
@@ -78,11 +78,10 @@ impl Execute for TailArgs {
         Ok(Payload::stream(
             doc,
             Box::new(move |sink, writer| {
-                // Line shape follows the resolved sink, not the command-local
-                // `--json` flag: `--format json|ndjson` must emit JSONL even
-                // when that flag is absent.
+                // Line shape follows the resolved sink: JSON modes retain
+                // the stream's established JSONL record format.
                 let mut args = self;
-                args.json = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
+                args.json_lines = matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
                 match run_tail(&path, &args, &filters, sink.color_allowed(), writer) {
                     Ok(()) => Ok(()),
                     // The reader closing the pipe is how `orbit log tail -f |
@@ -107,11 +106,11 @@ fn run_tail<W: Write + ?Sized>(
     use_color: bool,
     writer: &mut W,
 ) -> io::Result<()> {
+    if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
+        return run_split_tail(path, &agent_path, args, filters, use_color, writer);
+    }
     if !path.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("orbit log file not found: {}", path.display()),
-        ));
+        return Err(log_file_not_found(path));
     }
 
     let initial = print_initial_window(path, args, filters, use_color, writer)?;
@@ -123,7 +122,7 @@ fn run_tail<W: Write + ?Sized>(
         path,
         initial,
         filters,
-        args.json,
+        args.json_lines,
         use_color,
         writer,
         FollowControl::Forever,
@@ -167,10 +166,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
     control: FollowTestControl,
 ) -> io::Result<()> {
     if !path.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("orbit log file not found: {}", path.display()),
-        ));
+        return Err(log_file_not_found(path));
     }
 
     let initial = print_initial_window_with_hook(path, args, filters, use_color, writer, || {
@@ -196,7 +192,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
         path,
         initial,
         filters,
-        args.json,
+        args.json_lines,
         use_color,
         writer,
         FollowControl::UntilStopped(control.stop),
@@ -214,7 +210,7 @@ fn print_initial_window<W: Write + ?Sized>(
 }
 
 struct InitialWindow {
-    offset: u64,
+    reader: BufReader<File>,
     pending: Vec<u8>,
 }
 
@@ -226,6 +222,19 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
     writer: &mut W,
     after_first_read: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<InitialWindow> {
+    let (initial, history) = read_initial_window(path, args, filters, after_first_read)?;
+    for line in history {
+        emit_line(&line, args.json_lines, use_color, writer)?;
+    }
+    Ok(initial)
+}
+
+fn read_initial_window(
+    path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    after_first_read: impl FnOnce() -> io::Result<()>,
+) -> io::Result<(InitialWindow, VecDeque<String>)> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut buf = Vec::new();
@@ -258,11 +267,12 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
         }
     }
 
-    let offset = reader.stream_position()?;
-    for line in matching_lines.into_lines() {
-        emit_line(&line, args.json, use_color, writer)?;
-    }
-    Ok(InitialWindow { offset, pending })
+    // Carry this exact file into follow mode: rotation during the history
+    // read must not apply an old offset to the replacement path.
+    Ok((
+        InitialWindow { reader, pending },
+        matching_lines.into_lines(),
+    ))
 }
 
 /// A chronological tail window whose storage never exceeds its requested
@@ -304,34 +314,161 @@ fn follow_file<W: Write + ?Sized>(
     writer: &mut W,
     control: FollowControl,
 ) -> io::Result<()> {
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(initial.offset))?;
-    let mut reader = BufReader::new(file);
-    // Bytes of a line still being written. Kept undecoded so a write that
-    // ends inside a multi-byte character is completed, not rejected.
-    let mut pending = initial.pending;
+    follow_files(
+        vec![(path.to_path_buf(), Some(initial))],
+        filters,
+        json,
+        use_color,
+        writer,
+        control,
+    )
+}
 
+fn run_split_tail<W: Write + ?Sized>(
+    path: &Path,
+    agent_path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    use_color: bool,
+    writer: &mut W,
+) -> io::Result<()> {
+    let mut feeds = Vec::new();
+    let mut history = Vec::new();
+    let mut opened = false;
+    for path in [path, agent_path] {
+        match read_initial_window(path, args, filters, || Ok(())) {
+            Ok((initial, lines)) => {
+                opened = true;
+                history.extend(lines.into_iter().filter_map(|line| {
+                    let event: Value = serde_json::from_str(&line).ok()?;
+                    Some((event["timestamp"].as_str().unwrap_or("").to_owned(), line))
+                }));
+                feeds.push((path.to_path_buf(), Some(initial)));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                feeds.push((path.to_path_buf(), None));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // A one-shot read with neither feed on disk is a missing log, not an empty
+    // one. Follow mode keeps waiting: either feed can appear on a fresh install.
+    if !opened && !args.follow {
+        return Err(log_file_not_found(path));
+    }
+    history.sort_by(|left, right| left.0.cmp(&right.0));
+    for (_, line) in history
+        .iter()
+        .skip(history.len().saturating_sub(args.lines))
+    {
+        emit_line(line, args.json_lines, use_color, writer)?;
+    }
+    if args.follow {
+        follow_files(
+            feeds,
+            filters,
+            args.json_lines,
+            use_color,
+            writer,
+            FollowControl::Forever,
+        )?;
+    }
+    Ok(())
+}
+
+fn follow_files<W: Write + ?Sized>(
+    mut feeds: Vec<(PathBuf, Option<InitialWindow>)>,
+    filters: &Filters,
+    json: bool,
+    use_color: bool,
+    writer: &mut W,
+    control: FollowControl,
+) -> io::Result<()> {
     loop {
         if control.should_stop() {
             return Ok(());
         }
-        let n = reader.read_until(b'\n', &mut pending)?;
-        if n == 0 {
+        let mut progressed = false;
+        for (path, initial) in &mut feeds {
+            if initial.is_none() {
+                match File::open(&*path) {
+                    Ok(file) => {
+                        *initial = Some(InitialWindow {
+                            reader: BufReader::new(file),
+                            pending: Vec::new(),
+                        })
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            let Some(initial) = initial else { continue };
+            let reader = &mut initial.reader;
+            let pending = &mut initial.pending;
+            let mut offset = reader.stream_position()?;
+            // Bound each feed's batch so a busy relay cannot starve operations.
+            for _ in 0..256 {
+                if reader.get_ref().metadata()?.len() < offset {
+                    reader.seek(SeekFrom::Start(0))?;
+                    offset = 0;
+                    pending.clear();
+                }
+                let n = reader.read_until(b'\n', pending)?;
+                if n == 0 {
+                    let replacement = match File::open(&*path) {
+                        Ok(file) => Some(file),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error),
+                    };
+                    if let Some(file) = replacement {
+                        let current = reader.get_ref().metadata()?;
+                        if current.len() > offset {
+                            continue;
+                        }
+                        if !same_file(&current, &file.metadata()?)? {
+                            *reader = BufReader::new(file);
+                            offset = 0;
+                            pending.clear();
+                            progressed = true;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                progressed = true;
+                offset += n as u64;
+                if pending.last() != Some(&b'\n') {
+                    continue;
+                }
+                pending.pop();
+                let full_line = String::from_utf8_lossy(pending).into_owned();
+                pending.clear();
+                if let Ok(value) = serde_json::from_str::<Value>(&full_line)
+                    && filters.matches(&value)
+                {
+                    emit_line(&full_line, json, use_color, writer)?;
+                }
+            }
+        }
+        if !progressed {
             thread::sleep(Duration::from_millis(50));
-            continue;
         }
-        if pending.last() != Some(&b'\n') {
-            // Partial line: keep it and try again next iteration.
-            continue;
-        }
-        pending.pop();
-        let full_line = String::from_utf8_lossy(&pending).into_owned();
-        pending.clear();
-        if let Ok(value) = serde_json::from_str::<Value>(&full_line)
-            && filters.matches(&value)
-        {
-            emit_line(&full_line, json, use_color, writer)?;
-        }
+    }
+}
+
+fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(left.dev() == right.dev() && left.ino() == right.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (left, right);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "following log rotation requires Unix file identity (use WSL2 on Windows)",
+        ))
     }
 }
 
@@ -371,6 +508,13 @@ fn emit_line<W: Write + ?Sized>(
     };
     let formatted = format_event_line(&value, use_color);
     writeln!(writer, "{formatted}")
+}
+
+fn log_file_not_found(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("orbit log file not found: {}", path.display()),
+    )
 }
 
 fn io_to_orbit(err: io::Error) -> OrbitError {

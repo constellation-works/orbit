@@ -13,7 +13,9 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionCrewCapability, ClaimMutation, LocalPullAdmission, LocalPullPhase,
 };
-use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullCrewPreflight};
+use orbit_types::workflow::{
+    ClaimFailureClass, CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
+};
 use serde::Serialize;
 
 /// One admission carried by a settle-only pass.
@@ -106,7 +108,7 @@ fn outcome_guidance(outcome: &str) -> Option<&'static str> {
             "the launch was never acknowledged, so the leaf may still be running; recover the \
              claim on the owner's dashboard and do not start another attempt",
         ),
-        "no_owner_route" => Some("add the owner to ~/.orbit/mcp-destinations.toml"),
+        "no_owner_route" => Some("register the owner with `orbit host add <ssh-target>`"),
         _ => None,
     }
 }
@@ -257,6 +259,10 @@ pub struct PullLeafClaim {
     /// The owner's refusal of the pending settlement while it still holds
     /// the claim, and when delivery is next attempted.
     pub settlement_refusal: Option<RefusedPullSettlement>,
+    /// [ORB-14257] Why the leaf ended without its handoff, as its recorded
+    /// settlement types it; `None` until a failure or release is recorded,
+    /// and for a release of a leaf that never launched.
+    pub failure_class: Option<ClaimFailureClass>,
     /// What the phase means for the operator.
     pub guidance: String,
 }
@@ -265,8 +271,12 @@ impl PullLeafClaim {
     /// One line for a run page.
     #[must_use]
     pub fn describe(&self) -> String {
+        let failure = self
+            .failure_class
+            .map(|class| format!(" failure={}", class.as_str()))
+            .unwrap_or_default();
         format!(
-            "task {} claim {} owner {} drain {} settlement={} — {}",
+            "task {} claim {} owner {} drain {} settlement={}{failure} — {}",
             self.task_id.as_deref().unwrap_or("-"),
             self.claim_id.as_deref().unwrap_or("-"),
             self.owner,
@@ -315,20 +325,43 @@ impl DrainClaimedLeaf {
 /// The crews a pull drain's window can run, and those it will not [ORB-13941].
 ///
 /// The window's provider preflight, taken once when it opened, minus every
-/// crew a claimed leaf of this drain found unusable since — a provider that
-/// refused to authenticate, say. Derived from the drain's own admission
-/// records, so it survives a follower restart and ends with the drain.
+/// crew a claimed leaf of this drain found unusable since — an authentication
+/// failure excludes every configured crew of that provider, a capacity
+/// failure only the leaf's crew — and, when the drain was submitted with
+/// `--allow-crew`, outside that restriction [ORB-14174]. Derived from the
+/// drain's run input and its own admission records, so it survives a follower
+/// restart and a resume, and ends with the drain.
+///
+/// [ORB-14697] Each pass also excludes the crews this host's provider-limit
+/// store finds at their usage limit, until the reading lapses, so they are
+/// runnable again within the same window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullCrewWindow {
     /// When the preflight ran; `None` while the drain has not taken one.
     pub checked_at: Option<DateTime<Utc>>,
-    /// Crews the window can run. `None` without a preflight: then every crew
-    /// not excluded is offered to the owner.
+    /// Crews the window can run claimed work as. `None` without a preflight
+    /// or restriction: then every crew not excluded is offered to the owner.
     pub runnable: Option<Vec<String>>,
+    /// The drain's `--allow-crew` restriction, by canonical registry name;
+    /// `None` when it runs every crew the window can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<Vec<String>>,
     /// The crew a task naming none runs as on this host.
     pub default_crew: Option<String>,
-    /// Crews excluded for the rest of the window, with why.
+    /// Currently excluded crews and reasons; auth exclusions may recover.
     pub excluded: Vec<CrewExclusion>,
+    /// Active provider auth failures and their delayed recovery schedule.
+    pub auth_exclusions: Vec<PullAuthExclusion>,
+    /// Why this host claims nothing more for the rest of the window: a
+    /// claimed leaf of this drain was released for a failure of the host
+    /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_suppressed: Option<String>,
+    /// Crews the window can run before `allowed` narrows them. The owner's
+    /// before-PR reviewer runs as one of these: the restriction selects the
+    /// implementation crews a claim may carry, not the review it owes.
+    #[serde(skip)]
+    reviewable: Option<Vec<String>>,
 }
 
 impl PullCrewWindow {
@@ -342,17 +375,78 @@ impl PullCrewWindow {
         }
     }
 
-    /// Whether the window can run nothing at all: every configured crew is
-    /// excluded, so requesting work would only collect idle receipts.
+    /// Why the owner's before-PR reviewer crew cannot run in this window, or
+    /// `None` when it can. Judged without `allowed`: only exclusions and the
+    /// preflight count.
+    #[must_use]
+    pub fn reviewer_unrunnable_reason(&self, crew: &str) -> Option<String> {
+        AdmissionCrewCapability {
+            runnable: self.reviewable.clone(),
+            default_crew: None,
+            excluded: self
+                .excluded
+                .iter()
+                .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
+                .cloned()
+                .collect(),
+        }
+        .unrunnable_reason(Some(crew))
+    }
+
+    /// Whether the window can run nothing at all: the host is suppressed,
+    /// or every configured crew is excluded, so requesting work would only
+    /// collect idle receipts.
     #[must_use]
     pub fn runs_nothing(&self) -> bool {
-        self.runnable.as_ref().is_some_and(Vec::is_empty)
+        self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(Vec::is_empty)
+    }
+
+    /// Whether every crew this drain could otherwise run — the
+    /// allowlist-permitted preflight-runnable set — is excluded by a provider
+    /// usage limit, so this drain admits again once one lifts [ORB-14697, ORB-14902].
+    #[must_use]
+    pub fn held_by_provider_limit(&self) -> bool {
+        if self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(|r| !r.is_empty()) {
+            return false;
+        }
+        let candidate_crews: Vec<&str> = match (&self.allowed, &self.reviewable) {
+            (Some(allowed), Some(reviewable)) => reviewable
+                .iter()
+                .filter(|crew| allowed.iter().any(|a| a == *crew))
+                .map(String::as_str)
+                .collect(),
+            (None, Some(reviewable)) => reviewable.iter().map(String::as_str).collect(),
+            (Some(allowed), None) => allowed
+                .iter()
+                .filter(|crew| {
+                    !self.excluded.iter().any(|exclusion| {
+                        &exclusion.crew == *crew
+                            && exclusion.source != CrewExclusionSource::ProviderLimit
+                    })
+                })
+                .map(String::as_str)
+                .collect(),
+            (None, None) => Vec::new(),
+        };
+        !candidate_crews.is_empty()
+            && candidate_crews.iter().all(|crew| {
+                self.excluded.iter().any(|exclusion| {
+                    exclusion.crew == *crew
+                        && exclusion.source == CrewExclusionSource::ProviderLimit
+                })
+            })
     }
 
     /// One line per excluded crew, for a terminal report.
     #[must_use]
     pub fn describe(&self) -> Vec<String> {
-        let mut lines = Vec::with_capacity(self.excluded.len() + 1);
+        let mut lines = Vec::with_capacity(self.excluded.len() + 3);
+        if let Some(reason) = &self.host_suppressed {
+            lines.push(format!("host suppressed: {reason}"));
+        }
+        if let Some(allowed) = &self.allowed {
+            lines.push(format!("allowed (--allow-crew): {}", allowed.join(", ")));
+        }
         if let Some(runnable) = &self.runnable {
             lines.push(if runnable.is_empty() {
                 "runnable: none".to_string()
@@ -364,12 +458,23 @@ impl PullCrewWindow {
             let source = match exclusion.source {
                 CrewExclusionSource::Preflight => "preflight",
                 CrewExclusionSource::ProviderUnavailable => "provider_unavailable",
+                CrewExclusionSource::LeafReleased => "leaf_released",
+                CrewExclusionSource::ProviderLimit => "provider_limit",
             };
-            format!(
-                "excluded {} ({source}): {}",
-                exclusion.crew, exclusion.reason
-            )
+            match exclusion.until {
+                Some(until) => format!(
+                    "excluded {} ({source} until {}): {}",
+                    exclusion.crew,
+                    until.to_rfc3339(),
+                    exclusion.reason
+                ),
+                None => format!(
+                    "excluded {} ({source}): {}",
+                    exclusion.crew, exclusion.reason
+                ),
+            }
         }));
+        lines.extend(self.auth_exclusions.iter().map(PullAuthExclusion::describe));
         lines
     }
 }
@@ -532,6 +637,20 @@ impl crate::OrbitRuntime {
             .as_ref()
             .map(|preflight| preflight.excluded.clone())
             .unwrap_or_default();
+        let stored_recovery = self
+            .read_run_state(drain_run_id)?
+            .map(|state| state.pull_auth_recovery)
+            .unwrap_or_default();
+        let mut auth_exclusions = Vec::new();
+        let mut host_suppressed = None;
+        let default_crew = match &preflight {
+            Some(preflight) => preflight.default_crew.clone(),
+            None => self
+                .context
+                .settings()
+                .default_crew()
+                .map(ToOwned::to_owned),
+        };
         for record in self
             .stores()
             .jobs()
@@ -540,48 +659,229 @@ impl crate::OrbitRuntime {
             let Some(ClaimMutation::Release(evidence)) = &record.settlement else {
                 continue;
             };
-            let Some(unavailable) = &evidence.provider_unavailable else {
-                continue;
-            };
-            let Some(crew) = unavailable.crew.as_deref() else {
-                continue;
-            };
-            if excluded.iter().any(|exclusion| exclusion.crew == crew) {
-                continue;
-            }
             let task = record
                 .receipt
                 .as_ref()
                 .and_then(|receipt| receipt.claim.as_ref())
                 .map(|claim| claim.task_id.as_str())
                 .unwrap_or("a claimed task");
-            excluded.push(CrewExclusion {
-                crew: crew.to_string(),
-                source: CrewExclusionSource::ProviderUnavailable,
-                reason: format!("{task} failed: {}", unavailable.reason),
-            });
+            if let Some(failure) = &evidence.failure
+                && failure.class.suppresses_host()
+                && host_suppressed.is_none()
+            {
+                host_suppressed = Some(format!(
+                    "{task} was released ({}): {}",
+                    failure.class.as_str(),
+                    failure.reason
+                ));
+            }
+            // [ORB-14257] A provider release keeps its own source; any other
+            // released failure whose class blames this host excludes the crew
+            // too. [ORB-14262] Authentication is the provider's login, not the
+            // crew's model, so every configured crew of that provider is
+            // excluded. Capacity stays on the named crew: another model may
+            // still have room. Provider labels are parsed, so `anthropic`
+            // groups with `claude`. [ORB-14697] A usage limit excludes nothing
+            // here: the leaf recorded it in this host's provider-limit store,
+            // whose reading excludes the provider's crews below until it
+            // lapses.
+            let authentication = evidence.provider_unavailable.is_some()
+                && self.leaf_reported_authentication(record.leaf_run_id.as_deref());
+            if authentication
+                && let Some(incident) = self.pull_auth_incident(&record, &stored_recovery)?
+            {
+                if incident.recovered_at.is_some() {
+                    continue;
+                }
+                if !auth_exclusions
+                    .iter()
+                    .any(|entry: &PullAuthExclusion| entry.provider == incident.exclusion.provider)
+                {
+                    auth_exclusions.push(incident.exclusion);
+                }
+            }
+            let (crews, source, reason) = match (&evidence.provider_unavailable, &evidence.failure)
+            {
+                (Some(_), Some(failure)) if failure.provider_limit && !authentication => continue,
+                (Some(unavailable), _) => {
+                    let crews = match unavailable.crew.as_deref() {
+                        Some(crew) if authentication => self.crews_sharing_provider(crew),
+                        Some(crew) => vec![crew.to_string()],
+                        None => Vec::new(),
+                    };
+                    (
+                        crews,
+                        CrewExclusionSource::ProviderUnavailable,
+                        format!("{task} failed: {}", unavailable.reason),
+                    )
+                }
+                // A leaf whose task names no crew ran as the window's
+                // default, even when it died before resolving one.
+                // [ORB-14634] A forge outage is neither the crew's nor the
+                // host's, so its release excludes nothing.
+                (None, Some(failure))
+                    if failure.class.excludes_crew() && evidence.forge_hold.is_none() =>
+                {
+                    (
+                        failure
+                            .crew
+                            .as_deref()
+                            .or(default_crew.as_deref())
+                            .map(|crew| vec![crew.to_string()])
+                            .unwrap_or_default(),
+                        CrewExclusionSource::LeafReleased,
+                        format!(
+                            "{task} was released ({}): {}",
+                            failure.class.as_str(),
+                            failure.reason
+                        ),
+                    )
+                }
+                _ => continue,
+            };
+            for crew in crews {
+                if excluded.iter().any(|exclusion| exclusion.crew == crew) {
+                    continue;
+                }
+                excluded.push(CrewExclusion {
+                    crew,
+                    source,
+                    reason: reason.clone(),
+                    until: None,
+                });
+            }
         }
-        let runnable = preflight.as_ref().map(|preflight| {
+        // [ORB-14697] Recomputed on every pass, so a crew whose reading
+        // lapses is runnable again in the same window.
+        let gate = self.provider_limit_gate(Utc::now());
+        for crew in self.context.settings().crews().values() {
+            if excluded.iter().any(|exclusion| exclusion.crew == crew.name) {
+                continue;
+            }
+            if let Some(limit) = gate.limit_for(crew) {
+                excluded.push(CrewExclusion {
+                    crew: crew.name.clone(),
+                    source: CrewExclusionSource::ProviderLimit,
+                    reason: limit.describe(),
+                    until: Some(limit.until),
+                });
+            }
+        }
+        let limited = |crew: &str| {
+            excluded.iter().any(|exclusion| {
+                exclusion.crew == crew && exclusion.source == CrewExclusionSource::ProviderLimit
+            })
+        };
+        // Review is not delivery admission, so a provider limit does not
+        // keep the owner's reviewer from running here.
+        let reviewable: Option<Vec<String>> = preflight.as_ref().map(|preflight| {
             preflight
                 .runnable
                 .iter()
-                .filter(|crew| !excluded.iter().any(|exclusion| &exclusion.crew == *crew))
+                .filter(|crew| {
+                    !excluded.iter().any(|exclusion| {
+                        &exclusion.crew == *crew
+                            && exclusion.source != CrewExclusionSource::ProviderLimit
+                    })
+                })
                 .cloned()
                 .collect()
         });
+        // The run input is the authority for the restriction, as for an
+        // owner drain: a name this host no longer configures fails the pass
+        // rather than widening it.
+        let input = self
+            .stores()
+            .jobs()
+            .get_job_run(drain_run_id)?
+            .and_then(|run| run.input)
+            .unwrap_or(serde_json::Value::Null);
+        let allowlist = self.crew_allowlist_from_input(&input)?;
+        let unlimited = reviewable.as_ref().map(|crews| {
+            crews
+                .iter()
+                .filter(|crew| !limited(crew))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let runnable = match &allowlist {
+            None => unlimited,
+            Some(allowlist) => Some(match &unlimited {
+                Some(crews) => crews
+                    .iter()
+                    .filter(|crew| self.crew_allowlist_permits(allowlist, crew))
+                    .cloned()
+                    .collect(),
+                None => allowlist
+                    .names()
+                    .into_iter()
+                    .filter(|crew| !excluded.iter().any(|exclusion| exclusion.crew == *crew))
+                    .map(ToOwned::to_owned)
+                    .collect(),
+            }),
+        };
         Ok(PullCrewWindow {
             checked_at: preflight.as_ref().map(|preflight| preflight.checked_at),
             runnable,
-            default_crew: match preflight {
-                Some(preflight) => preflight.default_crew,
-                None => self
-                    .context
-                    .settings()
-                    .default_crew()
-                    .map(ToOwned::to_owned),
-            },
+            allowed: allowlist.map(|allowlist| {
+                allowlist
+                    .names()
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect()
+            }),
+            reviewable,
+            default_crew,
             excluded,
+            auth_exclusions,
+            host_suppressed,
         })
+    }
+
+    /// Whether `leaf`'s recorded step failure is provider authentication,
+    /// not model capacity. Capacity is also stored as `provider_unavailable`
+    /// evidence; only the authentication marker widens the exclusion.
+    pub(crate) fn leaf_reported_authentication(&self, leaf: Option<&str>) -> bool {
+        let Some(leaf) = leaf else {
+            return false;
+        };
+        self.stores()
+            .jobs()
+            .get_job_run(leaf)
+            .ok()
+            .flatten()
+            .is_some_and(|run| {
+                run.steps.iter().any(|step| {
+                    step.error_code.as_deref()
+                        == Some(orbit_types::workflow::PROVIDER_UNAVAILABLE_ERROR_CODE)
+                        || step.error_message.as_deref().is_some_and(|message| {
+                            message.contains(orbit_types::workflow::PROVIDER_UNAVAILABLE_MARKER)
+                        })
+                })
+            })
+    }
+
+    /// `failed` plus every configured crew whose provider parses to the same
+    /// canonical provider. An unparsable or unknown crew stays a single name.
+    fn crews_sharing_provider(&self, failed: &str) -> Vec<String> {
+        let registry = self.context.settings().crews();
+        let Some(provider) = registry.get(failed).and_then(|crew| {
+            orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
+        }) else {
+            return vec![failed.to_string()];
+        };
+        let mut names = registry
+            .values()
+            .filter(|crew| {
+                orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
+                    == Some(provider)
+            })
+            .map(|crew| crew.name.clone())
+            .collect::<Vec<_>>();
+        if !names.iter().any(|name| name == failed) {
+            names.push(failed.to_string());
+        }
+        names
     }
 
     /// The pull admission a local run executes, when it is a claimed leaf.
@@ -605,6 +905,12 @@ impl crate::OrbitRuntime {
             owner: admission.destination.selector.clone(),
             drain_run_id: admission.request.run_context.run_id.clone(),
             settlement_phase,
+            failure_class: match &admission.settlement {
+                Some(ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)) => {
+                    evidence.failure.as_ref().map(|failure| failure.class)
+                }
+                _ => None,
+            },
             refusal: admission.refusal.clone(),
             guidance: phase_guidance(
                 admission.phase,
@@ -636,9 +942,15 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
     match error {
         OrbitError::RemoteTool { code, .. } => matches!(
             code.as_str(),
-            "invalid_input" | "capability_refused" | "capability_denied" | "policy_denied"
+            "invalid_input"
+                | "capability_refused"
+                | "capability_denied"
+                | "policy_denied"
+                | "protocol_skew"
         ),
         OrbitError::InvalidInput(_)
+        | OrbitError::ClaimRefused { .. }
+        | OrbitError::ProtocolSkew(_)
         | OrbitError::CapabilityRefused(_)
         | OrbitError::CapabilityDenied(_)
         | OrbitError::PolicyDenied(_) => true,
@@ -651,9 +963,12 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
 /// that is unavailable, or an owner-side failure that is not a refusal.
 ///
 /// Only these mean the next call to the same owner is likely to fail or hang
-/// the same way, so a pass stops calling that owner after the first one. A
-/// refusal is an answer, and a local error (a store read, a missing binding)
-/// says nothing about the owner at all.
+/// the same way, so a pass stops calling that owner after the first one. That
+/// includes an owner that lost to its own lock-wait deadline (`lock_busy`):
+/// it decided nothing, and the next call would queue behind the same holder,
+/// so backing off until the next pass also eases the contention [ORB-15088].
+/// A refusal is an answer, and a local error (a store read, a missing
+/// binding) says nothing about the owner at all.
 pub(crate) fn is_owner_transport_failure(error: &OrbitError) -> bool {
     match error {
         OrbitError::RemoteTool { .. } => !is_owner_refusal(error),

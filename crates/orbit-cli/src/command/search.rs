@@ -12,7 +12,8 @@ use crate::command::{CommandOut, Execute, Payload};
     after_help = "Forms:\n  orbit search <query>\n  orbit search reindex"
 )]
 pub struct SearchCommand {
-    /// Free-text lexical query; multiple words need not be adjacent.
+    /// Tasks match non-adjacent terms: all terms first, then partial matches
+    /// by term count and BM25. Frictions match a case-insensitive substring.
     #[arg(value_name = "query")]
     pub query: Option<String>,
 
@@ -29,11 +30,15 @@ pub struct SearchCommand {
     /// Filter by tag (AND semantics). Applies to task and friction results.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',', global = true)]
     pub tags: Vec<String>,
-    /// Include normally-hidden statuses for the queried kind. Task adds
-    /// done/rejected/archived; friction adds triaged/resolved.
+    /// Include every status for the queried kind. Task defaults to
+    /// proposed/backlog/in-progress/review/blocked; --all adds
+    /// done/rejected/archived/someday. Friction defaults to open; --all adds
+    /// triaged/resolved.
     #[arg(long, global = true)]
     pub all: bool,
     /// Explicit per-kind status override, e.g. task:open,friction:open.
+    /// task:open covers proposed/backlog/in-progress/review/blocked.
+    /// Overrides --all for the named kind.
     #[arg(long, value_delimiter = ',', global = true)]
     pub status: Vec<String>,
     /// Search this registered workspace as well. Repeat or comma-separate to
@@ -47,9 +52,6 @@ pub struct SearchCommand {
     /// `--workspaces`.
     #[arg(long)]
     pub all_workspaces: bool,
-    /// Output as JSON.
-    #[arg(long, global = true)]
-    pub json: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
@@ -154,8 +156,8 @@ fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
     if federated {
         columns.push(Column::new("WORKSPACE").fixed());
     }
-    // Lexical hits carry no match detail; an always-empty last column would
-    // only leave a dangling tab on every row of the plain form.
+    // Partial task hits carry term counts. Show MATCH only when a result
+    // has detail to display.
     let has_match = results.iter().any(|hit| !match_text(hit).is_empty());
     columns.extend([Column::new("ID/PATH").path(), Column::new("TITLE/SUMMARY")]);
     if has_match {

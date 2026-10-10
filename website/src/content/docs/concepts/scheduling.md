@@ -1,6 +1,6 @@
 ---
 title: Routines and Auto-Tasks
-description: "How Orbit schedules unattended work: the sweep clock, routines that fire jobs, and auto-tasks that mint recurring chores as tasks."
+description: "How Orbit schedules unattended work: the host scheduler clock, routines that fire jobs, and auto-tasks that mint recurring chores as tasks."
 sidebar:
   order: 4
 ---
@@ -11,7 +11,7 @@ same path:
 
 <ol class="orbit-pipeline" aria-label="How a scheduled fire flows through Orbit">
   <li>
-    <span class="orbit-pipeline-step">Sweep clock</span>
+    <span class="orbit-pipeline-step">Scheduler clock</span>
     <span class="orbit-pipeline-note">The OS wakes <code>orbit clock tick</code></span>
   </li>
   <li>
@@ -34,11 +34,11 @@ same path:
 
 :::tip[Let your agent set it up]
 Ask your agent to **schedule a weekly QA sweep** or **ship the backlog every
-20 minutes**. The `orbit-setup` skill installs the clock, then enables the
+30 minutes**. The `orbit-setup` skill installs the clock, then enables the
 routine or auto-task you asked for. Everything ships disabled until then.
 :::
 
-## The sweep clock
+## The host scheduler clock
 
 `orbit clock tick` is the scheduler: one pass that fires whatever is due,
 records it, and exits. The operating system runs it once a minute, through a
@@ -61,7 +61,7 @@ schemaVersion: 1
 name: ship_sweep_myrepo
 enabled: true
 trigger:
-  cron: "*/20 * * * *"
+  cron: "*/30 * * * *"
   missed_run: skip
 target: job:workspace_ship_pipeline
 policy:
@@ -72,7 +72,10 @@ policy:
 The target is always a catalog job, so a routine can do exactly what a
 reviewed job can. Instead of `cron`, a routine can watch the backlog: the
 seeded task-pilot routine uses a `state` trigger that prepares new or edited
-tasks once they settle, and fires nothing while the backlog is unchanged.
+tasks once they settle, and fires nothing while the backlog is unchanged. If
+the branch moves under a task's context files while its pilot runs, that task
+is prepared again at the new head without using a retry; the rest of the batch
+still applies.
 
 - **Runs on every owner machine.** A cron routine runs on each machine that
   has the checkout registered and its clock on. To keep it off one machine,

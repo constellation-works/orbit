@@ -10,22 +10,23 @@
 //!
 //! This test binary is not a worker-capable Orbit entry point, so every leaf
 //! launch is refused (STD-03 §R19) and no worker process starts. A claimed leaf
-//! therefore ends at its launch and its failure settlement goes to the owner in
-//! the pass that bound it: the systemic executor fault the breaker exists for.
+//! therefore is cancelled and released with a host-suppressing environment
+//! failure. Tests of launched work explicitly advance the fixture's leaf.
 //!
-//! Host resource pressure is injected through the follower's resource probe.
+//! Both runtimes sample a pinned calm host; a test injects resource pressure
+//! through the follower's own probe.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
-use std::collections::BTreeSet;
-use std::io::Read;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::routines::{
     DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
@@ -33,15 +34,17 @@ use orbit_core::application::routines::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
-    ClaimMutation, JobRunStepParams, JobRunStoreBackend, LocalPullAdmission, LocalPullMutation,
-    LocalPullPhase, SettlementRefusal,
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
+    JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::policy::Role;
+use orbit_types::task::TaskArtifact;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{
-    HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition, TaskHandoff,
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
+    HandoffValidationLog, TaskHandoff,
 };
 use orbit_types::workflow::{
     ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey,
@@ -52,36 +55,61 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod admission;
+mod allow_crew;
+#[cfg(unix)]
+mod auth_recovery;
+mod before_landing;
+mod before_pr;
 mod cancel;
+mod candidate_carry;
+#[cfg(unix)]
+mod claimed_host_evidence;
+mod claimed_owed_evidence;
+mod claimed_owner;
+mod claimed_review;
+mod desktop_completion;
+mod failure_class;
+#[cfg(unix)]
+mod forge_hold;
+mod landing_attribution;
+mod landing_repair;
+mod no_diff;
+mod ordering;
+mod pilot;
+mod provider_limit;
 mod recovery;
 mod settlement;
+mod single_pass;
+mod waiting;
 mod worktree_gc;
 
 const OWNER: &str = "hm_owner";
 const FOLLOWER: &str = "hm_follower";
 const LEAF_JOB: &str = "task_claimed_pr_pipeline";
-
-/// How long one isolated test may run before it is killed and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(180);
+const LOCAL_LEAF_JOB: &str = "task_claimed_local_pipeline";
 
 /// Run `test` (declared in `module_path`, the caller's `module_path!()`)
 /// alone in a child of this binary with inherited Orbit authority
-/// cleared and a disposable `HOME`; `true` inside that child. The parent
-/// waits in-process up to [`CHILD_DEADLINE`] and reaps the child on any exit.
+/// cleared and a disposable `HOME`; `true` inside that child. `HOME/bin`
+/// leads the child's `PATH`, so a test can stand in for a provider CLI. The
+/// parent waits under the shared child-test hang guard and reaps the child on
+/// any exit.
 fn isolated(module_path: &str, test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_DISTRIBUTED_DRAIN_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
     let home = TempDir::new().unwrap();
-    let stdout_path = home.path().join("stdout.log");
-    let stderr_path = home.path().join("stderr.log");
     // libtest names a test by its module path below the crate root; the
     // caller's `module_path!()` carries the concern module the test lives in.
     let qualified = format!(
         "{}::{test}",
         module_path.split_once("::").expect("test module").1
     );
+    let path = std::env::join_paths(std::iter::once(home.path().join("bin")).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -89,51 +117,19 @@ fn isolated(module_path: &str, test: &str) -> bool {
     command
         .args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
         .env(MARKER, test)
+        .env("PATH", path)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout_path).unwrap())
-        .stderr(std::fs::File::create(&stderr_path).unwrap());
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break Some(status);
-        }
-        if started.elapsed() > CHILD_DEADLINE {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    drop(child);
-    let read = |path: &Path| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .unwrap()
-            .read_to_string(&mut text)
-            .unwrap();
-        text
-    };
-    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
-    let status = status
-        .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    assert!(status.success(), "`{test}` failed:\n{stdout}\n{stderr}");
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the child must run `{test}` itself:\n{stdout}"
+        .current_dir(home.path());
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        &qualified,
+        output.status,
+        &output.stdout,
+        &output.stderr,
     );
     false
-}
-
-/// Kills and reaps the isolated child however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
 }
 
 /// The follower's route to the owner. Every call reaches the owner's tool
@@ -141,6 +137,8 @@ impl Drop for ChildGuard {
 /// dropped after the owner committed it.
 struct Wire {
     owner: OrbitRuntime,
+    /// The machine whose trusted SSH session every call arrives under.
+    caller: String,
     calls: Mutex<Vec<(String, Value)>>,
     lose: Mutex<Vec<&'static str>>,
     /// The selector of every task read, in order.
@@ -153,13 +151,96 @@ struct Wire {
     unreachable: Mutex<bool>,
     /// An older owner fixture: revision 1 rejects the new crews field.
     protocol: Mutex<Option<u32>>,
+    fingerprint: Mutex<Option<Value>>,
     /// When set, the owner refuses every settlement with this policy denial
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
     refuse_settle: Mutex<Option<String>>,
+    /// When set, the owner accepts a handoff into its claim journal, with
+    /// the candidate the handoff names standing in for its provider read.
+    accept_handoffs: Mutex<bool>,
+    /// When set, every call arrives as the owner's own local session, as an
+    /// owner-local drain's does, and a settlement reaches the owner's real
+    /// observation of its own checkout.
+    local: Mutex<bool>,
+    /// Hosts other than the owner the host file registers, by task prefix:
+    /// their machine id and the runtime that answers for them.
+    prefix_hosts: Mutex<BTreeMap<String, (String, OrbitRuntime)>>,
+    /// The id of every task read routed by prefix to a non-owner host.
+    by_id_reads: Mutex<Vec<String>>,
 }
 
 impl Wire {
+    /// The owner's acceptance of a follower's handoff, as its settle tool
+    /// records it once the provider confirmed the named candidate. The
+    /// owner captures its own required commands; when it has any, the leaf
+    /// first published a passing log of each for its exact candidate.
+    fn accept(&self, mut handoff: TaskHandoff) -> Result<(), OrbitError> {
+        let required_commands = self.owner.workflow_required_validation_commands().to_vec();
+        let context = ClaimInvocation::trusted_worker(
+            handoff.task_id.clone(),
+            handoff.claim_id.clone(),
+            handoff.machine_id.clone(),
+            Some(ClaimRun {
+                machine_id: handoff.machine_id.clone(),
+                run_id: handoff.run_id.clone(),
+            }),
+        );
+        if !required_commands.is_empty() {
+            let artifacts: Vec<TaskArtifact> = required_commands
+                .iter()
+                .enumerate()
+                .map(|(index, command)| {
+                    let log = HandoffValidationLog {
+                        schema_version: 1,
+                        workspace_id: handoff.workspace_id.clone(),
+                        task_id: handoff.task_id.clone(),
+                        claim_id: handoff.claim_id.clone(),
+                        machine_id: handoff.machine_id.clone(),
+                        run_id: handoff.run_id.clone(),
+                        candidate: handoff.candidate.clone(),
+                        tested_head: handoff.candidate.candidate.commit.clone(),
+                        command: command.clone(),
+                        exit_code: 0,
+                        output: format!("{command} passed"),
+                    };
+                    TaskArtifact {
+                        path: format!("validation/{}/{index}.json", handoff.claim_id),
+                        content: serde_json::to_vec(&log).unwrap(),
+                        media_type: "application/json".into(),
+                        created_by: None,
+                    }
+                })
+                .collect();
+            handoff.validation = artifacts
+                .iter()
+                .map(|artifact| HandoffArtifactRef {
+                    path: artifact.path.clone(),
+                    sha256: sha256_hex(&artifact.content),
+                })
+                .collect();
+            self.owner.mutate_execution_claim(
+                Some(&context),
+                "validation-logs",
+                &ClaimMutation::Evidence(ClaimEvidence {
+                    artifacts,
+                    ..Default::default()
+                }),
+            )?;
+        }
+        let observation = HandoffObservation {
+            footprint_widening: vec![],
+            candidate: handoff.candidate.clone(),
+            required_commands,
+            owner_completion_authority: None,
+            review: None,
+        };
+        let request = format!("handoff:{}", handoff.claim_id);
+        self.owner
+            .accept_task_handoff(&context, &request, handoff, observation)?;
+        Ok(())
+    }
+
     /// Drop the owner's next reply to `tool`.
     fn lose_next_reply(&self, tool: &'static str) {
         self.lose.lock().unwrap().push(tool);
@@ -198,15 +279,27 @@ impl DrainOwnerTransport for Wire {
             });
         }
         // The owner verifies a handoff against its published pull request,
-        // which no test here has; the wire answers as an owner that did.
-        if name == "orbit.drain.claim.settle" && input["settlement"].get("AcceptHandoff").is_some()
+        // which no test here has; the wire answers as an owner that did, and
+        // records the acceptance when the test asks for it.
+        let local = *self.local.lock().unwrap();
+        if name == "orbit.drain.claim.settle"
+            && !local
+            && let Some(handoff) = input["settlement"].get("AcceptHandoff")
+            && handoff["candidate"]["delivery"]["kind"] != "no_diff"
         {
+            if *self.accept_handoffs.lock().unwrap() {
+                self.accept(serde_json::from_value(handoff.clone()).unwrap())?;
+            }
             return Ok(json!({"phase": "handed_off"}));
         }
         let session = ToolSessionContext {
-            caller_machine_id: Some(FOLLOWER.to_string()),
+            caller_machine_id: Some(self.caller.clone()),
             process_machine_id: Some(OWNER.to_string()),
-            transport: Some(McpTransport::SshMcp),
+            transport: Some(if local {
+                McpTransport::Local
+            } else {
+                McpTransport::SshMcp
+            }),
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..ToolSessionContext::default()
         };
@@ -226,6 +319,11 @@ impl DrainOwnerTransport for Wire {
             answer["admits"] = json!(false);
             answer["refusal"] = json!("version_mismatch");
             answer["diagnostics"] = json!(["older owner requires protocol revision 1"]);
+        }
+        if name == "orbit.drain.probe"
+            && let Some(fingerprint) = self.fingerprint.lock().unwrap().clone()
+        {
+            answer["protocol_fingerprint"] = fingerprint;
         }
         let mut lose = self.lose.lock().unwrap();
         if let Some(at) = lose.iter().position(|tool| *tool == name) {
@@ -253,6 +351,31 @@ impl DrainOwnerTransport for Wire {
         self.owner.run_tool("orbit.task.show", input)
     }
 
+    fn task_prefix_host(&self, prefix: &str) -> Result<Option<String>, OrbitError> {
+        if let Some((machine, _)) = self.prefix_hosts.lock().unwrap().get(prefix) {
+            return Ok(Some(machine.clone()));
+        }
+        let owner_prefix = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+            &orbit_store::maintenance::task_registry::task_registry_path(&self.owner.global_root()),
+        )?
+        .local_task_prefix()
+        .unwrap_or_else(|_| "ORB".to_string());
+        Ok((prefix == owner_prefix).then(|| OWNER.to_string()))
+    }
+
+    fn show_task_by_id(&self, input: Value) -> Result<Value, OrbitError> {
+        let id = input["id"].as_str().unwrap_or_default().to_string();
+        self.by_id_reads.lock().unwrap().push(id.clone());
+        let prefix = orbit_types::task::task_id_prefix(&id).unwrap_or_default();
+        let host = self.prefix_hosts.lock().unwrap().get(prefix).cloned();
+        match host {
+            Some((_, runtime)) => runtime.run_tool("orbit.task.show", input),
+            None => Err(OrbitError::UnreachableDestination(format!(
+                "no host answers for prefix {prefix}"
+            ))),
+        }
+    }
+
     fn worker_coordinator(&self) -> Arc<dyn OwnerCoordinator> {
         Arc::new(NoWorkerRoute)
     }
@@ -270,8 +393,9 @@ impl OwnerCoordinator for NoWorkerRoute {
 }
 
 struct Pair {
-    _root: TempDir,
+    _root: Arc<TempDir>,
     wire: Arc<Wire>,
+    owner_repo: PathBuf,
     follower: OrbitRuntime,
     follower_repo: PathBuf,
     follower_jobs: Arc<dyn JobRunStoreBackend>,
@@ -283,11 +407,31 @@ fn open_runtime(root: &Path, machine: &str) -> (OrbitRuntime, PathBuf) {
     let global = root.join(machine).join("global");
     let repo = root.join(machine).join("repo");
     std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    let git_boundary = std::process::Command::new("git")
+        .args(["init", "--bare", "--initial-branch=main", "-q"])
+        .arg(repo.join(".git"))
+        .output()
+        .unwrap();
+    assert!(
+        git_boundary.status.success(),
+        "initialize fixture Git discovery boundary: {}",
+        String::from_utf8_lossy(&git_boundary.stderr)
+    );
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .expect("runtime")
         .with_automation_machine_identity(Some(machine.to_string()));
-    (runtime, repo)
+    (calm_host(runtime), repo)
+}
+
+/// `runtime` admitting against a pinned calm resource sample, never the live
+/// host: a loaded test host would otherwise throttle every admission
+/// (ORB-14659). Every fixture runtime, including one reopened over the same
+/// roots, goes through here; a test of throttling installs its own probe and
+/// drives the pressure.
+fn calm_host(runtime: OrbitRuntime) -> OrbitRuntime {
+    runtime.with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
 }
 
 /// An approved owner task scoped to `file`, ready for admission, on `crew`
@@ -310,14 +454,22 @@ fn backlog_task(owner: &OrbitRuntime, repo: &Path, file: &str, crew: Option<&str
     }
     let task = owner.run_tool("orbit.task.add", input).expect("add task");
     let id = task["id"].as_str().unwrap().to_string();
-    for update in [
-        json!({"id": id, "plan": "1. Change it.", "model": "codex"}),
-        json!({"id": id, "status": "backlog", "model": "codex"}),
-    ] {
-        owner
-            .run_tool("orbit.task.update", update)
-            .expect("approve");
-    }
+    owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": id, "plan": "1. Change it.", "model": "codex"}),
+        )
+        .expect("plan");
+    owner
+        .update_task_as_human(
+            &id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("human approval");
     id
 }
 
@@ -333,16 +485,63 @@ impl Pair {
     /// routed to it. The follower can launch every provider it configures,
     /// so its window preflight runs every crew until a test says otherwise.
     fn with_crews(crews: &[Option<&str>]) -> Self {
+        Self::with_owner_config("", crews)
+    }
+
+    /// [`Self::with_crews`] with the owner opened over `config` as its
+    /// workspace `config.toml`.
+    fn with_owner_config(config: &str, crews: &[Option<&str>]) -> Self {
+        Self::with_configs(config, "", crews)
+    }
+
+    /// [`Self::with_owner_config`] with `follower_config` on the follower.
+    /// An empty follower config leaves the built-in crews. The follower's
+    /// window groups providers from its own registry, so an alias such as
+    /// `anthropic` has to be configured there to be excluded with `claude`.
+    fn with_configs(owner_config: &str, follower_config: &str, crews: &[Option<&str>]) -> Self {
         let root = TempDir::new().unwrap();
+        let orbit = root.path().join(OWNER).join("repo/.orbit");
+        std::fs::create_dir_all(&orbit).unwrap();
+        std::fs::write(orbit.join("config.toml"), owner_config).unwrap();
+        if !follower_config.is_empty() {
+            let follower_orbit = root.path().join(FOLLOWER).join("repo/.orbit");
+            std::fs::create_dir_all(&follower_orbit).unwrap();
+            std::fs::write(follower_orbit.join("config.toml"), follower_config).unwrap();
+        }
         let (owner, owner_repo) = open_runtime(root.path(), OWNER);
         let tasks = crews
             .iter()
             .enumerate()
             .map(|(n, crew)| backlog_task(&owner, &owner_repo, &format!("src/f{n}.rs"), *crew))
             .collect();
+        Self::follower_of(Arc::new(root), owner, owner_repo, tasks, FOLLOWER)
+    }
+
+    /// A second follower host of this pair's owner: its own runtime,
+    /// repository and object store, reaching the owner as `machine`
+    /// [ORB-14338].
+    fn another_host(&self, machine: &str) -> Self {
+        Self::follower_of(
+            self._root.clone(),
+            self.wire.owner.clone(),
+            self.owner_repo.clone(),
+            self.tasks.clone(),
+            machine,
+        )
+    }
+
+    /// A replica follower `machine` routed to `owner`.
+    fn follower_of(
+        root: Arc<TempDir>,
+        owner: OrbitRuntime,
+        owner_repo: PathBuf,
+        tasks: Vec<String>,
+        machine: &str,
+    ) -> Self {
         let workspace_id = owner.workspace_id().unwrap();
         let wire = Arc::new(Wire {
             owner,
+            caller: machine.to_string(),
             calls: Mutex::default(),
             lose: Mutex::default(),
             task_reads: Mutex::default(),
@@ -350,9 +549,14 @@ impl Pair {
             task_reads_remote_error: Mutex::default(),
             unreachable: Mutex::default(),
             protocol: Mutex::default(),
+            fingerprint: Mutex::default(),
             refuse_settle: Mutex::default(),
+            accept_handoffs: Mutex::default(),
+            local: Mutex::default(),
+            prefix_hosts: Mutex::default(),
+            by_id_reads: Mutex::default(),
         });
-        let (follower, follower_repo) = open_runtime(root.path(), FOLLOWER);
+        let (follower, follower_repo) = open_runtime(root.path(), machine);
         let follower = follower
             .with_coordination_write_owner(Some(OWNER.into()))
             .with_drain_owner_transport(wire.clone());
@@ -360,18 +564,11 @@ impl Pair {
             follower.sqlite_store().unwrap(),
             follower.workspace_id().unwrap(),
         );
-        let providers = follower
-            .configured_crew_registry_projection()
-            .crews
-            .into_iter()
-            .map(|crew| crew.provider)
-            .collect::<BTreeSet<_>>();
-        for provider in providers {
-            follower_cli(&follower, &provider, "sh");
-        }
+        launchable_providers(&follower);
         Self {
             _root: root,
             wire,
+            owner_repo,
             follower,
             follower_repo,
             follower_jobs,
@@ -379,7 +576,7 @@ impl Pair {
                 "owner_machine_id": OWNER,
                 "owner_workspace_id": workspace_id,
                 "selector": format!("{OWNER}/{workspace_id}"),
-                "execution_machine_id": FOLLOWER,
+                "execution_machine_id": machine,
             }),
             tasks,
         }
@@ -435,25 +632,31 @@ impl Pair {
     }
 
     /// One drain iteration with its window open and one leaf slot. A pass
-    /// never fails the drain; it reports what stopped it.
+    /// reports transient errors; typed protocol skew fails the drain.
     fn pass(&self, drain: &str) -> Value {
         self.pass_with(drain, 1)
     }
 
     /// A pass with `slots` leaf slots.
     fn pass_with(&self, drain: &str, slots: u64) -> Value {
+        self.pass_over(drain, json!({"max_active_leaf_runs": slots}))
+    }
+
+    /// A pass whose input is the open-window, one-slot default with
+    /// `overrides` (say `for_seconds` and `window_expired`, as the job
+    /// forwards them) laid over it.
+    fn pass_over(&self, drain: &str, overrides: Value) -> Value {
+        let mut input = json!({
+            "run_id": drain,
+            "destination": self.destination,
+            "window_expired": false,
+            "max_active_leaf_runs": 1,
+        });
+        for (key, value) in overrides.as_object().expect("override object") {
+            input[key] = value.clone();
+        }
         self.follower
-            .run_deterministic(
-                "pull_refill",
-                &json!({}),
-                &json!({
-                    "run_id": drain,
-                    "destination": self.destination,
-                    "window_expired": false,
-                    "max_active_leaf_runs": slots,
-                }),
-                ToolContext::default(),
-            )
+            .run_deterministic("pull_refill", &json!({}), &input, ToolContext::default())
             .expect("a pass reports its errors instead of failing the drain")
     }
 
@@ -479,6 +682,25 @@ impl Pair {
             .expect("drain state");
         self.follower_jobs
             .mark_job_run_running(&run.run_id, Utc::now(), worker)
+            .expect("drain running");
+        run.run_id
+    }
+
+    /// A running drain submitted with `input` as its run input, the way
+    /// `orbit run auto --pull` persists the operator's options.
+    fn run_drain_with_input(&self, input: Value) -> String {
+        let run = self
+            .follower_jobs
+            .insert_job_run("workspace_pull_pipeline", 1, Utc::now(), Some(input), None)
+            .expect("drain run");
+        self.follower
+            .write_run_state(
+                &run.run_id,
+                &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
+            )
+            .expect("drain state");
+        self.follower_jobs
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
             .expect("drain running");
         run.run_id
     }
@@ -596,17 +818,32 @@ impl Pair {
         self.owner_task(id)["status"].as_str().unwrap().to_string()
     }
 
+    /// Every claimed leaf run, a follower's PR leaves and an owner-local
+    /// drain's local ones alike.
     fn leaf_runs(&self) -> Vec<String> {
-        self.follower_jobs
-            .list_job_runs(LEAF_JOB)
-            .expect("leaf runs")
+        [LEAF_JOB, LOCAL_LEAF_JOB]
             .into_iter()
+            .flat_map(|job| self.follower_jobs.list_job_runs(job).expect("leaf runs"))
             .map(|run| run.run_id)
             .collect()
     }
 }
 
-/// Register `provider`'s executor on `runtime` as launching `command`.
+/// Give each configured crew provider a local shell stand-in so fixture
+/// preflight does not depend on provider CLIs installed on the host.
+fn launchable_providers(runtime: &OrbitRuntime) {
+    let providers = runtime
+        .configured_crew_registry_projection()
+        .crews
+        .into_iter()
+        .map(|crew| crew.provider)
+        .collect::<BTreeSet<_>>();
+    for provider in providers {
+        follower_cli(runtime, &provider, "sh");
+    }
+}
+
+/// Point `provider` at `command`, as an operator's executor definition does.
 fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
     runtime
         .upsert_executor_def(&ExecutorDef {
@@ -618,6 +855,7 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             model_pair_override: None,
             model_flag: None,
             timeout_seconds: None,
+            auth_probe: None,
             env: Default::default(),
             sandbox: None,
             allow_fallback: false,
@@ -627,8 +865,8 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
         .expect("executor");
 }
 
-/// A stand-in leaf worker: on Unix it leads its own process group, and is
-/// reaped the moment it exits so a stop can see it gone.
+/// A stand-in worker, reaped the moment it exits so a stop can see it gone.
+/// On Unix it leads its own group unless a test supplies a shared group.
 struct Worker {
     pid: u32,
     exited: std::sync::mpsc::Receiver<()>,
@@ -643,6 +881,19 @@ impl Worker {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
+        Self::spawn_command(command)
+    }
+
+    #[cfg(unix)]
+    fn spawn_in_group(pgid: libc::pid_t) -> Self {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = std::process::Command::new("sleep");
+        command.arg("600").process_group(pgid);
+        Self::spawn_command(command)
+    }
+
+    fn spawn_command(mut command: std::process::Command) -> Self {
         let mut child = command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -686,6 +937,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         .as_ref()
         .and_then(|receipt| receipt.claim.as_ref())
         .expect("claim");
+    let ship = &record.request.ship;
     TaskHandoff {
         schema_version: 1,
         workspace_id: record.destination.owner_workspace_id.clone(),
@@ -696,8 +948,8 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         candidate: HandoffCandidate {
             repository: "owner/repository".into(),
             source_branch: format!("orbit/{}", claim.task_id),
-            base_branch: "main".into(),
-            landing_branch: "main".into(),
+            base_branch: ship.base_branch.clone(),
+            landing_branch: ship.landing_branch.clone(),
             candidate: SourceRevision {
                 commit: "a".repeat(40),
                 tree: "b".repeat(40),
@@ -746,6 +998,37 @@ fn set_run_state(owner: &OrbitRuntime, run_id: &str, state: &str) {
             Ok(())
         })
         .unwrap();
+}
+
+/// Publish the current branch to a bare repo that stands in for `origin`.
+///
+/// The origin URL stays the configured GitHub address so delivery identity
+/// does not change. `url.<bare>.insteadOf` sends fetch and push to the bare
+/// repo. Observation then has to fetch; a commit that exists only in this
+/// worktree is invisible.
+fn publish_origin(repo: &Path) {
+    let url = git(repo, &["config", "--get", "remote.origin.url"]);
+    let url = url.trim();
+    assert!(!url.is_empty(), "origin url");
+    let bare = repo.with_file_name("origin.git");
+    if !bare.join("HEAD").exists() {
+        git(
+            bare.parent().unwrap(),
+            &["init", "--bare", "-q", bare.to_str().unwrap()],
+        );
+    }
+    let branch = git(repo, &["branch", "--show-current"]);
+    let branch = branch.trim();
+    git(
+        &bare,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+    );
+    let key = format!("url.{}.insteadOf", bare.display());
+    git(repo, &["config", &key, url]);
+    git(
+        repo,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+    );
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {

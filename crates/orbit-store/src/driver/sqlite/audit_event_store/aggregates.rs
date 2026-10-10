@@ -107,24 +107,7 @@ impl Store {
     ) -> Result<Vec<AuditToolCallCountsByRole>, OrbitError> {
         let conn = self.read()?;
 
-        let sql = if since.is_some() {
-            "SELECT role, COUNT(*), \
-             COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-             FROM audit_events \
-             WHERE command = 'tool' \
-               AND subcommand IN ('run', 'run-mcp') \
-               AND tool_name IS NOT NULL \
-               AND timestamp >= ?1 \
-             GROUP BY role ORDER BY COUNT(*) DESC, role ASC"
-        } else {
-            "SELECT role, COUNT(*), \
-             COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-             FROM audit_events \
-             WHERE command = 'tool' \
-               AND subcommand IN ('run', 'run-mcp') \
-               AND tool_name IS NOT NULL \
-             GROUP BY role ORDER BY COUNT(*) DESC, role ASC"
-        };
+        let sql = tool_call_counts_by_role_sql(since.is_some());
 
         let mut stmt = conn
             .prepare(sql)
@@ -256,36 +239,7 @@ impl Store {
     ) -> Result<Vec<AuditToolCallCountsBySurfaceAndRole>, OrbitError> {
         let conn = self.read()?;
 
-        // SUBSTR(tool_name, 7) strips the literal "orbit." prefix; the
-        // appended "." in the inner SUBSTR ensures INSTR finds a delimiter
-        // even for names with no third segment (e.g. "orbit.task" → surface
-        // "task"). The outer LIKE filter discards anything that does not
-        // start with "orbit." entirely.
-        let extract = "SUBSTR(tool_name, 7, INSTR(SUBSTR(tool_name, 7) || '.', '.') - 1)";
-        let sql = if since.is_some() {
-            format!(
-                "SELECT {extract} AS surface, role, COUNT(*), \
-                 COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-                 FROM audit_events \
-                 WHERE command = 'tool' \
-                   AND subcommand IN ('run', 'run-mcp') \
-                   AND tool_name LIKE 'orbit.%' \
-                   AND timestamp >= ?1 \
-                 GROUP BY surface, role \
-                 ORDER BY surface ASC, COUNT(*) DESC, role ASC"
-            )
-        } else {
-            format!(
-                "SELECT {extract} AS surface, role, COUNT(*), \
-                 COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
-                 FROM audit_events \
-                 WHERE command = 'tool' \
-                   AND subcommand IN ('run', 'run-mcp') \
-                   AND tool_name LIKE 'orbit.%' \
-                 GROUP BY surface, role \
-                 ORDER BY surface ASC, COUNT(*) DESC, role ASC"
-            )
-        };
+        let sql = tool_call_counts_by_surface_and_role_sql(since.is_some());
 
         let mut stmt = conn
             .prepare(&sql)
@@ -332,19 +286,7 @@ impl Store {
     ) -> Result<Vec<AuditTopToolCall>, OrbitError> {
         let conn = self.read()?;
 
-        let base = "SELECT tool_name, role, COUNT(*) \
-                    FROM audit_events \
-                    WHERE command = 'tool' \
-                      AND subcommand IN ('run', 'run-mcp') \
-                      AND tool_name LIKE 'orbit.%'";
-        let order = "GROUP BY tool_name, role \
-                     ORDER BY COUNT(*) DESC, tool_name ASC, role ASC";
-        let sql = match (since.is_some(), limit > 0) {
-            (true, true) => format!("{base} AND timestamp >= ?1 {order} LIMIT ?2"),
-            (true, false) => format!("{base} AND timestamp >= ?1 {order}"),
-            (false, true) => format!("{base} {order} LIMIT ?1"),
-            (false, false) => format!("{base} {order}"),
-        };
+        let sql = top_tool_calls_sql(since.is_some(), limit > 0);
 
         let mut stmt = conn
             .prepare(&sql)
@@ -533,3 +475,77 @@ impl Store {
             .map_err(|e| OrbitError::Store(e.to_string()))
     }
 }
+
+fn tool_call_counts_by_role_sql(windowed: bool) -> &'static str {
+    if windowed {
+        "SELECT role, COUNT(*), \
+             COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
+             FROM audit_events \
+             WHERE command = 'tool' \
+               AND subcommand IN ('run', 'run-mcp') \
+               AND tool_name IS NOT NULL \
+               AND timestamp >= ?1 \
+             GROUP BY role ORDER BY COUNT(*) DESC, role ASC"
+    } else {
+        "SELECT role, COUNT(*), \
+             COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
+             FROM audit_events \
+             WHERE command = 'tool' \
+               AND subcommand IN ('run', 'run-mcp') \
+               AND tool_name IS NOT NULL \
+             GROUP BY role ORDER BY COUNT(*) DESC, role ASC"
+    }
+}
+
+fn tool_call_counts_by_surface_and_role_sql(windowed: bool) -> String {
+    // SUBSTR(tool_name, 7) strips the literal "orbit." prefix; the
+    // appended "." in the inner SUBSTR ensures INSTR finds a delimiter
+    // even for names with no third segment (e.g. "orbit.task" → surface
+    // "task"). The outer LIKE filter discards anything that does not
+    // start with "orbit." entirely.
+    let extract = "SUBSTR(tool_name, 7, INSTR(SUBSTR(tool_name, 7) || '.', '.') - 1)";
+    if windowed {
+        format!(
+            "SELECT {extract} AS surface, role, COUNT(*), \
+                 COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
+                 FROM audit_events \
+                 WHERE command = 'tool' \
+                   AND subcommand IN ('run', 'run-mcp') \
+                   AND tool_name LIKE 'orbit.%' \
+                   AND timestamp >= ?1 \
+                 GROUP BY surface, role \
+                 ORDER BY surface ASC, COUNT(*) DESC, role ASC"
+        )
+    } else {
+        format!(
+            "SELECT {extract} AS surface, role, COUNT(*), \
+                 COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) \
+                 FROM audit_events \
+                 WHERE command = 'tool' \
+                   AND subcommand IN ('run', 'run-mcp') \
+                   AND tool_name LIKE 'orbit.%' \
+                 GROUP BY surface, role \
+                 ORDER BY surface ASC, COUNT(*) DESC, role ASC"
+        )
+    }
+}
+
+fn top_tool_calls_sql(windowed: bool, limited: bool) -> String {
+    let base = "SELECT tool_name, role, COUNT(*) \
+                    FROM audit_events \
+                    WHERE command = 'tool' \
+                      AND subcommand IN ('run', 'run-mcp') \
+                      AND tool_name LIKE 'orbit.%'";
+    let order = "GROUP BY tool_name, role \
+                     ORDER BY COUNT(*) DESC, tool_name ASC, role ASC";
+    match (windowed, limited) {
+        (true, true) => format!("{base} AND timestamp >= ?1 {order} LIMIT ?2"),
+        (true, false) => format!("{base} AND timestamp >= ?1 {order}"),
+        (false, true) => format!("{base} {order} LIMIT ?1"),
+        (false, false) => format!("{base} {order}"),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/aggregates.rs"]
+mod tests;

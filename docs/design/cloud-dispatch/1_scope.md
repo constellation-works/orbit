@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-09-23
+last_validated: 2026-10-08
 ---
 
 # Scope: Cloud dispatch
@@ -20,7 +20,7 @@ everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vc
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
 (`cli_runner/orchestrator/dispatch.rs`, `run_cli_backend`). Throughput is bounded by the host:
-about ten concurrent agents on either the Mac or `dk-server-1` before CPU, ports and
+about ten concurrent agents on either the Mac or a Linux server before CPU, ports and
 worktrees contend, and larger codebases lower that ceiling. Claude Code cloud sessions run
 in Anthropic-managed VMs, keep running when the host sleeps, and bill against subscription
 usage and then usage credits. Orbit has no way to use them.
@@ -94,7 +94,7 @@ Properties the design depends on:
   scope the follow-up message needs. Its refresh grant is capped at 30 days. On the Mac the
   desktop app has repeatedly revoked the CLI's login (probe: `claude auth status` →
   `loggedIn: false`, then `--cloud` fails with `401`). Dispatch therefore runs from
-  `dk-server-1`. `cloud_admit` runs `claude auth status` and blocks the dispatch with a
+  a Linux host. `cloud_admit` runs `claude auth status` and blocks the dispatch with a
   clear "run `claude auth login`" message instead of firing into a `401`.
 - **The output is an interactive UI, not a contract.** The three lines are stable today, but
   the format isn't documented. The parser is strict (§4.1) and fails closed, and a fixture
@@ -173,7 +173,7 @@ Orbit renders one payload per dispatch from a template shipped as an asset
 delivery rules from Appendix A, since there is no saved prompt to hold them. With
 `dispatch = "routine"`, those rules live in the routine's saved prompt instead
 (`assets/cloud/routine_prompt.md`), and doctor compares its hash against the value recorded
-when Daniel last pasted it.
+when the operator last pasted it.
 
 The payload carries:
 
@@ -355,7 +355,7 @@ requires.
 
 ### 5.1 Review and merge
 
-**Phase 1: a human reviews.** The task stops at `review` with the PR ready. Daniel reviews the
+**Phase 1: a human reviews.** The task stops at `review` with the PR ready. The maintainer reviews the
 PR on GitHub, then either:
 
 - tells a Claude session to merge it. The session runs Orbit's merge path, never
@@ -382,7 +382,7 @@ delivery it runs after adoption, against the fetched worktree at the pinned head
 ## 6. Self-hosted adapter (later, plan-gated)
 
 `claude -p "<payload>" --environment ccpool_… --ref agent-main --output-format json` creates
-a session on a runner Daniel operates, for example on `dk-server-1`. It prints
+a session on an operator-managed runner, for example on a Linux host. It prints
 `{session_id}`, and the payload is a real prompt rather than untrusted fire text. It would
 restore LAN access to Orbit MCP and host tooling while keeping the claude.ai session
 surface.
@@ -475,7 +475,7 @@ two-variant action; §4.2 onward is unchanged.
    marker line in the body is needed.
 2. **Review:** a human reviews first (Phase 1, `merge = "on-request"`). The practical target
    for cloud runs is merging without a hand in the loop: auto-merge after the Phase 2 review
-   gate, or Daniel telling a Claude session to merge (§5.1).
+   gate, or an operator telling a Claude session to merge (§5.1).
 3. **Drain concurrency:** cloud runs don't count against it. They get their own leaf job and
    are counted only against `[cloud].max_in_flight` (§4.4).
 4. **First repository:** `constellation-works/orbit`, base `agent-main`.
@@ -534,7 +534,7 @@ gates: make ci-lint && make ci-fast
 
 ## Task References
 
-None yet. Phase tasks will be filed in `ws_orbit` on `dk-server-1` once the open questions
+None yet. Phase tasks will be filed in `ws_orbit` on a Linux host once the open questions
 are answered.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

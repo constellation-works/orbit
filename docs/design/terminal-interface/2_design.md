@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -60,11 +60,11 @@ Both backends are now told, never asked: `Table::render_at` calls `enforce_styli
 
 ## 6. Per-Command Structured Output
 
-Legacy `--json`/`--ops` flags remain declared independently where they are accepted (83 `pub json: bool` fields under `crates/orbit-cli/src/command/`), but main now reads those flags as a compatibility mode input. Commands build a `Payload` and the shared renderer chooses the human, JSON, or NDJSON projection.
+`--json` is declared once in `main.rs` and installed throughout the assembled command tree, including plugin-derived groups. It selects the sink's compatibility rung and preserves historical always-pretty JSON bytes. Command-local `--ops` flags retain their record-shape meaning and also select that rung. A plugin-derived `--json` tool-input flag keeps its own meaning; callers select output JSON before the verb or through `--format json` on that leaf. Commands build a `Payload` and the shared renderer chooses the human, JSON, or NDJSON projection.
 
-The shared path keeps the JSON document and human view together. `orbit tool list` still derives a human `REQUIRED INPUT` summary from the parameter data, but it is rendered from the same collected records as the JSON document. The global `--format json|ndjson` modes are available alongside the legacy booleans; NDJSON emits one complete record per line. The remaining compatibility exceptions are documented in §§7 and 9.
+The shared path keeps the JSON document and human view together. `orbit tool list` still derives a human `REQUIRED INPUT` summary from the parameter data, but it is rendered from the same collected records as the JSON document. The global `--format json|ndjson` modes are available alongside the shorthand; NDJSON emits one complete record per line. The remaining compatibility exceptions are documented in §§7 and 9.
 
-A global `--format auto|table|json|ndjson` is accepted on every command that does not already own a `--format` — `audit export` and `hook pretooluse` do, with unrelated value types, and keep theirs. `main` extracts the deepest global value, resolves it once with the sink, and `output::render::emit` consumes it for successful payloads. On the failure path it is also load-bearing: `--format json` on a command with no `--json` flag of its own still produces a machine-readable error payload [ORB-10570].
+A global `--format auto|table|plain|json|ndjson` is accepted on every command that does not already own a `--format`. `plain` selects the untruncated piped form on any sink. `audit export` keeps its file-serialization option, independently of the sink's output mode. `main` extracts the deepest global value and rejects `--json` combined with a conflicting non-JSON output format, with exit 2 and a JSON usage error on stderr. It resolves the mode once with the sink, and `output::render::emit` consumes it for successful payloads. Both JSON spellings also select machine-readable errors on stderr.
 
 ## 7. Empty States and Errors
 
@@ -81,6 +81,8 @@ Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover t
 The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
 `crates/orbit-cli/src/output/tests/sink.rs` asserts that a non-terminal sink has zero width and refuses color however the environment insists [ORB-10570]. Its sink is built with `OutputSink::resolve`, never `from_process`, because `make ci` runs without a TTY.
+
+Built-binary tests cover the global JSON shorthand at every command level, conflicting output options, plugin input compatibility, and preservation of the local audit export format. An exhaustive assembled-tree parser test also covers hidden leaves that help output cannot enumerate.
 
 ## 9. Concerns & Honest Limitations
 

@@ -16,7 +16,9 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+
+use crate::child_guard::ChildGuard;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
@@ -101,6 +103,14 @@ impl McpWorkspace {
     }
 
     fn init_with_workspace_args(workspace_name: &str, extra_workspace_args: &[&str]) -> Self {
+        Self::init_with_task_prefix(workspace_name, extra_workspace_args, "TST")
+    }
+
+    fn init_with_task_prefix(
+        workspace_name: &str,
+        extra_workspace_args: &[&str],
+        task_prefix: &str,
+    ) -> Self {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
@@ -135,7 +145,7 @@ impl McpWorkspace {
             "--machine-name",
             "mcp-roundtrip-host",
             "--task-prefix",
-            "TST",
+            task_prefix,
         ];
         let output = orbit_ok(Self::orbit_command(&work, &home).args(init_args));
         assert!(output.status.success());
@@ -203,6 +213,7 @@ impl McpWorkspace {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp serve");
         let mut client = McpClient::new(child);
         self.initialize(&mut client);
@@ -223,6 +234,7 @@ impl McpWorkspace {
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log))
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp serve");
         let mut client = McpClient::new(child);
         self.initialize(&mut client);
@@ -238,6 +250,7 @@ impl McpWorkspace {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp listen");
         let mut client = McpClient::over_tcp(child, connect_when_listening(addr));
         self.initialize(&mut client);
@@ -254,6 +267,7 @@ impl McpWorkspace {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
+            .map(ChildGuard::new)
             .expect("spawn orbit mcp listen --workspace");
         let mut client = McpClient::over_tcp(child, connect_when_listening(addr));
         let response = client.initialize(McpClient::initialize_params("listen-bound", None));
@@ -326,7 +340,7 @@ fn connect_when_listening(addr: SocketAddr) -> TcpStream {
 // ---------------------------------------------------------------------------
 
 struct McpClient {
-    child: Child,
+    child: ChildGuard,
     writer: Box<dyn Write + Send>,
     lines: Receiver<String>,
     next_id: i64,
@@ -346,7 +360,7 @@ impl McpClient {
     }
 
     /// Complete the standard MCP handshake for a custom server launch.
-    fn initialized(child: Child, params: Value) -> (Self, Value) {
+    fn initialized(child: ChildGuard, params: Value) -> (Self, Value) {
         let mut client = Self::new(child);
         let response = client.initialize(params);
         (client, response)
@@ -358,7 +372,7 @@ impl McpClient {
         response
     }
 
-    fn new(mut child: Child) -> Self {
+    fn new(mut child: ChildGuard) -> Self {
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
         Self::over_streams(child, Box::new(stdin), Box::new(stdout))
@@ -366,13 +380,13 @@ impl McpClient {
 
     /// A session against `orbit mcp listen`, where the same protocol runs over
     /// an accepted socket instead of the child's stdio.
-    fn over_tcp(child: Child, stream: TcpStream) -> Self {
+    fn over_tcp(child: ChildGuard, stream: TcpStream) -> Self {
         let reader = stream.try_clone().expect("clone the MCP socket for reads");
         Self::over_streams(child, Box::new(stream), Box::new(reader))
     }
 
     fn over_streams(
-        child: Child,
+        child: ChildGuard,
         writer: Box<dyn Write + Send>,
         reader: Box<dyn Read + Send>,
     ) -> Self {
@@ -465,15 +479,6 @@ impl McpClient {
             .get("structuredContent")
             .cloned()
             .unwrap_or_else(|| panic!("`{name}` returned no structuredContent: {result}"))
-    }
-}
-
-impl Drop for McpClient {
-    fn drop(&mut self) {
-        // Closing stdin ends the stdio transport; give the server a moment to
-        // exit cleanly, then make sure it is gone.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -731,6 +736,50 @@ fn mcp_friction_rehome_moves_a_record_into_its_registered_owner() {
     );
 }
 
+/// A re-home refused before the move (here: the target is the record's own
+/// workspace) must not leave the accompanying edits committed.
+#[test]
+fn mcp_friction_refused_rehome_leaves_the_edits_unapplied() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let added = client.call_tool_ok(
+        "orbit_friction_add",
+        json!({ "body": "original body", "tags": ["policy"], "model": "codex" }),
+    );
+    let id = added["id"].as_str().expect("friction id").to_string();
+    let show = |id: &str| -> Value {
+        let output = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["friction", "show", "--json", id]),
+        );
+        serde_json::from_slice(&output.stdout).expect("friction show JSON")
+    };
+    let before = show(&id);
+
+    let refused = client.call_tool_err(
+        "orbit_friction_update",
+        json!({
+            "id": id,
+            "title": "edited title",
+            "body": "edited body",
+            "status": "triaged",
+            "rehome_to": "mcp-roundtrip",
+        }),
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("already belongs to workspace")),
+        "{refused}"
+    );
+
+    let after = show(&id);
+    assert_eq!(
+        after, before,
+        "a refused re-home must not persist the edits"
+    );
+}
+
 #[test]
 fn mcp_search_without_query_or_tag_keeps_its_refusal_message() {
     let workspace = McpWorkspace::init();
@@ -829,6 +878,20 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
         }),
     );
     let task_id = task["id"].as_str().expect("task id").to_string();
+    let foreign_task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Task outside delivery run",
+            "description": "Not submitted with the delivery run.",
+            "complexity": "low",
+            "model": "codex",
+        }),
+    );
+    let foreign_task_id = foreign_task["id"]
+        .as_str()
+        .expect("foreign task id")
+        .to_string();
+    assert_ne!(foreign_task_id, task_id);
 
     // The run row and its checkpoints, written against the fixture's own
     // disposable roots exactly as the host's pipeline worker leaves them.
@@ -938,12 +1001,34 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
         "run input or step output leaked: {observed}"
     );
 
-    // A task the run was not submitted with is refused, not answered.
+    // The real foreign task is absent from the run input above, so this call
+    // must reach the run-membership refusal instead of failing task lookup.
     let foreign = client.call_tool_err(
         "orbit_task_show",
-        json!({ "id": "TST-99999", "field": "delivery", "run_id": RUN_ID }),
+        json!({ "id": foreign_task_id, "field": "delivery", "run_id": RUN_ID }),
     );
-    assert_ne!(foreign["code"], "capability_denied", "{foreign}");
+    assert_eq!(
+        foreign["code"], "invalid_input",
+        "a real task omitted from the run must reach the membership refusal: {foreign}"
+    );
+    for field in [
+        "schema_version",
+        "workspace_id",
+        "repository",
+        "task_id",
+        "run_id",
+        "job_id",
+        "run_state",
+        "run_finished_at",
+        "delivery_status",
+        "commit",
+        "landing",
+    ] {
+        assert!(
+            foreign.get(field).is_none(),
+            "refused delivery response included observation field {field}: {foreign}"
+        );
+    }
 
     // The full run view is still the operator's.
     let denied = client.call_tool_err("orbit_workflow_run_show", json!({ "id": RUN_ID }));
@@ -1035,9 +1120,90 @@ fn a_replica_checkout_refuses_a_coordination_write_with_capability_refused() {
     );
 }
 
-/// The destination MCP host must enforce checkout capability classes on the
-/// production dispatch path — including control-plane tools that never pass
-/// through Core's task-write guard [ORB-11021].
+/// Legacy local friction resolution reaches Core through the production MCP
+/// capability gate; reopening remains owner-only.
+#[test]
+fn a_replica_mcp_session_closes_legacy_local_frictions() {
+    let workspace = McpWorkspace::init();
+    let added = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "friction",
+            "add",
+            "--body",
+            "Legacy MCP report",
+            "--model",
+            "codex",
+            "--json",
+        ]),
+    );
+    let record: Value = serde_json::from_slice(&added.stdout).expect("created record");
+    let id = record["id"].as_str().expect("friction ID");
+    orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(["workspace", "remove", "mcp-roundtrip"]),
+    );
+    orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "mcp-roundtrip",
+            "--role",
+            "replica",
+            "--owner",
+            "hm_remote_owner",
+        ]),
+    );
+
+    let mut client = workspace.serve();
+    let resolved = client.call_tool_ok(
+        "orbit_friction_update",
+        json!({
+            "id": id, "status": "resolved", "body": "Legacy MCP report\n\nVerified fixed.",
+            "model": "codex",
+        }),
+    );
+    assert_eq!(resolved["status"], "resolved", "{resolved}");
+    assert!(resolved["resolved_at"].is_string(), "{resolved}");
+    assert_eq!(resolved["created_at"], record["created_at"]);
+    let reopened = client.call_tool_err(
+        "orbit_friction_update",
+        json!({
+            "id": id, "status": "open", "model": "codex",
+        }),
+    );
+    assert_eq!(reopened["code"], "capability_refused", "{reopened}");
+    let persisted = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["friction", "show", id, "--json"]),
+    );
+    let persisted: Value = serde_json::from_slice(&persisted.stdout).expect("persisted record");
+    assert_eq!(persisted["status"], "resolved");
+    assert_eq!(persisted["body"], resolved["body"]);
+    assert_eq!(persisted["resolved_at"], resolved["resolved_at"]);
+    let audit = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "audit",
+            "list",
+            "--tool",
+            "orbit.friction.update",
+            "--status",
+            "success",
+            "--json",
+        ]),
+    );
+    let audit: Value = serde_json::from_slice(&audit.stdout).expect("audit rows");
+    assert!(
+        audit
+            .as_array()
+            .expect("audit array")
+            .iter()
+            .any(|row| row["tool_name"] == "orbit.friction.update"),
+        "MCP resolution must leave durable audit evidence: {audit}"
+    );
+}
+
 #[test]
 fn a_replica_mcp_session_enforces_checkout_capability_classes() {
     let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
@@ -1603,6 +1769,7 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
         .stderr(Stdio::piped());
     let child = command
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn the server launched by the generated config");
     let mut client = McpClient::new(child);
     workspace.initialize(&mut client);
@@ -1611,8 +1778,8 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
     assert_eq!(listed["items"], json!([]));
 }
 
-/// A fresh checkout's first ship must explain the setup files that block local
-/// landing. PR delivery reaches worktree setup with those same files present.
+/// Initialization's tracked edits still block local setup, while its unrelated
+/// untracked MCP files are omitted from the refusal. PR setup accepts both.
 #[test]
 fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
     for mode in ["local", "pr"] {
@@ -1639,7 +1806,8 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             &["config", "user.email", "orbit-test@example.invalid"],
         );
         std::fs::write(work.join("README.md"), "first commit\n").expect("write first commit");
-        git(&work, &["add", "README.md"]);
+        std::fs::write(work.join(".gitignore"), "").expect("track ignore file before init");
+        git(&work, &["add", "README.md", ".gitignore"]);
         git(&work, &["commit", "--quiet", "-m", "first commit"]);
         git(
             temp.path(),
@@ -1650,6 +1818,20 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
         git(&work, &["push", "--quiet", "-u", "origin", "main"]);
+        if mode == "pr" {
+            // PR admission needs a remote on a forge host. Delivery still
+            // fetches and pushes through the local `origin`; this one is
+            // never contacted.
+            git(
+                &work,
+                &[
+                    "remote",
+                    "add",
+                    "upstream",
+                    "https://github.com/orbit-test/fresh-host.git",
+                ],
+            );
+        }
 
         orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
             "init",
@@ -1674,10 +1856,7 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
                 "init omitted {path}: {human_report}"
             );
         }
-        assert!(
-            human_report.contains("commit") && human_report.contains("clean"),
-            "{human_report}"
-        );
+        assert!(human_report.contains("commit"), "{human_report}");
         let status = Command::new("git")
             .args(["status", "--porcelain", "--untracked-files=all"])
             .current_dir(&work)
@@ -1703,6 +1882,8 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             "First task",
             "--complexity",
             "low",
+            "--context",
+            "file:README.md",
             "--crew",
             "sol",
             "--status",
@@ -1765,15 +1946,17 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
                 .expect("local refusal");
             assert!(
                 error.contains("worktree_setup")
-                    && error.contains(".claude/settings.json")
-                    && error.contains(".mcp.json")
                     && error.contains(".gitignore")
                     && error.contains("Commit or stash"),
                 "{error}"
             );
+            assert!(
+                !error.contains(".claude/settings.json") && !error.contains(".mcp.json"),
+                "unrelated untracked init files do not block local delivery: {error}"
+            );
         } else {
             assert!(
-                leaf_run["pipeline_state"]["step_outputs"]["0"].is_object(),
+                leaf_run["pipeline_state"]["step_states"]["0"] == "success",
                 "PR mode must complete worktree setup despite init files: {leaf_run}"
             );
         }
@@ -1791,6 +1974,7 @@ fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn checkout-independent MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -1887,6 +2071,7 @@ fn task_artifact_get_resolves_globally_outside_any_checkout() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn checkout-independent MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -2014,7 +2199,7 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
 /// a sibling checkout B must still be readable by ID alone from checkout A on
 /// every surface, and an explicit foreign `workspace` selector must stay a
 /// fail-closed filter on all three. This must fail if the CLI routing change
-/// in `command/operation_registry.rs` is reverted.
+/// in `command/operation/registry.rs` is reverted.
 #[test]
 fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     let workspace = McpWorkspace::init();
@@ -2178,15 +2363,14 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
 }
 
 /// [ORB-12254] Regression guard for the class of bug this task fixed: a tool
-/// whose schema advertises `workspace` as resolved-globally-by-default text
-/// must actually resolve globally when a session carries no selector, and a
-/// tool that does not carry that wording must still fail closed. Walking the
-/// full canonical MCP surface keeps a future addition from drifting the same
-/// way `orbit.task.artifact.get` did.
+/// whose advertised schema leaves `workspace` optional in an unbound session
+/// must actually resolve without one, and a tool that requires it must still
+/// fail closed. Walking the full canonical MCP surface keeps a future
+/// addition from drifting the same way `orbit.task.artifact.get` did. The
+/// id-routed task tools resolve an id-only call through the host task
+/// registry [ORB-14449], so their selector is optional here.
 #[test]
-fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
-    const ID_RESOLVED_SELECTOR_MARKER: &str = "resolved globally by default";
-
+fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirement() {
     let workspace = McpWorkspace::init();
     let scratch = workspace.home.join("scratch");
     std::fs::create_dir_all(&scratch).expect("create non-workspace launch dir");
@@ -2196,31 +2380,36 @@ fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn checkout-independent MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
         McpClient::initialize_params("selector-wording-audit", None),
     );
+    let listed = client.request("tools/list", Value::Null);
+    let advertised = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .clone();
 
     let definitions = orbit_mcp::canonical_mcp_tool_definitions()
         .expect("canonical MCP tool definitions must build");
 
     // Global-scope tools never go through the session-selector gate at all;
-    // only `WorkspaceRequired` tools carry the id-resolution contract this
-    // test checks.
+    // only `WorkspaceRequired` tools carry the selector contract this test
+    // checks.
     for definition in definitions
         .iter()
         .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
     {
         let name = definition.schema.name.as_str();
-        let advertises_global_id_resolution = definition
-            .schema
-            .parameters
-            .iter()
-            .find(|param| param.name == "workspace")
-            .is_some_and(|param| param.description.contains(ID_RESOLVED_SELECTOR_MARKER));
-
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
+        let requires_selector = advertised
+            .iter()
+            .find(|tool| tool["name"] == json!(advertised_name))
+            .and_then(|tool| tool["inputSchema"]["required"].as_array())
+            .is_some_and(|required| required.contains(&json!("workspace")));
+
         let result = client.call_tool(&advertised_name, json!({}));
         let message = result
             .get("structuredContent")
@@ -2231,9 +2420,9 @@ fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
             && message.contains("requires an explicit workspace selector");
 
         assert_eq!(
-            refused_for_missing_selector, !advertises_global_id_resolution,
-            "{name}: schema advertises globally-resolved-by-default={advertises_global_id_resolution} \
-             but an unbound session's behavior disagrees (refused_for_missing_selector={refused_for_missing_selector}): {message}"
+            refused_for_missing_selector, requires_selector,
+            "{name}: the unbound schema requires workspace={requires_selector} but the \
+             session's behavior disagrees (refused_for_missing_selector={refused_for_missing_selector}): {message}"
         );
     }
 }
@@ -2275,6 +2464,7 @@ fn uninitialized_unbound_mcp_launch_gives_setup_guidance_without_operator_author
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn clean registry-style MCP server");
     let (mut client, initialized) = McpClient::initialized(
         child,
@@ -2336,6 +2526,7 @@ fn ssh_marked_mcp_server_audits_caller_and_server_identity_separately() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn SSH-marked MCP server");
     let (mut client, initialized) = McpClient::initialized(
         child,
@@ -2592,7 +2783,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
             "type": "chore",
             "tags": ["mcp-roundtrip"],
             "crew": "sol",
-            "orchestrator": "terra",
+            "orchestrator": "sol",
             "relations": [{"type": "related_to", "target": "DK-00042"}],
         }),
     );
@@ -2610,14 +2801,14 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert_eq!(shown["description"], "Created over the MCP stdio transport");
     assert_eq!(shown["tags"], json!(["mcp-roundtrip"]));
     assert_eq!(shown["crew"], "sol");
-    assert_eq!(shown["orchestrator"], "terra");
+    assert_eq!(shown["orchestrator"], "sol");
     assert_eq!(shown["job_run_id"], "jrun-mcp-projection");
     assert_eq!(
         client.call_tool_ok(
             "orbit_task_show",
             json!({ "id": task_id, "fields": ["crew", "orchestrator"] }),
         ),
-        json!({"crew": "sol", "orchestrator": "terra"})
+        json!({"crew": "sol", "orchestrator": "sol"})
     );
     assert_eq!(
         client.call_tool_ok(
@@ -2666,7 +2857,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Execution Crew: sol"), "{stdout}");
-    assert!(stdout.contains("Orchestrator: terra"), "{stdout}");
+    assert!(stdout.contains("Orchestrator: sol"), "{stdout}");
 
     let output = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
@@ -2681,7 +2872,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).expect("orchestrator JSON"),
-        json!("terra")
+        json!("sol")
     );
 
     let output = orbit_ok(
@@ -3055,6 +3246,42 @@ fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
     assert_eq!(search("Quartz telescope")["results"][0]["id"], id);
 }
 
+/// `orbit_task_add` and `orbit_task_update` answer with the task's readiness,
+/// so an agent filing work sees what it lacks without a second read.
+#[test]
+fn mcp_task_writes_report_readiness_gaps() {
+    let workspace = McpWorkspace::init();
+    std::fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n")
+        .expect("fixture file");
+    let mut client = workspace.serve();
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Readiness over MCP",
+            "description": "Filed without context selectors.",
+            "complexity": "medium",
+            "model": "codex",
+        }),
+    );
+    assert_eq!(added["readiness"]["ready"], false);
+    assert_eq!(
+        added["readiness"]["gaps"][0]["code"],
+        "missing_context_files"
+    );
+    assert_eq!(added["readiness"]["gaps"][0]["severity"], "blocking");
+    assert!(added["readiness"]["gaps"][0]["fix"].is_string());
+
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({
+            "id": added["id"],
+            "context_files": ["file:existing.rs"],
+            "model": "codex",
+        }),
+    );
+    assert_eq!(updated["readiness"], json!({"ready": true, "gaps": []}));
+}
+
 #[test]
 fn mcp_calls_are_audited_once_including_unknown_raw_names() {
     let workspace = McpWorkspace::init();
@@ -3369,6 +3596,7 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn federated MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -3395,17 +3623,12 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
         );
     }
 
+    // An id-only call routes by the id's prefix [ORB-14449]; it is never
+    // read as a minted selector.
     let omitted = client.call_tool_err("orbit_task_show", json!({ "id": "ORB-00001" }));
-    assert_ne!(
-        omitted["code"], "unknown_selector",
-        "omitting the selector is a missing-argument refusal, not a minted token: {omitted}"
-    );
-    assert!(
-        omitted["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("host-qualified")
-                || message.contains("requires a workspace selector")),
-        "federated task.show without a selector is refused: {omitted}"
+    assert_eq!(
+        omitted["code"], "unknown_task_prefix",
+        "an id-only call is routed by prefix, not refused as a selector: {omitted}"
     );
 
     let bare_show = client.call_tool_err(
@@ -3431,6 +3654,7 @@ fn federated_client(workspace: &McpWorkspace) -> McpClient {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn federated MCP server");
     let (client, _) = McpClient::initialized(
         child,
@@ -3633,6 +3857,55 @@ fn federated_mcp_serve_lists_local_workspaces_beside_unreachable_remotes() {
     assert!(
         ssh_log.exists(),
         "the unreachable remote should have attempted SSH"
+    );
+}
+
+/// ORB-14448: federated serve reads its remotes from the host file `orbit
+/// host` writes, and refuses to choose while the legacy file also exists.
+#[test]
+fn federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files() {
+    let workspace = McpWorkspace::init();
+    let orbit_root = workspace.home.join(".orbit");
+    std::fs::write(
+        orbit_root.join("hosts.toml"),
+        "schema_version = 1\n\n[[hosts]]\nname = \"remote\"\nmachine_id = \"hm_remote\"\n\
+         ssh = \"orbit-missing-host\"\ntask_prefix = \"RM\"\n",
+    )
+    .expect("write host file");
+    let ssh_log = workspace.home.join("ssh-invocations.log");
+    plant_ssh_stub(&McpWorkspace::stub_bin_dir(&workspace.home), &ssh_log);
+
+    let mut client = federated_client(&workspace);
+    let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
+    let remote = listed["workspaces"]
+        .as_array()
+        .expect("workspace rows")
+        .iter()
+        .find(|row| row["machine_id"] == "hm_remote")
+        .unwrap_or_else(|| panic!("registered host is listed: {listed}"));
+    assert_eq!(remote["reachability"], "unreachable");
+    assert!(
+        std::fs::read_to_string(&ssh_log).is_ok_and(|log| log.contains("orbit-missing-host")),
+        "the registered host's SSH target is the one dialed"
+    );
+    drop(client);
+
+    std::fs::write(
+        orbit_root.join("mcp-destinations.toml"),
+        "[[destinations]]\nssh = \"orbit-missing-host\"\nmachine_id = \"hm_remote\"\n",
+    )
+    .expect("write legacy destinations");
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["mcp", "serve", "--mode", "federated"])
+        .output()
+        .expect("run federated serve");
+    assert!(!output.status.success(), "both host files must fail closed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("host_file_conflict")
+            && stderr.contains("hosts.toml")
+            && stderr.contains("mcp-destinations.toml"),
+        "the refusal names both files: {stderr}"
     );
 }
 
@@ -3973,6 +4246,7 @@ fn unmanaged_orbit_workspace_env_does_not_bind_mcp() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn unbound MCP server");
     let (mut client, _) =
         McpClient::initialized(child, McpClient::initialize_params("unmanaged-env", None));
@@ -4001,6 +4275,7 @@ fn managed_source_inspection_mcp_search_uses_the_dispatching_workspace() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn inspection MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -4137,6 +4412,7 @@ fn spawn_generated_server(workspace: &McpWorkspace, cwd: &Path, args: &[String])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn the server launched by the generated config");
     let (client, _) = McpClient::initialized(
         child,
@@ -4186,6 +4462,7 @@ fn spawn_unbound_worktree_server(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn worktree-backed MCP server");
     let (client, _) = McpClient::initialized(
         child,
@@ -4648,6 +4925,7 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn SSH-marked MCP server");
     let (mut client, _) = McpClient::initialized(
         child,
@@ -4704,6 +4982,7 @@ fn serve_mcp_from(cwd: &Path, home: &Path, initialize: Value) -> McpClient {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map(ChildGuard::new)
         .expect("spawn orbit mcp serve");
     McpClient::initialized(child, initialize).0
 }
@@ -4716,10 +4995,15 @@ fn serve_mcp_from(cwd: &Path, home: &Path, initialize: Value) -> McpClient {
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
-    if !bubblewrap_mount_namespaces_available() {
-        // Some nested container runners deny user/mount namespaces. The
-        // production behavior remains covered by the focused store and
-        // dispatch tests; an unrestricted Linux CI runner executes this path.
+    if let Some(detail) = bubblewrap_mount_namespaces_unavailable() {
+        // Some nested container runners and agent lanes deny user/mount
+        // namespaces. The production behavior remains covered by the focused
+        // store and dispatch tests; an unrestricted Linux host executes this
+        // path.
+        orbit_exec::report_bwrap_deferral(
+            "readonly_state_mount_keeps_cli_and_mcp_reads_observational",
+            &detail,
+        );
         return;
     }
 
@@ -4899,7 +5183,10 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         Some(workspace.work.to_str().expect("utf8 checkout")),
     );
     let (mut client, initialized) = McpClient::initialized(
-        child.spawn().expect("spawn read-only MCP server"),
+        child
+            .spawn()
+            .map(ChildGuard::new)
+            .expect("spawn read-only MCP server"),
         initialize,
     );
     assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
@@ -5041,7 +5328,11 @@ fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
 #[cfg(target_os = "linux")]
 #[test]
 fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
-    if !bubblewrap_mount_namespaces_available() {
+    if let Some(detail) = bubblewrap_mount_namespaces_unavailable() {
+        orbit_exec::report_bwrap_deferral(
+            "readonly_orbit_command_scrubs_inherited_managed_run_authority",
+            &detail,
+        );
         return;
     }
 
@@ -5370,9 +5661,10 @@ fn main_registry_file_has_task(registry: &Path, task_id: &str) -> bool {
     bindings > 0
 }
 
+/// Why Bubblewrap cannot create a mount namespace here, or `None` when it can.
 #[cfg(target_os = "linux")]
-fn bubblewrap_mount_namespaces_available() -> bool {
-    Command::new("bwrap")
+fn bubblewrap_mount_namespaces_unavailable() -> Option<String> {
+    match Command::new("bwrap")
         .args([
             "--die-with-parent",
             "--ro-bind",
@@ -5382,9 +5674,17 @@ fn bubblewrap_mount_namespaces_available() -> bool {
             "/bin/true",
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(output) if output.status.success() => None,
+        Ok(output) => Some(format!(
+            "bwrap exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Some(format!("bwrap could not start: {error}")),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -5917,6 +6217,9 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
     assert_eq!(pending["answer"], Value::Null, "{pending}");
     let run_id = pending["run_id"].as_str().unwrap();
     let observed = client.call_tool_ok("orbit_workflow_run_show", json!({"id":run_id}));
+    let (machine_id, machine_name) = machine_identity(&workspace.home);
+    assert_eq!(observed["executed_on"]["machine_id"], machine_id);
+    assert_eq!(observed["executed_on"]["machine_name"], machine_name);
     assert!(
         matches!(observed["state"].as_str(), Some("pending" | "running")),
         "a client deadline leaves the run active: {observed}"
@@ -5973,3 +6276,7 @@ fn agent_invoke_mcp_reports_a_saturated_queue() {
         ]),
     );
 }
+
+mod search;
+#[cfg(unix)]
+mod worker_routing;

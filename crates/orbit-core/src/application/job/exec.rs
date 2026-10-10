@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use super::crew_pools;
 use super::log_best_effort;
 
 use orbit_common::{NotFoundKind, OrbitError};
@@ -28,6 +29,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
+use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
 
 #[derive(Debug, Clone)]
@@ -35,6 +37,10 @@ pub struct V2JobRunResult {
     pub run_id: String,
     pub job_name: String,
     pub success: bool,
+    /// Named external evidence that stopped delivery without a failure.
+    pub evidence_hold: Option<orbit_types::workflow::ReviewEvidenceHold>,
+    /// A delivery push the forge kept refusing; the run holds for a resume.
+    pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
     pub pipeline: Value,
     pub message: Option<String>,
     pub events_emitted: u64,
@@ -80,26 +86,84 @@ impl OrbitRuntime {
     /// Re-run a completed or historical job run from step 0 using the current
     /// catalog definition and the source run's persisted input.
     ///
+    /// Automatic crews are readmitted under current pools and provider holds;
+    /// a recorded explicit crew choice is retained.
     /// Explicitly discards checkpoints — replay is the "run everything again"
     /// surface, including agent steps. Use `submit_resume_run`
     /// to continue from the failed step instead.
     pub fn replay_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
+        self.replay_job_run_with_claim(source_run_id, None)
+    }
+
+    /// Foreground replay with the operator's workspace claim token.
+    pub fn replay_job_run_with_claim(
+        &self,
+        source_run_id: &str,
+        claim_token: Option<&str>,
+    ) -> Result<V2JobRunResult, OrbitError> {
+        let (source, mut input) = self.admit_job_run_replay(source_run_id, claim_token)?;
+        crate::application::review::install_review_admission(
+            self,
+            &source.job_id,
+            &mut input,
+            None,
+            false,
+        )?;
+        self.install_auto_crew_admission(
+            &source.job_id,
+            &mut input,
+            None,
+            false,
+            &mut crew_pools::random_crew_ticket,
+        )?;
+        let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
+        self.run_job_v2_from_yaml_with_retry_source(&job_path, input, Some(source.run_id), 1, None)
+    }
+
+    /// Persist a whole-run replay and submit it to a detached worker.
+    /// Uses today's catalog and admission policy, with no source checkpoints.
+    pub fn submit_replay_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let (source, input) = self.admit_job_run_replay(source_run_id, claim_token)?;
+        self.submit_persisted_pipeline_run(PipelineSubmission {
+            replay_source_run_id: Some(&source.run_id),
+            trigger,
+            ..PipelineSubmission::catalog(&source.job_id, input, actor)
+        })
+    }
+
+    fn admit_job_run_replay(
+        &self,
+        source_run_id: &str,
+        claim_token: Option<&str>,
+    ) -> Result<(JobRun, Value), OrbitError> {
+        self.require_workspace_claim("orbit.job.replay", claim_token)?;
         let source = self.show_job_run(source_run_id)?;
         let mut input = source.input.clone().unwrap_or_else(|| json!({}));
-        // [ORB-11354] A replay re-runs a historical input under no new
-        // admission, so the source's trusted-host admission does not travel
-        // with it. Stripping rather than refusing keeps replay usable for the
-        // rest of the run's input; the activity then fails closed on the
-        // missing admission, which is the honest outcome.
+        let task_ids: Vec<String> = super::resume::task_ids_from_input(&input)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        self.drain_entry_admission(
+            crate::application::distributed::DrainEntryPoint::Replay,
+            &task_ids,
+            false,
+        )?
+        .into_result()?;
+        // Historical authority never travels into a new invocation. Trusted
+        // host execution fails closed; review is captured from current policy.
         strip_trusted_host_admission(&mut input);
-        let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
-        self.run_job_v2_from_yaml_with_retry_source(
-            &job_path,
-            input,
-            Some(source.run_id.clone()),
-            1,
-            None,
-        )
+        orbit_types::workflow::strip_review_reconciliation_admission(&mut input);
+        if let Some(object) = input.as_object_mut() {
+            object.remove(orbit_types::workflow::REVIEW_ADMISSION_KEY);
+        }
+        crew_pools::strip_auto_crew_admission(&source.job_id, &mut input);
+        Ok((source, input))
     }
 
     /// [ORB-10002] Resume an interrupted (or failed / timed-out) job run from
@@ -148,6 +212,11 @@ impl OrbitRuntime {
         if run_input_declares_trusted_host(&input) {
             return Err(super::pipeline::reserved_trusted_host_key_error(&job_name));
         }
+        if orbit_types::workflow::run_input_declares_review_reconciliation(&input) {
+            return Err(super::pipeline::reserved_reconciliation_key_error(
+                &job_name,
+            ));
+        }
         let scheduled_at = chrono::Utc::now();
         let run = self.stores().jobs().insert_job_run(
             &job_name,
@@ -156,17 +225,35 @@ impl OrbitRuntime {
             Some(input.clone()),
             retry_source_run_id.clone(),
         )?;
-        self.seed_v2_pipeline_run(&run, &input, resume, JobRunTrigger::cli())?;
-
+        // [ORB-14524] The run row is committed, so a seed or Start-write
+        // failure must terminalize it: no worker exists to ever pick it up, and
+        // a stranded pending run would hold its concurrency slot and retry key.
         let started_at = chrono::Utc::now();
+        let start = self
+            .seed_v2_pipeline_run(&run, &input, resume, JobRunTrigger::cli())
+            .and_then(|()| {
+                self.stores().jobs().mark_job_run_running(
+                    &run.run_id,
+                    started_at,
+                    std::process::id(),
+                )
+            })
+            .inspect_err(|error| {
+                log_best_effort(
+                    "finalize startup failure",
+                    &run.run_id,
+                    self.finalize_pipeline_worker_startup_failure(
+                        &run,
+                        &error.to_string(),
+                        None,
+                        None,
+                    ),
+                );
+            })?;
         // [ORB-10965] This run was inserted moments ago by this very process,
         // so it must win its own Start. Anything else means another owner
         // reached it first, and running it here would duplicate execution.
-        match self.stores().jobs().mark_job_run_running(
-            &run.run_id,
-            started_at,
-            std::process::id(),
-        )? {
+        match start {
             JobRunStartOutcome::Started => {}
             JobRunStartOutcome::NotFound => {
                 return Err(OrbitError::not_found(NotFoundKind::JobRun, run.run_id));
@@ -179,20 +266,24 @@ impl OrbitRuntime {
                 )));
             }
         }
-        self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
-        self.record_event(OrbitEvent::JobRunStarted {
-            job_id: run.job_id.clone(),
-            run_id: run.run_id.clone(),
-            attempt: run.attempt,
-        })?;
+        // Once Start succeeds, setup errors belong to this run and must reach
+        // the same terminal lifecycle as execution errors in detached workers.
+        let outcome = (|| {
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
+            self.record_event(OrbitEvent::JobRunStarted {
+                job_id: run.job_id.clone(),
+                run_id: run.run_id.clone(),
+                attempt: run.attempt,
+            })?;
 
-        let outcome = self.run_job_v2_from_yaml_with_run_context(
-            yaml_path,
-            input.clone(),
-            Some(run.run_id.clone()),
-            retry_source_run_id,
-            resume.and_then(|plan| plan.resume_state.as_ref()),
-        );
+            self.run_job_v2_from_yaml_with_run_context(
+                yaml_path,
+                input.clone(),
+                Some(run.run_id.clone()),
+                retry_source_run_id,
+                resume.and_then(|plan| plan.resume_state.as_ref()),
+            )
+        })();
         let finished_at = chrono::Utc::now();
 
         self.finalize_v2_pipeline_run(
@@ -292,9 +383,16 @@ impl OrbitRuntime {
 
         let outcome_res: Result<JobOutcome, OrbitError> =
             execute_job_with_resume(&asset.spec, input, &run_id, writer.clone(), self, resume)
-                .map_err(|err| OrbitError::Execution(format!("v2 job dispatch: {err}")));
+                .map_err(|err| match err {
+                    orbit_engine::DispatchError::ProtocolSkew(message) => {
+                        OrbitError::ProtocolSkew(message)
+                    }
+                    other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
+                });
 
         let (outcome_str, error_message) = match &outcome_res {
+            Ok(o) if o.evidence_hold.is_some() => ("held", None),
+            Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
             Ok(o) if o.success => ("success", None),
             Ok(o) => ("failed", o.message.clone()),
             Err(err) => ("error", Some(err.to_string())),
@@ -315,6 +413,8 @@ impl OrbitRuntime {
                 run_id,
                 job_name: asset.name,
                 success: o.success,
+                evidence_hold: o.evidence_hold,
+                forge_hold: o.forge_hold,
                 pipeline: o.pipeline,
                 message: o.message,
                 events_emitted: events_count,
@@ -396,17 +496,80 @@ impl OrbitRuntime {
                 .max(0) as u64,
         );
         let final_state = match outcome {
+            Ok(result) if result.evidence_hold.is_some() => {
+                // Final summaries are best-effort for every outcome: a store
+                // fault must not turn an evidence hold into a worker failure.
+                log_best_effort(
+                    "persist held run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Held, options),
+                );
+                log_best_effort(
+                    "record held step",
+                    &run.run_id,
+                    self.record_pipeline_diagnostic_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        Some("review_awaiting_evidence"),
+                        "Delivery awaits named external evidence; receipt queues a fresh review.",
+                        JobRunState::Held,
+                    ),
+                );
+                JobRunState::Held
+            }
+            Ok(result) if result.forge_hold.is_some() => {
+                // [ORB-14617] The forge, not the candidate, refused the push:
+                // no failure step, no task block. The clock resumes the run.
+                log_best_effort(
+                    "persist held run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Held, options),
+                );
+                let fallback = "the forge refused the delivery push past its retry budget";
+                log_best_effort(
+                    "record held step",
+                    &run.run_id,
+                    self.record_pipeline_diagnostic_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        Some(orbit_types::workflow::FORGE_UNAVAILABLE_ERROR_CODE),
+                        result.message.as_deref().unwrap_or(fallback),
+                        JobRunState::Held,
+                    ),
+                );
+                JobRunState::Held
+            }
             Ok(result) if result.success => {
-                self.persist_v2_run_state(run, input, result, JobRunState::Success, options)?;
+                // Summary persistence follows completed execution. Its failure
+                // must not replace success or escape before the terminal write.
+                log_best_effort(
+                    "persist successful run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Success, options),
+                );
                 if options.record_synthetic_success_step {
-                    self.record_synthetic_v2_success_step(run, started_at, finished_at, result)?;
+                    log_best_effort(
+                        "record success step",
+                        &run.run_id,
+                        self.record_synthetic_v2_success_step(run, started_at, finished_at, result),
+                    );
                 } else {
-                    self.persist_detached_worker_steps(run, started_at, finished_at, result)?;
+                    log_best_effort(
+                        "persist worker step summary",
+                        &run.run_id,
+                        self.persist_detached_worker_steps(run, started_at, finished_at, result),
+                    );
                 }
                 JobRunState::Success
             }
             Ok(result) => {
-                self.persist_v2_run_state(run, input, result, JobRunState::Failed, options)?;
+                log_best_effort(
+                    "persist failed run state",
+                    &run.run_id,
+                    self.persist_v2_run_state(run, input, result, JobRunState::Failed, options),
+                );
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
                 log_best_effort(
@@ -420,11 +583,13 @@ impl OrbitRuntime {
                 log_best_effort(
                     "record failure step",
                     &run.run_id,
-                    self.record_pipeline_failure_step(
+                    self.record_pipeline_diagnostic_step(
                         run,
                         started_at,
                         finished_at,
+                        matches!(error, OrbitError::ProtocolSkew(_)).then_some("protocol_skew"),
                         &error.to_string(),
+                        JobRunState::Failed,
                     ),
                 );
                 JobRunState::Failed
@@ -501,6 +666,9 @@ impl OrbitRuntime {
             PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone())
         });
         state.sync_pipeline(result.pipeline.clone());
+        // A resumed run starts from its source's hold; its own outcome
+        // replaces it, so only a run that is held carries one.
+        state.forge_hold = result.forge_hold.clone();
         // [ORB-10002] Per-step checkpoints already maintain step records for
         // this run; only fall back to the legacy single-summary step record
         // when no checkpoint was ever written, so a later `resume` never sees
@@ -609,17 +777,19 @@ fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
         Some("skipped") => JobRunState::Skipped,
         Some("cancelled") => JobRunState::Cancelled,
         Some("interrupted") => JobRunState::Interrupted,
+        Some("held") => JobRunState::Held,
         _ => JobRunState::Success,
     }
 }
 
 /// [ORB-10002] Re-key a source run's checkpoint state onto the resumed run.
-/// The step records are the source's; only the identity and timestamp change,
-/// so the resumed run owns its own durable state from its first write.
+/// The step records are the source's; the identity and timestamp belong to
+/// the resumed run. Forge-hold expiry is run-local and starts unacknowledged.
 pub(super) fn seeded_resume_state(source_state: &PipelineState, run: &JobRun) -> PipelineState {
     let mut seeded = source_state.clone();
     seeded.run_id = run.run_id.clone();
     seeded.job_id = run.job_id.clone();
+    seeded.forge_hold_expired_at = None;
     seeded.updated_at = chrono::Utc::now();
     seeded
 }

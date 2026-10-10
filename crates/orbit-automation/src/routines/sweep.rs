@@ -12,6 +12,11 @@ use orbit_store::contracts::{
 use orbit_types::workflow::{JobRunState, OverlapPolicy};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Instant;
+
+/// Cooperative budget for a host scheduler tick. The native manager supplies
+/// an independent hard ceiling for an operation that never returns.
+pub const TICK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// Core-supplied owner facts, independent of persisted run status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +76,9 @@ pub struct SweepOptions {
     /// assembly supplies the configured clock cadence; deterministic callers
     /// use the compatible 60-second default.
     pub sweep_cadence_seconds: u64,
+    /// Shared monotonic deadline for all phases. `None` starts a fresh budget
+    /// at the sweep boundary; a running operation finishes before yielding.
+    pub deadline: Option<Instant>,
 }
 
 impl Default for SweepOptions {
@@ -78,6 +86,7 @@ impl Default for SweepOptions {
         Self {
             dry_run: false,
             sweep_cadence_seconds: 60,
+            deadline: None,
         }
     }
 }
@@ -132,12 +141,19 @@ pub struct SweepOutcome {
     pub machine_id: String,
     /// True when another sweep held the lock and this pass exited early.
     pub lock_busy: bool,
+    /// The tick exhausted its cooperative budget; callers must exit nonzero.
+    pub deadline_exceeded: bool,
+    /// Workspaces with work deferred to the next tick by the deadline.
+    pub skipped_workspaces: Vec<String>,
     /// Per-routine outcomes.
     pub reports: Vec<RoutineSweepReport>,
     /// Per-auto-task outcomes, evaluated after all routine rows.
     pub auto_task_reports: Vec<AutoTaskSweepReport>,
     /// Fail-closed definition/load failures (those routines were absent).
     pub load_errors: Vec<RoutineLoadError>,
+    /// `execution.env.pass` names this pass exported from the clock
+    /// environment file into the runs it starts. Names only.
+    pub clock_env_loaded: Vec<String>,
     /// Set when every discovered workspace failed to open, so this pass
     /// loaded nothing. The CLI prints this one row and exits non-zero.
     /// Partial load errors leave this `None`.
@@ -156,6 +172,9 @@ pub fn run_sweep_core(
     options: SweepOptions,
     now_utc: DateTime<Utc>,
 ) -> Result<Vec<RoutineSweepReport>, OrbitError> {
+    let deadline = options
+        .deadline
+        .unwrap_or_else(|| Instant::now() + TICK_DEADLINE);
     let routines_by_name: BTreeMap<String, &LoadedRoutine> = collection
         .routines
         .iter()
@@ -165,13 +184,17 @@ pub fn run_sweep_core(
     let sync_errors = if options.dry_run {
         BTreeMap::new()
     } else {
-        sync_unresolved_fires(store, &routines_by_name, dispatch, now_utc)?
+        sync_unresolved_fires(store, &routines_by_name, dispatch, now_utc, deadline)?
     };
 
     let pauses = store.routine_pauses()?;
 
     let mut reports = Vec::new();
     for routine in &collection.routines {
+        if Instant::now() >= deadline {
+            reports.push(skipped(routine, "tick_deadline"));
+            continue;
+        }
         let same_target = collection
             .routines
             .iter()
@@ -492,9 +515,13 @@ fn sync_unresolved_fires(
     routines_by_name: &BTreeMap<String, &LoadedRoutine>,
     dispatch: &dyn RoutineDispatch,
     now_utc: DateTime<Utc>,
+    deadline: Instant,
 ) -> Result<BTreeMap<String, String>, OrbitError> {
     let mut errors = BTreeMap::new();
     for fire in store.routine_unresolved_fires()? {
+        if Instant::now() >= deadline {
+            break;
+        }
         // A fire recorded for a routine this host no longer loads must leave
         // that prior history untouched.
         let Some(routine) = routines_by_name.get(&fire.routine_name) else {

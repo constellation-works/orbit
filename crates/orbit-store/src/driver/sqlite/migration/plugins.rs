@@ -30,10 +30,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
     .map_err(|error| OrbitError::Store(error.to_string()))?;
     ensure_audit_events_schema(conn)?;
     for column in ["plugin_name", "plugin_version", "plugin_manifest_digest"] {
-        add_column_if_missing(
-            conn,
-            &format!("ALTER TABLE audit_events ADD COLUMN {column} TEXT"),
-        )?;
+        add_column_if_missing(conn, "audit_events", column, "TEXT")?;
     }
     conn.execute_batch(
         r#"
@@ -51,10 +48,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
 /// an older binary ignores the column.
 pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema(conn)?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE audit_events ADD COLUMN plugin_secrets TEXT",
-    )
+    add_column_if_missing(conn, "audit_events", "plugin_secrets", "TEXT")
 }
 
 /// v31 `audit_plugin_secret_updates` migration: each secret a plugin-backed
@@ -65,10 +59,7 @@ pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitE
 /// the column.
 pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema(conn)?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE audit_events ADD COLUMN plugin_secret_updates TEXT",
-    )
+    add_column_if_missing(conn, "audit_events", "plugin_secret_updates", "TEXT")
 }
 
 /// v32 `audit_brokered_call` migration: whether a run's plugin broker
@@ -78,8 +69,8 @@ pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(),
 /// reads NULL, which is not brokered.
 pub(super) fn apply_audit_brokered_call(conn: &Connection) -> Result<(), OrbitError> {
     ensure_audit_events_schema(conn)?;
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN brokered INTEGER")?;
-    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN peer_pid INTEGER")
+    add_column_if_missing(conn, "audit_events", "brokered", "INTEGER")?;
+    add_column_if_missing(conn, "audit_events", "peer_pid", "INTEGER")
 }
 
 /// v27 `plugin_certified_orbit_version` migration: the Orbit version a
@@ -91,10 +82,7 @@ pub(super) fn apply_plugin_certified_orbit_version(conn: &Connection) -> Result<
     if !table_exists(conn, "plugins")? {
         return Ok(());
     }
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE plugins ADD COLUMN certified_orbit_version TEXT",
-    )
+    add_column_if_missing(conn, "plugins", "certified_orbit_version", "TEXT")
 }
 
 /// v28 `plugin_archive_digest` migration: the SHA-256 of the archive a
@@ -106,7 +94,7 @@ pub(super) fn apply_plugin_archive_digest(conn: &Connection) -> Result<(), Orbit
     if !table_exists(conn, "plugins")? {
         return Ok(());
     }
-    add_column_if_missing(conn, "ALTER TABLE plugins ADD COLUMN archive_digest TEXT")
+    add_column_if_missing(conn, "plugins", "archive_digest", "TEXT")
 }
 
 /// v35 `plugin_build_record` migration: the JSON build record of a plugin
@@ -117,5 +105,5 @@ pub(super) fn apply_plugin_build_record(conn: &Connection) -> Result<(), OrbitEr
     if !table_exists(conn, "plugins")? {
         return Ok(());
     }
-    add_column_if_missing(conn, "ALTER TABLE plugins ADD COLUMN build_json TEXT")
+    add_column_if_missing(conn, "plugins", "build_json", "TEXT")
 }

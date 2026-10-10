@@ -36,7 +36,7 @@
 
 /* A task opened by ID that the current filter or page would hide. */
 .pinned-task-wrap { margin-bottom: 6px; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg-elev); }
-.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); }
+.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); cursor: default; }
 .panel > header.tasks-head .count { flex: 0 0 auto; }
 #tasks-panel > .controls { border-bottom: 0; padding-bottom: 6px; }
 
@@ -56,9 +56,7 @@
   display: flex;
   flex: 1 1 100%;
   gap: 2px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
+  flex-wrap: wrap;
   max-width: none;
 }
 
@@ -244,6 +242,13 @@
   gap: 2px;
   min-width: 0;
 }
+.task-quick-cell .exec-origin {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-quick {
   height: 28px;
   padding: 0 11px;
@@ -262,7 +267,7 @@
 .task-quick.approve:hover:not(:disabled) { border-color: var(--state-success); color: #d8fbe9; }
 .task-quick:disabled { opacity: 0.6; cursor: not-allowed; }
 .task-quick:focus-visible,
-.task-quick-link:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.task-quick-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-quick-link { font-size: 12.5px; color: var(--accent); white-space: nowrap; text-decoration: none; }
 .task-quick-link:hover { color: var(--accent-hi); }
 .row.has-quick-error {
@@ -356,7 +361,7 @@
 .operation-cadence:focus-visible,
 .operation-details summary:focus-visible,
 .operation-action-unavailable:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -388,7 +393,7 @@
   font: 11px var(--font-mono);
 }
 .task-pagination button:disabled { color: var(--fg-dim); opacity: 0.55; }
-.task-pagination button:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.task-pagination button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #tasks-page-status { margin-right: auto; color: var(--fg-dim); font: 11px var(--font-mono); }
 #tasks-page-status.error { color: var(--state-error); }
 
@@ -463,9 +468,6 @@
   background: transparent;
   border-bottom: none;
   min-height: 32px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-mute);
   pointer-events: none;
 }
 .row.header:hover {
@@ -477,9 +479,9 @@
 .row.header .status-cell,
 .row.header .crew-cell,
 .row.header .task-quick-cell {
-  font-size: inherit;
+  /* Every cell reads as the shared `.col-head` the row carries. */
+  font: inherit;
   color: inherit;
-  font-family: var(--font-sans);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -491,7 +493,7 @@ main.tasks-layout {
   grid-template-columns: minmax(0, 1fr) var(--dock-w, clamp(336px, 32%, 720px));
 }
 @media (max-width: 1250px) {
-  main.tasks-layout {
+  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
     grid-template-columns: minmax(0, 2fr) var(--dock-w, minmax(280px, 1.15fr)) !important;
   }
 }
@@ -502,7 +504,7 @@ main.tasks-layout {
    log panel follows underneath rather than both being squeezed into
    slivers side by side. */
 @media (max-width: 900px) {
-  main.tasks-layout {
+  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
     grid-template-columns: 1fr !important;
   }
 
@@ -539,4 +541,3 @@ main.tasks-layout {
     z-index: 5;
   }
 }
-

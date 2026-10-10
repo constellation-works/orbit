@@ -8,7 +8,7 @@
 // the dashboard uses, so plugin-authored text cannot introduce script or
 // event handlers.
 
-import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, isHttpUrl, onWorkspaceChange, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, isHttpUrl, onWorkspaceChange, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -99,7 +99,7 @@ function pluginCard(plugin) {
     el('span', { class: `plugin-status status-${plugin.status}`, text: plugin.status }),
     plugin.pinned ? el('span', { class: 'plugin-chip', text: 'pinned' }) : null,
     plugin.unsandboxed ? el('span', { class: 'plugin-chip plugin-chip-warn', text: 'unsandboxed' }) : null,
-    plugin.certified_orbit_version ? el('span', { class: 'plugin-chip', text: `certified for ${plugin.certified_orbit_version}` }) : null,
+    certificationChip(plugin),
   ].filter(Boolean)));
   if (plugin.description) card.appendChild(el('p', { class: 'plugin-description', text: plugin.description }));
   // The diagnostic is the whole reason a non-active plugin is listed at all.
@@ -127,6 +127,45 @@ function pluginCard(plugin) {
   return card;
 }
 
+// Compare SemVer precedence, including release candidates; build metadata
+// does not make a certification older. Unknown versions cannot prove lag.
+function certificationBehind(certified, host) {
+  const parse = value => {
+    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([\da-zA-Z-]+(?:\.[\da-zA-Z-]+)*))?(?:\+[\da-zA-Z-]+(?:\.[\da-zA-Z-]+)*)?$/.exec(value || '');
+    if (!match) return null;
+    const pre = match[4]?.split('.') || [];
+    if (pre.some(part => /^\d+$/.test(part) && part.length > 1 && part.startsWith('0'))) return null;
+    return { core: match.slice(1, 4).map(BigInt), pre };
+  };
+  const a = parse(certified), b = parse(host);
+  if (!a || !b) return false;
+  for (let i = 0; i < a.core.length; i++) {
+    if (a.core[i] !== b.core[i]) return a.core[i] < b.core[i];
+  }
+  if (!a.pre.length || !b.pre.length) return Boolean(a.pre.length && !b.pre.length);
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+    const left = a.pre[i], right = b.pre[i];
+    if (left === right) continue;
+    if (left === undefined || right === undefined) return left === undefined;
+    const leftNumeric = /^\d+$/.test(left), rightNumeric = /^\d+$/.test(right);
+    if (leftNumeric !== rightNumeric) return leftNumeric;
+    return leftNumeric ? BigInt(left) < BigInt(right) : left < right;
+  }
+  return false;
+}
+
+function certificationChip(plugin) {
+  if (!plugin.certified_orbit_version) return null;
+  const behind = certificationBehind(plugin.certified_orbit_version, plugin.host_orbit_version);
+  return el('span', {
+    class: `plugin-chip plugin-certification${behind ? ' plugin-chip-warn' : ''}`,
+    text: `certified for ${plugin.certified_orbit_version}${behind ? ' · behind host' : ''}`,
+    title: behind
+      ? `Certification predates this host's Orbit ${plugin.host_orbit_version}; compatibility with this version has not been certified.`
+      : `Conformance certification for Orbit ${plugin.certified_orbit_version}${plugin.host_orbit_version ? `; host runs ${plugin.host_orbit_version}` : '; host version unavailable'}.`,
+  });
+}
+
 function pluginEnablement(plugin) {
   const section = el('div', { class: 'plugin-enablement' });
   const states = [
@@ -137,7 +176,7 @@ function pluginEnablement(plugin) {
     const row = el('div', { class: `plugin-scope plugin-scope-${scope}` });
     row.appendChild(el('span', { text: `${scope === 'host' ? 'Host' : 'Workspace'}: ${enabled ? 'enabled' : 'disabled'}${scope === 'workspace' && plugin.workspace_toggle == null ? ' (inherited)' : ''}` }));
     const action = enabled ? 'disable' : 'enable';
-    if (plugin.capabilities?.[action]?.authorized === true) {
+    if (plugin.capabilities?.[action]?.authorized === true && !hostWriteRefusal()) {
       const button = el('button', { class: 'plugin-toggle', text: `${action === 'enable' ? 'Enable' : 'Disable'} ${scope}` });
       button.type = 'button';
       button.disabled = pendingChanges.has(plugin.name);
@@ -159,10 +198,17 @@ async function changePlugin(plugin, scope, action, section) {
   const buttons = Array.from(section.children).flatMap(row => Array.from(row.children)).filter(node => node.tagName === 'BUTTON');
   for (const button of buttons) button.disabled = true;
   try {
-    await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/${action}`, { scope });
-    await fetchAndRenderPlugins();
-  } catch (error) {
-    if (revision === getWorkspaceRevision()) changeErrors.set(plugin.name, error.message || String(error));
+    try {
+      await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/${action}`, { scope });
+    } catch (error) {
+      if (revision === getWorkspaceRevision()) changeErrors.set(plugin.name, error.message || String(error));
+      return;
+    }
+    try {
+      await fetchAndRenderPlugins();
+    } catch (_) {
+      // requestPanel reports a failed refresh as stale panel data.
+    }
   } finally {
     pendingChanges.delete(plugin.name);
     for (const button of buttons) button.disabled = false;

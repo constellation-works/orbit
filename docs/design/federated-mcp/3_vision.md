@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Vision
 owner: grok
-last_updated: 2026-09-24
-last_validated: 2026-09-24
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Draft
 feature: federated-mcp
 doc_role: vision
@@ -23,7 +23,7 @@ Forward-looking only. The contract in [specs/federated-workspace-mcp.md](./specs
 1. **Transport authentication.** ~~What authenticated principal does a destination Core receive on a mux-forwarded call?~~ **Resolved, then withdrawn as a question** by [ORB-12564]. The two-tier answer ([ORB-11052], [ORB-11053]) was built and removed: it made the destination declare each caller's ceiling, but the ceiling lived in a file that same caller could rewrite over the SSH login it already held, and the tier that would have made it real ([ORB-11053]'s `authorized_keys` forced command and setgid launcher) is the machinery a *multi-tenant* destination needs. Orbit has no such deployment. The standing answer is that a destination receives no authenticated principal and needs none: an SSH login to it is ownership of it, so it serves the authority the session's argv asks for, and `--operator` on the calling client propagates into every destination it opens. The caller-side guard is that a client running as an agent never propagates it. `--remote-caller-machine-id` stays an audit label. See [4_decisions.md](./4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it); the removed caller-authorization spec is in git history. `orbit mcp listen` authenticates nobody and keeps its hardcoded `agent`, unchanged.
 
 2. **Selector expiry.** Does a host-qualified selector remain valid across destination catalog edits, host re-init, and mux restarts, or does it expire? If it expires, what is the caller-visible error, and how does that differ from `stale_route`?
-3. **Health freshness.** How old may host-reachability and checkout-health be when listed? Is the list a live probe, a cached projection with explicit freshness, or a last-known snapshot for unreachable hosts? The spec requires including unreachable hosts and requires routing to decide on live delivery rather than cached list health; it does not yet define probe cadence or staleness thresholds.
+3. **Health freshness.** The shipped list probes configured destinations concurrently on each request and includes unreachable hosts, reporting unknown checkout health when a destination cannot be probed. What caller-visible freshness guarantee or timestamp should a descriptor expose as destination count and probe time grow? No staleness threshold or age field is defined.
 4. **Cloud coordination-store details.** The declared control-plane authority may later offload the coordination store. What is the persistence contract, how do execution-binding hosts refer to it, and how does destination Core still refuse task issuance locally without implying replication?
 
 ## 2. Prior Work

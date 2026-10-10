@@ -52,14 +52,19 @@ use orbit_registry::workspace_registry;
 use orbit_types::workspace::WorkspaceStatus;
 use serde_json::json;
 
+use crate::doctor_report::DoctorReports;
+use crate::host_tunnels::{HostTunnels, TunnelConfig};
 use crate::runtime_memo::RuntimeMemo;
 
 mod dashboard;
+mod hosts;
 mod registry;
 mod request;
 
 pub(crate) use dashboard::DashboardState;
 use dashboard::StateInner;
+use hosts::HostFileState;
+pub(crate) use hosts::PinnedHosts;
 
 pub(crate) use registry::RegistrySource;
 use registry::{CheckoutFingerprint, RegistryFingerprint, checkout_fingerprints};

@@ -117,7 +117,7 @@ pub struct JobV2Step {
 /// `parallel`, `fan_out`, or `loop` body keys.
 ///
 /// `TargetRef` and `Target` are distinct variants so the executor only ever
-/// sees `Target` after [`super::catalog::resolve_job_target_refs`] runs at
+/// sees `Target` after `resolve_job_target_refs` runs at
 /// load time. A `TargetRef` that survives into dispatch is a caller bug —
 /// the job executor should never have to look up an activity by name.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -261,7 +261,7 @@ fn deserialize_optional_string<E: serde::de::Error>(
 
 /// Flat target step: inlines an `ActivityV2Spec` directly on the step. This
 /// is the shape the executor operates on — [`TargetRef`] is rewritten to
-/// `TargetStep` by [`super::catalog::resolve_job_target_refs`] before
+/// `TargetStep` by `resolve_job_target_refs` before
 /// dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TargetStep {
@@ -289,7 +289,7 @@ pub struct TargetStep {
 /// Named target reference — `target: activity:<name>` in YAML. Phase 4
 /// introduces this so job YAMLs can reference activities by name instead of
 /// inlining the full spec. The resolver in
-/// [`super::catalog::resolve_job_target_refs`] looks the name up in the
+/// `resolve_job_target_refs` looks the name up in the
 /// workspace catalog and rewrites this variant to [`TargetStep`] with the
 /// named `ActivityV2Spec` inlined. All other fields (`default_input`,
 /// `timeout_seconds`, `session`) carry through unchanged.

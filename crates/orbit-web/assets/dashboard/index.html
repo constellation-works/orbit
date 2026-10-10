@@ -10,6 +10,7 @@
     <script src="/static/vendor/purify.min.js"></script>
     <link rel="stylesheet" href="/static/dashboard.css">  </head>
   <body>
+    <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
       <!-- ORB-10972: the top-level nav is a left rail. It keeps the `.tab` /
            `.subtab` classes and the `#diag-subtabs` id the router selects on,
@@ -24,8 +25,10 @@
         </svg>
         </div>
 
-        <!-- The workspace picker sits under the brand: it scopes every view, so
-             it belongs above the destinations it scopes, not below the fold. -->
+        <!-- The host and workspace pickers sit under the brand: they scope every
+             view, so they belong above the destinations they scope, not below
+             the fold. The host comes first because it scopes the workspace list. -->
+        <div class="rail-host" id="rail-host"></div>
         <div class="rail-workspace" id="rail-workspace"></div>
 
         <div class="tabs" id="tabs">
@@ -41,6 +44,7 @@
           <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span></button>
             <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
               <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
+              <button class="subtab" data-subtab="doctor" type="button">Doctor</button>
               <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability<span class="rail-count" id="rail-count-diag-reliability"></span></button>
               <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
@@ -66,6 +70,7 @@
               <button class="subtab" data-subtab="crews" type="button">Crews</button>
               <button class="subtab" data-subtab="keys" type="button">Keys</button>
               <button class="subtab" data-subtab="system" type="button">System</button>
+              <button class="subtab" data-subtab="hosts" type="button">Hosts</button>
             </nav>
           </div>
         </div>
@@ -73,7 +78,7 @@
         <div class="rail-foot">
           <div class="rail-conn">
             <span id="conn-status" class="status-dot orange"></span>
-            <span id="meta-text">connecting&hellip;</span>
+            <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
           </div>
         </div>
       </nav>
@@ -81,27 +86,33 @@
       <div class="main-col">
         <header class="topbar">
           <h1 class="crumb" id="topbar-crumb">Tasks</h1>
-          <!-- The four health metrics read as counts with plain labels, and each
-               one opens the view that explains it. Same ids for the values. -->
-          <div class="kpis" id="health-strip" role="group" aria-label="Windowed health and live host resources">
-            <button type="button" class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Opens Runs filtered to failures."><span class="v" id="tile-failed-value">-</span><span class="k">failed runs</span></button>
-            <button type="button" class="kpi" id="tile-denials" title="Policy denials in the selected window. Opens Audit &gt; Policy."><span class="v" id="tile-denials-value">-</span><span class="k">policy denials</span></button>
-            <button type="button" class="kpi" id="tile-active" title="Runs still going after longer than 95% of this window's finished runs took. Opens live runs."><span class="v" id="tile-active-value">-</span><span class="k">running long</span></button>
-            <button type="button" class="kpi" id="tile-events" title="Audited events in the selected window. Opens Audit."><span class="v" id="tile-events-value">-</span><span class="k">events</span><svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg></button>
-            <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
-            <div class="host-resource-chips" id="host-resource-chips" role="group" aria-label="Live serving host resources" aria-live="polite">
-              <span class="kpi host-resource unknown" tabindex="0" title="CPU unknown · sample unavailable · Throttle verdict: unknown"><span class="v">-</span><span class="k">cpu</span></span>
-              <span class="kpi host-resource unknown" tabindex="0" title="Memory unknown · sample unavailable · Throttle verdict: unknown"><span class="v">-</span><span class="k">memory</span></span>
-              <span class="kpi host-resource unknown" tabindex="0" title="Disk unknown · sample unavailable · Throttle verdict: unknown"><span class="v">-</span><span class="k">disk</span></span>
+          <!-- Live readings for the selected host: load relative to cores, memory
+               and disk. The group names that host. Each chip is sized for its
+               widest usual reading, so a new reading or a throttle verdict does
+               not move the bar. The windowed counts sit on the rail (failed runs
+               on Runs, events on Audit). -->
+          <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
+            <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
+            <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
+              <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">-</span></span>
+              <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
+              <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
             </div>
           </div>
           <span class="topbar-spacer"></span>
-          <button id="global-drain-state" class="global-drain-state" type="button" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span></button>
-          <button id="refresh-btn" class="refresh-btn" type="button">Refresh</button>
+          <button id="global-drain-state" class="global-drain-state" type="button" title="Open Drain card" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span></button>
+          <button id="refresh-btn" class="refresh-btn" type="button" title="Refresh dashboard"><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 0 4M16 3v5h-5"/></svg><span class="refresh-label">Refresh</span></button>
         </header>
+        <!-- ORB-14680: the selected host's state. An unreachable, mismatched or
+             too-old host replaces every panel with one host-level state; a
+             host on another version or protocol keeps a non-blocking banner. -->
+        <div class="host-banner" id="host-skew" role="status" hidden></div>
+        <div class="host-banner host-read-only" id="host-read-only" role="status" hidden></div>
+        <section class="host-state" id="host-state" aria-labelledby="host-state-title" hidden></section>
+        <div class="visually-hidden" id="host-announcer" role="status" aria-live="polite"></div>
 
     <section class="tab-pane" data-tab="tasks">
-      <main class="tasks-layout">
+      <main class="tasks-layout" id="tasks-main">
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
             <header class="tasks-head">
@@ -121,7 +132,7 @@
               <span id="tasks-page-status" role="status" aria-live="polite"></span>
               <button id="tasks-next" type="button" disabled>Next</button>
             </nav>
-            <div class="body" id="tasks-body">
+            <div class="body" id="tasks-body" tabindex="0" role="region" aria-label="Task list">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -149,7 +160,7 @@
             <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
               <header>
                 <span class="drain-title"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-title">Auto-drain</span></span>
-                <span class="drain-live" id="auto-drain-live">idle</span>
+                <span class="drain-live" id="auto-drain-live">—</span>
               </header>
               <div class="body" id="auto-drain-body">
                 <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
@@ -169,11 +180,12 @@
                 <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>
                 <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>
                 <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>
+                <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">agent</button>
                 <button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><b>&#8595;</b> follow</button>
                 <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">wrap</button>
                 <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
               </div>
-              <div class="log-stream">
+              <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
                 <div class="inner" id="logInner"></div>
               </div>
             </section>
@@ -181,11 +193,11 @@
         </div>
       </main>
     </section>
-    <section class="tab-pane" data-tab="audit">
+    <section class="tab-pane" data-tab="audit" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main class="tasks-layout" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="audit-pane">
-            <header><span id="audit-title">Audit Events</span><span class="count" id="audit-count">-</span></header>
+            <header><span id="audit-title">Audit events</span><span class="count" id="audit-count">-</span></header>
             <nav class="subtabs" id="audit-subtabs">
               <button class="subtab" data-subtab="events" type="button">Events</button>
               <button class="subtab" data-subtab="policy" type="button">Policy</button>
@@ -195,7 +207,7 @@
               <div id="audit-scope-chips" class="scope-chips" aria-label="Active audit scope"></div>
               <div id="audit-filter"></div>
             </div>
-            <div class="body scoreboard-table-wrap" id="audit-body">
+            <div class="body scoreboard-table-wrap" id="audit-body" tabindex="0" role="region" aria-label="Audit events">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -212,18 +224,18 @@
         </div>
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="audit-summary-panel">
-            <header><span id="audit-summary-title">Audit Summary 24h</span></header>
-            <div class="body" id="audit-summary-body" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
+            <header><span id="audit-summary-title">Audit summary 24h</span></header>
+            <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
             </div>
           </section>
         </div>
       </main>
     </section>
-    <section class="tab-pane" data-tab="run-detail">
+    <section class="tab-pane" data-tab="run-detail" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: 1fr;">
         <section class="panel" id="run-detail-panel">
           <header>
-            <span id="run-detail-title">Run Detail</span>
+            <span id="run-detail-title">Run detail</span>
             <span class="count" id="run-detail-count">-</span>
           </header>
           <div class="body" id="run-detail-meta">
@@ -243,7 +255,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="diagnostics">
+    <section class="tab-pane" data-tab="diagnostics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main class="tasks-layout" id="diagnostics-main" style="grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr);">
         <div style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="diagnostics-panel">
@@ -251,13 +263,13 @@
               <span id="diag-title">Diagnostics</span>
               <span class="count" id="diag-count">-</span>
             </header>
-            <div class="body scoreboard-table-wrap" id="diag-body" style="display: none;">
+            <div class="body scoreboard-table-wrap" id="diag-body" tabindex="0" role="region" aria-label="Health diagnostics">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 75%"></div>
               </div>
             </div>
-            <div class="body" id="runs-body" style="display: none;">
+            <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -267,11 +279,28 @@
         </div>
         <div id="diagnostics-side-col" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="diagnostics-side-panel">
-            <header><span>Diagnostics Summary</span></header>
+            <header><span>Diagnostics summary</span></header>
             <div class="body" id="diag-implement-one-body" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);">
             </div>
           </section>
         </div>
+      </main>
+      <!-- ORB-14830: `orbit doctor` for the selected workspace on the selected
+           host. Read-only: the panel runs the checks on open and on Refresh,
+           and offers each remediation's commands to copy; repairs stay CLI. -->
+      <main id="diagnostics-doctor-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="doctor-panel">
+          <header>
+            <span>Doctor</span>
+            <span class="count" id="doctor-count">-</span>
+          </header>
+          <div class="scoreboard-controls" id="doctor-controls">
+            <span class="scoreboard-controls-meta doctor-meta" id="doctor-meta">Not run yet</span>
+            <span class="scoreboard-controls-spacer"></span>
+            <button class="action preview" id="doctor-refresh" type="button" title="Run orbit doctor again (read-only)">Refresh</button>
+          </div>
+          <div class="body doctor-body" id="doctor-body" tabindex="0" role="region" aria-label="Doctor checks" aria-live="polite"></div>
+        </section>
       </main>
       <!-- ORB-10588: pipeline reliability. Like the scoreboard it replaces the
            two-column diagnostics layout with its own full-width <main>. Every
@@ -280,7 +309,7 @@
       <main id="diagnostics-reliability-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="reliability-panel">
           <header>
-            <span>Pipeline Reliability</span>
+            <span>Pipeline reliability</span>
             <span class="scope-badge independent" id="reliability-scope-badge">Fleet-wide</span>
             <span class="count" id="reliability-count">-</span>
           </header>
@@ -302,7 +331,7 @@
           <p class="rel-note" id="reliability-denominator-note"></p>
           <p class="rel-note rel-note-warn" id="reliability-truncation-note" style="display: none;"></p>
           <div class="rel-chart-wrap">
-            <div class="rel-chart-title">Job-run failure rate over time</div>
+            <div class="rel-chart-title section-title">Job-run failure rate over time</div>
             <div class="rel-chart" id="reliability-over-time"></div>
             <div class="rel-chart-axis" id="reliability-over-time-axis"></div>
           </div>
@@ -312,7 +341,7 @@
           <div class="body" id="reliability-breakdown" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);"></div>
         </section>
         <section class="panel" id="reliability-activities-panel">
-          <header><span>Recovery Evidence</span></header>
+          <header><span>Recovery evidence</span></header>
           <div class="body" id="reliability-activities" style="padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; background: var(--bg);"></div>
         </section>
       </main>
@@ -353,7 +382,7 @@
         </section>
         <section class="panel" id="scoreboard-orchestration-panel">
           <header>
-            <span>Managed Execution Cost &amp; Token Usage</span>
+            <span>Managed execution cost &amp; token usage</span>
             <span class="count" id="scoreboard-orchestration-count">—</span>
           </header>
           <div class="body" id="scoreboard-orchestration">
@@ -369,7 +398,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="operations">
+    <section class="tab-pane" data-tab="operations" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <p id="operations-session" class="operations-readonly-note" role="status"></p>
       <main class="operations-layout operations-routines-layout" id="operations-routines-main">
         <section class="panel operation-clock-panel" id="clock-panel">
@@ -415,7 +444,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="knowledge">
+    <section class="tab-pane" data-tab="knowledge" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
         <section class="panel" id="knowledge-panel">
           <header><span>Knowledge</span><span class="count" id="knowledge-count" role="status" aria-live="polite" aria-atomic="true">-</span></header>
@@ -458,7 +487,7 @@
           </div>
         </section>
         <section class="panel" id="friction-detail-panel">
-          <header><span>Friction Detail</span><span class="count" id="friction-detail-count">-</span></header>
+          <header><span>Friction detail</span><span class="count" id="friction-detail-count">-</span></header>
           <div class="body" id="friction-detail">
             <div class="empty-state">
               <div class="icon">✧</div>
@@ -468,7 +497,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="plugins">
+    <section class="tab-pane" data-tab="plugins" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- One generic surface for every installed plugin: its state, the
            panels its manifest declares, and its link tiles. No plugin ships
            markup or script, so a new plugin needs no dashboard edit. -->
@@ -491,7 +520,7 @@
         </section>
       </main>
     </section>
-    <section class="tab-pane" data-tab="config">
+    <section class="tab-pane" data-tab="config" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- ORB-12724: the Config tab reads the same layered resolution
            `orbit config show` prints, so a row's value, its layer, and the
            lower layer it shadows are the server's answer, not the client's. -->
@@ -501,7 +530,7 @@
             <span>Configuration</span>
             <span class="count" id="config-count">-</span>
           </header>
-          <p class="config-explainer">
+          <p class="config-explainer" id="config-explainer">
             What this workspace actually runs on: every setting with the layer its value came from.
             An edit writes one key to the workspace <span class="mono">.orbit/config.toml</span> (per-user, git-ignored); the System view edits the global file instead.
           </p>

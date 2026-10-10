@@ -7,6 +7,40 @@ use super::super::manager::ClockPlatform;
 use super::super::settings::ClockSettings;
 use super::support::MockRunner;
 
+#[test]
+fn installed_systemd_unit_has_recovery_settings_that_pass_inspection() {
+    use super::super::inspect::{ClockUnitVerdict, RunningBinary, inspect_clock_unit_at};
+    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let program = root.path().join("orbit");
+    fs::write(&program, "fixture").unwrap();
+    let runner = MockRunner::new(vec![Ok(false)]);
+    let report = install_clock_with(
+        root.path(),
+        program.to_str().unwrap(),
+        ClockSettings::default(),
+        ClockPlatform::Systemd,
+        &runner,
+        home.path(),
+    )
+    .unwrap();
+    assert!(!report.activated, "fixture manager unavailable");
+    let inspected = inspect_clock_unit_at(
+        home.path(),
+        ClockPlatform::Systemd,
+        &RunningBinary {
+            path: program,
+            version: "1.0.0".into(),
+        },
+        |_| Ok("1.0.0".into()),
+    );
+    assert_eq!(
+        inspected.verdict,
+        ClockUnitVerdict::Matching,
+        "installed recovery settings must be finite and clean up descendants"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn sweep_log_path_rejects_symlinked_directory() {

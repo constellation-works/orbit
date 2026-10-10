@@ -1,16 +1,18 @@
 use std::cell::Cell;
 use std::io::Read;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
-    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, should_retry_git_ref_cas,
-    with_git_fetch_lock,
+    GIT_FETCH_CAS_ATTEMPTS, GIT_FETCH_LOCK_HOLD_LIMIT, GIT_REMOTE_TIMEOUT,
+    git_fetch_cas_retry_delay, should_retry_git_ref_cas, with_git_fetch_lock,
 };
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
 };
+use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
 use serde_json::Value;
 
 /// Bounded wall-clock budgets for host Git children.
@@ -162,12 +164,25 @@ pub(crate) fn git_timeout_error(
     timeout_ms: u64,
     stderr: &str,
 ) -> OrbitError {
-    OrbitError::Execution(format!(
-        "git {} timed out after {timeout_ms}ms in '{}': {}",
-        args.join(" "),
-        current_dir.display(),
-        stderr.trim()
-    ))
+    timeout_recovery_error(
+        timeout_ms,
+        format!(
+            "git {} timed out after {timeout_ms}ms in '{}': {}",
+            args.join(" "),
+            current_dir.display(),
+            stderr.trim()
+        ),
+    )
+}
+
+/// An execution failure caused by a Git deadline, worded by the caller. The
+/// timeout class travels in the variant, so recovery guidance never has to
+/// recognize it from the text.
+pub(crate) fn timeout_recovery_error(timeout_ms: u64, message: String) -> OrbitError {
+    OrbitError::ExecutionTimeout {
+        timeout_ms,
+        message,
+    }
 }
 
 pub(crate) fn git_failure_error(current_dir: &Path, args: &[&str], stderr: &str) -> OrbitError {
@@ -251,6 +266,8 @@ fn git_args(args: &[&str]) -> Vec<String> {
     let mut secured = vec![
         "-c".to_string(),
         "core.hooksPath=/dev/null".to_string(),
+        "-c".to_string(),
+        "core.fsmonitor=false".to_string(),
         "-c".to_string(),
         "gc.auto=0".to_string(),
     ];
@@ -366,28 +383,108 @@ pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<b
 /// Serializes with other Orbit-owned fetches through the git-common-dir
 /// lock so linked worktrees and task-pilot prepare do not CAS-fail the
 /// same `refs/remotes/origin/*` ref.
+/// Timeouts and transport failures retry within the same bounded attempt
+/// count, with backoff. Exhaustion carries the transient failure marker;
+/// authentication, permission and missing-ref refusals remain ordinary errors.
+///
+/// The lock is held for at most [`GIT_FETCH_LOCK_HOLD_LIMIT`] in total across
+/// attempts and backoff, so a stalled remote cannot outlast the waiters (task
+/// pilot, final recovery) and turn into their lock timeouts. Each attempt gets
+/// the smaller of the activity's fetch budget, [`GIT_REMOTE_TIMEOUT`] and
+/// what is left of that limit; a raised `git_timeouts.fetch` cannot lengthen
+/// the hold.
 pub fn fetch_remote_base(repo_root: &Path, base: &str) -> Result<(), OrbitError> {
-    let branch = normalize_base_branch(base)?;
-    with_git_fetch_lock(repo_root, || fetch_remote_base_locked(repo_root, &branch))
+    fetch_remote_base_within(repo_root, base, GIT_FETCH_LOCK_HOLD_LIMIT)
 }
 
-fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
+pub(crate) fn fetch_remote_base_within(
+    repo_root: &Path,
+    base: &str,
+    hold_limit: Duration,
+) -> Result<(), OrbitError> {
+    let branch = normalize_base_branch(base)?;
+    with_git_fetch_lock(repo_root, || {
+        fetch_remote_base_locked(repo_root, &branch, hold_limit)
+    })
+}
+
+fn fetch_remote_base_locked(
+    repo_root: &Path,
+    branch: &str,
+    hold_limit: Duration,
+) -> Result<(), OrbitError> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    let held_since = Instant::now();
     let mut last_stderr = String::new();
+    let mut last_transport_error: Option<OrbitError> = None;
     for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
-        let outcome = git_run(repo_root, &["fetch", "origin", &spec])?;
-        if outcome.timed_out {
-            return Err(git_timeout_error(
-                repo_root,
-                &["fetch", "origin", &spec],
-                outcome.timeout_ms,
-                &outcome.stderr,
-            ));
+        let remaining = hold_limit.saturating_sub(held_since.elapsed());
+        if remaining.is_zero() {
+            return Err(match last_transport_error {
+                Some(error) => {
+                    let message = format!(
+                        "{TRANSIENT_FAILURE_MARKER} remote base fetch hit the {}ms fetch-lock hold limit after {attempt} attempts: {error}",
+                        hold_limit.as_millis()
+                    );
+                    match error {
+                        OrbitError::ExecutionTimeout { timeout_ms, .. } => {
+                            timeout_recovery_error(timeout_ms, message)
+                        }
+                        _ => OrbitError::Execution(message),
+                    }
+                }
+                None => OrbitError::Execution(format!(
+                    "failed to fetch remote base 'origin/{branch}' in '{}': fetch-lock hold limit of {}ms reached: {last_stderr}",
+                    repo_root.display(),
+                    hold_limit.as_millis()
+                )),
+            });
         }
-        if outcome.success {
+        let outcome = {
+            let current = GitTimeoutBudget::current();
+            let attempt_ms = current
+                .fetch_ms
+                .min(GIT_REMOTE_TIMEOUT.as_millis() as u64)
+                .min(remaining.as_millis().max(1) as u64);
+            let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
+                fetch_ms: attempt_ms,
+                ..current
+            });
+            git_run(repo_root, &["fetch", "origin", &spec])?
+        };
+        if outcome.success && !outcome.timed_out {
             return Ok(());
         }
+        if outcome.timed_out || is_git_transport_failure(&outcome.stderr) {
+            let error = if outcome.timed_out {
+                git_timeout_error(
+                    repo_root,
+                    &["fetch", "origin", &spec],
+                    outcome.timeout_ms,
+                    &outcome.stderr,
+                )
+            } else {
+                git_failure_error(repo_root, &["fetch", "origin", &spec], &outcome.stderr)
+            };
+            if attempt + 1 == GIT_FETCH_CAS_ATTEMPTS {
+                let message = format!(
+                    "{TRANSIENT_FAILURE_MARKER} remote base fetch failed after {} attempts: {error}",
+                    attempt + 1
+                );
+                return Err(if outcome.timed_out {
+                    timeout_recovery_error(outcome.timeout_ms, message)
+                } else {
+                    OrbitError::Execution(message)
+                });
+            }
+            tracing::warn!(attempt, branch, %error, "retrying remote base fetch after transport failure");
+            last_transport_error = Some(error);
+            let backoff = Duration::from_millis(250 * (1 << attempt));
+            std::thread::sleep(backoff.min(hold_limit.saturating_sub(held_since.elapsed())));
+            continue;
+        }
         last_stderr = outcome.stderr.trim().to_string();
+        last_transport_error = None;
         if should_retry_git_ref_cas(attempt, &last_stderr) {
             tracing::warn!(
                 attempt,
@@ -404,6 +501,50 @@ fn fetch_remote_base_locked(repo_root: &Path, branch: &str) -> Result<(), OrbitE
         "failed to fetch remote base 'origin/{branch}' in '{}': {last_stderr}",
         repo_root.display()
     )))
+}
+
+/// Match transport diagnostics narrowly: an access refusal may also mention
+/// a closed connection, but must never become an inconclusive network result.
+fn is_git_transport_failure(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    if [
+        "authentication failed",
+        "permission denied",
+        "access denied",
+        "could not read username",
+        "terminal prompts disabled",
+        "host key verification failed",
+        "ssl certificate problem",
+        "couldn't find remote ref",
+        "repository not found",
+        "not a git repository",
+        "the requested url returned error: 4",
+    ]
+    .iter()
+    .any(|refusal| text.contains(refusal))
+    {
+        return false;
+    }
+    [
+        "could not resolve host",
+        "could not resolve proxy",
+        "could not resolve hostname",
+        "unable to look up",
+        "failed to connect",
+        "couldn't connect to server",
+        "connection refused",
+        "connection timed out",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "network is unreachable",
+        "no route to host",
+        "operation timed out",
+        "remote end hung up unexpectedly",
+        "early eof",
+    ]
+    .iter()
+    .any(|transport| text.contains(transport))
 }
 
 pub(in crate::executor::automation) fn resolve_worktree_start_point(

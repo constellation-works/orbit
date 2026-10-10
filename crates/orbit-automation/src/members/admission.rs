@@ -1,11 +1,13 @@
 //! Acknowledge a claimed member attempt with Core, or retire it as failed input.
 
 use super::evaluate::{active_batch, diagnostic_with_batch, member_state};
+use super::observe::{CAPACITY, retire_superseded};
 use super::{MemberAdmission, MemberHost};
 use crate::AutomationError;
 use crate::checkpoint::commit;
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
+use std::collections::BTreeSet;
 
 /// Acknowledge the active attempt with Core. `batch` carries the due reasons
 /// of a claim made this pass; a resumed claim reports its members as admitted.
@@ -53,10 +55,54 @@ pub(super) fn admit(
 }
 
 /// Record `attempt` as the exhausted failed input of every member it still
-/// carries, so none of them refires at the same fingerprint.
-pub(super) fn retire_attempt(members: &mut MemberState, mut attempt: MemberAttempt) {
-    attempt.exhausted = true;
-    for member in attempt.members().to_vec() {
-        members.failed.insert(member.key, attempt.clone());
+/// carries, so none of them refires at the same fingerprint. Each member
+/// keeps its own failure record rather than a copy of the whole batch.
+pub(super) fn retire_attempt(
+    host: &dyn MemberHost,
+    members: &mut MemberState,
+    attempt: MemberAttempt,
+) -> Result<(), AutomationError> {
+    for member in attempt.members() {
+        if let Some(record) = attempt.failure_record(&member.key) {
+            members.failed.insert(member.key.clone(), record);
+        }
     }
+    fit_failed(host, members, &attempt)
+}
+
+/// Fit the failed records `retired` just wrote under the store's cap.
+/// Admission reserves that room for every attempt it claims; a consumer that
+/// claimed past it before that reservation existed first retires the records
+/// of members the source no longer observes, with their pending entries,
+/// rather than refusing every pass. Assessments stay: a receipt settling
+/// this attempt certifies exactly the ones it adds.
+pub(super) fn fit_failed(
+    host: &dyn MemberHost,
+    members: &mut MemberState,
+    retired: &MemberAttempt,
+) -> Result<(), AutomationError> {
+    if members.failed.len() <= CAPACITY {
+        return Ok(());
+    }
+    let kept = retired
+        .members()
+        .iter()
+        .map(|member| member.key.clone())
+        .collect::<BTreeSet<_>>();
+    retire_superseded(members, &kept);
+
+    let keys = members
+        .failed
+        .keys()
+        .filter(|key| !kept.contains(*key))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let observable = host.observable(&keys)?;
+    for key in keys.difference(&observable) {
+        members.failed.remove(key);
+        members.pending.remove(key);
+        members.withheld.remove(key);
+    }
+
+    Ok(())
 }

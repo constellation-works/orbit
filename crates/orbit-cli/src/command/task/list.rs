@@ -65,9 +65,6 @@ pub struct TaskListArgs {
     /// selector under it.
     #[arg(long)]
     pub path: Option<String>,
-    /// Output full task objects as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Output signal-tier JSON (id, title, type, status, priority only)
     #[arg(long)]
     pub ops: bool,

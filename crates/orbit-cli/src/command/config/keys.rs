@@ -6,10 +6,7 @@ use serde_json::json;
 use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
-pub struct ConfigKeysArgs {
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct ConfigKeysArgs {}
 
 impl Execute for ConfigKeysArgs {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {

@@ -4,7 +4,9 @@ use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
-use orbit_core::application::routines::{RetiredRoutine, RoutineStatusReport, recent_fires};
+use orbit_core::application::routines::{
+    OwnerOnlyRoutine, RetiredRoutine, RoutineStatusReport, recent_fires,
+};
 use orbit_types::workflow::automation::members::BatchMember;
 use serde_json::json;
 
@@ -14,9 +16,6 @@ const RECENT_FIRE_LIMIT: usize = 10;
 pub struct RoutineShowArgs {
     /// Routine name.
     pub name: String,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl RoutineShowArgs {
@@ -34,6 +33,15 @@ impl RoutineShowArgs {
                 .find(|routine| routine.name == self.name)
             {
                 return Ok(inactive_detail(&report, routine).into());
+            }
+            // A replica lists what its owner schedules; it resolves here with
+            // the owner-authority reason.
+            if let Some(owned) = report
+                .owner_only
+                .iter()
+                .find(|owned| owned.routine.definition.name == self.name)
+            {
+                return Ok(owner_only_detail(&report, owned).into());
             }
             return Err(OrbitError::InvalidInput(format!(
                 "no routine named '{}' (see `orbit routine list`)",
@@ -214,6 +222,36 @@ fn inactive_detail(report: &RoutineStatusReport, routine: &RetiredRoutine) -> Pa
         routine.origin.as_str(),
         routine.job,
         routine.reason
+    );
+    Payload::detail(doc, out)
+}
+
+fn owner_only_detail(report: &RoutineStatusReport, owned: &OwnerOnlyRoutine) -> Payload {
+    let routine = &owned.routine;
+    let target = routine.definition.target.as_ref_string();
+    let doc = json!({
+        "machine_name": report.machine_name,
+        "machine_id": report.machine_id,
+        "name": routine.definition.name,
+        "source": routine.source_workspace,
+        "origin": routine.origin.as_str(),
+        "path": routine.path.display().to_string(),
+        "target": target,
+        "enabled": routine.definition.enabled,
+        "effective": false,
+        "owner_only": true,
+        "owner_machine": owned.owner_machine,
+        "skipped_reason": owned.reason,
+    });
+    let out = format!(
+        "Name: {}\nSource: {} ({}, {} origin)\nTarget: {}\nEffective on this host: no\n\
+         Owner-only: {}\n",
+        routine.definition.name,
+        routine.source_workspace,
+        routine.path.display(),
+        routine.origin.as_str(),
+        target,
+        owned.reason
     );
     Payload::detail(doc, out)
 }

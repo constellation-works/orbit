@@ -1,18 +1,18 @@
 ---
 type: runbook
-summary: Authoring and maintenance conventions for Orbit operational runbooks.
+summary: Authoring and maintenance conventions for Orbit operator, contributor, and release runbooks.
 tags: [docs, operations, runbooks]
 paths: ["docs/runbooks/**"]
-related_features: [orbit-docs]
+related_features: []
 related_artifacts: []
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 ---
 
 # Runbook Conventions
 
 Runbooks under `docs/runbooks/` are command-first procedures for operating Orbit after
-installation. They optimize for an operator arriving with a concrete goal or symptom, not
-for explaining system design from first principles.
+installation, developing it, and releasing it. They optimize for a reader arriving with
+a concrete goal or symptom, not for explaining system design from first principles.
 
 ## 1. Scope
 
@@ -20,8 +20,9 @@ Create or extend a runbook when the reader needs to do one of these things:
 
 - perform a repeatable operational task;
 - diagnose a recognizable failure mode;
-- recover state safely; or
-- verify that a runtime surface is healthy.
+- recover state safely;
+- verify that a runtime surface is healthy; or
+- build, validate, or release Orbit.
 
 Keep reference material in [`CONFIG.md`](../CONFIG.md), implementation rationale under
 [`docs/design/`](../design/), and reusable code shapes under
@@ -105,3 +106,21 @@ inspection sequence and interpretation notes.
 Do not edit [`../INDEX.md`](../INDEX.md#runbooks) by hand. Give each runbook a precise H1 and
 one-line `summary`, then run `scripts/generate-doc-indexes.sh` from the repository root. Use
 `scripts/generate-doc-indexes.sh --check` to verify that the top-level doc index is current.
+
+The generator's `runbook_group` function maps filenames to exactly one audience group:
+
+- **Operate Orbit** is the default for runbooks about installed Orbit, including onboarding,
+  health checks, state recovery, and runtime administration.
+- **Develop and release** contains these authoring conventions and the explicitly mapped
+  build-budget, compiler-cache, CodeQL, website-validation, dashboard-memory-soak,
+  full-QA-sweep, and release procedures.
+
+When adding a contributor or release procedure, add its filename to the generator's
+**Develop and release** case. New runbooks otherwise appear automatically under
+**Operate Orbit**. Grouping is maintained in this map, not in a frontmatter field.
+
+The same index discovers top-level Markdown guides (excluding `INDEX.md`), all Markdown
+design patterns, and QA Markdown records, including their `README.md`. It uses their H1
+and frontmatter `summary`, falling back to the filename and first body paragraph when
+needed. Add documentation in those locations and regenerate the index; no guide list
+needs manual maintenance.

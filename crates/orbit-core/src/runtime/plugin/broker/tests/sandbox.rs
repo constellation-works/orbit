@@ -8,6 +8,7 @@
 //! cannot run (no Bubblewrap user namespaces, e.g. inside another sandbox).
 
 use std::fs;
+#[cfg(not(target_os = "linux"))]
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -110,19 +111,7 @@ fn platform_sandbox() -> Result<ExecutorSandboxKind, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let applies = orbit_exec::sandbox_exec_path().is_some_and(|path| {
-            std::process::Command::new(path)
-                .args(["-p", "(version 1)\n(allow default)\n", "/usr/bin/true"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
-        });
-        if applies {
-            Ok(ExecutorSandboxKind::MacosSandboxExec)
-        } else {
-            Err("sandbox-exec cannot apply a profile on this host".to_string())
-        }
+        Ok(ExecutorSandboxKind::MacosSandboxExec)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -132,9 +121,15 @@ fn platform_sandbox() -> Result<ExecutorSandboxKind, String> {
 
 /// A scratch tree for one test, or `None` after reporting why it is skipped.
 fn scratch_or_skip(test: &str) -> Option<Scratch> {
+    if !orbit_exec::macos_sandbox_test_guard(test) {
+        return None;
+    }
     match platform_sandbox() {
         Ok(kind) => Some(Scratch::new(kind)),
         Err(reason) => {
+            #[cfg(target_os = "linux")]
+            orbit_exec::report_bwrap_deferral(test, &reason);
+            #[cfg(not(target_os = "linux"))]
             let _ = writeln!(
                 std::io::stderr(),
                 "skipped {test}: the agent sandbox is unavailable: {reason}"
@@ -201,7 +196,13 @@ impl Scratch {
             .iter()
             .find_map(|(key, path)| (*key == RESULT_ENV).then_some(*path))
             .expect("broker client result sentinel");
-        let mut assignments = format!("{CLIENT_ENV}=1");
+        // The provider starts from the runner's cleared environment, so the
+        // child half would not inherit the scrub marker and its pre-`main`
+        // scrub would remove the `ORBIT_PLUGIN_BROKER` the runner exported.
+        let mut assignments = format!(
+            "{CLIENT_ENV}=1 {}=1",
+            orbit_common::test_env::SCRUBBED_MARKER_ENV
+        );
         for (key, value) in env {
             assignments.push_str(&format!(" {key}={}", quote(value)));
         }

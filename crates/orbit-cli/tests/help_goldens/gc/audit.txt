@@ -1,0 +1,38 @@
+Prune audit rows older than `retention.audit_days` and the audit blobs no remaining row names
+
+Usage: orbit gc audit [OPTIONS]
+
+Options:
+      --apply
+          Delete what the plan lists; without this flag the command only reports
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --older-than-days <DAYS>
+          Retention window in days, overriding `retention.audit_days` (default 60)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Without --apply this only reports. The command audit (`audit_events`) is host-wide; run audit rows and blobs are this workspace's. A blob is kept while any remaining run audit row, run step or pipeline state names it, while a pending-publication marker newer than the cutoff names it, and for 24 hours after it was last written. Deletes run in batches of 1,000 rows, each its own write transaction. Freed pages stay in the store file; VACUUM it while Orbit is idle to return them to the filesystem.
+
+Examples:
+  orbit gc audit
+  orbit gc audit --older-than-days 30 --apply --json

@@ -3,23 +3,30 @@
 .runs-row {
   display: grid;
   grid-template-columns:
-    104px minmax(180px, 1.3fr) minmax(170px, 1fr)
-    56px 64px 72px 80px 96px;
+    104px minmax(100px, 1fr) minmax(140px, 1.3fr) minmax(130px, 1fr)
+    56px 68px 84px 84px 96px;
   gap: 12px;
   min-height: 42px;
   padding: 4px 16px;
-  font-size: 13px;
   align-items: center;
   border-bottom: 1px solid var(--hair);
 }
+/* The header row takes its type from the shared `.col-head`. */
+.runs-row:not(.runs-header) { font-size: 13px; }
 .runs-row:not(.runs-header):hover { background: var(--bg-hover); }
-.runs-row .id, .runs-row .run-id, .runs-row .duration, .runs-row .num { font-family: var(--font-mono); font-size: 12.5px; }
+.runs-row:not(.runs-header) .id,
+.runs-row:not(.runs-header) .run-id,
+.runs-row:not(.runs-header) .duration,
+.runs-row:not(.runs-header) .num {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
 .runs-row .run-actions button { font-family: var(--font-sans); font-size: 12.5px; }
 #runs-body { overflow-x: auto; }
 .runs-row.workspace-attributed {
   grid-template-columns:
-    104px minmax(90px, 0.6fr) minmax(170px, 1.2fr) minmax(160px, 1fr)
-    56px 64px 72px 80px 96px;
+    104px minmax(70px, 0.6fr) minmax(90px, 1fr) minmax(130px, 1.3fr) minmax(116px, 1fr)
+    56px 68px 84px 84px 96px;
 }
 .runs-row .run-workspace {
   color: var(--accent);
@@ -27,6 +34,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.run-tasks { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; }
+.run-task-link { display: flex; flex-direction: column; min-width: 0; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.run-task-link:hover { text-decoration: underline; }
+.run-task-id { font-family: var(--font-mono); font-size: 12px; }
+.run-task-title { color: var(--fg-dim); }
+.runs-row .run-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runs-filter {
   display: flex;
   align-items: center;
@@ -72,7 +85,34 @@
   line-height: 1.5;
 }
 .runs-limit-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   color: var(--accent);
+}
+.runs-limit-note .runs-load-more {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.runs-limit-note .runs-load-more:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent-wash);
+}
+.runs-limit-note .runs-load-more:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .runs-row:last-child {
@@ -117,6 +157,7 @@
 }
 .runs-row .duration { color: var(--fg-dim); text-align: right; }
 .runs-row .num { text-align: right; color: var(--fg-dim); }
+.runs-row .duration, .runs-row .num { white-space: nowrap; }
 .runs-row .num.hot { color: var(--state-failed); }
 .runs-row .state { text-align: left; }
 .runs-row .long-run-flag {
@@ -141,11 +182,19 @@
   border-radius: 7px;
   white-space: nowrap;
 }
+.runs-row .run-actions .run-cancel {
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: #e7b8b1;
+}
+.runs-row .run-actions .run-cancel:hover:not(:disabled) {
+  border-color: #5a2a27;
+  background: var(--danger-wash);
+  color: var(--danger-fg);
+}
 .runs-row.runs-header {
   min-height: 34px;
-  color: var(--fg-mute);
-  font-size: 12px;
-  font-weight: 500;
+  white-space: nowrap;
   border-bottom: 1px solid var(--hair);
   cursor: default;
   position: sticky;
@@ -153,28 +202,131 @@
   background: var(--bg-elev);
   z-index: 1;
 }
+.runs-row.runs-header > span,
+.runs-row.runs-header button {
+  white-space: nowrap;
+}
+.runs-row.runs-header .run-actions-header {
+  text-align: right;
+}
 .runs-sort {
   appearance: none;
   border: 0;
   background: transparent;
   color: inherit;
-  font: inherit;
+  font-family: var(--font-sans);
+  font-size: inherit;
+  font-weight: inherit;
   letter-spacing: inherit;
   text-transform: inherit;
+  white-space: nowrap;
   padding: 0;
   cursor: pointer;
 }
 .runs-sort.active { color: var(--fg); }
 
-@media (max-width: 760px) {
-  .runs-row { min-width: 820px; }
-  .runs-row.workspace-attributed { min-width: 940px; }
+/* Where the runs grid overflows through tablet widths, keep its State column
+   pinned while the rest of the table scrolls under it. */
+@media (max-width: 1183px) {
+  /* The grid's tracks overflow the row's auto-sized box at these widths.
+     Give the row its table width so its sticky State cell stays pinned for
+     the full scroll range. */
+  .runs-row { min-width: 1090px; }
+  .runs-row.workspace-attributed { min-width: 1192px; }
+  .runs-row > :first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    box-shadow: inset -1px 0 0 var(--border);
+    z-index: 1;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    margin-top: -4px;
+    margin-bottom: -4px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .runs-row.runs-header > :first-child {
+    z-index: 3;
+    box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border);
+  }
+  .runs-row:not(.runs-header):hover > :first-child {
+    background: var(--bg-hover);
+  }
+}
+
+/* 601–768 px: the filter and notes are pinned at the scroller's own width
+   (`#runs-body` is a size container) so they never scroll away or run past
+   the viewport. */
+@media (max-width: 768px) {
+  #runs-body { container-type: inline-size; }
+  .runs-row { min-width: 1090px; }
+  .runs-row.workspace-attributed { min-width: 1192px; }
   .runs-filter,
   .runs-source-warning,
   .runs-scope-note,
   .runs-limit-note {
-    min-width: max-content;
     position: sticky;
     left: 0;
+    box-sizing: border-box;
   }
+  .runs-source-warning,
+  .runs-scope-note,
+  .runs-limit-note { width: 100cqw; }
+}
+
+/* Phones: each run is a card; the header becomes a row of sort buttons. */
+@media (max-width: 600px) {
+  #runs-body { background: none; }
+  .runs-row,
+  .runs-row.workspace-attributed {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "state state when"
+      "job job job"
+      "workspace workspace workspace"
+      "task task task"
+      "runid runid runid"
+      "denials toolfails duration"
+      "actions actions actions";
+    column-gap: 12px;
+    row-gap: 0;
+    padding: 8px 16px;
+  }
+  .runs-row > :first-child {
+    position: static;
+    background: transparent !important;
+    box-shadow: none;
+    align-self: auto;
+    display: block;
+    margin: 0;
+    padding: 0;
+  }
+  .runs-row.runs-header > :first-child {
+    box-shadow: none;
+  }
+  .runs-row .state { grid-area: state; }
+  .runs-row .when { grid-area: when; }
+  .runs-row .id { grid-area: job; }
+  .runs-row .run-workspace { grid-area: workspace; }
+  .runs-row .run-tasks { grid-area: task; }
+  .runs-row .run-id-cell { grid-area: runid; }
+  .runs-row .num.denials { grid-area: denials; text-align: left; }
+  .runs-row .num.tool-fails { grid-area: toolfails; text-align: left; }
+  .runs-row .duration { grid-area: duration; }
+  .runs-row .run-actions { grid-area: actions; min-height: 0; margin-top: 4px; }
+  .runs-row .num.denials::before { content: "denials "; font-family: var(--font-sans); }
+  .runs-row .num.tool-fails::before { content: "tool fails "; font-family: var(--font-sans); }
+  .runs-row.runs-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 14px;
+    min-height: 0;
+    padding: 8px 16px;
+  }
+  .runs-row.runs-header::before { content: "Sort by"; color: var(--fg-mute); }
+  .runs-row.runs-header > span { text-align: left; }
+  .runs-row.runs-header > span:not(:has(.runs-sort)) { display: none; }
 }

@@ -9,11 +9,19 @@
 //! caller-supplied [`PatternRedactor`]; the stored bytes are already safe, so
 //! read-side tooling does not need to re-apply it. Blob hashes are computed
 //! from those post-redaction bytes.
+//!
+//! A store with a pending-publication root ([`BlobStore::with_pending_root`])
+//! takes part in the audit blob sweep's protocol ([`super::blob_sweep`]): each
+//! write records a pending marker before the blob is published, and a write
+//! of content already stored refreshes the blob's mtime, so the sweep never
+//! removes a blob between its write and the row that names it.
 
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
+use super::blob_sweep;
 use crate::fs::io::{atomic_write_private_bytes, create_private_dir_all};
 use crate::security::redaction::{PatternRedactor, redact_all};
 use crate::security::release::sha256_hex;
@@ -21,6 +29,7 @@ use crate::security::release::sha256_hex;
 pub struct BlobStore {
     root: PathBuf,
     extra_redactor: PatternRedactor,
+    pending_root: Option<PathBuf>,
 }
 
 impl BlobStore {
@@ -28,7 +37,15 @@ impl BlobStore {
         Self {
             root: root.into(),
             extra_redactor: PatternRedactor::empty(),
+            pending_root: None,
         }
+    }
+
+    /// Record a pending-publication marker under `pending_root` for every
+    /// write, until [`BlobStore::clear_published`] retires it.
+    pub fn with_pending_root(mut self, pending_root: impl Into<PathBuf>) -> Self {
+        self.pending_root = Some(pending_root.into());
+        self
     }
 
     /// Add caller-specific pattern redaction on top of the mandatory
@@ -46,13 +63,28 @@ impl BlobStore {
     pub fn write(&self, content: &[u8]) -> io::Result<String> {
         let redacted = self.redact_for_storage(content);
         let hash = sha256_hex(&redacted);
+        // The marker precedes the blob: the sweep rechecks it after moving a
+        // blob aside, so it either sees this marker or this write sees the
+        // blob gone and stores it again.
+        if let Some(pending_root) = &self.pending_root {
+            blob_sweep::mark_pending(pending_root, &hash)?;
+        }
         let dir = self.root.join(&hash[..2]);
         create_private_dir_all(&dir)?;
         let path = dir.join(&hash);
-        if !path_matches_hash(&path, &hash)? {
+        if !refresh_existing(&path, &hash)? {
             atomic_write_private_bytes(&path, &redacted)?;
         }
         Ok(hash)
+    }
+
+    /// Retire the pending markers of every blob `published` names, once the
+    /// row holding that text is durable. Best effort: a marker left behind is
+    /// only swept late, never early.
+    pub fn clear_published(&self, published: &str) {
+        if let Some(pending_root) = &self.pending_root {
+            blob_sweep::clear_pending(pending_root, published);
+        }
     }
 
     /// Return the bytes that would be persisted for `content` after the
@@ -103,6 +135,24 @@ impl BlobStore {
             ));
         }
         Ok(self.root.join(&sha256[..2]).join(sha256))
+    }
+}
+
+/// Whether `path` already holds `hash`'s content, refreshing its mtime when it
+/// does: content-addressed writes share one file, and the sweep keeps a blob
+/// touched inside its grace window.
+fn refresh_existing(path: &Path, hash: &str) -> io::Result<bool> {
+    if !path_matches_hash(path, hash)? {
+        return Ok(false);
+    }
+    match fs::OpenOptions::new().append(true).open(path) {
+        Ok(file) => {
+            file.set_modified(SystemTime::now())?;
+            Ok(true)
+        }
+        // The sweep moved it aside after the read: store it again.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
     }
 }
 

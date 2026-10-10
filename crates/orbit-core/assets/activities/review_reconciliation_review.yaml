@@ -1,0 +1,158 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_reconciliation_review
+spec:
+  type: agent_loop
+  # The report is the contract the settle step judges; a missing or malformed
+  # response must surface instead of passing silently.
+  require_response_envelope: true
+  # Read-only: the engine pins an invocation-owned checkout of exactly the
+  # merged head and fails the step if anything in it changes.
+  fsProfile: reviewer
+  description: >
+    Independent read-only review of the exact already-merged head of a
+    recovered foreign delivery. Inspects the merged change against the task's
+    intent and the repository at that head and returns a structured report in
+    its response envelope. It has no repository-write, task-update, lifecycle
+    or dispatch grant: the settle step records the report, decides the
+    outcome, and files any follow-up.
+  input_schema_json:
+    type: object
+    required: [task_id, reconciliation_id, workspace_path, inspection_revision, base, crew]
+    properties:
+      task_id:
+        type: string
+        minLength: 1
+      reconciliation_id:
+        type: string
+        minLength: 1
+      workspace_path:
+        type: string
+      repo_root:
+        type: string
+      inspection_revision:
+        type: string
+      source_revision:
+        type: [string, "null"]
+      base:
+        type: string
+      pull_request_url:
+        type: string
+      crew:
+        type: string
+        description: The independent review crew frozen in the reconciliation's contract at submission.
+  output_schema_json:
+    type: object
+    required: [report]
+    properties:
+      report:
+        type: object
+        required: [schema_version, attempt_id, verdict, summary]
+        properties:
+          schema_version:
+            type: number
+          attempt_id:
+            type: string
+          verdict:
+            type: string
+            enum: [accept, reject, incomplete]
+          summary:
+            type: string
+          findings:
+            type: array
+            items:
+              type: object
+          escalation:
+            type: string
+  instruction: |
+    You are Orbit's independent reviewer for a delivery that has already
+    merged. A follower handed off one candidate, but its pull request merged
+    at a different head (a base merge or a manual fix), so no review or
+    validation covers what actually landed. You review exactly that merged
+    head. You did not implement it, and you cannot change it.
+
+    Input:
+    - task_id: the task the delivery implements. Read it with
+      `orbit.task.show`: description, acceptance criteria, plan, execution
+      summary and every comment in order.
+    - workspace_path: a private checkout of exactly the merged head
+      (`inspection_revision`). `base` is the commit the pull request merged
+      onto; `git diff <base>..HEAD` and `git log <base>..HEAD` show the
+      delivered change.
+    - reconciliation_id: the id your report must name.
+    - pull_request_url: the merged pull request, for reference.
+
+    Boundaries:
+    - Read only. Do not edit, create or delete files; do not run any Git
+      command that writes. The checkout is verified after you finish and any
+      change fails the review.
+    - Do not update tasks, attach artifacts, file frictions, start runs or
+      invoke agents. Orbit records your report and files follow-up work.
+    - Orbit has already run the repository's required validation commands at
+      this head. Judge the change itself.
+
+    Procedure:
+    1. Establish what the task asked for and what the merged change does.
+    2. Check the change against every acceptance criterion and the
+       repository's conventions. Look for defects, missing work, unsafe or
+       out-of-scope changes, and anything the post-handoff changes broke.
+    3. Report each concrete problem as a finding. A finding stays `open`:
+       nothing can be repaired in this review. Mark one `disposed` only when
+       you examined a suspicion and found it is not a defect, with the reason.
+
+    Return exactly one Orbit response envelope whose `result` is:
+    {"report": {
+      "schema_version": 1,
+      "attempt_id": "<reconciliation_id>",
+      "verdict": "accept" | "reject" | "incomplete",
+      "summary": "<one paragraph>",
+      "findings": [{"id": "F1", "severity": "high|medium|low",
+                    "summary": "...", "paths": ["..."],
+                    "disposition": "open" | {"kind": "disposed", "reason": "..."}}],
+      "escalation": "<why, when verdict is not accept>"
+    }}
+    Use `accept` only when the merged head meets the task with no open
+    finding, `reject` when open findings remain, and `incomplete` when you
+    could not review honestly (missing evidence, unreadable checkout).
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.task.reconcile_review
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
+  on_denial: terminate
+  wall_clock_timeout_seconds: 3600

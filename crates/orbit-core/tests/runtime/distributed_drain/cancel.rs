@@ -2,6 +2,70 @@
 
 use super::*;
 
+/// A foreground run owner inherits its caller's group. Cancelling that run
+/// must leave other members alive, including when the canceller shares it.
+#[cfg(unix)]
+#[test]
+fn cancelling_a_shared_group_owner_stops_only_the_owner() {
+    if !isolated(
+        module_path!(),
+        "cancelling_a_shared_group_owner_stops_only_the_owner",
+    ) {
+        return;
+    }
+    let pair = Pair::new(0);
+    for (shares_canceller_group, force_kill) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let sibling = if shares_canceller_group {
+            Worker::spawn_in_group(unsafe { libc::getpgrp() })
+        } else {
+            Worker::spawn()
+        };
+        let pgid = unsafe { libc::getpgid(sibling.pid as libc::pid_t) };
+        assert!(pgid > 1);
+        let owner = Worker::spawn_in_group(pgid);
+        assert_eq!(unsafe { libc::getpgid(owner.pid as libc::pid_t) }, pgid);
+        assert_ne!(owner.pid, pgid as u32, "the owner must not lead the group");
+        if force_kill {
+            // A stopped owner cannot handle TERM, forcing escalation to KILL.
+            // Observe the stop before cancelling; the reaper waits only for exit.
+            assert_eq!(
+                unsafe { libc::kill(owner.pid as libc::pid_t, libc::SIGSTOP) },
+                0
+            );
+            let mut status = 0;
+            assert_eq!(
+                unsafe { libc::waitpid(owner.pid as libc::pid_t, &mut status, libc::WUNTRACED) },
+                owner.pid as libc::pid_t
+            );
+            assert!(libc::WIFSTOPPED(status));
+        }
+        let run = pair.run_drain_with_worker(owner.pid);
+
+        let cancel = pair
+            .follower
+            .cancel_job_run_with_options(&run, "operator", "cli", None, true)
+            .expect("a shared-group owner can be stopped independently");
+
+        assert_eq!(cancel.outcome, "cancelled");
+        assert_eq!(
+            cancel.signal_outcome.as_deref(),
+            Some(if force_kill {
+                "killed_owner"
+            } else {
+                "terminated_owner"
+            })
+        );
+        assert_eq!(pair.run_state(&run), JobRunState::Cancelled);
+        assert!(owner.stopped(), "cancellation must stop and reap the owner");
+        assert!(
+            orbit_common::process::identity::process_is_alive(sibling.pid),
+            "cancellation must never signal a sibling sharing the owner's group"
+        );
+    }
+}
+
 /// [ORB-13892] Cancelling a running pull drain is graceful. The request
 /// returns at once naming the leaf it waits for; the drain's next pass stops
 /// requesting and returns the claim it never launched to the owner's backlog

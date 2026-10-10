@@ -79,7 +79,7 @@ impl AgentRuntime for ClaudeRuntime {
             self.runtime_key,
             self.required_env_vars,
             self.command.clone(),
-            self.cli.args(req.verbose),
+            self.cli.args(),
             self.cli.stdin(&req.envelope_json),
         );
         spec.fixed_env = CLAUDE_CLI_FIXED_ENV;

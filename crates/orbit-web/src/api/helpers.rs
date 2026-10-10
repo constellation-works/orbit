@@ -1,8 +1,10 @@
-use axum::body::to_bytes;
+use axum::body::{Bytes, to_bytes};
+use axum::extract::{FromRequest, Request};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 pub(super) const HISTORY_DEFAULT_LIMIT: usize = 50;
@@ -19,6 +21,8 @@ pub(super) struct LimitQuery {
 #[derive(Deserialize)]
 pub(super) struct DiagnosticsQuery {
     #[serde(default)]
+    pub(super) since: Option<String>,
+    #[serde(default)]
     pub(super) month: Option<String>,
     #[serde(default)]
     pub(super) limit: Option<usize>,
@@ -30,10 +34,14 @@ pub(super) struct AuditQuery {
     pub(super) since: Option<String>,
     #[serde(default)]
     pub(super) tool: Option<String>,
+    /// A stored status, or `non_success` for failure and denied rows together.
     #[serde(default)]
     pub(super) status: Option<String>,
     #[serde(default)]
     pub(super) role: Option<String>,
+    /// Matches recorded roles using the scoreboard's agent-family fold.
+    #[serde(default)]
+    pub(super) agent_family: Option<String>,
     #[serde(default)]
     pub(super) workspace_id: Option<String>,
     #[serde(default)]
@@ -68,6 +76,9 @@ pub(super) struct AuditQuery {
     /// JSONL where `profile` is a typed field.
     #[serde(default)]
     pub(super) profile: Option<String>,
+    /// Comma-separated database row IDs for an exact incident-evidence view.
+    #[serde(default)]
+    pub(super) ids: Option<String>,
     #[serde(default)]
     pub(super) limit: Option<usize>,
     #[serde(default)]
@@ -119,6 +130,9 @@ pub(super) struct LogQuery {
     /// Overridden by `Last-Event-ID` when both are present.
     #[serde(default)]
     pub(super) from: Option<u64>,
+    /// Companion agent-feed byte cursor from the snapshot or SSE event ID.
+    #[serde(default)]
+    pub(super) agent_from: Option<u64>,
 }
 
 pub(super) fn current_year_month_utc() -> String {
@@ -206,7 +220,8 @@ pub(super) fn non_empty_string(raw: &str) -> Option<String> {
 
 pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
     match e {
-        orbit_core::OrbitError::InvalidInput(msg) => bad_request(msg),
+        orbit_core::OrbitError::InvalidInput(msg)
+        | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
         orbit_core::OrbitError::TaskCompletionLiveRun { task_id, run_id } => (
             StatusCode::CONFLICT,
@@ -244,6 +259,16 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         error @ orbit_core::OrbitError::ShipRunInFlight { .. } => {
             ship_run_in_flight_conflict(error)
         }
+        // A well-formed ship the workspace's remotes cannot deliver as a PR:
+        // the caller rebinds the ship mode or tags the task, then retries.
+        error @ orbit_core::OrbitError::PrForgeRemoteMissing { .. } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": error.to_string(),
+                "code": "pr_forge_remote_missing",
+            })),
+        )
+            .into_response(),
         // [ORB-10709] Another operator holds this workspace's claim. A 409 for
         // the same reason a duplicate dispatch is one: the request is
         // well-formed, and the caller can retry once the claim lapses or is
@@ -337,6 +362,46 @@ pub(super) fn bad_request(message: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
 }
 
+/// JSON body that is optional only when it is absent or empty.
+///
+/// `Option<Json<T>>` turns every extractor rejection into `None` (axum-core
+/// implements `FromRequest for Option<T>` as `T::from_request(..).await.ok()`).
+/// On these routes `T::default()` is a real action: an empty ship selection
+/// discovers the whole backlog, and a missing `force` is a graceful cancel.
+/// A zero-length body still becomes [`Default`]. Any non-empty body is parsed
+/// as JSON, and a wrong content type, syntax error, unknown field, or type
+/// mismatch is a 400 whose `error` is the parser's own text.
+pub(super) struct OptionalJson<T>(
+    /// Parsed value, or `T::default()` when the body had no bytes.
+    pub T,
+);
+
+#[axum::async_trait]
+impl<T, S> FromRequest<S> for OptionalJson<T>
+where
+    T: DeserializeOwned + Default,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (parts, body) = req.into_parts();
+        let bytes = Bytes::from_request(Request::from_parts(parts.clone(), body), state)
+            .await
+            .map_err(|rejection| bad_request(rejection.body_text()))?;
+        if bytes.is_empty() {
+            return Ok(OptionalJson(T::default()));
+        }
+        let parsed = axum::Json::<T>::from_request(
+            Request::from_parts(parts, axum::body::Body::from(bytes)),
+            state,
+        )
+        .await
+        .map_err(|rejection| bad_request(rejection.body_text()))?;
+        Ok(OptionalJson(parsed.0))
+    }
+}
+
 pub(super) fn not_found(message: String) -> Response {
     (StatusCode::NOT_FOUND, Json(json!({ "error": message }))).into_response()
 }
@@ -398,4 +463,20 @@ where
             format!("{label} panicked: {join_err}"),
         )))),
     }
+}
+
+/// Workspace identity for audit records, resolved on the blocking pool.
+///
+/// `OrbitRuntime::workspace_id` reads the identity from disk, so a handler must
+/// not call it inline. Falls back to the shared root when the identity cannot
+/// be read.
+pub(super) async fn workspace_label(runtime: &std::sync::Arc<orbit_core::OrbitRuntime>) -> String {
+    let runtime = std::sync::Arc::clone(runtime);
+    tokio::task::spawn_blocking(move || {
+        runtime
+            .workspace_id()
+            .unwrap_or_else(|_| runtime.shared_root().display().to_string())
+    })
+    .await
+    .unwrap_or_default()
 }

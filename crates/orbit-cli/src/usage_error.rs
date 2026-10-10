@@ -57,11 +57,14 @@ pub(crate) fn exit(error: clap::Error, requested: Option<FormatArg>, legacy_json
             let payload = crate::output::json::usage_error_payload(&message(&error));
             if let Ok(rendered) = crate::output::json::render(&payload, sink.pretty_json()) {
                 eprintln!("{rendered}");
-                std::process::exit(error.exit_code());
+                orbit_common::observability::logging::exit(error.exit_code());
             }
         }
     }
-    error.exit()
+    // `clap::Error::exit` leaves through `std::process::exit` and would skip
+    // the JSONL flush.
+    let _ = error.print();
+    orbit_common::observability::logging::exit(error.exit_code())
 }
 
 /// clap's rendered message without its styling or its `error: ` label, which
@@ -97,4 +100,46 @@ pub(crate) fn suggest_help_flag(mut error: clap::Error) -> clap::Error {
         );
     }
     error
+}
+
+/// Say where a host-local command runs when `--host` is passed to one.
+///
+/// `--host` routes only id-addressed task calls, `tool run` and
+/// `run auto --pull`. Every other command acts on this machine, so the
+/// rejection names the command to run on that host instead. `ssh_command` is
+/// that command when the host resolved, else `None`.
+pub(crate) fn suggest_host_command(
+    mut error: clap::Error,
+    ssh_command: Option<String>,
+) -> clap::Error {
+    use clap::error::{ContextKind, ContextValue};
+
+    if !is_unknown_host_flag(&error) {
+        return error;
+    }
+    let hint = match ssh_command {
+        Some(command) => format!(
+            "this command runs on this machine and takes no `--host`; run it on that host: \
+             `{command}`"
+        ),
+        None => "this command runs on this machine and takes no `--host`; run it on the host \
+                 you mean with `ssh <target> orbit …` (see `orbit host list`)"
+            .to_string(),
+    };
+    error.insert(
+        ContextKind::Suggested,
+        ContextValue::StyledStrs(vec![clap::builder::StyledStr::from(hint)]),
+    );
+    error
+}
+
+/// Whether clap rejected `--host` (or `--host=…`) as an unknown argument.
+pub(crate) fn is_unknown_host_flag(error: &clap::Error) -> bool {
+    use clap::error::{ContextKind, ContextValue};
+
+    error.kind() == ErrorKind::UnknownArgument
+        && matches!(
+            error.get(ContextKind::InvalidArg),
+            Some(ContextValue::String(arg)) if arg == "--host" || arg.starts_with("--host=")
+        )
 }

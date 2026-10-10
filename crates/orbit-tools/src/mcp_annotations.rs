@@ -56,7 +56,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
 
         // Starts work outside Orbit's own state: an agent, a workflow run's
         // agents, or an arbitrary process.
-        "orbit.pipeline.invoke"
+        "orbit.task.reconcile_review"
+        | "orbit.pipeline.invoke"
         | "orbit.workflow.auto"
         | "orbit.routine.control"
         | "orbit.agent.invoke"

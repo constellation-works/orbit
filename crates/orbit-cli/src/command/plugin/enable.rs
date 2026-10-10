@@ -1,6 +1,6 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::PluginEnableOptions;
+use orbit_core::{OrbitError, OrbitRuntime};
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -20,9 +20,9 @@ pub struct PluginEnableArgs {
     /// manifest's template language ({{workspace}}, {{plugin_state}},
     /// absolute, or relative to the plugin root); the sandbox then opens only
     /// where those roots and the manifest's request overlap. Write a bare
-    /// relative root after the first as ./<root>, so it is not read as a
+    /// relative root after the first as `./<root>`, so it is not read as a
     /// mistyped grant name. Plain fs grants every root the manifest requests.
-    #[arg(long = "grant", value_delimiter = ',', conflicts_with = "scope")]
+    #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
     /// Overwrite a seeded routine or auto-task that was edited after Orbit
     /// wrote it. Without this, a customised file is preserved with a warning.
@@ -40,6 +40,13 @@ pub struct PluginEnableArgs {
 
 impl Execute for PluginEnableArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        if self.scope == PluginScope::Workspace && !self.grants.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "--grant is only valid with host scope; workspace scope never records grants"
+                    .to_string(),
+            ));
+        }
+
         let (result, mut text) = match self.scope {
             PluginScope::Host => {
                 let options = PluginEnableOptions {

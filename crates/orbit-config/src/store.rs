@@ -19,7 +19,11 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
-use crate::layering::{reject_workspace_machine_table, validate_staged_workspace_document};
+use crate::layering::{
+    reject_workspace_machine_table, resolve_workspace_file_document,
+    validate_staged_global_document, validate_staged_workspace_document,
+};
+use crate::operation::OperationLayerSource;
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     PLUGIN_ENABLEMENT_TABLE, reject_global_plugin_enablement, workspace_config_sets_policy,
@@ -182,11 +186,37 @@ impl ConfigStore {
     }
 
     /// The fully resolved (defaulted) view of this document, as if it were
-    /// loaded as the effective `config.toml`. Scoped `orbit config show` uses
-    /// this to enumerate settings, and [`Self::validate`] uses it to verify an
-    /// edited document before saving.
+    /// loaded as the effective `config.toml`. [`Self::validate`] uses it to
+    /// verify a standalone document before saving. File views use
+    /// [`Self::snapshot_with_global`] to admit cross-layer crew references.
     pub fn snapshot(&self) -> Result<ConfigSnapshot, OrbitError> {
         Ok(self.resolved()?.snapshot)
+    }
+
+    /// Resolve this file's settings and built-in defaults. For workspace
+    /// files, crew definitions layer over the global file so crew references
+    /// and partial crew overrides are admitted in their normal context.
+    /// Other global settings are excluded; a global snapshot stays isolated.
+    pub fn snapshot_with_global(&self, global_root: &Path) -> Result<ConfigSnapshot, OrbitError> {
+        // Without a distinct workspace, both runtime roots name the global
+        // file. Preserve its standalone semantics, including [machine].
+        if self.path.parent() == Some(global_root) {
+            return self.snapshot();
+        }
+        match self.scope {
+            ConfigScope::Global => self.snapshot(),
+            ConfigScope::Workspace => {
+                let global_path = global_root.join("config.toml");
+                let global_raw = read_optional(&global_path)?;
+                resolve_workspace_file_document(
+                    &global_path,
+                    &global_raw,
+                    &self.path,
+                    &self.doc.to_string(),
+                )
+                .map(|resolved| resolved.snapshot)
+            }
+        }
     }
 
     fn resolved(&self) -> Result<ResolvedConfig, OrbitError> {
@@ -194,7 +224,16 @@ impl ConfigStore {
         // the config document, and are irrelevant to key validation here.
         let persistence =
             PersistenceConfig::default_for_data_root(self.path.parent().unwrap_or(&self.path));
-        ResolvedConfig::from_raw_str(&self.doc.to_string(), &self.path, persistence)
+        let operation_layer_source = match self.scope {
+            ConfigScope::Global => OperationLayerSource::Global,
+            ConfigScope::Workspace => OperationLayerSource::Workspace,
+        };
+        ResolvedConfig::from_raw_str(
+            &self.doc.to_string(),
+            &self.path,
+            persistence,
+            operation_layer_source,
+        )
     }
 
     /// Look up the effective value of a single admitted key.
@@ -469,6 +508,41 @@ impl ConfigStore {
         self.reject_workspace_machine_table()?;
         let resolved = self.resolved()?;
         self.validate_set_target(key, &resolved)
+    }
+
+    /// Validate a staged global document against the workspace layer at
+    /// `workspace_root` that it would be read with, through the same layered
+    /// load a runtime performs. A global file that is valid alone can still
+    /// make that workspace's config unloadable (both review layers on,
+    /// resource-throttle resume at or above a workspace high, a crew a
+    /// workspace pool names), so the write is refused here instead.
+    pub fn validate_global_with_workspace(&self, workspace_root: &Path) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Global {
+            return Err(OrbitError::InvalidInput(
+                "layered global validation requires a global config store".to_string(),
+            ));
+        }
+        let global_root = self.path.parent().ok_or_else(|| {
+            OrbitError::InvalidInput("global config path has no parent directory".to_string())
+        })?;
+        let roots = ConfigRoots::new(global_root, workspace_root);
+        validate_staged_global_document(&roots, &self.path, &self.doc.to_string())
+    }
+
+    /// [`Self::validate_for_set`] for a global edit, plus the layered
+    /// admission of [`Self::validate_global_with_workspace`].
+    pub fn validate_global_for_set(
+        &self,
+        key: &str,
+        workspace_root: &Path,
+    ) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Global {
+            return Err(OrbitError::InvalidInput(
+                "layered global validation requires a global config store".to_string(),
+            ));
+        }
+        self.validate_for_set(key)?;
+        self.validate_global_with_workspace(workspace_root)
     }
 
     fn validate_set_target(&self, key: &str, resolved: &ResolvedConfig) -> Result<(), OrbitError> {

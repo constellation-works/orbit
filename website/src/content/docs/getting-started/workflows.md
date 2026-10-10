@@ -55,8 +55,15 @@ A ship run uses the workspace's ship mode:
 - **`local`** commits and merges into the base branch before the task reaches
   `review`, so `review` is not a pre-merge stop.
 
-Set the mode with `orbit workspace init --ship-mode`. On the CLI, `--mode` and
-`--base` override it for one run.
+Set the mode with `orbit workspace init --ship-mode`, or change it later with
+`orbit workspace ship-mode pr|local`. On the CLI, `--mode` and `--base` override
+it for one run.
+
+PR mode needs a Git remote on a forge host. If no remote names a network host
+(only a local bare repository, say), Orbit refuses to ship an untagged task
+before creating a worktree, and `orbit doctor` warns on its `forge-remote` row.
+Switch the workspace to `local`, or tag a single task
+`delivery:task_local_pipeline` to deliver just that task locally.
 
 ## Drain the backlog
 
@@ -97,8 +104,13 @@ only after it has committed, merged, and pushed. A closed or blocked pull
 request, or a failed merge or push, fails the run and leaves the task in
 `review`.
 
-Completion is off unless you grant it on that run. No workspace setting,
-environment variable, or scheduled sweep turns it on. Two limits:
+Local ship and auto runs require completion authorization on that run;
+scheduled ship sweeps never complete tasks. For
+[distributed handoffs](../../how-to/distributed-drain/), the owner can instead
+set `workflow.distributed_completion = "done"` to authorize landing accepted
+handoffs automatically. Its default, `"review"`, waits for **Approve handoff**
+on the owner's dashboard. This setting applies to distributed handoffs, not
+local ship or auto runs. Two limits on per-run completion:
 
 - **A drain's completion covers its whole window**, including tasks that reach
   the backlog after it starts. It does not carry over to any other run.

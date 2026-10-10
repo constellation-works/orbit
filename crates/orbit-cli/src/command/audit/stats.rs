@@ -13,9 +13,6 @@ pub struct AuditStatsArgs {
     /// Filter by tool name
     #[arg(long)]
     pub tool: Option<String>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AuditStatsArgs {

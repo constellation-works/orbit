@@ -20,8 +20,12 @@ Three things must all be true for a routine to fire:
 3. The routine is not paused on this host.
 
 The workspace itself opts in by being registered: the tick loads definitions
-from every registered, active **owner** checkout on the host. Replica checkouts
-are skipped, and there is no config key to set.
+from every registered, active checkout on the host, and there is no config key
+to set. A **replica** checkout fires only its `worktree-gc` routine, which
+reclaims that host's claimed-leaf worktrees after asking the owner whether each
+task settled. Its other routines are listed as `owner-only` with the owner
+machine named and never fire there. Auto-tasks are not evaluated there, and the
+auto-task panel disables toggle and manual mint with the owner machine named.
 
 ## Turning the scheduler on
 
@@ -42,8 +46,29 @@ orbit clock pause|enable            # host-wide, without touching definition sta
 orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit
 ```
 
+The clock starts with no login environment. Credentials its runs need (on a Mac,
+`CLAUDE_CODE_OAUTH_TOKEN`) come from the owner-only `~/.orbit/clock.env`, which
+the install creates; see [macOS](macos.md).
+
 `clock pause` stops scheduled invocation; a manual `orbit clock tick` still works.
 `orbit sweep` is a compatibility alias for the same tick and produces the same output.
+
+A tick has a five-minute cooperative deadline shared by discovery, routine
+evaluation, auto-tasks, and recovery. An operation already running finishes
+before the next boundary checks the budget; remaining workspaces are reported
+in `skipped_workspaces`, `deadline_exceeded` is true, and the tick exits nonzero.
+Skipped schedules keep their cursors unchanged, so the next tick retries
+according to each definition's missed-run policy. Source git and GitHub commands have a shared
+30-second pass budget including fetch-lock waits; timeout cleanup kills their
+process group, including fetch helpers.
+
+The Linux service adds a ten-minute `TimeoutStartSec` with `KillMode=mixed`
+as the hard backstop for an operation that never returns. Keep worker
+containment enabled so pipeline runs have their own scopes; workers opting
+out remain in the service cgroup and can be killed when that service stops.
+`orbit clock status` and `orbit doctor` flag overdue or failed ticks and unsafe
+recovery settings. Run `orbit clock repair` to update an older service, even
+when it already names the current binary. A paused clock stays paused.
 
 **2. Enable routines, one at a time.** Each is a YAML file in this checkout's
 `.orbit/routines/`. `.orbit/` is per-user state that git ignores, so flipping
@@ -53,10 +78,10 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The five seeded routines
+## The six seeded routines
 
-`orbit workspace init` seeds all five, **all disabled**, with a workspace-unique
-name (`<base>-<workspace>`) resolved at seed time. The four cron routines resolve
+`orbit workspace init` seeds all six, **all disabled**, with a workspace-unique
+name (`<base>-<workspace>`) resolved at seed time. The five cron routines resolve
 nothing else per machine, so two hosts seed identical bytes. `task-pilot` is
 state-triggered and additionally resolves this host's machine id as its
 `owner_machine` and the registered base branch as the `branch` it observes;
@@ -65,11 +90,12 @@ copy. Run `orbit routine list` to see their names on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
-| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived. |
+| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
-| `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
+| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days`. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). |
+| `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
 
 ## Built in: final recovery of blocked tasks
 
@@ -79,7 +105,9 @@ a failed gate or auto run, or a failed claim settlement left `blocked`. It
 dispatches one `blocked_task_recovery_pipeline` run per block, with at most
 two at a time. The `final_recovery` agent proposes `complete_no_diff`,
 `reject`, `archive`, `requeue` or `escalate`, and Orbit's deterministic
-applier acts on it. Each decision is a task comment with the run id.
+applier acts on it. Each decision is a task comment with the run id. An
+escalation names the failed run's worktree and its changed paths when it
+still exists, since that is where unfinished work stays.
 `orbit task show` prints the last one, and `orbit doctor` lists tasks still
 blocked after one in its `blocked-task-recovery` row.
 
@@ -93,6 +121,33 @@ worker.
 
 The crew comes from `workflow.final_recovery_crews`. To opt out, set it to
 `[]`; this also turns off final recovery inside the delivery pipelines.
+
+## Built in: re-checking tasks held for a red base
+
+This needs no enablement either. A task whose required command fails on its
+base exactly as on the candidate waits in the backlog under a red-base hold.
+Every clock sweep on the owner judges those holds from cached base results
+only. When a held base ref has moved to a tip nobody has checked, the sweep
+dispatches one `baseline_hold_refresh_pipeline` run, at most one per workspace
+at a time. That run executes the held command on the new tip and records the
+verdict; the hold lifts only when the command passes. The sweep never runs the
+command itself, so a long check never makes later ticks report `lock_busy`.
+It never runs on a follower or inside a claimed worker.
+
+## Built in: Linux CodeQL evidence for held reviews
+
+This also needs no enablement. On a Linux owner, every clock sweep looks for
+in-progress tasks whose before-PR review is held only for a `codeql` result. A
+macOS reviewer, local or claimed, cannot complete
+`scripts/codeql-rust-local.sh`, so it holds instead. For each such task the
+sweep dispatches one `review_evidence_fulfilment_pipeline` run, one at a time.
+The run executes the named command at the held commit and attaches the result,
+which queues a fresh review. A failed or incomplete run attaches only its log,
+with a typed reason, and the hold stays. Each run needs `min_free_mib` free
+(30 GiB by default; override it in a workspace copy of the job) and is audited
+as `review.evidence_fulfilment`. It never runs on a follower, inside a claimed
+worker, or on another platform. See
+[owner fulfilment](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/codeql-local.md#owner-fulfilment).
 
 ## Recommended enablement order
 
@@ -258,7 +313,7 @@ orbit routine resume <name>
 
 Resolve the toggles in this order — `orbit routine list` shows both at once:
 
-1. `enabled: false` in the definition (versioned, affects every host).
+1. `enabled: false` in this checkout's definition (per-user, gitignored).
 2. A local pause (this host only, unversioned, durable across reboots).
 
 If neither explains it, check further out: is this checkout registered as an
@@ -278,6 +333,8 @@ they do not launch repair agents or ship the tasks they create.
 orbit job show ci_failure_sweep_pipeline
 orbit run job ci_failure_sweep_pipeline --input integration_branch=<branch> --input max_tasks=5
 orbit job show dependabot_alert_sweep_pipeline
+orbit run job dependabot_alert_sweep_pipeline --input max_tasks=10
+# Override the configured floor for one run:
 orbit run job dependabot_alert_sweep_pipeline --input min_severity=high --input max_tasks=10
 ```
 
@@ -290,14 +347,30 @@ inert routine, is explicit promotion authorization; the filing activity and a
 standalone `task_pilot_pipeline` run carry no such authority. Set the CI
 integration branch explicitly when it differs from GitHub's default branch.
 CI defaults bound investigation to six runs and filing to five tasks. The
-security job defaults to high-severity Dependabot/code-scanning findings and
-always considers secret-scanning findings; it skips dependency alerts with an
-open Dependabot PR by default. Its catalog exposes per-source collection caps.
+security job defaults to `moderate` and above for Dependabot/code-scanning
+findings. Set `[security_alert_sweep] min_severity = "high"` in the workspace
+`.orbit/config.toml` or global `~/.orbit/config.toml` to change the floor for
+scheduled routines and manual runs. Allowed values are `low`, `moderate`,
+`high` and `critical`; precedence is explicit run/job `min_severity` input >
+workspace config > global config > built-in `moderate`. The `--input
+min_severity=high` example overrides config for that run only. Invalid config
+values fail validation with `security_alert_sweep.min_severity` named in the
+error. Secret-scanning findings are always considered regardless of this floor;
+dependency alerts with an open Dependabot PR are skipped by default. Its catalog
+exposes per-source collection caps. The file step records the effective
+`min_severity`, `min_severity_source` (`input`, `workspace`, `global` or
+`built-in`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
+summarizes the filed count, floor and source, and excluded alert count and
+numbers, including for a successful sweep.
 Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,
 not evidence of a clean repository. Read the collect/file step outcomes. CI
-filing first reuses a still-open `ci-failure:<key>` owner, then a rejected
+filing honors exact-key operator `covered_by` relations and timed archive/reject
+suppression (`ci_failure.operator_suppression_hours`, default 6; see
+[recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
+failing-test signatures consolidate across jobs with every job retained.
+Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then a rejected
 exact-key task whose comment names one still-open covering owner, then a
 high-confidence material match (generated workflow/job/step labels, or a
 specific error together with the failing command or the same run and job).

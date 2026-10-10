@@ -81,12 +81,7 @@ where
         )));
     }
 
-    let floor_name = input
-        .get("min_severity")
-        .and_then(Value::as_str)
-        .unwrap_or("high")
-        .trim()
-        .to_ascii_lowercase();
+    let (floor_name, floor_source) = severity_floor(runtime, input)?;
     let floor = severity_rank(&floor_name).ok_or_else(|| {
         OrbitError::InvalidInput(
             "input.min_severity must be one of low, moderate, high, or critical".to_string(),
@@ -213,9 +208,9 @@ where
                     "security".to_string(),
                 ],
                 required_tools: Vec::new(),
-                crew: system_crew.clone(),
+                crew: None,
                 priority: priority_for_rank(highest),
-                complexity: TaskComplexity::Unassessed,
+                complexity: TaskComplexity::Low,
                 task_type: Some(TaskType::Bug),
                 status: Some(TaskStatus::Backlog),
                 system_created: true,
@@ -434,10 +429,44 @@ where
         "skipped_over_cap": skipped_over_cap,
         "excluded_below_min_severity": excluded_below_min_severity,
         "min_severity": floor_name,
+        "min_severity_source": floor_source,
         "skip_when_dependabot_pr_open": skip_pr,
         "max_tasks": max_tasks,
         "code_scanning_group_bounds": code_groups::group_bounds(),
     }))
+}
+
+fn severity_floor(
+    runtime: &OrbitRuntime,
+    input: &Value,
+) -> Result<(String, &'static str), OrbitError> {
+    match input.get("min_severity") {
+        // The job renderer binds an absent optional string input as empty.
+        None | Some(Value::Null) => {}
+        Some(Value::String(value)) if value.trim().is_empty() => {}
+        Some(Value::String(value)) => return Ok((value.trim().to_ascii_lowercase(), "input")),
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "input.min_severity must be one of low, moderate, high, or critical".to_string(),
+            ));
+        }
+    }
+    let key = "security_alert_sweep.min_severity";
+    let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))?;
+    let entry = config.values().iter().find(|entry| entry.key == key);
+    entry
+        .and_then(|entry| {
+            entry
+                .value
+                .as_str()
+                .map(|value| (value.to_string(), entry.source.kind().label()))
+        })
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!("{key} is unavailable in the admitted config"))
+        })
 }
 
 /// The open tasks that already own same-cause alerts left out of a group, as
@@ -696,9 +725,10 @@ fn dependabot_title_package(title: &str) -> Option<String> {
 }
 
 /// Dependabot head refs follow `dependabot/<ecosystem>/<manifest path…>/<package>-<version>`.
-/// Require the ecosystem segment to agree and the final path segment to name
-/// the package followed by a version-like suffix. Checking that suffix avoids
-/// treating a hyphenated sibling package (e.g. `time-core`) as `time`.
+/// Require the ecosystem segment to agree (alert ecosystems use API names, branches
+/// use package-manager names) and the path tail to name the package followed by a
+/// version-like suffix. Checking that suffix avoids treating a hyphenated sibling
+/// package (e.g. `time-core`) as `time`.
 fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: &str) -> bool {
     let mut segments = head_branch.split('/');
     if segments.next() != Some("dependabot") {
@@ -707,22 +737,42 @@ fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: 
     let Some(branch_ecosystem) = segments.next() else {
         return false;
     };
-    if !branch_ecosystem.eq_ignore_ascii_case(ecosystem) {
+    let expected_branch_ecosystem = if ecosystem.eq_ignore_ascii_case("npm") {
+        "npm_and_yarn"
+    } else if ecosystem.eq_ignore_ascii_case("rust") {
+        "cargo"
+    } else if ecosystem.eq_ignore_ascii_case("actions") {
+        "github_actions"
+    } else if ecosystem.eq_ignore_ascii_case("go") {
+        "go_modules"
+    } else if ecosystem.eq_ignore_ascii_case("rubygems") {
+        "bundler"
+    } else {
+        ecosystem
+    };
+    if !branch_ecosystem.eq_ignore_ascii_case(expected_branch_ecosystem) {
         return false;
     }
-    let Some(last) = segments.next_back() else {
-        return false;
-    };
-    let last = last.to_ascii_lowercase();
-    if last == package {
+    // Everything after the ecosystem segment is `<manifest path…>/<package>-<version>`.
+    // Package names can themselves contain slashes (`actions/checkout`,
+    // `@babel/core`, `github.com/org/module`), so match the whole name at a
+    // path-segment boundary rather than only the final segment.
+    let remainder = segments.collect::<Vec<_>>().join("/").to_ascii_lowercase();
+    let name_start = |index: usize| index == 0 || remainder[..index].ends_with('/');
+    if remainder == package || remainder.ends_with(&format!("/{package}")) {
         return true;
     }
-    last.strip_prefix(&format!("{package}-"))
-        .is_some_and(|version| {
-            version
-                .chars()
-                .next()
-                .is_some_and(|character| character.is_ascii_digit())
+    let versioned_prefix = format!("{package}-");
+    remainder
+        .match_indices(&versioned_prefix)
+        .any(|(index, _)| {
+            let version = &remainder[index + versioned_prefix.len()..];
+            name_start(index)
+                && !version.contains('/')
+                && version
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_digit())
         })
 }
 

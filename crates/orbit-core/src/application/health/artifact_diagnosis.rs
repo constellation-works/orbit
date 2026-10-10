@@ -17,12 +17,14 @@ use super::artifact::{
 };
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
+use crate::application::auto_tasks::settings::classify_bundled_file;
 use crate::application::managed_assets::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, load_managed_asset_manifest,
     resolve_confined_asset_path,
 };
 use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::template::{ShippedShape, shipped_shape_of};
+use orbit_automation::auto_tasks::settings::{AutoTaskOverrides, load_settings_table};
 
 pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> ArtifactHealth {
     let kind = catalog.kind;
@@ -182,6 +184,12 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
     // Stale: a managed copy of an older release, or an untracked file wearing
     // a bundled default's name.
     if let Some(embedded) = &catalog.embedded {
+        // An unreadable settings table is reported by the loader's faults.
+        let auto_task_settings = if kind == ArtifactKind::AutoTask {
+            load_settings_table(&catalog.dir).unwrap_or_default()
+        } else {
+            Default::default()
+        };
         for (name, rendered) in embedded {
             if opted_out.contains(name) {
                 continue;
@@ -193,6 +201,25 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
             let on_disk_digest = sha256_hex(on_disk.as_bytes());
             let rendered_digest = sha256_hex(rendered.as_bytes());
             if on_disk_digest == rendered_digest {
+                continue;
+            }
+            if kind == ArtifactKind::AutoTask
+                && manifest.is_some()
+                && let Ok(Some(overrides)) = classify_bundled_file(
+                    rendered,
+                    &on_disk,
+                    tracked.get(name),
+                    auto_task_settings.get(name),
+                    runtime.workspace_base_branch(),
+                )
+            {
+                findings.push(auto_task_fork_finding(
+                    name,
+                    path,
+                    tracked.contains_key(name),
+                    &overrides.overrides,
+                    overrides.stale_shipped_body,
+                ));
                 continue;
             }
             match tracked.get(name) {
@@ -267,6 +294,70 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
     }
 
     finish_catalog_health(runtime, catalog, findings, &tracked)
+}
+
+/// Report a shipped auto-task default whose file left its bundled body.
+///
+/// A settings-only fork is stale: sync moves its settings into the settings
+/// table. A body fork is preserved as authored; the finding names the body
+/// fields so the operator can decide whether to keep them. Neither remedy
+/// moves or renames the file, which would discard its settings.
+fn auto_task_fork_finding(
+    name: &str,
+    path: PathBuf,
+    tracked: bool,
+    overrides: &AutoTaskOverrides,
+    stale_shipped_body: bool,
+) -> ArtifactFinding {
+    let kind = ArtifactKind::AutoTask;
+    let provenance = if tracked {
+        ArtifactProvenance::LocallyModified
+    } else {
+        ArtifactProvenance::UserAuthored
+    };
+    let settings = overrides.settings.field_names();
+    let settings_clause = if settings.is_empty() {
+        String::new()
+    } else {
+        format!("; operator settings: {}", settings.join(", "))
+    };
+    if overrides.body_fields.is_empty() {
+        return ArtifactFinding {
+            kind,
+            name: name.to_string(),
+            path,
+            condition: ArtifactCondition::Stale,
+            provenance,
+            detail: if stale_shipped_body {
+                format!("`{name}` has a stale shipped body (will upgrade on sync){settings_clause}")
+            } else {
+                format!(
+                    "`{name}` differs from its bundled default only in settings{settings_clause}, \
+                     so Orbit stopped refreshing its body"
+                )
+            },
+            remediation: format!(
+                "Run `{}` to move the settings into the auto-task settings table and manage the bundled body again.",
+                init_command(kind)
+            ),
+        };
+    }
+    ArtifactFinding {
+        kind,
+        name: name.to_string(),
+        path,
+        condition: ArtifactCondition::Forked,
+        provenance,
+        detail: format!(
+            "`{name}` is a body fork of its bundled default; body fields: {}{settings_clause}. \
+             Orbit preserves it and no longer applies upstream template changes to it",
+            overrides.body_fields.join(", ")
+        ),
+        remediation: format!(
+            "Keep the fork to retain its body edits, or set those body fields back to the bundled values with `orbit auto-task update {name}` and run `{}` to manage the body again; its settings are kept.",
+            init_command(kind)
+        ),
+    }
 }
 
 /// Whether `path` is the managed catalog file for `name`.

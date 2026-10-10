@@ -4,10 +4,10 @@ use std::sync::Arc;
 use crate::Store;
 use crate::contracts::{
     AuditEventStoreBackend, ExecutorDefStoreBackend, FrictionStoreBackend, InvocationStoreBackend,
-    JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend, RoutineStoreBackend,
-    SessionLogStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
-    V2AuditStoreBackend,
+    JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend, ProviderLimitStoreBackend,
+    RoutineStoreBackend, SessionLogStoreBackend, TaskArtifactStoreBackend,
+    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
+    TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
@@ -147,6 +147,12 @@ pub fn invocation_store(
     database: &std::path::Path,
 ) -> Result<Arc<dyn InvocationStoreBackend>, orbit_common::OrbitError> {
     Ok(invocation_store_from_store(Store::open(database)?))
+}
+
+/// [ORB-14695] Compose the host's provider usage limits over an
+/// already-opened host store.
+pub fn provider_limit_store_from_store(store: Store) -> Arc<dyn ProviderLimitStoreBackend> {
+    Arc::new(store)
 }
 
 /// Compose invocation accounting over an already-opened host store.

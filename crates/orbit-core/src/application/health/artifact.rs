@@ -3,7 +3,7 @@
 //!
 //! `orbit doctor` already diagnoses infrastructure (config, database, disk,
 //! indexes, locks, runs). This module supplies the missing half: the
-//! definitions themselves, classified into four conditions.
+//! definitions themselves and their provider discovery links.
 //!
 //! - **Faulty** — the file fails to parse or validate, so its definition is
 //!   absent at dispatch time even though the file is still on disk.
@@ -16,16 +16,25 @@
 //!   reporting the catalog healthy would contradict it [DANI-10502].
 //! - **Stale** — the file is a managed copy of an *older* release of a default
 //!   this binary still ships, or an untracked file colliding with a bundled
-//!   default name.
+//!   default name. An auto-task file that differs from its bundled body only
+//!   in operator settings is stale too: `orbit workspace sync` moves the
+//!   settings into the settings table and manages the body again.
+//! - **Forked** — an auto-task file edited away from its bundled body in a
+//!   body field (description, criteria, …). It is preserved as authored but
+//!   no longer receives upstream template changes; the finding names the
+//!   differing fields.
 //! - **Missing** — the managed catalog was previously reconciled, and a primary
 //!   shipped default this binary still embeds is absent from disk. Warm opens
 //!   skip reconciliation when the defaults stamp matches, so this state can
 //!   persist until `orbit init` or `orbit workspace sync` restores the file.
 //!   A default the manifest records as operator-deleted (`orbit auto-task
 //!   delete`) is an opt-out, reported neither missing nor stale.
+//! - **Dangling link** — a symlink directly under a provider discovery root
+//!   beside the selected global root points to a missing target. Ownership is
+//!   unknown, so diagnosis warns and leaves repair to the operator.
 //!
 //! Provenance judgements are made from the per-kind managed manifest written by
-//! [`crate::application::managed_assets::reconcile_managed_assets`]. Residual
+//! `crate::application::managed_assets::reconcile_managed_assets`. Residual
 //! skill directories are the one condition discovered directly from the catalog layout because a deleted
 //! entry point cannot be represented by a successfully loaded skill. That
 //! matters for correctness as well as safety: precedence differs across kinds —
@@ -63,7 +72,10 @@ use crate::application::managed_assets::{
     load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::DEFAULT_ROUTINE_FILES;
-use crate::application::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::skill::{
+    DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
+    skill_link_remediation,
+};
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_common::security::release::sha256_hex;
 
@@ -138,8 +150,12 @@ pub enum ArtifactCondition {
     Deprecated,
     /// Drifted from the current release, or colliding with a bundled name.
     Stale,
+    /// An auto-task body edited away from its bundled default.
+    Forked,
     /// A primary shipped default this binary still embeds is not on disk.
     Missing,
+    /// A provider discovery symlink points to a missing target.
+    DanglingLink,
 }
 
 impl ArtifactCondition {
@@ -149,7 +165,9 @@ impl ArtifactCondition {
             Self::Residual => "residual",
             Self::Deprecated => "deprecated",
             Self::Stale => "stale",
+            Self::Forked => "forked",
             Self::Missing => "missing",
+            Self::DanglingLink => "dangling link",
         }
     }
 }
@@ -205,7 +223,9 @@ impl ArtifactFinding {
             ArtifactCondition::Missing => true,
             ArtifactCondition::Residual
             | ArtifactCondition::Deprecated
-            | ArtifactCondition::Stale => false,
+            | ArtifactCondition::Stale
+            | ArtifactCondition::Forked
+            | ArtifactCondition::DanglingLink => false,
         }
     }
 }
@@ -311,9 +331,12 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
                 )
             }),
         ),
+        // Routines are loaded and reconciled from the shared catalog. A linked
+        // worktree's `local_dir` is its own `.orbit` and must not hide a fault
+        // in the catalog the loader and sweep read. Auto-tasks stay local.
         ManagedCatalog::names_only(
             ArtifactKind::Routine,
-            local_dir.join("routines"),
+            runtime.shared_root().join("routines"),
             DEFAULT_ROUTINE_FILES
                 .iter()
                 .map(|(name, _)| (*name).to_string()),
@@ -328,7 +351,49 @@ impl OrbitRuntime {
     pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
         let mut report = Vec::new();
         for catalog in managed_catalogs(self) {
-            report.push(diagnose_catalog(self, &catalog));
+            let mut health = diagnose_catalog(self, &catalog);
+            if catalog.kind == ArtifactKind::Skill
+                && let Some(base) = self.global_root().parent()
+            {
+                let roots = crate::bootstrap::init::skill_link_roots(base);
+                let links = match dangling_client_skill_links(&roots) {
+                    Ok(links) => links,
+                    Err(error) => {
+                        health.findings.push(ArtifactFinding {
+                            kind: ArtifactKind::Skill,
+                            name: "provider discovery links".to_string(),
+                            path: base.to_path_buf(),
+                            condition: ArtifactCondition::Faulty,
+                            provenance: ArtifactProvenance::UserAuthored,
+                            detail: format!("cannot inspect provider skill links: {error}"),
+                            remediation: format!(
+                                "Check access to the skill discovery roots beside `{}`, then rerun `orbit doctor`.",
+                                base.display(),
+                            ),
+                        });
+                        Vec::new()
+                    }
+                };
+                for path in links {
+                    health.findings.push(ArtifactFinding {
+                        kind: ArtifactKind::Skill,
+                        name: path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("?")
+                            .to_string(),
+                        condition: ArtifactCondition::DanglingLink,
+                        provenance: ArtifactProvenance::UserAuthored,
+                        detail: format!(
+                            "dangling skill link at {} (target missing)",
+                            path.display(),
+                        ),
+                        remediation: skill_link_remediation(&path),
+                        path,
+                    });
+                }
+            }
+            report.push(health);
         }
         Ok(report)
     }

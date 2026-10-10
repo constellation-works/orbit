@@ -34,6 +34,13 @@ const INVALID_INPUT: &str = "plugin_broker_invalid_input";
 /// timed out, or answered with something other than its envelope.
 const CALL_FAILED: &str = "plugin_broker_call_failed";
 
+/// Whether `code` is one the listener answers before dispatch, so no broker
+/// audit row exists for the call. [`call_error_response`] never lets a
+/// dispatched call answer with one, which keeps this an origin signal.
+pub(crate) fn is_listener_code(code: &str) -> bool {
+    matches!(code, BUSY | INVALID_REQUEST | REQUEST_TOO_LARGE)
+}
+
 /// Why a request frame could not be read.
 #[derive(Debug)]
 pub(crate) enum FrameError {
@@ -181,6 +188,10 @@ pub(crate) fn output_response(output: Value) -> Vec<u8> {
 /// A call's error as the §4.3 error response. A backend's own structured
 /// error keeps its code, retryability and detail; the host's refusals and
 /// failures map onto the broker's codes, none of them retryable.
+///
+/// A backend code that is also a listener code becomes
+/// [`CALL_FAILED`], not retryable: the client reads listener codes as "no
+/// broker audit row", so a dispatched call must never answer with one.
 pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
     let code = match error {
         OrbitError::RemoteTool {
@@ -188,13 +199,33 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
             message,
             payload,
         } => {
+            let code = payload.get("code").and_then(Value::as_str).unwrap_or(code);
+            let message = payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or(message);
+            let retryable = payload
+                .get("retryable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let (code, message, retryable) = if is_listener_code(code) {
+                (
+                    CALL_FAILED,
+                    format!(
+                        "the backend answered with the broker's reserved code {code}: {message}"
+                    ),
+                    false,
+                )
+            } else {
+                (code, message.to_string(), retryable)
+            };
             return json!({
                 "schema_version": SCHEMA_VERSION,
                 "ok": false,
                 "error": {
-                    "code": payload.get("code").and_then(Value::as_str).unwrap_or(code),
-                    "message": payload.get("message").and_then(Value::as_str).unwrap_or(message),
-                    "retryable": payload.get("retryable").and_then(Value::as_bool).unwrap_or(false),
+                    "code": code,
+                    "message": message,
+                    "retryable": retryable,
                     "detail": payload.get("detail").cloned().unwrap_or(Value::Null),
                 },
             })
@@ -213,7 +244,9 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
             kind: NotFoundKind::Tool,
             ..
         } => REFUSED,
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => INVALID_INPUT,
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => INVALID_INPUT,
         _ => CALL_FAILED,
     };
     error_response(code, &error.to_string(), false)

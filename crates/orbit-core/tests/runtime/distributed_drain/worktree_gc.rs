@@ -2,12 +2,125 @@
 
 use super::*;
 
+/// GC must see distinct machine namespaces, including tasks this follower
+/// minted before it became a replica.
+fn gc_pair(tasks: usize) -> Pair {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    let mut pair = Pair::new(tasks);
+    let global = pair.follower.global_root();
+    std::fs::write(
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_0000000000000002\"\nname = \"follower\"\ntask_prefix = \"DANI\"\n",
+    )
+    .unwrap();
+    TaskRegistryStore::open(&task_registry_path(&global))
+        .unwrap()
+        .set_task_prefix("DANI")
+        .unwrap();
+    pair.follower = calm_host(
+        OrbitRuntime::from_roots_with_binding(
+            &global,
+            &pair.follower_repo.join(".orbit"),
+            orbit_core::WorkspaceRuntimeBinding {
+                logical_workspace_id: pair.wire.owner.workspace_id().unwrap(),
+                task_partition_id: pair.follower.workspace_id().unwrap(),
+                owner_machine_id: Some(OWNER.into()),
+                checkout_role: None,
+                repo_root: pair.follower_repo.clone(),
+                ship_mode: orbit_core::ShipMode::Local,
+                base_branch: None,
+            },
+        )
+        .unwrap()
+        .with_automation_machine_identity(Some(FOLLOWER.into()))
+        .with_coordination_write_owner(Some(OWNER.into()))
+        .with_drain_owner_transport(pair.wire.clone()),
+    );
+    pair
+}
+
+fn terminal_worktree(pair: &Pair, tasks: &[&str]) -> (String, PathBuf) {
+    let run = pair
+        .follower_jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": tasks, "scope": "all"})),
+            None,
+        )
+        .unwrap();
+    pair.follower_jobs
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    pair.follower_jobs
+        .finalize_job_run(&run.run_id, JobRunState::Failed, Utc::now(), None)
+        .unwrap();
+    let (path, _) = leaf_worktree(pair, &run.run_id);
+    (run.run_id, path)
+}
+
+fn local_done_task(pair: &Pair) -> String {
+    let local = pair.follower.clone().with_coordination_write_owner(None);
+    let id = local
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Historical local work".into(),
+            description: "Completed before this checkout became a replica.".into(),
+            acceptance_criteria: vec!["Work complete.".into()],
+            plan: "Complete the work.".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    local
+        .force_update_task_with_identity(
+            &id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Done),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    id
+}
+
+fn mirror_tasks(pair: &Pair, source: &OrbitRuntime) {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_store::workflow::task::{
+        ExportSelection, ImportConflictPolicy, export_tasks, import_tasks,
+    };
+
+    let source_registry =
+        TaskRegistryStore::open(&task_registry_path(&source.global_root())).unwrap();
+    let target_registry =
+        TaskRegistryStore::open(&task_registry_path(&pair.follower.global_root())).unwrap();
+    let archive = pair._root.path().join("mirrors.tar.zst");
+    export_tasks(
+        &source_registry,
+        &source.workspace_id().unwrap(),
+        ExportSelection::All,
+        &archive,
+        Utc::now(),
+    )
+    .unwrap();
+    import_tasks(
+        &target_registry,
+        &archive,
+        Some(&pair.follower.workspace_id().unwrap()),
+        ImportConflictPolicy::OwnerWins,
+    )
+    .unwrap();
+}
+
 /// The checkout setup gives a claimed leaf: a Git worktree of the follower's
 /// checkout on the leaf's own branch, holding a Cargo `target/` that the
 /// checkout ignores. Returns the worktree and the build output's size.
 fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
     let repo = &pair.follower_repo;
-    if !repo.join(".git").exists() {
+    if git(repo, &["rev-parse", "--is-inside-work-tree"]).trim() != "true" {
         git(repo, &["init", "-q", "-b", "main"]);
         std::fs::write(repo.join(".gitignore"), "/target/\n/.orbit/\n").unwrap();
         git(repo, &["add", ".gitignore"]);
@@ -33,7 +146,7 @@ fn leaf_worktree(pair: &Pair, leaf: &str) -> (PathBuf, u64) {
     (worktree, 4096)
 }
 
-fn gc_report(result: &orbit_engine::WorktreeGcResult, leaf: &str) -> Value {
+fn gc_report(result: &impl serde::Serialize, leaf: &str) -> Value {
     let result = serde_json::to_value(result).unwrap();
     result["reports"]
         .as_array()
@@ -42,6 +155,158 @@ fn gc_report(result: &orbit_engine::WorktreeGcResult, leaf: &str) -> Value {
         .find(|report| report["run_id"] == leaf)
         .cloned()
         .unwrap_or_else(|| panic!("no report for {leaf}: {result:#}"))
+}
+
+/// Delivery must index other runs before filtering its own cleanup [ORB-14533].
+#[test]
+fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
+    if !isolated(
+        module_path!(),
+        "delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal",
+    ) {
+        return;
+    }
+    for stable_token in [true, false] {
+        for running in [false, true] {
+            let pair = gc_pair(0);
+            let runtime = pair.follower.clone().with_coordination_write_owner(None);
+            let task = local_done_task(&pair);
+            let token = if stable_token {
+                "shared-delivery".to_string()
+            } else {
+                format!("task-{task}")
+            };
+            let (worktree, _) = leaf_worktree(&pair, &token);
+            std::fs::write(worktree.join("retained.rs"), "fn retained() {}\n").unwrap();
+            git(&worktree, &["add", "retained.rs"]);
+            git(&worktree, &["commit", "-q", "-m", "shared work"]);
+            let head = git(&worktree, &["rev-parse", "HEAD"]);
+            let branch = format!("orbit/{token}");
+            let mut input = json!({"task_ids": [task], "crew": "sol"});
+            if stable_token {
+                input["run_id"] = json!(token);
+            }
+            let other_task = if stable_token {
+                local_done_task(&pair)
+            } else {
+                task.clone()
+            };
+            let mut other_input = input.clone();
+            other_input["task_ids"] = json!([other_task]);
+            let job_dir = runtime.global_root().join("resources/jobs");
+            std::fs::create_dir_all(&job_dir).unwrap();
+            let job = job_dir.join("shared_delivery.yaml");
+            std::fs::write(
+                &job,
+                serde_json::to_string(&json!({
+                    "schemaVersion": 2,
+                    "kind": "Job",
+                    "metadata": {"name": "shared_delivery"},
+                    "spec": {"state": "enabled", "owns_task_worktree": true, "steps": []}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let other = pair
+                .follower_jobs
+                .insert_job_run("shared_delivery", 1, Utc::now(), Some(other_input), None)
+                .unwrap();
+            if running {
+                pair.follower_jobs
+                    .mark_job_run_running(&other.run_id, Utc::now(), std::process::id())
+                    .unwrap();
+            }
+            let unrelated_task = local_done_task(&pair);
+            let (unrelated_run, unrelated_path) = terminal_worktree(&pair, &[&unrelated_task]);
+
+            let delivered = runtime.run_job_v2_from_yaml(&job, input.clone()).unwrap();
+            assert!(delivered.success, "{delivered:?}");
+            let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
+            let cleanup = &state.pipeline["worktree_cleanup"];
+            assert_eq!(
+                gc_report(cleanup, &delivered.run_id)["action"],
+                "skipped:ambiguous_run_path"
+            );
+            assert!(worktree.join("retained.rs").exists());
+            assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head);
+            assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
+            assert!(
+                cleanup["reports"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|report| report["run_id"] == delivered.run_id)
+            );
+            assert!(
+                unrelated_path.exists(),
+                "delivery retains unrelated worktrees"
+            );
+
+            let scheduled = runtime
+                .gc_worktrees(true, None, None, false, false)
+                .unwrap();
+            for run in [&delivered.run_id, &other.run_id] {
+                assert_eq!(
+                    gc_report(&scheduled, run)["action"],
+                    "skipped:ambiguous_run_path"
+                );
+            }
+            assert_eq!(gc_report(&scheduled, &unrelated_run)["action"], "removed");
+            assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
+
+            if !running {
+                pair.follower_jobs
+                    .mark_job_run_running(&other.run_id, Utc::now(), std::process::id())
+                    .unwrap();
+            }
+            pair.follower_jobs
+                .finalize_job_run(&other.run_id, JobRunState::Success, Utc::now(), None)
+                .unwrap();
+            if stable_token {
+                // A terminal peer's unsettled task must still protect its
+                // committed work, even though this delivery's task is done.
+                runtime
+                    .force_update_task_with_identity(
+                        &other_task,
+                        orbit_core::application::task::TaskUpdateParams {
+                            status: Some(orbit_types::task::TaskStatus::Backlog),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                let delivered = runtime.run_job_v2_from_yaml(&job, input.clone()).unwrap();
+                assert!(delivered.success, "{delivered:?}");
+                let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
+                let report = gc_report(&state.pipeline["worktree_cleanup"], &delivered.run_id);
+                assert_eq!(report["action"], "skipped:ambiguous_run_path");
+                assert_eq!(report["task_status"], "backlog");
+                assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
+                assert!(worktree.join("retained.rs").exists());
+                runtime
+                    .force_update_task_with_identity(
+                        &other_task,
+                        orbit_core::application::task::TaskUpdateParams {
+                            status: Some(orbit_types::task::TaskStatus::Done),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
+                    )
+                    .unwrap();
+            }
+            let delivered = runtime.run_job_v2_from_yaml(&job, input).unwrap();
+            assert!(delivered.success, "{delivered:?}");
+            let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
+            assert_eq!(
+                gc_report(&state.pipeline["worktree_cleanup"], &delivered.run_id)["action"],
+                "removed"
+            );
+            assert!(!worktree.exists());
+            assert!(git(&pair.follower_repo, &["branch", "--list", &branch]).is_empty());
+        }
+    }
 }
 
 /// [ORB-13920] An accepted handoff is all a follower needs to give back its
@@ -57,7 +322,7 @@ fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
     ) {
         return;
     }
-    let pair = Pair::new(1);
+    let pair = gc_pair(1);
     let drain = pair.run_drain();
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
     pair.leaf_hands_off(&leaf);
@@ -128,7 +393,7 @@ fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
     ) {
         return;
     }
-    let pair = Pair::new(1);
+    let pair = gc_pair(1);
     let drain_worker = Worker::spawn();
     let drain = pair.run_drain_with_worker(drain_worker.pid);
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
@@ -194,8 +459,10 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
     ) {
         return;
     }
-    let pair = Pair::new(1);
+    let pair = gc_pair(1);
     let drain = pair.start_drain();
+    // Cancellation's terminal hook and the launch pass both try delivery.
+    pair.wire.lose_next_reply("orbit.drain.claim.settle");
     pair.wire.lose_next_reply("orbit.drain.claim.settle");
     let lost = pair.pass(&drain);
     assert!(error_of(&lost).contains("dropped"), "{lost}");
@@ -206,16 +473,8 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         .unwrap()
         .expect("claimed leaf");
     assert_eq!(claim.settlement_phase, "settling");
-    // The leaf has finished; only its settlement is still owed to the owner.
-    set_run_state(&pair.follower, &leaf, "running");
-    pair.follower_jobs
-        .finalize_job_run(
-            &leaf,
-            orbit_types::workflow::JobRunState::Failed,
-            Utc::now(),
-            None,
-        )
-        .unwrap();
+    // The leaf is cancelled; only its release is still owed to the owner.
+    assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
     let (worktree, _) = leaf_worktree(&pair, &leaf);
     let timeout = "ssh: connect to host owner port 22: Connection timed out";
     *pair.wire.task_reads_fail.lock().unwrap() = Some(timeout.into());
@@ -271,8 +530,204 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         "{report:#}"
     );
     assert_eq!(
-        report["task_status"], "blocked",
+        report["task_status"], "backlog",
         "the owner's answer decides: {report:#}"
     );
     assert!(worktree.exists());
+}
+
+/// A replica retains authority over its own historical tasks [ORB-14447].
+#[test]
+fn a_replica_collects_a_local_done_task_without_asking_the_owner() {
+    if !isolated(
+        module_path!(),
+        "a_replica_collects_a_local_done_task_without_asking_the_owner",
+    ) {
+        return;
+    }
+    let pair = gc_pair(0);
+    let task = local_done_task(&pair);
+    assert_eq!(orbit_types::task::task_id_prefix(&task), Some("DANI"));
+    let (leaf, path) = terminal_worktree(&pair, &[&task]);
+    let missing = orbit_types::task::format_task_id("DANI", u32::MAX).unwrap();
+    let (missing_leaf, missing_path) = terminal_worktree(&pair, &[&missing]);
+    *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unavailable".into());
+
+    let gc = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    assert_eq!(gc_report(&gc, &leaf)["action"], "removed");
+    assert!(!path.exists());
+    assert_eq!(
+        gc_report(&gc, &missing_leaf)["action"],
+        "skipped:task_unresolved"
+    );
+    assert!(missing_path.exists(), "a missing local task fails closed");
+    assert!(pair.wire.task_reads.lock().unwrap().is_empty());
+}
+
+/// An owner outage is memoized without poisoning other namespaces, and a
+/// third prefix never causes a failed task.show call on that owner [ORB-14447].
+#[test]
+fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
+    if !isolated(
+        module_path!(),
+        "replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent",
+    ) {
+        return;
+    }
+    let pair = gc_pair(1);
+    let drain = pair.start_drain();
+    pair.pass(&drain); // Persist an admission identifying the owner's prefix.
+    let owner_task = &pair.tasks[0];
+    let third = orbit_types::task::format_task_id("THIRD", 1).unwrap();
+    let local = local_done_task(&pair);
+    let (owner_leaf, owner_path) = terminal_worktree(&pair, &[owner_task]);
+    let (second_owner_leaf, _) = terminal_worktree(&pair, &[owner_task]);
+    let (local_leaf, local_path) = terminal_worktree(&pair, &[&local]);
+    let (third_leaf, third_path) = terminal_worktree(&pair, &[&third]);
+    let selector = pair.destination["selector"].as_str().unwrap();
+
+    *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
+    let outage = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    for leaf in [&owner_leaf, &second_owner_leaf] {
+        assert_eq!(
+            gc_report(&outage, leaf)["action"],
+            "skipped:owner_unreachable"
+        );
+    }
+    assert_eq!(gc_report(&outage, &local_leaf)["action"], "removed");
+    assert!(!local_path.exists());
+    assert_eq!(
+        gc_report(&outage, &third_leaf)["action"],
+        "skipped:task_prefix_unroutable"
+    );
+    assert!(owner_path.exists() && third_path.exists());
+    assert_eq!(
+        *pair.wire.task_reads.lock().unwrap(),
+        vec![selector.to_string()],
+        "one owner-prefix transport failure per sweep"
+    );
+
+    pair.wire.task_reads.lock().unwrap().clear();
+    *pair.wire.task_reads_fail.lock().unwrap() = None;
+    for (code, action) in [
+        ("unauthorized", "skipped:owner_lookup_failed"),
+        ("not_found", "skipped:task_unresolved"),
+    ] {
+        *pair.wire.task_reads_remote_error.lock().unwrap() =
+            Some((code.into(), "owner refused lookup".into()));
+        let gc = pair
+            .follower
+            .gc_worktrees(true, None, None, false, false)
+            .unwrap();
+        assert_eq!(gc_report(&gc, &owner_leaf)["action"], action);
+        assert_eq!(
+            gc_report(&gc, &third_leaf)["action"],
+            "skipped:task_prefix_unroutable"
+        );
+        assert!(owner_path.exists() && third_path.exists());
+    }
+    assert_eq!(
+        *pair.wire.task_reads.lock().unwrap(),
+        vec![selector.to_string(), selector.to_string()],
+        "the task answer is memoized within each sweep, but retried on the next sweep"
+    );
+}
+
+/// Each id is looked up on the host its prefix names [ORB-14449]: this
+/// machine's in the local store, the owner's over the claim route, another
+/// registered host's on that host, and an unregistered prefix nowhere. A
+/// local mirror never stands in for the holder.
+#[test]
+fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
+    if !isolated(
+        module_path!(),
+        "replica_gc_looks_each_id_up_on_the_host_its_prefix_names",
+    ) {
+        return;
+    }
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    let pair = gc_pair(1);
+    let owner_task = &pair.tasks[0];
+    let local = local_done_task(&pair);
+    let (third, third_repo) = open_runtime(pair._root.path(), "hm_third");
+    TaskRegistryStore::open(&task_registry_path(&third.global_root()))
+        .unwrap()
+        .set_task_prefix("THIRD")
+        .unwrap();
+    let third_task = backlog_task(&third, &third_repo, "src/third.rs", None);
+    // Mirrors of both remote namespaces sit in the local store; none of them
+    // is ever read in place of its holder.
+    mirror_tasks(&pair, &pair.wire.owner);
+    mirror_tasks(&pair, &third);
+    let unregistered = orbit_types::task::format_task_id("NOONE", 1).unwrap();
+    let (owner_leaf, owner_path) = terminal_worktree(&pair, &[owner_task]);
+    let (local_leaf, _) = terminal_worktree(&pair, &[&local]);
+    let (third_leaf, third_path) = terminal_worktree(&pair, &[&third_task]);
+    let (unregistered_leaf, unregistered_path) = terminal_worktree(&pair, &[&unregistered]);
+
+    // Before the host file registers THIRD, its ids are unroutable too.
+    let unknown = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    for leaf in [&third_leaf, &unregistered_leaf] {
+        assert_eq!(
+            gc_report(&unknown, leaf)["action"],
+            "skipped:task_prefix_unroutable"
+        );
+    }
+    assert!(pair.wire.by_id_reads.lock().unwrap().is_empty());
+    pair.wire.task_reads.lock().unwrap().clear();
+
+    pair.wire
+        .prefix_hosts
+        .lock()
+        .unwrap()
+        .insert("THIRD".into(), ("hm_third".into(), third.clone()));
+    let routed = pair
+        .follower
+        .gc_worktrees(false, None, None, false, false)
+        .unwrap();
+    assert_eq!(gc_report(&routed, &owner_leaf)["task_status"], "backlog");
+    assert_eq!(gc_report(&routed, &local_leaf)["task_status"], "done");
+    assert_eq!(gc_report(&routed, &third_leaf)["task_status"], "backlog");
+    assert_eq!(
+        gc_report(&routed, &unregistered_leaf)["action"],
+        "skipped:task_prefix_unroutable"
+    );
+    let selector = format!("{OWNER}/{}", pair.wire.owner.workspace_id().unwrap());
+    assert_eq!(
+        *pair.wire.task_reads.lock().unwrap(),
+        vec![selector],
+        "only the owner's id goes over the owner route"
+    );
+    assert_eq!(
+        *pair.wire.by_id_reads.lock().unwrap(),
+        vec![third_task.clone()],
+        "the third host's id goes to that host; the unregistered id goes nowhere"
+    );
+    assert!(owner_path.exists() && third_path.exists() && unregistered_path.exists());
+
+    // An unreachable third host is that host's outage, not a missing task.
+    *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
+    let outage = pair
+        .follower
+        .gc_worktrees(true, None, None, false, false)
+        .unwrap();
+    assert_eq!(
+        gc_report(&outage, &owner_leaf)["action"],
+        "skipped:owner_unreachable"
+    );
+    assert_eq!(
+        gc_report(&outage, &third_leaf)["task_status"],
+        "backlog",
+        "one holder's outage does not poison another's lookups"
+    );
 }

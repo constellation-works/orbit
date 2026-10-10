@@ -8,6 +8,7 @@ Mechanisms every layer needs: `OrbitError` plus responsibility-named modules (`e
   - `security::release` — the only Rust copy of release keys and manifest verification (`scripts/check-installer-pubkey.sh` guards drift with the shell/npm installers).
   - `security::redaction` — the only redaction implementation (guardrail script forbids surface-local `fn redact_*`).
   - `fs::selector` — owns `SelectorParseError` and its `OrbitError` translator; no caller crate may translate it.
+  - `error` — owns the `impl From<orbit_types::…Error> for OrbitError` translators, since `orbit-types` cannot name `OrbitError`; each is listed in `from_registry` in `scripts/check-error-translation.sh`.
   - `migration` — forward-only, read-time YAML migration; no rollback, no write-back. One-shot importers belong in `orbit-store::workflow`.
 - `governance::operation` is the operations-as-data kernel; specs live here, handlers live in `orbit-core` joined by the verb enum. Keep it transport/runtime-agnostic: no clap, axum, or `OrbitRuntime` types. Every registry string is shipped contract.
 - Features: `sqlite` gates `storage::sqlite`; `clap` forwards to `orbit-types/clap`. Test helpers are always compiled so build and test dependency graphs stay identical. Gate optional production code behind the flag, don't `#[allow]` it.

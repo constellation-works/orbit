@@ -14,14 +14,26 @@
 //! decision to the host again instead of dispatching. The host applies a
 //! decision idempotently, so a crash anywhere in the first application
 //! converges on the same outcome.
+//!
+//! A `sync_base` failure that reports an absorbed candidate (conflict
+//! recovery left the branch on its pinned base, which already carries the
+//! change) is admitted the same way, but the engine re-verifies the certified
+//! evidence and hands the host a `complete_no_diff` for the covering commit
+//! instead of dispatching the activity.
 
-use orbit_types::workflow::{FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, PipelineState};
+use orbit_types::workflow::{
+    FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision, FinalRecoveryRepairCommit, PipelineState,
+};
 
 use super::*;
 use crate::context::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied,
+    FinalRecoveryApplied, TaskAutomationUpdate,
 };
+use crate::executor::automation::vcs::absorbed::{
+    AbsorbedCandidate, is_candidate_absorbed, verify_absorbed_candidate,
+};
+use crate::executor::automation::vcs::git::{git_command_success, git_output};
 
 /// What the executor does after the hook.
 #[derive(Debug, PartialEq, Eq)]
@@ -104,6 +116,53 @@ pub(super) fn attempt_final_recovery(
             "required validation lacked a tool in its environment; the candidate was not judged",
         );
     }
+    // [ORB-14258] Nor fix a required command the base fails the same way; the
+    // failure handoff holds the task until the command passes on a new base.
+    if orbit_types::workflow::is_baseline_red_failure(None, Some(error_message)) {
+        return skip(
+            "required validation fails on the base exactly as on the candidate; the candidate \
+             did not cause it",
+        );
+    }
+    // [ORB-14269] Nor does another agent clear a blocker the implementer or
+    // step recovery [ORB-14268] declared. The failure handoff records the
+    // kind and keeps the candidate.
+    if orbit_types::workflow::is_task_blocked_by_agent(None, Some(error_message)) {
+        return skip("an agent declared a blocker; the candidate was not judged by another agent");
+    }
+    // [ORB-14149] Nor does any decision give the provider's model capacity;
+    // the candidate stays in the worktree for a resume.
+    if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {
+        return skip(
+            "the provider reported the selected model at capacity; the candidate was not judged",
+        );
+    }
+    // [ORB-14695] Nor outlasts the provider account's usage limit; run
+    // finalization holds the task until the reset the provider reported.
+    if orbit_types::workflow::is_provider_limit(None, Some(error_message)) {
+        return skip(
+            "the provider reported its account's usage limit reached; the candidate was not judged",
+        );
+    }
+    // [ORB-14266] Nor makes an unusable provider usable, or gets past its
+    // content policy. Run finalization holds the task in the backlog with
+    // that provider's crews excluded for a while instead.
+    if orbit_types::workflow::is_provider_unavailable(None, Some(error_message)) {
+        return skip("the provider could not be used on this host; the candidate was not judged");
+    }
+    if orbit_types::workflow::is_provider_refusal(None, Some(error_message)) {
+        return skip(
+            "the provider's content policy refused the turn; the candidate was not judged",
+        );
+    }
+    // [ORB-14260] Nor can a recovery agent in the same sandbox reach the
+    // claimed task's owner its step could not; the claim is released.
+    if orbit_types::workflow::is_owner_route_unavailable(None, Some(error_message)) {
+        return skip(
+            "the claimed worker could not reach its owner through the run's coordinator; the \
+             candidate was not judged",
+        );
+    }
     let Some(task_id) = single_task_id(&ctx.input) else {
         return skip(
             "final recovery decides for exactly one task; this run carries none or several",
@@ -121,11 +180,25 @@ pub(super) fn attempt_final_recovery(
             failed_step_id: step.id.clone(),
             decision,
             resume_step_index: None,
+            repair_commit: None,
             workspace_path: worktree.workspace_path.into(),
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         };
-        return conclude(job, ctx, step, activity, &application, None);
+        return conclude(job, ctx, step, activity, &application, None, None);
     }
+    // [ORB-14668] A candidate conflict recovery found already on the pinned
+    // base is settled from the host-certified evidence, re-observed here,
+    // without dispatching an agent. A refusal leaves the agent its look, and
+    // tells it why.
+    let absorbed = is_candidate_absorbed(error_message).then(|| {
+        verify_absorbed_candidate(
+            ctx.host,
+            &ctx.run_id,
+            &step.id,
+            &task_id,
+            std::path::Path::new(&worktree.workspace_path),
+        )
+    });
     let request = FinalRecoveryAdmissionRequest {
         task_id: task_id.clone(),
         failed_step_id: step.id.clone(),
@@ -136,9 +209,41 @@ pub(super) fn attempt_final_recovery(
         Ok(FinalRecoveryAdmission::Skipped { reason }) => return skip(&reason),
         Err(error) => return skip(&format!("admission failed: {error}")),
     }
+    let absorbed_refusal = match absorbed {
+        Some(Ok(candidate)) => {
+            return settle_absorbed(job, ctx, step, activity, task_id, worktree, &candidate);
+        }
+        Some(Err(refusal)) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %ctx.run_id,
+                failed_step_id = %step.id,
+                reason = refusal.reason.code(),
+                detail = %refusal.detail,
+                "absorbed candidate not settled without an agent"
+            );
+            Some(refusal)
+        }
+        None => None,
+    };
 
-    let input = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message);
-    let decision = match dispatch_final_recovery(ctx, step, activity, &input) {
+    // These observations belong to the engine, not the activity's response.
+    // A worktree without a resolvable HEAD may still settle a task, but cannot
+    // authorize a moved HEAD in a later commit step.
+    let head_before = git_output(
+        std::path::Path::new(&worktree.workspace_path),
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .ok();
+    let dispatch = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message)
+        .map(|mut input| {
+            if let Some(refusal) = &absorbed_refusal {
+                input["absorbed_refusal"] = refusal.evidence();
+            }
+            input
+        })
+        .and_then(|input| dispatch_final_recovery(ctx, step, activity, &input));
+    let decision = match dispatch {
         Ok(output) => FinalRecoveryDecision::from_output(Some(&decision_payload(&output))),
         Err(message) => FinalRecoveryDecision::Escalate {
             diagnosis: format!(
@@ -150,17 +255,97 @@ pub(super) fn attempt_final_recovery(
                 .to_string(),
         },
     };
-    let (decision, resume_index) = admit_resume_step(job, step_index, decision);
+    let (mut decision, mut resume_index, downgrade) = admit_resume_step(job, step_index, decision);
+    let repair_commit = resume_index
+        .and_then(|_| observe_repair_commit(&worktree.workspace_path, head_before.as_deref()));
+    if repair_commit.is_some()
+        && let Some(commit_index) = job.steps[1..=step_index].iter().position(|step| {
+            matches!(&step.body, JobV2StepBody::Target(target)
+                if matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
+                    if spec.action == "git_commit"))
+        })
+    {
+        // A repair is a new candidate. Even a request to resume settlement
+        // must rerun commit, validation, admission and review first.
+        let index = resume_index.unwrap_or(step_index).min(commit_index + 1);
+        if let FinalRecoveryDecision::Resume { step_id, .. } = &mut decision {
+            *step_id = job.steps[index].id.clone();
+        }
+        resume_index = Some(index);
+    }
 
     let application = FinalRecoveryApplication {
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
         resume_step_index: resume_index.map(|index| index as u32),
+        repair_commit,
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
     };
-    conclude(job, ctx, step, activity, &application, resume_index)
+    conclude(
+        job,
+        ctx,
+        step,
+        activity,
+        &application,
+        resume_index,
+        downgrade.as_deref(),
+    )
+}
+
+/// Hand the host a `complete_no_diff` for a verified absorbed candidate's
+/// covering commit, as the decision no agent needed to make.
+fn settle_absorbed(
+    job: &JobV2,
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    activity: &ResolvedRecoveryActivity,
+    task_id: String,
+    worktree: RunWorktree,
+    candidate: &AbsorbedCandidate,
+) -> FinalRecoveryVerdict {
+    let application = FinalRecoveryApplication {
+        task_id,
+        failed_step_id: step.id.clone(),
+        decision: FinalRecoveryDecision::CompleteNoDiff {
+            evidence_commit: candidate.covering_commit.clone(),
+            rationale: format!(
+                "conflict recovery left the candidate on base {} with no commit of its own; \
+                 {} on '{}' already carries its change. Verified by the engine; no final \
+                 recovery agent was dispatched.",
+                candidate.base_sha, candidate.covering_commit, candidate.base_ref
+            ),
+        },
+        resume_step_index: None,
+        repair_commit: None,
+        workspace_path: worktree.workspace_path.into(),
+        completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+    };
+    conclude(job, ctx, step, activity, &application, None, None)
+}
+
+fn observe_repair_commit(
+    workspace_path: &str,
+    head_before: Option<&str>,
+) -> Option<FinalRecoveryRepairCommit> {
+    let workspace_path = std::path::Path::new(workspace_path).canonicalize().ok()?;
+    let head_sha_before = head_before?.to_string();
+    let head_sha = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"]).ok()?;
+    if head_sha == head_sha_before
+        || !git_command_success(
+            &workspace_path,
+            &["merge-base", "--is-ancestor", &head_sha_before, &head_sha],
+        )
+        .ok()?
+    {
+        return None;
+    }
+    Some(FinalRecoveryRepairCommit {
+        workspace_path,
+        head_sha_before,
+        head_sha,
+    })
 }
 
 /// Hand `application` to the host and turn its answer into the verdict.
@@ -171,12 +356,35 @@ fn conclude(
     activity: &ResolvedRecoveryActivity,
     application: &FinalRecoveryApplication,
     resume_index: Option<usize>,
+    downgrade: Option<&str>,
 ) -> FinalRecoveryVerdict {
     let applied = ctx.host.apply_final_recovery(&ctx.run_id, application);
     let kind = Some(application.decision.kind());
     match (applied, resume_index) {
         (Ok(FinalRecoveryApplied::Resume), Some(index)) => {
-            let detail = format!("rerunning from step `{}`", job.steps[index].id);
+            let mut detail = format!("rerunning from step `{}`", job.steps[index].id);
+            if let Some(downgrade) = downgrade {
+                detail.push_str(&format!("; {downgrade}"));
+                if let Err(error) = ctx.host.apply_task_automation_update(
+                    &application.task_id,
+                    TaskAutomationUpdate {
+                        append_comments: vec![orbit_types::task::TaskComment {
+                            at: chrono::Utc::now(),
+                            by: "system".to_string(),
+                            message: format!("Final recovery for run `{}`: {detail}.", ctx.run_id),
+                        }],
+                        ..Default::default()
+                    },
+                ) {
+                    tracing::warn!(
+                        target: "orbit.engine.job_executor",
+                        run_id = %ctx.run_id,
+                        error = %error,
+                        "final recovery resume downgrade task comment not recorded"
+                    );
+                    detail.push_str(&format!("; task comment could not be recorded: {error}"));
+                }
+            }
             emit_final_recovery_event(ctx, step, activity, "resume", kind, Some(&detail));
             FinalRecoveryVerdict::Resume(index)
         }
@@ -246,7 +454,7 @@ fn final_recovery_input(
     task_id: &str,
     worktree: &RunWorktree,
     error_message: &str,
-) -> Value {
+) -> Result<Value, String> {
     let step = &job.steps[step_index];
     let mut input = serde_json::json!({
         "task_id": task_id,
@@ -263,8 +471,11 @@ fn final_recovery_input(
         ),
         "step_outputs": bounded_recovery_input(&ctx.run_id, ctx.pipeline_value()),
         "step_ids": job.steps.iter().map(|step| step.id.clone()).collect::<Vec<_>>(),
+        "allowed_resume_step_ids": job.steps[1..=step_index]
+            .iter().map(|step| step.id.clone()).collect::<Vec<_>>(),
         "crew_config_key": FINAL_RECOVERY_CREWS_KEY,
     });
+    inject_recovery_evidence(ctx, &mut input)?;
     if let JobV2StepBody::Target(target) = &step.body
         && let Ok(rendered) = render_input(
             target.default_input.as_ref(),
@@ -283,7 +494,7 @@ fn final_recovery_input(
             input[key] = Value::String(value.clone());
         }
     }
-    input
+    Ok(input)
 }
 
 /// Dispatch the activity under its configured crew, returning its output.
@@ -293,11 +504,19 @@ fn dispatch_final_recovery(
     activity: &ResolvedRecoveryActivity,
     input: &Value,
 ) -> Result<Value, String> {
-    let spec = crew_overridden_recovery_spec(activity, ctx, input)
-        .map_err(|error| format!("crew: {error}"))?;
+    let mut spec = crew_overridden_recovery_spec(activity, ctx, input)
+        .map_err(|error| format!("crew: {error}"))?
+        .unwrap_or_else(|| activity.spec.clone());
+    if let ActivityV2Spec::AgentLoop(agent) = &mut spec {
+        agent.instruction.push_str(&format!(
+            "\n\nFor this failure, resume only from one of these step ids. The first \
+             admission step and later steps are excluded.\nAllowed resume step ids: {}",
+            input["allowed_resume_step_ids"]
+        ));
+    }
     let dispatch = dispatch_v2_activity_without_run_id_injection(V2DispatchInput {
         activity_name: &activity.name,
-        spec: spec.as_ref().unwrap_or(&activity.spec),
+        spec: &spec,
         fs_profile: step_fs_profile(step),
         input: input.clone(),
         audit: ctx.audit.clone(),
@@ -344,8 +563,10 @@ fn decision_payload(output: &Value) -> Value {
     )
 }
 
-/// Keep a `resume` only when it names the failed step or an earlier step of
-/// its phase; otherwise it becomes `escalate`.
+/// Keep a `resume` when it names the failed step or an earlier step of its
+/// phase. A later step downgrades to the failed step, preserving the intent
+/// to continue without skipping the failed contract. Missing and admission
+/// steps still become `escalate`.
 ///
 /// Phases are top-level steps — the executor's checkpoint and resume unit —
 /// so a step nested in a block resumes by naming its block. The job's first
@@ -355,15 +576,27 @@ fn admit_resume_step(
     job: &JobV2,
     failed_index: usize,
     decision: FinalRecoveryDecision,
-) -> (FinalRecoveryDecision, Option<usize>) {
-    let FinalRecoveryDecision::Resume { step_id, .. } = &decision else {
-        return (decision, None);
+) -> (FinalRecoveryDecision, Option<usize>, Option<String>) {
+    let FinalRecoveryDecision::Resume { step_id, rationale } = &decision else {
+        return (decision, None, None);
     };
     let step_id = step_id.trim();
     let target = job.steps.iter().position(|step| step.id == step_id);
     match target {
-        Some(index) if index == failed_index || (1..failed_index).contains(&index) => {
-            (decision, Some(index))
+        Some(index) if (1..=failed_index).contains(&index) => (decision, Some(index), None),
+        Some(index) if index > failed_index => {
+            let failed = &job.steps[failed_index].id;
+            let downgrade = format!(
+                "downgraded resume from `{step_id}` to failed step `{failed}` to rerun its contract"
+            );
+            (
+                FinalRecoveryDecision::Resume {
+                    step_id: failed.clone(),
+                    rationale: rationale.clone(),
+                },
+                Some(failed_index),
+                Some(downgrade),
+            )
         }
         _ => {
             let failed = &job.steps[failed_index].id;
@@ -378,6 +611,7 @@ fn admit_resume_step(
                          step after the first, or move the task by hand."
                     ),
                 },
+                None,
                 None,
             )
         }

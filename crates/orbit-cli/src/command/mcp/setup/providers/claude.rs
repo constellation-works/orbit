@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use orbit_common::fs::io::{LockFileNaming, with_exclusive_file_lock_named};
+use orbit_common::fs::directory_lock::with_directory_lock;
 use orbit_core::OrbitError;
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -24,22 +24,13 @@ pub(in crate::command::mcp::setup) fn apply_claude_init(
         let mut root = load_json_object(&target.mcp_path)?;
         let mcp_servers = ensure_json_object(&mut root, "mcpServers")?;
         mcp_servers.insert(server_id.to_string(), claude_mcp_server_value(launch));
-        if target.scope == ScopeArg::Home {
-            write_json_object_atomic(&target.mcp_path, &root)
-        } else {
-            write_json_object(&target.mcp_path, &root)
-        }
+        write_json_object(&target.mcp_path, &root)
     };
     if target.scope == ScopeArg::Home {
-        // Claude Code itself locks `<mcp_path>.lock` (its own file name with
-        // `.lock` appended), not Orbit's usual dot-prefixed sibling. Locking
-        // anything else lets the two writers race past each other (ORB-12182).
-        with_exclusive_file_lock_named(
-            &target.mcp_path,
-            LockFileNaming::AppendedSuffix,
-            "Claude Code main settings",
-            update_mcp,
-        )?;
+        // Claude Code's proper-lockfile uses mkdir at `<mcp_path>.lock`,
+        // refreshes its mtime, and removes the directory on release. A flock
+        // on a regular file at that same path does not exclude Claude.
+        with_directory_lock(&target.mcp_path, "Claude Code main settings", update_mcp)?;
     } else {
         update_mcp()?;
     }
@@ -71,7 +62,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
         if target.scope == ScopeArg::Home {
             if target.mcp_path.exists() {
-                write_json_object_atomic(&target.mcp_path, &root)?;
+                write_json_object(&target.mcp_path, &root)?;
             }
             Ok(())
         } else {
@@ -79,12 +70,7 @@ pub(in crate::command::mcp::setup) fn apply_claude_remove(
         }
     };
     if target.scope == ScopeArg::Home {
-        with_exclusive_file_lock_named(
-            &target.mcp_path,
-            LockFileNaming::AppendedSuffix,
-            "Claude Code main settings",
-            remove_mcp,
-        )?;
+        with_directory_lock(&target.mcp_path, "Claude Code main settings", remove_mcp)?;
     } else {
         remove_mcp()?;
     }
@@ -150,8 +136,8 @@ fn cleanup_legacy_mcp_path(target: &ConfigTarget, server_id: &str) -> Result<(),
 
 /// Remove `dir` if it exists and is now empty.
 ///
-/// `apply_claude_init` calls `write_json_object`, which `create_dir_all`s the
-/// settings file's parent on demand — for a workspace or home root with no
+/// `apply_claude_init` calls `write_json_object`, whose atomic helper creates
+/// the settings file's parent on demand — for a workspace or home root with no
 /// prior `.claude/`, that is this directory. A clean `remove` should leave the
 /// tree as it found it, so once the settings file this function owns is gone,
 /// an empty directory is one `remove` itself created and should go with it.

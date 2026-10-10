@@ -125,6 +125,75 @@ grep -E -q '^SCCACHE_SERVER_PORT=$' "$FAKE_SCCACHE_ENV" || fail "wrapper must no
 "$ROOT/scripts/compiler-cache.sh" --help >/dev/null
 HOME="$HOME" "$ROOT/scripts/compiler-cache.sh" status >/dev/null
 
+# Installer failures must reject a local archive before extraction, preserve an
+# existing binary, and remove temporary downloads. No network or host install.
+(
+  install_fixture="$TMP/install-fixture"
+  mkdir -p "$install_fixture/bin" "$install_fixture/archive/unexpected"
+  cat > "$install_fixture/archive/unexpected/sccache" <<'EOF'
+#!/usr/bin/env bash
+touch "$FAKE_INSTALL_EXECUTED"
+EOF
+  chmod +x "$install_fixture/archive/unexpected/sccache"
+  tar -czf "$install_fixture/archive.tar.gz" -C "$install_fixture/archive" unexpected
+  cat > "$install_fixture/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+[[ "$FAKE_INSTALL_MODE" != download-failure ]] || exit 22
+[[ "$#" -eq 4 && "$1" == -fsSL && "$3" == -o ]] || exit 2
+cp "$FAKE_INSTALL_ARCHIVE" "$4"
+EOF
+  cat > "$install_fixture/bin/uname" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  -s) printf '%s\n' "$FAKE_INSTALL_OS" ;;
+  -m) printf '%s\n' "$FAKE_INSTALL_ARCH" ;;
+  *) exit 2 ;;
+esac
+EOF
+  cat > "$install_fixture/bin/tar" <<'EOF'
+#!/usr/bin/env bash
+touch "$FAKE_INSTALL_EXTRACTED"
+exit 99
+EOF
+  chmod +x "$install_fixture/bin/"*
+  export PATH="$install_fixture/bin:$PATH"
+  export FAKE_INSTALL_ARCHIVE="$install_fixture/archive.tar.gz"
+  while read -r FAKE_INSTALL_OS FAKE_INSTALL_ARCH FAKE_INSTALL_MODE; do
+    case_dir="$install_fixture/$FAKE_INSTALL_OS-$FAKE_INSTALL_ARCH-$FAKE_INSTALL_MODE"
+    export HOME="$case_dir/home" TMPDIR="$case_dir/downloads"
+    export FAKE_INSTALL_OS FAKE_INSTALL_ARCH FAKE_INSTALL_MODE
+    export FAKE_INSTALL_EXECUTED="$case_dir/executed"
+    export FAKE_INSTALL_EXTRACTED="$case_dir/extracted"
+    mkdir -p "$HOME" "$TMPDIR"
+    dest="$HOME/.orbit/cache/bin/sccache"
+    if [[ "$FAKE_INSTALL_MODE" == existing ]]; then
+      mkdir -p "$(dirname "$dest")"
+      cp "$install_fixture/archive/unexpected/sccache" "$dest"
+    fi
+    if "$ROOT/scripts/compiler-cache.sh" setup --install > "$case_dir/install.log" 2>&1; then
+      fail "installer accepted $FAKE_INSTALL_MODE for $FAKE_INSTALL_OS/$FAKE_INSTALL_ARCH"
+    fi
+    if [[ "$FAKE_INSTALL_MODE" != download-failure ]]; then
+      grep -Fq 'SHA-256 mismatch' "$case_dir/install.log" || fail "installer did not report checksum rejection"
+    fi
+    [[ ! -e "$FAKE_INSTALL_EXTRACTED" ]] || fail "installer extracted an unverified archive"
+    [[ ! -e "$FAKE_INSTALL_EXECUTED" ]] || fail "installer executed an unverified binary"
+    if [[ "$FAKE_INSTALL_MODE" == existing ]]; then
+      cmp "$install_fixture/archive/unexpected/sccache" "$dest" || fail "rejected archive replaced the installed binary"
+    else
+      [[ ! -e "$dest" ]] || fail "installer left a binary after failure"
+    fi
+    [[ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ]] || fail "installer leaked its download directory"
+  done <<'EOF'
+Linux x86_64 fresh
+Linux aarch64 fresh
+Darwin x86_64 fresh
+Darwin arm64 fresh
+Linux x86_64 existing
+Linux x86_64 download-failure
+EOF
+)
+
 # 6. When the Linux stable mounts alias this checkout, argv paths are rewritten
 # and rustc cwd is the stable source mount (provider agent cwd is not changed).
 fake_tgt="$TMP/stable-target"

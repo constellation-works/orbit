@@ -3,10 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_common::fs::generation::{ParticipantRecord, ParticipantRole};
 use serde::Serialize;
 
 use super::converge::{ConvergenceStep, run_reporting_step, run_step};
 use super::environment::UpdateEnvironment;
+use super::local_candidate::LocalCandidateEvidence;
+use super::version::ReleaseVersion;
 
 /// Exit code for an update that installed the new executable but could not
 /// finish converging workspace state. Distinct from a plain failure: the
@@ -20,9 +24,10 @@ pub const EXIT_UPDATE_AVAILABLE: i32 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateOutcome {
-    /// The requested version is already installed and state is converged.
+    /// `--check` found no newer release, or the requested version is already
+    /// installed and state is converged after applying an update.
     AlreadyCurrent,
-    /// `--check` found a different version to install.
+    /// `--check` found a newer version to install.
     UpdateAvailable,
     /// The executable and workspace state are both at the target version.
     Updated,
@@ -70,9 +75,54 @@ pub struct UpdateReport {
     /// Workspace root selected for convergence, when one was found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
+    /// Generation authorities admission was taken on, in lock order.
+    pub admission_roots: Vec<PathBuf>,
+    /// Provenance of an operator-built candidate; absent for a release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_candidate: Option<LocalCandidateEvidence>,
+    /// Live processes admitted beside the update because they hand over to
+    /// the candidate once it is renamed over the executable.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub handover: Vec<HandoverProcess>,
     /// What the operator must do to finish, when the run did not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
+}
+
+/// A live process that hands over to the installed candidate.
+#[derive(Debug, Clone, Serialize)]
+pub struct HandoverProcess {
+    /// Its process id, which the handover keeps.
+    pub pid: u32,
+    /// The role it registered.
+    pub role: ParticipantRole,
+    /// When it joined the authority.
+    pub started_at: DateTime<Utc>,
+    /// The resume capability it hands over with.
+    pub resume: Option<String>,
+}
+
+impl From<&ParticipantRecord> for HandoverProcess {
+    fn from(record: &ParticipantRecord) -> Self {
+        Self {
+            pid: record.pid,
+            role: record.role,
+            started_at: record.started_at,
+            resume: record.handover.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for HandoverProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "pid {} ({}, started {})",
+            self.pid,
+            self.role,
+            self.started_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+        )
+    }
 }
 
 impl UpdateReport {
@@ -121,12 +171,47 @@ pub(super) fn finish(
 /// names the binary this update just installed.
 const CLOCK_STEP: &[&str] = &["clock", "repair"];
 
+/// Host preparation run by the replacement executable, which re-installs the
+/// bundled Bubblewrap when it is older than the one the new release pins.
+const BUNDLED_BWRAP_STEP: &[&str] = &["init", "--host-prerequisites-only", "--non-interactive"];
+
 /// Migrate `.orbit/` state, reconcile managed assets, then repoint the host
-/// clock unit — in that order.
+/// clock unit — in that order — and refresh the bundled Bubblewrap when this
+/// host uses one.
 fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
     let mut steps = workspace_steps(environment, executable);
     steps.push(clock_step(environment, executable, &steps));
+    steps.extend(bundled_bwrap_step(environment, executable));
     steps
+}
+
+/// The bundled Bubblewrap is part of the Orbit release, so it moves with
+/// Orbit. Only a host that already has one installed runs this step: the
+/// distribution's own Bubblewrap is not Orbit's to change during an update.
+/// Like the clock step it is host-wide, and like `orbit init` it never
+/// prompts — a host without passwordless sudo reports the step as failed with
+/// the command to run by hand.
+fn bundled_bwrap_step(
+    environment: &UpdateEnvironment,
+    executable: &Path,
+) -> Option<ConvergenceStep> {
+    if !environment.bundled_bwrap_installed {
+        return None;
+    }
+    let cwd = match environment.workspace.as_ref() {
+        Some(workspace) => workspace.cwd.clone(),
+        None => match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                return Some(ConvergenceStep::skipped(
+                    &BUNDLED_BWRAP_STEP.join(" "),
+                    &format!("could not resolve the current directory: {error}"),
+                ));
+            }
+        },
+    };
+    // Host preparation refuses `--root`: it touches no workspace.
+    Some(run_step(executable, &cwd, None, BUNDLED_BWRAP_STEP))
 }
 
 fn workspace_steps(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
@@ -204,23 +289,58 @@ fn clock_step(
 }
 
 fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&Path>) -> String {
+    let bundled_bwrap_step = BUNDLED_BWRAP_STEP.join(" ");
     let command = |args: &str| {
+        if args == bundled_bwrap_step {
+            // Host preparation takes no root, and by hand it may prompt for sudo.
+            return "`orbit init --host-prerequisites-only`".to_string();
+        }
         root_argument.map_or_else(
             || format!("`orbit {args}`"),
             |root| format!("`orbit --root {} {args}`", root.display()),
         )
     };
-    let retry = command("update");
+    // A local candidate is retried with its own exact invocation: the plain
+    // command would resolve a published release instead.
+    let (installed, retry) = match &report.local_candidate {
+        Some(local) => (
+            format!(
+                "the local candidate {} (orbit {})",
+                local.executable_sha256.value, report.target_version
+            ),
+            format!("`{}`", local.retry_command),
+        ),
+        None => {
+            let downgrade = match (
+                ReleaseVersion::parse(&report.target_version),
+                ReleaseVersion::parse(&report.current_version),
+            ) {
+                (Ok(target), Ok(current)) => target < current,
+                _ => false,
+            };
+            let update_args = if downgrade {
+                format!(
+                    "update --version {} --allow-downgrade",
+                    report.target_version
+                )
+            } else {
+                format!("update --version {}", report.target_version)
+            };
+            (
+                format!("orbit {}", report.target_version),
+                command(&update_args),
+            )
+        }
+    };
     let direct = failed
         .iter()
         .map(|args| command(args))
         .collect::<Vec<_>>()
         .join(" and ");
     let mut text = format!(
-        "orbit {} is installed, but {direct} did not finish. \
+        "{installed} is installed, but {direct} did not finish. \
          Re-run {retry} from this workspace to retry — every step is idempotent — \
-         or run {direct} directly and read its diagnostics.",
-        report.target_version,
+         or run {direct} directly and read its diagnostics."
     );
     if let Some(backup) = &report.backup_path {
         text.push_str(&format!(

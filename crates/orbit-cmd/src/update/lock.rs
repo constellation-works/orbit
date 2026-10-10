@@ -21,6 +21,10 @@ pub struct UpdateLock {
 
 impl UpdateLock {
     /// Take the update lock for `install_dir`, or report who holds it.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the binary installation directory is external to Orbit state and retains its deployment permissions"
+    )]
     pub fn acquire(install_dir: &Path) -> Result<Self, OrbitError> {
         std::fs::create_dir_all(install_dir).map_err(|error| {
             OrbitError::Io(format!(
@@ -41,12 +45,19 @@ impl UpdateLock {
                     path.display()
                 ))
             })?;
-        file.try_lock_exclusive().map_err(|_| {
-            OrbitError::Execution(format!(
-                "another orbit update is already running for '{}'; wait for it to finish, \
-                 then re-run `orbit update` (it is idempotent and will resume)",
-                install_dir.display()
-            ))
+        file.try_lock_exclusive().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                OrbitError::Execution(format!(
+                    "another orbit update is already running for '{}'; wait for it to finish, \
+                     then re-run `orbit update` (it is idempotent and will resume)",
+                    install_dir.display()
+                ))
+            } else {
+                OrbitError::Io(format!(
+                    "failed to acquire the update lock '{}': {error}",
+                    path.display()
+                ))
+            }
         })?;
         Ok(Self { file, path })
     }

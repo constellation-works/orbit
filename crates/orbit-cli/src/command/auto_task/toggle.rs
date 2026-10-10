@@ -20,9 +20,6 @@ pub struct AutoTaskToggleArgs {
     /// Whether to enable (`on`) or disable (`off`)
     #[arg(value_enum)]
     pub state: ToggleState,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskToggleArgs {
@@ -32,10 +29,6 @@ impl Execute for AutoTaskToggleArgs {
 
         let status = if definition.enabled {
             "enabled"
-        } else if runtime.auto_task_enabled_by_review_policy(&definition) {
-            // [ORB-13896] The policy, not this toggle, keeps it running.
-            "disabled, but still enabled by operation.review_policy = after-landing; set the \
-             policy to none or before-pr to stop after-landing review"
         } else {
             "disabled"
         };

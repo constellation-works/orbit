@@ -6,13 +6,285 @@ use orbit_exec::{
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::adapter::engine_host::v2_host::sandbox::resolve::{
-    append_orbit_child_runtime_write_roots, deny_registered_auto_task_definition_writes,
-    resolve_fs_profile_absolute,
+    append_codex_side_write_roots, append_orbit_child_runtime_write_roots,
+    deny_registered_checkout_host_stores, resolve_fs_profile_absolute,
 };
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_layout, seed_executor,
+    runtime_with_workspace_config, runtime_with_workspace_layout, seed_executor,
 };
+
+/// A run whose cwd is the registered checkout must not receive the policy's
+/// versioned `.orbit` exceptions against that checkout's live host-clock
+/// stores. The assertion goes through `resolve_executor_sandbox`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn registered_checkout_denies_live_orbit_versioned_stores() {
+    use orbit_types::workflow::ExecutorSandboxKind;
+
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let repo_root = repo_root.canonicalize().expect("canonical repo");
+    std::fs::create_dir_all(repo_root.join(".git")).expect("git metadata");
+    let sandbox = if cfg!(target_os = "linux") {
+        ExecutorSandboxKind::LinuxBwrap
+    } else {
+        ExecutorSandboxKind::MacosSandboxExec
+    };
+    for provider in ["claude", "codex"] {
+        seed_executor(&runtime, provider, Some(sandbox));
+        let resolved = runtime
+            .resolve_executor_sandbox(provider, None, Some(&repo_root))
+            .unwrap_or_else(|error| panic!("{provider} sandbox must resolve: {error}"))
+            .unwrap_or_else(|| panic!("{provider} must resolve a sandbox"));
+        assert_registered_host_stores_denied(&runtime, &resolved, provider);
+        assert_registered_checkout_boundaries_unchanged(&runtime, &resolved, &repo_root);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let worktree = repo_root.join(".orbit/state/worktrees/orbit-jrun-registered-deny");
+        std::fs::create_dir_all(worktree.join(".orbit/auto_tasks")).expect("worktree orbit");
+        std::fs::create_dir_all(worktree.join(".orbit/routines")).expect("worktree routines");
+        std::fs::create_dir_all(worktree.join(".orbit/resources")).expect("worktree resources");
+        std::fs::write(worktree.join(".orbit/config.toml"), "versioned = true")
+            .expect("worktree config");
+        let resolved = runtime
+            .resolve_executor_sandbox("claude", None, Some(&worktree))
+            .expect("resolve worktree sandbox")
+            .expect("sandbox");
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "claude")
+            .expect("compile worktree profile");
+        let orbit = worktree.join(".orbit");
+        for relative in [
+            "auto_tasks/child-write.yaml",
+            "routines/x.yaml",
+            "config.toml",
+            "resources/x.yaml",
+        ] {
+            let path = orbit_exec::physical_with_missing_tail(&orbit.join(relative));
+            assert!(
+                last_compiled_file_write_allows(&sbpl, &path),
+                "worktree-local `{relative}` must stay writable:\n{sbpl}"
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_registered_host_stores_denied(
+    runtime: &crate::OrbitRuntime,
+    resolved: &orbit_engine::ResolvedSandbox,
+    provider: &str,
+) {
+    let orbit = runtime
+        .paths()
+        .orbit_dir
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.paths().orbit_dir.clone());
+    let protected = [
+        orbit.join("auto_tasks/child-write.yaml"),
+        orbit.join("routines/x.yaml"),
+        orbit.join("config.toml"),
+        orbit.join("resources/x.yaml"),
+    ];
+
+    #[cfg(target_os = "linux")]
+    {
+        for path in &protected {
+            let denied = linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, path)
+                .unwrap_or_else(|error| panic!("diagnose {}: {error}", path.display()));
+            assert!(
+                denied.is_some(),
+                "{provider} must deny {} from the registered checkout: {denied:?}\nrules: {:?}",
+                path.display(),
+                resolved.fs_profile.modify
+            );
+        }
+        for still_granted in [orbit.join("tmp/scratch"), orbit.join("tasks")] {
+            assert!(
+                linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &still_granted)
+                    .unwrap_or_else(|error| panic!("diagnose {}: {error}", still_granted.display()))
+                    .is_none(),
+                "{provider} must keep {} granted: {:?}",
+                still_granted.display(),
+                resolved.fs_profile.modify
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, provider)
+            .unwrap_or_else(|error| panic!("compile {provider} profile: {error}"));
+        for path in &protected {
+            let physical = orbit_exec::physical_with_missing_tail(path);
+            assert!(
+                !last_compiled_file_write_allows(&sbpl, &physical),
+                "{provider} compiled profile must deny {}:\n{sbpl}",
+                physical.display()
+            );
+        }
+    }
+}
+
+/// Recovery, Git metadata, and the plugin mask are applied on the same
+/// resolution that denies the registered host-clock stores.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_registered_checkout_boundaries_unchanged(
+    runtime: &crate::OrbitRuntime,
+    resolved: &orbit_engine::ResolvedSandbox,
+    repo_root: &std::path::Path,
+) {
+    let mask = resolved
+        .mask
+        .as_ref()
+        .expect("plugin mask stays on a sandboxed resolution");
+    let targets = mask
+        .targets
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        targets.iter().any(|path| path.ends_with("state/plugins")),
+        "plugin state mask missing: {targets:?}"
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|path| path.ends_with("state/plugin-secrets")),
+        "plugin secret mask missing: {targets:?}"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let global = runtime
+            .paths()
+            .global_dir
+            .canonicalize()
+            .unwrap_or_else(|_| runtime.paths().global_dir.clone());
+        let authority = global.join("state/recovery-authority/authority.db");
+        let denied = linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &authority)
+            .expect("diagnose recovery authority");
+        assert!(
+            denied.is_some(),
+            "recovery authority must stay denied: {denied:?}"
+        );
+        let git = repo_root
+            .canonicalize()
+            .expect("canonical repo")
+            .join(".git");
+        assert!(
+            resolved
+                .fs_profile
+                .modify
+                .iter()
+                .any(|rule| rule == &format!("!{}/**", git.display())),
+            "git metadata deny missing from {:?}",
+            resolved.fs_profile.modify
+        );
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "claude")
+            .expect("compile registered checkout profile");
+        let authority = orbit_exec::physical_with_missing_tail(
+            &runtime
+                .paths()
+                .global_dir
+                .join("state/recovery-authority/authority.db"),
+        );
+        assert!(
+            !last_compiled_file_write_allows(&sbpl, &authority),
+            "recovery authority must stay denied:\n{sbpl}"
+        );
+        let git_config = orbit_exec::physical_with_missing_tail(&repo_root.join(".git/config"));
+        assert!(
+            !last_compiled_file_write_allows(&sbpl, &git_config),
+            "registered Git metadata must stay denied:\n{sbpl}"
+        );
+    }
+}
+
+/// Last `file-write*` clause whose `subpath` or `literal` covers `path`. The
+/// compiled profile denies by default, so a path with no covering clause is
+/// denied.
+#[cfg(target_os = "macos")]
+fn last_compiled_file_write_allows(profile: &str, path: &std::path::Path) -> bool {
+    last_compiled_file_write_allows_under(profile, path, std::path::Path::new("/"))
+}
+
+/// [`last_compiled_file_write_allows`] over the clauses rooted inside
+/// `fixture`. Temp fixtures sit beneath the compiler's host scratch allows
+/// (`/tmp`, `/private/var/folders`), which never cover a real `~/.orbit`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn last_compiled_file_write_allows_under(
+    profile: &str,
+    path: &std::path::Path,
+    fixture: &std::path::Path,
+) -> bool {
+    last_compiled_file_write_under(profile, path, fixture) == Some(true)
+}
+
+/// Whether the last `file-write*` clause rooted inside `fixture` that covers
+/// `path` allows it, or `None` when no such clause exists. A temp fixture
+/// sits beneath the host scratch allows, so a `None` path is writable there
+/// even though a real checkout would leave it to the default deny. A `regex`
+/// clause, which policy globs such as `**/.env` compile to, counts whenever
+/// it matches a `path` inside `fixture`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn last_compiled_file_write_under(
+    profile: &str,
+    path: &std::path::Path,
+    fixture: &std::path::Path,
+) -> Option<bool> {
+    let rendered = path.display().to_string();
+    let mut allowed = None;
+    for line in profile.lines() {
+        let (is_deny, filter) = if let Some(filter) = line.trim().strip_prefix("(deny file-write* ")
+        {
+            (true, filter)
+        } else if let Some(filter) = line.trim().strip_prefix("(allow file-write* ") {
+            (false, filter)
+        } else {
+            continue;
+        };
+        let filter = filter.trim_end_matches(')');
+        let quoted = |prefix: &str| {
+            filter
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix('"'))
+        };
+        let in_fixture = if let Some(root) = quoted("(subpath \"") {
+            (rendered == root || rendered.starts_with(&format!("{root}/")))
+                && std::path::Path::new(root).starts_with(fixture)
+        } else if let Some(entry) = quoted("(literal \"") {
+            rendered == entry && std::path::Path::new(entry).starts_with(fixture)
+        } else if let Some(pattern) = quoted("(regex \"") {
+            sbpl_regex(pattern).is_match(&rendered) && path.starts_with(fixture)
+        } else {
+            continue;
+        };
+        if in_fixture {
+            allowed = Some(!is_deny);
+        }
+    }
+    allowed
+}
+
+/// The pattern of an SBPL `regex` filter, with its string escapes undone.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn sbpl_regex(quoted: &str) -> regex::Regex {
+    let mut pattern = String::with_capacity(quoted.len());
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        pattern.push(if c == '\\' {
+            chars.next().expect("complete SBPL escape")
+        } else {
+            c
+        });
+    }
+    regex::Regex::new(&pattern).unwrap_or_else(|error| panic!("SBPL regex `{pattern}`: {error}"))
+}
 
 /// [ORB-13458] Every positive macOS `modify` entry compiles to an SBPL write
 /// allow, so provider and runtime conveniences must not hand a reviewer the
@@ -79,6 +351,122 @@ fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
             );
         }
     }
+}
+
+/// [ORB-15117] A writer from a managed worktree gets the policy inside that
+/// worktree as authored: its own grants, every policy deny, and nothing else
+/// there or in the registered checkout. Re-allowing the bare worktree after
+/// the denies let SBPL last-match-wins override them, including the `**/.env`
+/// globs, which compile to `regex` clauses rather than `subpath` ones.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let repo = repo_root.canonicalize().expect("canonical repo");
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-orb-15117");
+    for directory in ["a", "docs/drafts", "src"] {
+        std::fs::create_dir_all(worktree.join(directory)).expect("worktree layout");
+    }
+    std::fs::create_dir_all(repo.join("docs")).expect("registered docs");
+    let wt = |relative: &str| worktree.join(relative);
+    // (profile, writable, explicitly denied, granted by no clause)
+    let cases = [
+        (
+            "implementer",
+            vec![wt("src/lib.rs")],
+            vec![
+                wt(".env"),
+                wt(".env.local"),
+                wt("a/b.env"),
+                wt("a/prod.env.bak"),
+            ],
+            vec![repo.join("src/lib.rs")],
+        ),
+        (
+            "docs_writer",
+            vec![wt("docs/guide.md")],
+            vec![wt("docs/drafts/plan.md")],
+            vec![
+                wt("src/lib.rs"),
+                wt("README.md"),
+                repo.join("docs/guide.md"),
+                repo.join("src/lib.rs"),
+            ],
+        ),
+    ];
+
+    for provider in ["claude", "codex"] {
+        seed_executor(
+            &runtime,
+            provider,
+            Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+        );
+        for (profile, writable, denied, not_granted) in &cases {
+            let sandbox = runtime
+                .resolve_executor_sandbox(provider, Some(profile), Some(&worktree))
+                .expect("resolve writer sandbox")
+                .expect("macOS sandbox");
+            let sbpl = orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
+                .expect("compile writer profile");
+            for path in writable {
+                assert!(
+                    last_compiled_file_write_allows_under(&sbpl, path, &repo),
+                    "{provider} {profile} from a worktree must write {}:\n{sbpl}",
+                    path.display()
+                );
+            }
+            for path in denied {
+                assert_eq!(
+                    last_compiled_file_write_under(&sbpl, path, &repo),
+                    Some(false),
+                    "{provider} {profile} from a worktree must be denied {}:\n{sbpl}",
+                    path.display()
+                );
+            }
+            for path in not_granted {
+                assert!(
+                    !last_compiled_file_write_allows_under(&sbpl, path, &repo),
+                    "{provider} {profile} from a worktree must not be granted {}:\n{sbpl}",
+                    path.display()
+                );
+            }
+            if orbit_exec::macos_sandbox_test_guard(
+                "macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree",
+            ) {
+                for path in writable {
+                    assert_native_write(&sbpl, path, true);
+                }
+                for path in denied {
+                    assert_native_write(&sbpl, path, false);
+                }
+            }
+        }
+    }
+}
+
+/// Create or append to `path` under `profile` with the native wrapper.
+#[cfg(target_os = "macos")]
+fn assert_native_write(profile: &str, path: &std::path::Path, allowed: bool) {
+    let output = orbit_common::process::run_bounded_capped(
+        std::process::Command::new("/usr/bin/sandbox-exec").args([
+            "-p",
+            profile,
+            "/bin/sh",
+            "-c",
+            "printf probe >> \"$1\"",
+            "write-probe",
+            path.to_str().expect("fixture path"),
+        ]),
+        std::time::Duration::from_secs(10),
+        64 * 1024,
+    )
+    .expect("run sandbox-exec write probe");
+    assert_eq!(
+        output.status.success(),
+        allowed,
+        "native write to {}: {output:?}",
+        path.display()
+    );
 }
 
 /// The recovery authority is the one durable record a resume trusts, so it
@@ -229,7 +617,7 @@ fn macos_child_profile_denies_registered_auto_task_definitions() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let mut resolved = resolve_fs_profile_absolute(&runtime, None, None).expect("resolve profile");
     append_orbit_child_runtime_write_roots(&runtime, true, &mut resolved);
-    deny_registered_auto_task_definition_writes(&runtime, &mut resolved);
+    deny_registered_checkout_host_stores(&runtime, &mut resolved);
 
     let workspace_orbit = runtime
         .paths()
@@ -518,6 +906,251 @@ fn undeclared_sandbox_still_resolves_to_none_on_every_os() {
             assert!(
                 resolved.is_none(),
                 "{provider} on {target_os} declared no sandbox: {resolved:?}"
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const CODEX_WORKSPACE_WRITE: &str = "[execution.codex]\nsandbox = \"workspace-write\"\n";
+
+/// Host state a workspace-write Codex run must not reach, the runtime stores
+/// it must, and the two non-registered cwds it runs from. [ORB-14538]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct CodexSideRootFixture {
+    root: std::path::PathBuf,
+    worktree: std::path::PathBuf,
+    recovery: std::path::PathBuf,
+    protected: Vec<std::path::PathBuf>,
+    granted: Vec<std::path::PathBuf>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl CodexSideRootFixture {
+    fn new(runtime: &crate::OrbitRuntime) -> Self {
+        let canonical = |path: &std::path::Path| path.canonicalize().expect("canonical root");
+        let orbit = canonical(&runtime.paths().orbit_dir);
+        let global = canonical(&runtime.paths().global_dir);
+        let file = |path: std::path::PathBuf| {
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+            std::fs::write(&path, "host").expect("write fixture file");
+            path
+        };
+        let worktree = orbit.join("state/worktrees/orbit-jrun-codex-side-roots");
+        let recovery = orbit.join("state/recovery-checkouts/orbit-jrun-codex-side-roots");
+        for checkout in [&worktree, &recovery] {
+            std::fs::create_dir_all(checkout.join(".orbit/tmp")).expect("create checkout");
+        }
+        for store in [
+            "tasks",
+            "frictions",
+            "state/audit",
+            "state/logs",
+            "state/job-runs",
+        ] {
+            std::fs::create_dir_all(orbit.join(store)).expect("workspace store");
+        }
+        for store in ["tasks", "state/audit", "state/logs", "cache"] {
+            std::fs::create_dir_all(global.join(store)).expect("global store");
+        }
+        let protected = vec![
+            file(orbit.join("config.toml")),
+            file(orbit.join("auto_tasks/nightly.yaml")),
+            file(orbit.join("routines/sweep.yaml")),
+            file(orbit.join("resources/crew.yaml")),
+            file(orbit.join("state/worktrees/orbit-jrun-other/src/lib.rs")),
+            file(global.join("bin/orbit")),
+            file(global.join("config.toml")),
+            file(global.join("workspaces.json")),
+            file(global.join("resources/crew.yaml")),
+        ];
+        let granted = vec![
+            orbit.join("tasks/ORB-1.yaml"),
+            orbit.join("state/job-runs/run.yaml"),
+            global.join("tasks/ORB-1.yaml"),
+            global.join("cache/artifact"),
+        ];
+        let root = orbit_exec::physical_with_missing_tail(
+            runtime.paths().repo_root.parent().expect("fixture root"),
+        );
+        Self {
+            root,
+            worktree,
+            recovery,
+            protected,
+            granted,
+        }
+    }
+}
+
+/// The side roots must be in play, or the reachability assertions are vacuous.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_codex_side_roots_configured(runtime: &crate::OrbitRuntime) {
+    let config = RuntimeHost::agent_provider_config(runtime);
+    let dirs: Vec<String> = serde_json::from_str(
+        config
+            .get("writable_dirs_json")
+            .expect("workspace-write Codex carries side roots"),
+    )
+    .expect("side roots parse");
+    assert!(
+        !dirs.is_empty(),
+        "the fixture must exercise the Codex side roots"
+    );
+}
+
+/// Whether the last Bubblewrap mount covering `path` is writable. Mounts
+/// stack in argv order, and a bind covers its destination's whole subtree.
+#[cfg(target_os = "linux")]
+fn bwrap_argv_writes(args: &[String], path: &std::path::Path) -> bool {
+    let mut writable = false;
+    let mut index = 0;
+    while index < args.len() {
+        let (arity, mount) = match args[index].as_str() {
+            "--bind" | "--bind-try" | "--dev-bind" | "--dev-bind-try" => (2, Some(true)),
+            "--ro-bind" | "--ro-bind-try" => (2, Some(false)),
+            "--bind-fd" => (2, Some(true)),
+            "--ro-bind-fd" => (2, Some(false)),
+            "--tmpfs" | "--remount-ro" => (1, Some(false)),
+            "--dir" => (1, None),
+            _ => (0, None),
+        };
+        if let (Some(writes), Some(destination)) = (mount, args.get(index + arity))
+            && path.starts_with(destination)
+        {
+            writable = writes;
+        }
+        index += arity + 1;
+    }
+    writable
+}
+
+/// [ORB-14538] A workspace-write Codex run from a managed worktree or a
+/// recovery checkout used to receive the registered `.orbit` and the global
+/// `~/.orbit` as bare side roots, which Bubblewrap binds as whole subtrees:
+/// the host clock's stores, other runs' worktrees, global config and the
+/// `orbit` binary were writable. Only the runtime stores may be.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(CODEX_WORKSPACE_WRITE));
+    seed_executor(
+        &runtime,
+        "codex",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+    let fixture = CodexSideRootFixture::new(&runtime);
+    assert_codex_side_roots_configured(&runtime);
+
+    for cwd in [&fixture.worktree, &fixture.recovery] {
+        let resolved = runtime
+            .resolve_executor_sandbox("codex", None, Some(cwd))
+            .expect("resolve Codex sandbox")
+            .expect("descriptor");
+        assert!(
+            resolved.managed_worktree,
+            "{} is host-managed",
+            cwd.display()
+        );
+        prepare_linux_bwrap_write_grants(&resolved.fs_profile, cwd).expect("prepare grants");
+        let plan = compile_linux_bwrap_argv(
+            &resolved.fs_profile,
+            "/bin/true",
+            &[],
+            Some(cwd),
+            resolved.managed_worktree,
+        )
+        .expect("compile Codex sandbox");
+        for path in &fixture.protected {
+            assert!(
+                !bwrap_argv_writes(&plan.args, path),
+                "Codex from {} must not write {}: {:?}",
+                cwd.display(),
+                path.display(),
+                resolved.fs_profile.modify
+            );
+        }
+        for path in fixture.granted.iter().chain([&cwd.join("src/lib.rs")]) {
+            assert!(
+                bwrap_argv_writes(&plan.args, path),
+                "Codex from {} must keep writing {}: {:?}",
+                cwd.display(),
+                path.display(),
+                plan.args
+            );
+        }
+    }
+}
+
+/// [ORB-14538] The macOS side-root appender emits contained store subpaths,
+/// never a runtime root. Exercised through the SBPL compiler on every host,
+/// without the registered-store denies that would mask a whole-root grant.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn codex_side_roots_compile_to_store_subpaths_only() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(CODEX_WORKSPACE_WRITE));
+    let fixture = CodexSideRootFixture::new(&runtime);
+    assert_codex_side_roots_configured(&runtime);
+    let mut resolved =
+        resolve_fs_profile_absolute(&runtime, None, Some(&fixture.worktree)).expect("profile");
+    append_codex_side_write_roots(&runtime, "codex", &mut resolved).expect("side roots");
+
+    let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved, "codex").expect("compile");
+    for path in &fixture.protected {
+        let physical = orbit_exec::physical_with_missing_tail(path);
+        assert!(
+            !last_compiled_file_write_allows_under(&sbpl, &physical, &fixture.root),
+            "a Codex side root must not reach {}:\n{sbpl}",
+            physical.display()
+        );
+    }
+    for path in &fixture.granted {
+        let physical = orbit_exec::physical_with_missing_tail(path);
+        assert!(
+            last_compiled_file_write_allows_under(&sbpl, &physical, &fixture.root),
+            "the Codex side roots must keep {} writable:\n{sbpl}",
+            physical.display()
+        );
+    }
+}
+
+/// [ORB-14538] The full macOS resolution from a managed worktree or a
+/// recovery checkout keeps the same boundary under SBPL `subpath` semantics.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(CODEX_WORKSPACE_WRITE));
+    seed_executor(
+        &runtime,
+        "codex",
+        Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+    );
+    let fixture = CodexSideRootFixture::new(&runtime);
+    assert_codex_side_roots_configured(&runtime);
+
+    for cwd in [&fixture.worktree, &fixture.recovery] {
+        let resolved = runtime
+            .resolve_executor_sandbox("codex", None, Some(cwd))
+            .expect("resolve Codex sandbox")
+            .expect("descriptor");
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "codex")
+            .expect("compile Codex profile");
+        for path in &fixture.protected {
+            let physical = orbit_exec::physical_with_missing_tail(path);
+            assert!(
+                !last_compiled_file_write_allows_under(&sbpl, &physical, &fixture.root),
+                "Codex from {} must not write {}:\n{sbpl}",
+                cwd.display(),
+                physical.display()
+            );
+        }
+        for path in fixture.granted.iter().chain([&cwd.join("src/lib.rs")]) {
+            let physical = orbit_exec::physical_with_missing_tail(path);
+            assert!(
+                last_compiled_file_write_allows_under(&sbpl, &physical, &fixture.root),
+                "Codex from {} must keep writing {}:\n{sbpl}",
+                cwd.display(),
+                physical.display()
             );
         }
     }

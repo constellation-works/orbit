@@ -9,9 +9,6 @@ use super::support::{format_required_tool_input_summary, tool_status};
 
 #[derive(Args)]
 pub struct ToolListArgs {
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Include inactive tools that are hidden from the default agent surface
     #[arg(long, alias = "include-hidden")]
     pub all: bool,

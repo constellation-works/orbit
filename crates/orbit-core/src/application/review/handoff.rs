@@ -2,7 +2,9 @@
 //! Trusted callers obtain observations from Git/provider state and repository check
 //! policy, including the existing already-landed verifier for no-diff work. They
 //! must never manufacture observations by copying the worker's handoff payload.
-use orbit_common::OrbitError;
+use std::collections::HashMap;
+
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
     ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationResult, ExecutionClaimPhase,
     HandoffObservation,
@@ -32,6 +34,11 @@ impl OrbitRuntime {
     /// request; the owner landing job is dispatched from that request here, so
     /// no drain or ship sweep has to be running for authorized work to land.
     /// A review-only handoff records no request and dispatches nothing.
+    ///
+    /// An accepted before-PR handoff's certificate is recorded in this
+    /// owner's review store, so after-landing coverage excludes the reviewed
+    /// tree as it does for the owner's own gate [ORB-13895]. A replayed
+    /// acceptance records it again, which is a no-op.
     pub fn accept_task_handoff(
         &self,
         context: &ClaimInvocation,
@@ -39,14 +46,29 @@ impl OrbitRuntime {
         handoff: TaskHandoff,
         observation: HandoffObservation,
     ) -> Result<ClaimMutationResult, OrbitError> {
+        let claim_id = handoff.claim_id.clone();
         let context = context.clone().with_handoff_observation(observation);
         let result = self.mutate_execution_claim(
             Some(&context),
             request_id,
             &ClaimMutation::AcceptHandoff(handoff),
         )?;
+        self.record_handoff_review_certificate(&claim_id)?;
         dispatch_recorded_authority(self);
         Ok(result)
+    }
+
+    /// Record the certificate an accepted before-PR handoff pinned, read
+    /// back through the claim journal's digest check.
+    fn record_handoff_review_certificate(&self, claim_id: &str) -> Result<(), OrbitError> {
+        let Some(certificate) = self
+            .admission_boundary()?
+            .accepted_review_certificate(claim_id)?
+        else {
+            return Ok(());
+        };
+        self.review_store()?
+            .review_certificate_record(&self.workspace_id()?, &certificate)
     }
 
     /// Explicit review-state approval. Does not reuse the backlog grant validator.
@@ -114,6 +136,17 @@ impl OrbitRuntime {
 /// Response shape version of [`OrbitRuntime::distributed_claim_console`].
 pub const HANDOFF_CONSOLE_SCHEMA: u32 = 1;
 
+/// Claim lifecycle states selected by the owner's read-only console.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistributedClaimState {
+    /// Claims that still hold execution authority or a protected footprint.
+    Active,
+    /// Claims whose execution lifecycle has settled.
+    Settled,
+    /// Both active and settled claims.
+    All,
+}
+
 /// Why an owner console read or action was refused before the store saw it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandoffConsoleRefusal {
@@ -137,32 +170,43 @@ impl HandoffConsoleRefusal {
         }
     }
 
-    /// Classify a store refusal the console surfaces verbatim to an operator.
+    /// The console refusal for an owner claim refusal of `kind`.
     ///
-    /// The store speaks one vocabulary for every fencing failure (`stale_claim`)
-    /// and names an unreconciled external send separately, because the two need
-    /// different operator responses: refresh, versus reconcile the merge first.
-    pub fn classify(error: &OrbitError) -> Option<Self> {
-        let message = error.to_string();
-        if message.contains("unresolved external merge intent")
-            || message.contains("merge intent replay requires reconciliation")
-        {
-            return Some(Self::UncertainMerge);
+    /// Every fencing failure reads as stale, and an unreconciled external send
+    /// is named separately, because the two need different operator responses:
+    /// refresh, versus reconcile the merge first.
+    pub fn for_claim_refusal(kind: ClaimRefusalKind) -> Self {
+        match kind {
+            ClaimRefusalKind::StaleClaim
+            | ClaimRefusalKind::HandoffCandidateMismatch
+            | ClaimRefusalKind::HandoffIdentityMismatch
+            | ClaimRefusalKind::ValidationRequirementsChanged
+            | ClaimRefusalKind::LandingAuthorityRevoked
+            | ClaimRefusalKind::HandoffAlreadyLanded => Self::Stale,
+            ClaimRefusalKind::NotCurrent => Self::NotCurrent,
+            ClaimRefusalKind::UnresolvedMergeIntent
+            | ClaimRefusalKind::MergeIntentReplayUnreconciled => Self::UncertainMerge,
         }
-        if matches!(error, OrbitError::CapabilityRefused(_)) && message.contains("replica checkout")
+    }
+}
+
+impl OrbitRuntime {
+    /// Classify a refusal one of this runtime's console reads or actions
+    /// returned, for the console to surface verbatim to an operator.
+    ///
+    /// Decided from the error's variant and this runtime's role, never from
+    /// its text: a capability refusal here is the replica-checkout refusal
+    /// exactly when this runtime is a replica, and an owner claim refusal maps
+    /// by its kind.
+    pub fn handoff_console_refusal(&self, error: &OrbitError) -> Option<HandoffConsoleRefusal> {
+        if matches!(error, OrbitError::CapabilityRefused(_))
+            && self.replica_owner_machine().is_some()
         {
-            return Some(Self::ReplicaCheckout);
+            return Some(HandoffConsoleRefusal::ReplicaCheckout);
         }
-        if message.contains("stale_claim")
-            || message.contains("handoff candidate mismatch")
-            || message.contains("handoff identity mismatch")
-            || message.contains("validation requirements changed")
-            || message.contains("landing authority revoked")
-            || message.contains("handoff has already landed")
-        {
-            return Some(Self::Stale);
-        }
-        None
+        error
+            .claim_refusal()
+            .map(HandoffConsoleRefusal::for_claim_refusal)
     }
 }
 
@@ -180,10 +224,31 @@ impl OrbitRuntime {
         self.distributed_claim_console_at(chrono::Utc::now())
     }
 
+    /// Read the owner claim console with bounded task and lifecycle selection.
+    /// Settled claims are compact summaries unless `detail` is true.
+    pub fn distributed_claim_console_filtered(
+        &self,
+        task_id: Option<&str>,
+        state: DistributedClaimState,
+        detail: bool,
+    ) -> Result<serde_json::Value, OrbitError> {
+        self.distributed_claim_console_filtered_at(task_id, state, detail, chrono::Utc::now())
+    }
+
     /// [`Self::distributed_claim_console`] observed at `now`, so a reservation
     /// expiry can be projected without waiting out its real TTL.
     pub(crate) fn distributed_claim_console_at(
         &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<serde_json::Value, OrbitError> {
+        self.distributed_claim_console_filtered_at(None, DistributedClaimState::All, true, now)
+    }
+
+    fn distributed_claim_console_filtered_at(
+        &self,
+        task_id: Option<&str>,
+        state: DistributedClaimState,
+        detail: bool,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<serde_json::Value, OrbitError> {
         if let Err(error) = self.ensure_coordination_task_write_permitted() {
@@ -197,31 +262,80 @@ impl OrbitRuntime {
                 "claims": Vec::<serde_json::Value>::new(),
             }));
         }
-        let claims = self.stores().tasks().inspect_execution_claims()?;
-        let requests = self.stores().tasks().landing_start_requests()?;
-        let attempts = self.stores().tasks().landing_attempts()?;
+        let inspected_claims = self.stores().tasks().inspect_execution_claims()?;
+        let claims = inspected_claims
+            .iter()
+            .filter(|claim| {
+                task_id.is_none_or(|task_id| claim.claim.task_id == task_id)
+                    && match state {
+                        DistributedClaimState::Active => claim.claim.phase.is_unsettled(),
+                        DistributedClaimState::Settled => !claim.claim.phase.is_unsettled(),
+                        DistributedClaimState::All => true,
+                    }
+            })
+            .collect::<Vec<_>>();
         let local_machine = self.automation_machine_identity().map(str::to_string);
+
+        // Read accepted handoffs once and join in memory. The old projection did
+        // one indexed store read per claim and linearly searched landing records
+        // twice for each accepted handoff.
+        let needs_detail = claims
+            .iter()
+            .any(|claim| claim.claim.phase.is_unsettled() || detail);
+        let accepted = if needs_detail {
+            self.stores().tasks().accepted_handoffs()?
+        } else {
+            Vec::new()
+        };
+        let accepted_by_claim = accepted
+            .iter()
+            .map(|accepted| (accepted.handoff.claim_id.as_str(), accepted))
+            .collect::<HashMap<_, _>>();
+        let has_selected_handoffs = claims.iter().any(|claim| {
+            (claim.claim.phase.is_unsettled() || detail)
+                && accepted_by_claim.contains_key(claim.claim.claim_id.as_str())
+        });
+        let requests = if has_selected_handoffs {
+            self.stores().tasks().landing_start_requests()?
+        } else {
+            Vec::new()
+        };
+        let requests_by_handoff = requests
+            .iter()
+            .map(|request| (request.handoff_id.as_str(), request))
+            .collect::<HashMap<_, _>>();
+        let attempts = if has_selected_handoffs {
+            self.stores().tasks().landing_attempts()?
+        } else {
+            Vec::new()
+        };
+        let attempts_by_handoff = attempts
+            .iter()
+            .map(|attempt| (attempt.handoff_id.as_str(), attempt))
+            .collect::<HashMap<_, _>>();
 
         let mut rows = Vec::with_capacity(claims.len());
         for claim in &claims {
-            let accepted = self
-                .stores()
-                .tasks()
-                .find_accepted_handoff(&claim.claim.claim_id)?;
-            let handoff = accepted.as_ref().map(|accepted| {
-                let request = requests
-                    .iter()
-                    .find(|request| request.handoff_id == accepted.handoff_id);
-                let attempt = attempts
-                    .iter()
-                    .find(|attempt| attempt.handoff_id == accepted.handoff_id);
-                handoff_json(
-                    accepted,
-                    request,
-                    attempt,
-                    claim.unresolved_merge_intent.as_deref(),
-                )
-            });
+            if !claim.claim.phase.is_unsettled() && !detail {
+                rows.push(settled_claim_summary_json(claim));
+                continue;
+            }
+            let handoff = accepted_by_claim
+                .get(claim.claim.claim_id.as_str())
+                .map(|accepted| {
+                    let request = requests_by_handoff
+                        .get(accepted.handoff_id.as_str())
+                        .copied();
+                    let attempt = attempts_by_handoff
+                        .get(accepted.handoff_id.as_str())
+                        .copied();
+                    handoff_json(
+                        accepted,
+                        request,
+                        attempt,
+                        claim.unresolved_merge_intent.as_deref(),
+                    )
+                });
             rows.push(claim_json(claim, handoff, local_machine.as_deref(), now));
         }
 
@@ -258,6 +372,9 @@ impl OrbitRuntime {
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
             owner_completion_authority: self.owner_completion_authority(),
+            // Acceptance observed the review's base and repository; the store
+            // rechecks the review evidence the handoff pinned without them.
+            review: None,
         };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
@@ -338,17 +455,19 @@ impl OrbitRuntime {
             .resolve_execution_claims()?
             .into_iter()
             .find(|claim| claim.claim.claim_id == claim_id)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "no claim '{claim_id}' is current on this owner (stale_claim)"
-                ))
+            .ok_or_else(|| OrbitError::ClaimRefused {
+                kind: ClaimRefusalKind::StaleClaim,
+                message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
         let observed = phase_label(claim.claim.phase);
         if observed != expected_phase {
-            return Err(OrbitError::InvalidInput(format!(
-                "claim '{claim_id}' is now '{observed}', not the '{expected_phase}' this action \
-                 was prepared against (stale_claim)"
-            )));
+            return Err(OrbitError::ClaimRefused {
+                kind: ClaimRefusalKind::StaleClaim,
+                message: format!(
+                    "claim '{claim_id}' is now '{observed}', not the '{expected_phase}' this \
+                     action was prepared against (stale_claim)"
+                ),
+            });
         }
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
@@ -394,9 +513,10 @@ impl OrbitRuntime {
                 return Ok((claim, accepted));
             }
         }
-        Err(OrbitError::InvalidInput(format!(
-            "no accepted handoff '{handoff_id}' is current on this owner"
-        )))
+        Err(OrbitError::ClaimRefused {
+            kind: ClaimRefusalKind::NotCurrent,
+            message: format!("no accepted handoff '{handoff_id}' is current on this owner"),
+        })
     }
 }
 
@@ -419,15 +539,29 @@ impl ExpectedCandidate {
         {
             return Ok(());
         }
-        Err(OrbitError::InvalidInput(format!(
-            "this action was prepared against candidate {} on base {}; the owner now holds \
-             candidate {} on base {} (stale_claim)",
-            self.candidate_commit,
-            self.base_commit,
-            candidate.candidate.commit,
-            candidate.base.commit,
-        )))
+        Err(OrbitError::ClaimRefused {
+            kind: ClaimRefusalKind::StaleClaim,
+            message: format!(
+                "this action was prepared against candidate {} on base {}; the owner now holds \
+                 candidate {} on base {} (stale_claim)",
+                self.candidate_commit,
+                self.base_commit,
+                candidate.candidate.commit,
+                candidate.base.commit,
+            ),
+        })
     }
+}
+
+fn settled_claim_summary_json(claim: &ClaimInspection) -> serde_json::Value {
+    let location = &claim.claim.executed_on;
+    serde_json::json!({
+        "claim_id": claim.claim.claim_id,
+        "task_id": claim.claim.task_id,
+        "host": location.machine_name.as_deref().unwrap_or(&location.machine_id),
+        "outcome": phase_label(claim.claim.phase),
+        "settled_at": claim.updated_at,
+    })
 }
 
 fn mutation_json(handoff_id: &str, result: &ClaimMutationResult) -> serde_json::Value {
@@ -444,6 +578,7 @@ fn phase_label(phase: ExecutionClaimPhase) -> &'static str {
         ExecutionClaimPhase::Claimed => "claimed",
         ExecutionClaimPhase::Running => "running",
         ExecutionClaimPhase::HandedOff => "handed_off",
+        ExecutionClaimPhase::RepairPending => "repair_pending",
         ExecutionClaimPhase::Failed => "failed",
         ExecutionClaimPhase::Revoked => "revoked",
         ExecutionClaimPhase::Landed => "landed",
@@ -457,6 +592,9 @@ fn phase_summary(phase: ExecutionClaimPhase) -> &'static str {
         ExecutionClaimPhase::Running => "executing on its bound run",
         ExecutionClaimPhase::HandedOff => {
             "delivery handed off and awaiting completion authority — this is not a code review"
+        }
+        ExecutionClaimPhase::RepairPending => {
+            "landing stopped on its base; awaiting the one automatic repair"
         }
         ExecutionClaimPhase::Failed => "settled as failed; the task is blocked with its evidence",
         ExecutionClaimPhase::Revoked => "revoked by deliberate recovery",
@@ -558,6 +696,10 @@ fn handoff_json(
     unresolved_merge_intent: Option<&str>,
 ) -> serde_json::Value {
     let candidate = &accepted.handoff.candidate;
+    let no_diff = matches!(
+        candidate.delivery,
+        orbit_types::workflow::handoff::HandoffDelivery::NoDiff { .. }
+    );
     let (authority_state, authority_summary) = match request.map(|request| request.state) {
         None => (
             "not_authorized",
@@ -571,6 +713,10 @@ fn handoff_json(
             "revoked",
             "completion authority was withdrawn; the task stays in review",
         ),
+        Some(LandingStartState::Completed) if no_diff => (
+            "completed",
+            "authority was consumed by verified no-diff completion",
+        ),
         Some(LandingStartState::Completed) => {
             ("completed", "authority was consumed by a verified merge")
         }
@@ -580,6 +726,10 @@ fn handoff_json(
         Some(LandingAttemptState::Dispatched) => (
             "dispatched",
             "an owner landing job is carrying this handoff",
+        ),
+        Some(LandingAttemptState::Merged) if no_diff => (
+            "completed",
+            "verified clean-base delivery completed without an external merge",
         ),
         // Merged is merged: the candidate is on the landing branch. It says
         // nothing about whether anything was deployed.
@@ -613,14 +763,16 @@ fn handoff_json(
             "base": {"commit": candidate.base.commit, "tree": candidate.base.tree},
             "delivery": candidate.delivery,
         },
-        // v1 admits `review_policy = none` only. The typed disposition records
-        // that no review was required — it is not a review that passed, and the
-        // task's `review` status means "delivery awaiting completion authority".
+        // The typed disposition records what the claimed leaf's review
+        // settled [ORB-13908]: a before-PR verdict the owner checked at
+        // acceptance, or that no review was required — which is not a review
+        // that passed. Either way the task's `review` status means "delivery
+        // awaiting completion authority".
         "review": {
             "policy": accepted.handoff.review.policy,
             "disposition": accepted.handoff.review.disposition,
-            "is_code_review": false,
-            "summary": "review not required (policy none) — no reviewer ran and no verdict exists",
+            "is_code_review": accepted.handoff.review.evidence().is_some(),
+            "summary": review_summary(&accepted.handoff.review),
         },
         "required_commands": accepted.required_commands,
         "validation": accepted.handoff.validation,
@@ -636,7 +788,7 @@ fn handoff_json(
             "attempt": attempt.map(|attempt| attempt.attempt),
             "job_run_id": attempt.and_then(|attempt| attempt.job_run_id.clone()),
             "evidence": attempt.and_then(|attempt| attempt.evidence.clone()),
-            "merged": matches!(attempt.map(|attempt| attempt.state), Some(LandingAttemptState::Merged)),
+            "merged": !no_diff && matches!(attempt.map(|attempt| attempt.state), Some(LandingAttemptState::Merged)),
             "deployed": serde_json::Value::Null,
         },
         // An external send whose reply was lost. Until it is reconciled against
@@ -644,4 +796,25 @@ fn handoff_json(
         // row cannot cancel a request GitHub may already have applied.
         "uncertain_merge_intent": unresolved_merge_intent,
     })
+}
+
+/// One line on what a handoff's review settled, for the owner console.
+fn review_summary(review: &orbit_types::workflow::handoff::HandoffReview) -> String {
+    match review.evidence() {
+        Some(evidence) => format!(
+            "{} review {} by crew `{}` (attempt {}) on candidate {}; the owner checked its \
+             certificate at acceptance",
+            match review.evidence_timing() {
+                orbit_types::workflow::ReviewTiming::BeforeLanding => "before-landing",
+                _ => "before-PR",
+            },
+            evidence.verdict.as_str(),
+            evidence.reviewer_crew,
+            evidence.attempt_id,
+            evidence.reviewed_head_sha
+        ),
+        None => {
+            "review not required (policy none) — no reviewer ran and no verdict exists".to_string()
+        }
+    }
 }

@@ -222,6 +222,7 @@ fn build_invocation(verb: &PluginCliVerb, matches: &ArgMatches) -> PluginGroupIn
             fields: Vec::new(),
             full: false,
             pretty: false,
+            host: None,
             parsed_input: OnceLock::new(),
         },
         input_error,

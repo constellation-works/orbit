@@ -1,0 +1,367 @@
+[
+  {
+    "name": "chained parent-child propagation",
+    "rows": [
+      [
+        "a-leaf",
+        0,
+        "database connection failed",
+        "codex",
+        false
+      ],
+      [
+        "b-child",
+        15,
+        "enclosing step failed: (`a-leaf`),",
+        "codex",
+        false
+      ],
+      [
+        "c-parent",
+        40,
+        "job failed: b-child",
+        "codex",
+        false
+      ]
+    ],
+    "expected_incidents": 1
+  },
+  {
+    "name": "boundary and out-of-window citations",
+    "rows": [
+      [
+        "a-leaf",
+        0,
+        "database connection failed",
+        "codex",
+        false
+      ],
+      [
+        "b-boundary",
+        60,
+        "guard failed: a-leaf",
+        "codex",
+        false
+      ],
+      [
+        "c-outside",
+        121,
+        "guard failed: b-boundary",
+        "codex",
+        false
+      ],
+      [
+        "d-different-class",
+        20,
+        "denied after a-leaf",
+        "codex",
+        true
+      ],
+      [
+        "e-earlier",
+        -1,
+        "guard failed: a-leaf",
+        "codex",
+        false
+      ]
+    ],
+    "expected_incidents": 4
+  },
+  {
+    "name": "extended target unlocks older citation candidate",
+    "rows": [
+      [
+        "a-waiter",
+        110,
+        "guard failed: z-root",
+        "codex",
+        false
+      ],
+      [
+        "b-child",
+        50,
+        "guard failed: z-root",
+        "codex",
+        false
+      ],
+      [
+        "z-root",
+        0,
+        "database connection failed",
+        "codex",
+        false
+      ]
+    ],
+    "expected_incidents": 1
+  },
+  {
+    "name": "ambiguous run becomes uniquely owned after folds",
+    "rows": [
+      [
+        "a-waiter",
+        200,
+        "guard failed: b-shared",
+        "codex",
+        false
+      ],
+      [
+        "b-shared",
+        0,
+        "first guard failed: z-root",
+        "codex",
+        false
+      ],
+      [
+        "b-shared",
+        150,
+        "second guard failed: z-root",
+        "codex",
+        false
+      ],
+      [
+        "z-root",
+        0,
+        "database connection failed",
+        "codex",
+        false
+      ],
+      [
+        "z-root",
+        200,
+        "database connection failed",
+        "codex",
+        false
+      ]
+    ],
+    "expected_incidents": 1
+  },
+  {
+    "name": "inherited citation order follows raw event recency",
+    "rows": [
+      [
+        "a-child",
+        45,
+        "guard failed: b-root c-root",
+        "codex",
+        false
+      ],
+      [
+        "b-root",
+        30,
+        "nested guard failed: z-leaf",
+        "codex",
+        false
+      ],
+      [
+        "c-root",
+        0,
+        "database connection failed",
+        "codex",
+        false
+      ],
+      [
+        "z-leaf",
+        0,
+        "disk operation failed",
+        "codex",
+        false
+      ]
+    ],
+    "expected_incidents": 1
+  },
+  {
+    "name": "citation outside root preview survives full raw evidence",
+    "rows": [
+      [
+        "run-1234",
+        -1,
+        "database connection failed",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        25,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        24,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        23,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        22,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        21,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        20,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        19,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        18,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        17,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        16,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        15,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        14,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        13,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        12,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        11,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        10,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        9,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        8,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        7,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        6,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        5,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        4,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        3,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        2,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        1,
+        "guard failed (`run-9999`)",
+        "codex",
+        false
+      ],
+      [
+        "run-2222",
+        0,
+        "guard failed (`run-1234`)",
+        "codex",
+        false
+      ]
+    ],
+    "expected_incidents": 1
+  }
+]

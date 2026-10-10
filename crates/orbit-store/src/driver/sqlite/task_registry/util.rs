@@ -32,6 +32,7 @@ pub(super) fn relation_type_name(relation_type: TaskRelationType) -> &'static st
         TaskRelationType::RegressionFrom => "regression_from",
         TaskRelationType::Supersedes => "supersedes",
         TaskRelationType::RelatedTo => "related_to",
+        TaskRelationType::CoveredBy => "covered_by",
         TaskRelationType::Produces => "produces",
         TaskRelationType::Resolves => "resolves",
     }
@@ -45,6 +46,7 @@ pub(super) fn parse_relation_type_name(raw: &str) -> Result<TaskRelationType, St
         "regression_from" => Ok(TaskRelationType::RegressionFrom),
         "supersedes" => Ok(TaskRelationType::Supersedes),
         "related_to" => Ok(TaskRelationType::RelatedTo),
+        "covered_by" => Ok(TaskRelationType::CoveredBy),
         "produces" => Ok(TaskRelationType::Produces),
         "resolves" => Ok(TaskRelationType::Resolves),
         other => Err(format!("unknown task relation type '{other}'")),

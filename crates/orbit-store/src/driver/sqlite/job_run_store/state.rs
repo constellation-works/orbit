@@ -1,11 +1,16 @@
 //! Pipeline-state read, bulk-read, write, and immediate read-modify-write.
+//!
+//! A run's pipeline state lives in `job_run_states`, a 1:1 side table of
+//! `job_runs` (schema v38). Run listings never touch it, so they never walk
+//! a checkpoint's overflow-page chain; a checkpoint write rewrites only the
+//! state row, never the listing row.
 
 use std::collections::HashMap;
 use std::str::FromStr;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::workflow::{JobRunState, PipelineState, RunStateUpdate};
-use rusqlite::TransactionBehavior;
+use rusqlite::{OptionalExtension, TransactionBehavior};
 
 use super::queries::STEP_RUN_ID_CHUNK;
 use crate::Store;
@@ -17,15 +22,7 @@ impl Store {
         run_id: &str,
     ) -> Result<Option<PipelineState>, OrbitError> {
         let conn = self.read()?;
-        let raw = match conn.query_row(
-            "SELECT pipeline_state_json FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
-            rusqlite::params![workspace_id, run_id],
-            |row| row.get::<_, Option<String>>(0),
-        ) {
-            Ok(raw) => raw,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(err) => return Err(OrbitError::Store(err.to_string())),
-        };
+        let raw = read_state_json_conn(&conn, workspace_id, run_id)?;
         raw.map(|raw| {
             serde_json::from_str(&raw)
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))
@@ -54,8 +51,10 @@ impl Store {
                 .join(", ");
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT run_id, pipeline_state_json FROM job_runs \
-                     WHERE workspace_id = ?1 AND run_id IN ({placeholders})"
+                    "SELECT r.run_id, s.pipeline_state_json FROM job_runs r \
+                     LEFT JOIN job_run_states s \
+                       ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+                     WHERE r.workspace_id = ?1 AND r.run_id IN ({placeholders})"
                 ))
                 .map_err(|e| OrbitError::Store(e.to_string()))?;
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
@@ -89,25 +88,64 @@ impl Store {
         run_id: &str,
         state: &PipelineState,
     ) -> Result<(), OrbitError> {
-        let state_json = serde_json::to_string(state)
-            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        let updated = conn
-            .execute(
-                "UPDATE job_runs SET pipeline_state_json = ?3 WHERE workspace_id = ?1 AND run_id = ?2",
-                rusqlite::params![workspace_id, run_id, state_json],
-            )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        if updated == 0 {
+        // A snapshot written after the run finished must not bring back what
+        // finalization compacted away.
+        let compacted = run_state_conn(&conn, workspace_id, run_id)?.and_then(|run_state| {
+            let mut compacted = state.clone();
+            compacted
+                .compact_for_terminal(run_state)
+                .then_some(compacted)
+        });
+        let state_json = serde_json::to_string(compacted.as_ref().unwrap_or(state))
+            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+        if !write_state_json_conn(&conn, workspace_id, run_id, &state_json)? {
             return Err(OrbitError::not_found(
                 NotFoundKind::JobRun,
                 run_id.to_string(),
             ));
         }
         Ok(())
+    }
+
+    /// Initialize without replacing a checkpoint another writer supplied.
+    pub fn initialize_job_run_state_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+        state: &PipelineState,
+    ) -> Result<bool, OrbitError> {
+        let state_json = serde_json::to_string(state)
+            .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let updated = tx
+                .tx
+                .execute(
+                    "INSERT INTO job_run_states(workspace_id, run_id, pipeline_state_json) \
+                     SELECT ?1, ?2, ?3 WHERE EXISTS(\
+                         SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2) \
+                     ON CONFLICT(workspace_id, run_id) DO NOTHING",
+                    rusqlite::params![workspace_id, run_id, state_json],
+                )
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            if updated == 0 {
+                let exists = tx.tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2)",
+                    rusqlite::params![workspace_id, run_id],
+                    |row| row.get::<_, bool>(0),
+                ).map_err(|error| OrbitError::Store(error.to_string()))?;
+                if !exists {
+                    return Err(OrbitError::not_found(
+                        NotFoundKind::JobRun,
+                        run_id.to_string(),
+                    ));
+                }
+            }
+            Ok(updated != 0)
+        })
     }
 
     /// [ORB-11253] Apply `update` to a run's pipeline state, reading the run's
@@ -118,7 +156,9 @@ impl Store {
     /// two callers serialize here instead of racing between their own read and
     /// write. An `Err` from `update` — the shape both a refused terminal run
     /// and a lost compare-and-set take — propagates before the commit, leaving
-    /// the stored state untouched.
+    /// the stored state untouched. A finished run's result stays compacted
+    /// (`PipelineState::compact_for_terminal`), so a late checkpoint cannot
+    /// restore its resume-only maps.
     pub fn update_job_run_state_for_workspace(
         &self,
         workspace_id: &str,
@@ -129,8 +169,10 @@ impl Store {
             let row = tx
                 .tx
                 .query_row(
-                    "SELECT state, pipeline_state_json FROM job_runs \
-                     WHERE workspace_id = ?1 AND run_id = ?2",
+                    "SELECT r.state, s.pipeline_state_json FROM job_runs r \
+                     LEFT JOIN job_run_states s \
+                       ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+                     WHERE r.workspace_id = ?1 AND r.run_id = ?2",
                     rusqlite::params![workspace_id, run_id],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
@@ -150,11 +192,12 @@ impl Store {
             let mut pipeline_state: PipelineState = serde_json::from_str(&raw_pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))?;
             update(state, &mut pipeline_state)?;
+            pipeline_state.compact_for_terminal(state);
             let state_json = serde_json::to_string(&pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
             tx.tx
                 .execute(
-                    "UPDATE job_runs SET pipeline_state_json = ?3 \
+                    "UPDATE job_run_states SET pipeline_state_json = ?3 \
                      WHERE workspace_id = ?1 AND run_id = ?2",
                     rusqlite::params![workspace_id, run_id, state_json],
                 )
@@ -162,4 +205,92 @@ impl Store {
             Ok(RunStateUpdate::Updated)
         })
     }
+}
+
+/// The run's serialized pipeline state, or `None` when the run has none or
+/// does not exist.
+pub(super) fn read_state_json_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    conn.query_row(
+        "SELECT pipeline_state_json FROM job_run_states WHERE workspace_id = ?1 AND run_id = ?2",
+        rusqlite::params![workspace_id, run_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+/// Insert or replace the run's serialized pipeline state. `false` when the
+/// run does not exist: no state row is ever written without its run.
+pub(super) fn write_state_json_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+    state_json: &str,
+) -> Result<bool, OrbitError> {
+    conn.execute(
+        "INSERT INTO job_run_states(workspace_id, run_id, pipeline_state_json) \
+         SELECT ?1, ?2, ?3 WHERE EXISTS(\
+             SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2) \
+         ON CONFLICT(workspace_id, run_id) DO UPDATE SET \
+             pipeline_state_json = excluded.pipeline_state_json",
+        rusqlite::params![workspace_id, run_id, state_json],
+    )
+    .map(|changed| changed > 0)
+    .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+/// The run's lifecycle state, or `None` when the run does not exist.
+fn run_state_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+) -> Result<Option<JobRunState>, OrbitError> {
+    conn.query_row(
+        "SELECT state FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+        rusqlite::params![workspace_id, run_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| OrbitError::Store(e.to_string()))?
+    .map(|raw| {
+        JobRunState::from_str(&raw)
+            .map_err(|error| OrbitError::Store(format!("invalid job run state: {error}")))
+    })
+    .transpose()
+}
+
+/// [ORB-14587] Drop the resume-only maps of a run that just finished
+/// `run_state`, inside the transaction that finished it. Best-effort: an
+/// unreadable checkpoint is left as it is rather than failing the terminal
+/// write.
+pub(super) fn compact_finished_state_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    run_id: &str,
+    run_state: JobRunState,
+) -> Result<(), OrbitError> {
+    let Some(raw) = read_state_json_conn(conn, workspace_id, run_id)? else {
+        return Ok(());
+    };
+    let mut state = match serde_json::from_str::<PipelineState>(&raw) {
+        Ok(state) => state,
+        Err(error) => {
+            orbit_common::tracing::warn!(
+                run_id,
+                %error,
+                "finished run's pipeline state is unreadable; left uncompacted"
+            );
+            return Ok(());
+        }
+    };
+    if !state.compact_for_terminal(run_state) {
+        return Ok(());
+    }
+    let state_json = serde_json::to_string(&state)
+        .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
+    write_state_json_conn(conn, workspace_id, run_id, &state_json).map(|_| ())
 }

@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Vision
 owner: claude
-last_updated: 2026-09-18
-last_validated: 2026-09-19
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: distributed-drain
 doc_role: vision
@@ -22,6 +22,9 @@ requests. Its required scope includes idempotent admission, attempt ownership, m
 routed task reads/writes, and durable landing handoff. The questions below extend that contract;
 they are not prerequisites hidden as future work.
 
+Claimed PR leaves can run the owner's captured `review.before_pr` gate when the executor declares
+`review_gate`; the executor's own switch is diagnostic.
+
 ## 1. Open Questions
 
 1. **Liveness signals and automatic recovery.** V1 exposes claims for inspection and requires
@@ -40,19 +43,16 @@ they are not prerequisites hidden as future work.
    leaves the owner host, pull becomes an HTTP call and the "always-on owner" decision dissolves.
    The pull contract is written to survive that: it names a store, not a machine.
 5. **Federated run inspection.** `orbit run` on the owner cannot see follower runs. With
-   `job_run_host` on the task, a read-only `execute`-class run lookup routed to that destination is
+   `job_run_machine` on the task, a read-only `execute`-class run lookup routed to that destination is
    the obvious shape; whether the dashboard should
    aggregate it is a separate question.
-6. **Review policies beyond none.** V1 requires `review_policy = none` on owner and executor,
-   with validation evidence and a typed not-required review disposition. Before-PR and after-landing
-   review need explicit admission, artifact, and landing contracts before either can be enabled.
-7. **Bounded request receipt retention.** V1 compacts settled receipts to permanent tombstones and
+6. **Bounded request receipt retention.** V1 compacts settled receipts to permanent tombstones and
    stops each refill pass at its first idle response. A future retired-namespace/sequence protocol
    could bound storage while rejecting every old request; random IDs and age-based deletion cannot.
-8. **Checkpoint resume under claims.** V1 refuses generic resume of interrupted claimed leaves;
+7. **Checkpoint resume under claims.** V1 refuses generic resume of interrupted claimed leaves;
    recovery creates a fenced new claim/run. A future logical execution identity or fenced run
    transfer can preserve checkpoints without permitting two run identities under one immutable binding.
-9. **Hosted sessions as followers.** A cloud session could pull if the owner store were reachable
+8. **Hosted sessions as followers.** A cloud session could pull if the owner store were reachable
    from it, which today it is not. Revisit once question 4 has an answer.
 
 ## 2. Prior Work
@@ -61,9 +61,7 @@ they are not prerequisites hidden as future work.
 
 `workspace_auto_pipeline` already refills slots from the whole backlog as each child finishes and
 treats a live wrapper run as the claim. The distributed drain keeps that throughput model, moves
-the claim into authoritative store transactions and drops the epic branch of the loop. The
-resident-orchestrator design folder has been removed; its drain loop lives on in
-`workspace_auto_pipeline`.
+the claim into authoritative store transactions and drops the epic branch of the loop.
 
 ### Federated MCP and remote authority
 

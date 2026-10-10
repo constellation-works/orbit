@@ -30,6 +30,10 @@ pub(super) struct GateContext {
     pub(super) workspace_id: String,
     pub(super) repository: String,
     pub(super) task_digests: (BTreeMap<String, String>, String),
+    /// Set when this run is a claimed distributed leaf [ORB-13908]: its
+    /// task lives in the owner's store, so task writes route to the owner
+    /// as claim evidence and selector widening is the owner's at handoff.
+    pub(super) claimed: bool,
 }
 
 impl GateContext {
@@ -81,10 +85,13 @@ impl GateContext {
             .filter(|base| !base.is_empty())
             .unwrap_or_else(|| "main".to_string());
 
+        let claim_id = claimed_leaf_claim(runtime, &run_id, &task_ids)?;
         let mut tasks = Vec::with_capacity(task_ids.len());
         for task_id in &task_ids {
+            // A claimed leaf reads the owner's task through its binding; the
+            // claim, checked above, is what ties that task to this run.
             let task = runtime.get_task(task_id)?;
-            if task.job_run_id.as_deref() != Some(run_id.as_str()) {
+            if claim_id.is_none() && task.job_run_id.as_deref() != Some(run_id.as_str()) {
                 return Err(OrbitError::Execution(format!(
                     "review gate: task '{task_id}' no longer belongs to run '{run_id}'"
                 )));
@@ -96,7 +103,12 @@ impl GateContext {
             None => run_review_admission(runtime, &run_id)?,
         };
         let task_digests = compute_task_digests(&tasks)?;
-        let lineage_root = lineage_root(runtime, &run_id)?;
+        // A claim is one delivery attempt, never resumed: it keys its own
+        // lineage, held in this executor's review store.
+        let lineage_root = match &claim_id {
+            Some(claim_id) => claim_id.clone(),
+            None => lineage_root(runtime, &run_id)?,
+        };
         let repository = Source::new(&runtime.paths().repo_root)
             .repository()
             .map_err(automation_error)?;
@@ -113,6 +125,7 @@ impl GateContext {
             workspace_id: runtime.workspace_id()?,
             repository,
             task_digests,
+            claimed: claim_id.is_some(),
         })
     }
 
@@ -131,6 +144,17 @@ impl GateContext {
         }
     }
 
+    /// The ref the base is synchronized from, as delivery names it: the
+    /// remote-tracking branch under remote sync, the local branch otherwise.
+    /// A red-base hold watches it to learn when the base turns green.
+    pub(super) fn base_ref(&self) -> String {
+        if self.base_sync == "local" {
+            self.base_branch.clone()
+        } else {
+            format!("origin/{}", self.base_branch)
+        }
+    }
+
     pub(super) fn lineage_key(&self) -> String {
         lineage_key(
             &self.workspace_id,
@@ -144,6 +168,27 @@ impl GateContext {
         self.task_digests = compute_task_digests(&self.tasks)?;
         Ok(())
     }
+}
+
+/// The claim `run_id` executes, when this process is a claimed leaf. The
+/// gate reviews exactly the claimed task as that leaf's bound run, or not at
+/// all.
+fn claimed_leaf_claim(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    task_ids: &[String],
+) -> Result<Option<String>, OrbitError> {
+    if runtime.worker_invocation().is_none() {
+        return Ok(None);
+    }
+    let leaf = runtime.current_claimed_leaf()?;
+    if leaf.binding.bound_run_id != run_id || task_ids != [leaf.claim.task_id.clone()] {
+        return Err(OrbitError::PolicyDenied(format!(
+            "review gate: a claimed leaf reviews only its claimed task as its bound run; run \
+             '{run_id}' asked for {task_ids:?}"
+        )));
+    }
+    Ok(Some(leaf.claim.claim_id))
 }
 
 /// Longest resume chain followed back to its first run; a longer chain keys

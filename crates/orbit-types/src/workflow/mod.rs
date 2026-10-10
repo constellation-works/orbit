@@ -7,21 +7,19 @@ mod error;
 mod executor_def;
 mod final_recovery;
 pub mod handoff;
+mod host_evidence;
 mod job;
+mod reconciliation;
 mod review;
+mod review_evidence;
 mod routine;
-mod run {
-    // Retain the run subtree while exposing its validation failure classifier.
-    include!("run/mod.rs");
-
-    pub use state::{
-        VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
-        is_validation_environment_failure,
-    };
-}
+mod run;
 mod ship;
 mod skill;
-pub use error::WorkflowError;
+pub use error::{
+    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
+    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
+};
 
 #[cfg(test)]
 mod tests;
@@ -50,19 +48,24 @@ pub use activity_job::{
 pub use auto_task::{
     AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskCursor, AutoTaskCursorState,
     AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSchedule, AutoTaskSkipRecord,
-    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, SWEEP_CURSOR_ARTIFACT,
-    SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord, SweepCursorSelector,
-    auto_task_tag, is_valid_auto_task_name,
+    AutoTaskTemplate, DedupePolicy, InactivePluginWarning, MAX_AUTO_TASK_INTERVAL_MINUTES,
+    SWEEP_CURSOR_ARTIFACT, SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord,
+    SweepCursorSelector, auto_task_tag, files_regression_findings, is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
 pub use executor_def::{
-    ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
+    AuthProbe, AuthProbeSuccess, ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride,
+    StdoutFormat,
 };
 pub use final_recovery::{
     FINAL_RECOVERY_ACTIVITY, FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision,
     MAX_DECISION_TEXT_CHARS,
+};
+pub use host_evidence::{
+    EvidenceHostOs, HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord,
+    HostEvidenceRefusal, HostSandboxCommand, judge_host_test_output,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
@@ -70,31 +73,65 @@ pub use job::{
     KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs,
     default_max_iterations, default_retry_backoff_seconds,
 };
+pub use reconciliation::{
+    BaselineDisposition, BaselineRemediationCheck, REVIEW_RECONCILIATION_ADMISSION_KEY,
+    REVIEW_RECONCILIATION_JOB, REVIEW_RECONCILIATION_SCHEMA_VERSION, ReconciledCommand,
+    ReconciledCommandRun, ReconciledExecution, ReconciledPullRequest, ReconciledReview,
+    ReconciledValidation, ReconciliationAdmission, ReconciliationAttempt, ReconciliationBinding,
+    ReconciliationCommandSource, ReconciliationContract, ReconciliationLog, ReconciliationOutcome,
+    ReviewReconciliation, run_input_declares_review_reconciliation,
+    strip_review_reconciliation_admission,
+};
 pub use review::{
-    CommitIdentity, DEFAULT_REVIEW_MINUTES, DEFAULT_REVIEW_REVIEWER_STARTS, FindingDisposition,
-    LandingTransformation, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
-    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewAssurance,
-    ReviewAttempt, ReviewAttemptState, ReviewBudget, ReviewCertificate, ReviewConsumption,
-    ReviewFinding, ReviewInvalidation, ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport,
-    ReviewReservation, ReviewResetDecision, ReviewTiming, ReviewValidation, ReviewVerdict,
-    ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent, ValidationOutcome,
-    ValidationRole, seconds_between,
+    CommitIdentity, DEFAULT_REVIEW_MINUTES, FindingDisposition, HostCandidateOverride,
+    LandingTransformation, NegativeControl, REVIEW_ABANDONED_MARKER, REVIEW_ADMISSION_KEY,
+    REVIEW_BASELINE_ARTIFACT, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
+    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
+    REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION, RecordGap, RetainedObligation,
+    RetiredValidation, ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState,
+    ReviewBaselineClaim, ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding,
+    ReviewInvalidation, ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport,
+    ReviewReportHistory, ReviewReportRevision, ReviewReservation, ReviewResetDecision,
+    ReviewTiming, ReviewValidation, ReviewVerdict, ReviewerIdentity, ReviewerInvocation,
+    ReviewerInvocationEvent, ValidationOutcome, ValidationRole, is_reserved_review_artifact,
+    record_gap, seconds_between,
+};
+pub use review_evidence::{
+    HostEvidenceRule, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
+    ReviewEvidenceCarried, ReviewEvidenceHold, ReviewEvidenceKind, ReviewEvidenceRequirement,
+    ReviewEvidenceRerequestReason, ReviewExternalEvidence, owed_requirements,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
     RoutineRetries, RoutineTarget, RoutineTrigger,
 };
 pub use run::{
-    ActivityCrewDraw, ActivityCrewPoolMember, CommitObservation, CommitObservationStatus,
+    ActivityCrewDraw, ActivityCrewPoolMember, AgentBlocker, BASELINE_RED_ERROR_CODE,
+    BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold, CANDIDATE_HELD_EVENT,
+    CANDIDATE_HELD_MARKER, ClaimFailureClass, CommitObservation, CommitObservationStatus,
     CrewExclusion, CrewExclusionSource, DeliveryEvidenceGap, DeliveryEvidenceProvenance,
-    DrainAdmissionPass, DrainAdmissionsStop, DrainCancelRequest, DrainWaitingTask,
-    DrainWorkerLimit, FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
-    FinalRecoveryObservedTask, LandingMethod, LandingObservation, LandingObservationStatus,
-    PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState, PullCrewPreflight,
-    RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle,
-    RunDeliveryObservation, RunDeliveryStatus, RunIdRole, VALIDATION_ENVIRONMENT_ERROR_CODE,
-    VALIDATION_ENVIRONMENT_MARKER, is_provider_unavailable, is_validation_environment_failure,
-    run_id_candidate, run_id_minute_stem, run_id_role,
+    DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest,
+    DrainCapacity, DrainWaitingTask, DrainWorkerLimit, FORGE_UNAVAILABLE_ERROR_CODE,
+    FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER, FailureActivityCheckpoint,
+    FinalRecoveryCheckpoint, FinalRecoveryKey, FinalRecoveryObservedTask,
+    FinalRecoveryRepairCommit, ForgeUnavailableHold, HeldCandidate, LandingMethod,
+    LandingObservation, LandingObservationStatus, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+    OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER,
+    PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, PROVIDER_LIMIT_ERROR_CODE,
+    PROVIDER_LIMIT_MARKER, PROVIDER_REFUSAL_ERROR_CODE, PROVIDER_REFUSAL_MARKER,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
+    ProviderFailureClass, ProviderFailureHold, ProviderLimitFailure, PullAuthExclusion,
+    PullAuthRecovery, PullCrewPreflight, PullSinglePass, RUN_DELIVERY_EVIDENCE_SOURCE,
+    RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle, RunDeliveryObservation,
+    RunDeliveryStatus, RunIdRole, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
+    TASK_BLOCKED_BY_AGENT_MARKER, TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER,
+    TaskCancellationPolicy, VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+    agent_blocker_from_output, failed_provider, is_baseline_red_failure, is_forge_unavailable,
+    is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
+    is_provider_limit, is_provider_refusal, is_provider_unavailable, is_task_blocked_by_agent,
+    is_validation_environment_failure, normalize_unfiled_findings, provider_failure_text,
+    run_id_candidate, run_id_minute_stem, run_id_role, task_blocked_by_agent_kind,
+    task_blocked_by_agent_message, unfiled_findings_shape_error,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

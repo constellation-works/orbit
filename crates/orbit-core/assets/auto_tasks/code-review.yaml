@@ -32,8 +32,13 @@ template:
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
       File a finding with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
-      Omit `relations` only when no task in the window can be held responsible.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Omit the `regression_from` relation only when no task in the window can be
+      held responsible. Derive canonical `file:` selectors from every evidenced
+      source path, removing the line suffix, and add the matching
+      regression-test location. Use existing paths where possible; for a test file
+      that must be created, set `allow_missing_context: true` and identify that
+      intended path. Never file a finding without context selectors.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Fail open. A window with no confirmed findings is a successful no-op. Do not
       invent work to justify the run.
@@ -103,8 +108,9 @@ template:
     scheduler reads to decide whether the next tick has anything to review:
     write `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`
     to a gitignored scratch file inside the checkout (for example
-    `target/sweep-cursor.json`) and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":"target/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `.orbit/tmp/sweep-cursor.json`) and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool show <tool.name>` prints the tool's schema.
     Write it on every completed sweep, including an empty window: the commit it
     names is the one this sweep examined through, and a completed sweep without
     it leaves the next tick no cursor to compare the branch tip against.
@@ -119,6 +125,11 @@ template:
   tags:
   - code-review
   - no-diff-expected
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.list
+  - orbit.task.show
   priority: medium
   complexity: hard
   # The portable system lane is seeded per machine and compatibility-aliased

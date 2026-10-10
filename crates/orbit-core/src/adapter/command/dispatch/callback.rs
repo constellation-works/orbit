@@ -6,10 +6,11 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::{
-    ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_store::Store;
 use orbit_store::contracts::PluginStoreBackend;
+use orbit_tools::ProcSpawnBudget;
 use orbit_tools::plugin::{
     CallbackResolution, PluginCallbackIdentity, load_plugin_dir, resolve_plugin_callback_session,
 };
@@ -122,7 +123,7 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
 
 /// Refuse a plain CLI command invoked by a plugin backend [ORB-12876].
 ///
-/// [`enforce_plugin_callback_allowlist`] gates the two entry points a backend
+/// `enforce_plugin_callback_allowlist` gates the two entry points a backend
 /// is allowed — `orbit tool run` and MCP `tools/call` — against
 /// `permissions.orbit_tools`. Every *other* CLI command reads governed data
 /// without ever consulting that allowlist, so a plugin granted nothing but
@@ -368,6 +369,35 @@ pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
     std::env::var("ORBIT_PROC_DISALLOWED_PROGRAMS")
         .ok()
         .map(|raw| split_env_list(&raw))
+}
+
+/// The `proc.spawn` budget of the managed activity this process serves: the
+/// deadline its CLI runner stamped, under the operator's per-call ceiling.
+/// A missing or malformed deadline keeps the unscoped ceiling.
+pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<ProcSpawnBudget> {
+    let mut deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    // A fresh call gets the activity's admission credit accumulated so far;
+    // the operator's per-call ceiling remains independent and unchanged.
+    if let (Ok(directory), Some(timeout_ms)) = (
+        std::env::var(orbit_common::process::build_budget::WAIT_DIRECTORY_ENV),
+        std::env::var(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok()),
+    ) {
+        let waits = orbit_common::process::build_budget::read_waits(
+            std::path::Path::new(&directory),
+            timeout_ms,
+        );
+        deadline_ms = deadline_ms.saturating_add(waits.deadline_extension_ms);
+    }
+    Some(ProcSpawnBudget {
+        deadline: std::time::UNIX_EPOCH + std::time::Duration::from_millis(deadline_ms),
+        max_timeout_ms,
+    })
 }
 
 pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {

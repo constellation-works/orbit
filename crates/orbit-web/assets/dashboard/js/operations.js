@@ -1,14 +1,17 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, statusPill, fmtDuration } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
+import { cpuLoadMultiple } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
 const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.";
 const AUTO_DRAIN_DURATION_SECONDS = { "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800 };
 const AUTO_DRAIN_DURATIONS = Object.keys(AUTO_DRAIN_DURATION_SECONDS);
+const AUTO_DRAIN_APPROVE_RULE = "Approval needs context files and an assessed complexity (or the no-diff-expected tag) plus a clean task-pilot verification. Tasks tagged no-auto-approve are skipped.";
+const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 let lastOperations = null;
 let lastAutoTasks = null;
@@ -17,6 +20,7 @@ let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
 let autoDrainComplete = false;
+let autoDrainApproveProposed = false;
 // Set while Start or Stop is refreshing the card after reporting its result, so
 // the state change that result caused is not announced over the result.
 let holdDrainAnnouncement = false;
@@ -34,7 +38,7 @@ export function initOperations(nextContext) {
   context = nextContext;
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
-    lastOperations = lastAutoTasks = lastAutoDrain = null;
+    lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
     announcedDrainState = null;
     updateDrainIndicators("idle", "idle");
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
@@ -52,6 +56,8 @@ function selectedWorkspaceName() {
 }
 
 function workspaceReadOnlyReason() {
+  const hostRefusal = hostWriteRefusal();
+  if (hostRefusal) return hostRefusal;
   const selected = getWorkspace();
   if (!selected) return "All-workspace mode is read-only. Select one workspace; auto-task definitions are workspace-scoped.";
   const workspace = selectedWorkspace();
@@ -69,12 +75,6 @@ function feedback(id, kind, message) {
   node.textContent = message || "";
 }
 
-function timezoneName(date) {
-  return new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
-    .formatToParts(date)
-    .find((part) => part.type === "timeZoneName")?.value || "UTC";
-}
-
 function looksLikeDuration(value) {
   const text = String(value).trim();
   return /\d+\s*(?:h|hr|hrs|hour|hours|min|mins|minute|minutes|s|sec|secs|seconds)\b/i.test(text)
@@ -84,14 +84,7 @@ function looksLikeDuration(value) {
 function time(value) {
   if (!value) return "Not observed";
   if (looksLikeDuration(value)) return `Duration ${value}`;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-  const formatted = String(context.formatAbsoluteTime(value));
-  const tz = timezoneName(parsed);
-  if (formatted.includes(tz) || /\bUTC\b/.test(formatted) || /[+-]\d{2}:\d{2}$/.test(formatted)) {
-    return formatted;
-  }
-  return `${formatted} ${tz}`;
+  return formatDateTime(value);
 }
 
 function cadenceText(seconds) {
@@ -120,13 +113,21 @@ function clockServiceText(clock) {
   return clock.enabled ? "enabled" : "paused";
 }
 
-function nextEvaluationText(projection, fallbackAt) {
+// What a waiting definition waits for, by the trigger that holds it. A
+// definition without a trigger of its own (an auto-task) waits for deliveries.
+function waitingText(trigger) {
+  if (trigger?.state?.kind === "execution_failed") return "Waiting for failed tasks";
+  if (trigger?.state) return "Waiting for task creation or edits";
+  return "Waiting for deliveries";
+}
+
+function nextEvaluationText(projection, fallbackAt, trigger) {
   const state = projection?.state;
   const at = projection?.at || (state === "disabled" || state === "paused" ? fallbackAt : null);
   const when = at ? time(at) : null;
   if (state === "disabled") return when ? `Disabled · hypothetical next ${when}` : "Disabled";
   if (state === "paused") return when ? `Paused · hypothetical next ${when}` : "Paused";
-  if (state === "waiting") return "Waiting for deliveries";
+  if (state === "waiting") return waitingText(trigger);
   if (state === "never_observed") return "Never observed";
   if (state === "unavailable") return "Unavailable";
   if (state === "scheduled") return when || "Scheduled";
@@ -135,7 +136,7 @@ function nextEvaluationText(projection, fallbackAt) {
 
 function lastMintedText(definition) {
   if (!definition.last_minted_task_id) return "None";
-  const status = definition.last_minted_task_status ? ` · ${definition.last_minted_task_status}` : "";
+  const status = definition.last_minted_task_status ? ` · ${normalizeTaskStatus(definition.last_minted_task_status)}` : "";
   const schedulerId = definition.last_evaluation?.last_task_id;
   const source = schedulerId && definition.last_minted_task_id !== schedulerId
     ? " · manual mint"
@@ -171,11 +172,24 @@ function lastFireText(fire) {
   return fire.state ? `${fire.state} · ${when}` : when;
 }
 
+// "on task creation/edit · debounce 2m": what fires a state-triggered routine
+// and how long it settles first.
+function stateTriggerText(state) {
+  const what = state.kind === "execution_failed" ? "on task execution failure" : "on task creation/edit";
+  return state.debounce_minutes ? `${what} · debounce ${state.debounce_minutes}m` : what;
+}
+
 function routineScheduleText(routine) {
   if (routine.trigger?.deliveries_landed) {
     return `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}`;
   }
+  if (routine.trigger?.state) return stateTriggerText(routine.trigger.state);
   return routine.cron || "—";
+}
+
+// Delivery- and state-triggered routines have no cron cadence to describe.
+function routineEventDriven(routine) {
+  return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state);
 }
 
 function operationIdentity(name, state) {
@@ -185,10 +199,10 @@ function operationIdentity(name, state) {
   ]);
 }
 
-function operationFact(label, value) {
+function operationFact(label, value, title) {
   return el("div", { class: "operation-fact" }, [
     el("span", { class: "operation-fact-label", text: label }),
-    el("span", { class: "operation-fact-value", text: value == null || value === "" ? "—" : String(value) }),
+    el("span", { class: "operation-fact-value", text: value == null || value === "" ? "—" : String(value), title: title || "" }),
   ]);
 }
 
@@ -293,41 +307,66 @@ function relativeTime(value, now = Date.now()) {
 }
 
 function durationText(ms) {
-  if (ms == null || ms === "") return null;
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n < 0) return null;
-  const seconds = Math.round(n / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  const text = fmtDuration(ms);
+  return text === "-" ? null : text;
 }
 
-function clockHm(value) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// Local wall-clock time with its zone, so a next-fire time is never read as
+// the UTC of the cron trigger beside it.
+function clockHm(value, { zone = true } = {}) {
+  return formatClock(value, { seconds: false, zone });
 }
 
 const CRON_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const TIMELINE_ROWS = 4;
 
+// The zone cron triggers are evaluated in (the host's, from the routines and
+// auto-tasks payloads). Unknown until a payload names it; a trigger is then
+// shown without a zone claim rather than with a wrong one.
+let hostCronZone = null;
+
+function noteCronZone(payload) {
+  if (payload?.cron_zone) hostCronZone = payload.cron_zone;
+}
+
+// "PDT" for an IANA host zone, else "UTC-07:00" from the offset.
+function cronZoneLabel(zone) {
+  if (!zone) return "";
+  if (zone.name) {
+    try {
+      const part = new Intl.DateTimeFormat("en-US", { timeZone: zone.name, timeZoneName: "short" })
+        .formatToParts(new Date()).find((p) => p.type === "timeZoneName");
+      if (part?.value) return part.value;
+    } catch {
+      // Unknown to this browser: fall back to the offset.
+    }
+  }
+  const offset = Number(zone.offset_seconds);
+  if (!Number.isFinite(offset)) return "";
+  if (offset === 0) return "UTC";
+  const minutes = Math.abs(Math.round(offset / 60));
+  const pad = (v) => String(v).padStart(2, "0");
+  return `UTC${offset < 0 ? "-" : "+"}${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+}
+
 // A readable cadence for the common cron shapes routines use; anything else
-// is shown verbatim so nothing is misdescribed.
+// is shown verbatim so nothing is misdescribed. Clock times are in the host
+// zone the scheduler evaluates cron in, not UTC.
 function cronText(cron) {
   const parts = String(cron || "").trim().split(/\s+/);
   if (parts.length !== 5) return cron || "—";
   const [minute, hour, dom, month, dow] = parts;
   const pad = (v) => String(v).padStart(2, "0");
+  const label = cronZoneLabel(hostCronZone);
+  const zone = label ? ` ${label}` : "";
   if (dom !== "*" || month !== "*") return cron;
   if (minute === "*" && hour === "*" && dow === "*") return "every minute";
   const every = /^\*\/(\d+)$/.exec(minute);
   if (every && hour === "*" && dow === "*") return `every ${every[1]} min`;
   if (/^\d+$/.test(minute) && hour === "*" && dow === "*") return `hourly at :${pad(minute)}`;
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)} UTC`;
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)}${zone}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d$/.test(dow)) {
-    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)} UTC`;
+    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
   }
   return cron;
 }
@@ -362,7 +401,7 @@ function operationGroup(tone, title, count, hint) {
 }
 
 function operationColumns(labels) {
-  const row = el("div", { class: "operation-columns" }, labels.map((label) => el("span", { text: label })));
+  const row = el("div", { class: "operation-columns col-head" }, labels.map((label) => el("span", { text: label })));
   row.setAttribute("aria-hidden", "true");
   return row;
 }
@@ -435,10 +474,11 @@ function inactivePluginToggle(hiddenCount) {
   return el("p", { class: "operation-control-note operation-inactive-note" }, [button]);
 }
 
-// Listed on request only, outside every count, timeline and next-fire
-// summary: the row is the name, what it would run, and the skip reason.
-function inactivePluginGroup(entries, noun) {
-  const group = operationGroup("", "Plugin off", entries.length, `seeded by a plugin that is switched off here · never ${noun}`);
+// Definitions that never fire here — plugin-parked (listed on request only) or
+// a replica's owner-only routines — sit outside every count, timeline and
+// next-fire summary: the row is the name, what it would run, and the reason.
+function inactivePluginGroup(entries, noun, title = "Plugin off", summary = `seeded by a plugin that is switched off here · never ${noun}`) {
+  const group = operationGroup("", title, entries.length, summary);
   group.className += " inactive-plugin-group";
   for (const entry of entries) {
     group.appendChild(el("article", { class: "operation-card operation-row inactive-plugin-card" }, [
@@ -446,7 +486,7 @@ function inactivePluginGroup(entries, noun) {
         operationCell("Definition", [
           el("div", { class: "operation-identity" }, [
             el("strong", { text: entry.name }),
-            el("span", { class: "operation-state inactive", text: "inactive" }),
+            el("span", { class: "operation-state inactive", text: entry.state || "inactive" }),
           ]),
           entry.detail ? el("span", { class: "operation-cell-sub mono", text: entry.detail }) : null,
         ], "operation-cell-identity"),
@@ -512,13 +552,60 @@ function jobLink(target) {
   return link;
 }
 
-// The next hour as a strip: where each routine's next slot lands, with paused
+// One cron field as a membership test, or null for a shape this does not
+// read (names, `L`, `?`): the caller then plots only the slot the server named.
+function cronFieldMatcher(field, min, max) {
+  const accepted = new Set();
+  for (const part of String(field).split(",")) {
+    const match = /^(?:\*|(\d+)(?:-(\d+))?)(?:\/(\d+))?$/.exec(part);
+    if (!match) return null;
+    const step = match[3] === undefined ? 1 : Number(match[3]);
+    if (step < 1) return null;
+    const ranged = part.startsWith("*") ? [min, max] : [Number(match[1]), match[2] === undefined ? (match[3] === undefined ? Number(match[1]) : max) : Number(match[2])];
+    if (ranged[0] < min || ranged[1] > max || ranged[0] > ranged[1]) return null;
+    for (let value = ranged[0]; value <= ranged[1]; value += step) accepted.add(value);
+  }
+  return (value) => accepted.has(value);
+}
+
+// Every fire of a cron routine from its next slot to the end of the window.
+// The server names only the next slot; the rest are the minutes after it that
+// the cron expression matches, read in the host's cron zone. A zone-sensitive
+// expression on a host whose zone is unknown keeps just the named slot.
+function routineFireTimes(routine, first, until) {
+  const fields = String(routine.cron || "").trim().split(/\s+/);
+  if (fields.length !== 5 || routineEventDriven(routine)) return [first];
+  const matchers = [
+    cronFieldMatcher(fields[0], 0, 59), cronFieldMatcher(fields[1], 0, 23), cronFieldMatcher(fields[2], 1, 31),
+    cronFieldMatcher(fields[3], 1, 12), cronFieldMatcher(fields[4], 0, 7),
+  ];
+  const offset = Number(hostCronZone?.offset_seconds);
+  if (matchers.includes(null) || (!Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
+  const [minute, hour, dom, month, dow] = matchers;
+  const zoneOffset = Number.isFinite(offset) ? offset * 1000 : 0;
+  const times = [first];
+  for (let at = Math.floor(first / 60_000) * 60_000 + 60_000; at <= until; at += 60_000) {
+    const local = new Date(at + zoneOffset);
+    const weekday = local.getUTCDay();
+    // Day-of-month and day-of-week combine with OR unless one is a wildcard.
+    const days = fields[2] !== "*" && fields[4] !== "*"
+      ? dom(local.getUTCDate()) || dow(weekday) || (weekday === 0 && dow(7))
+      : dom(local.getUTCDate()) && (dow(weekday) || (weekday === 0 && dow(7)));
+    if (minute(local.getUTCMinutes()) && hour(local.getUTCHours()) && month(local.getUTCMonth() + 1) && days) times.push(at);
+  }
+  return times;
+}
+
+// The next hour as a strip: where each routine's slots land, with paused
 // routines drawn hollow so an operator sees skipped slots, not only live ones.
+// A routine due several times in the hour is drawn at each of its slots.
 function routineTimeline(routines, now = Date.now()) {
   const horizon = 60 * 60_000;
   const due = routines
-    .map((routine) => ({ routine, at: new Date(routineNextAt(routine) || NaN).getTime() }))
-    .filter(({ at }) => Number.isFinite(at) && at >= now - 60_000 && at <= now + horizon)
+    .map((routine) => ({ routine, first: new Date(routineNextAt(routine) || NaN).getTime() }))
+    .filter(({ first }) => Number.isFinite(first) && first >= now - 60_000 && first <= now + horizon)
+    .flatMap(({ routine, first }) => routineFireTimes(routine, first, now + horizon)
+      .map((at, index) => ({ routine, at, repeat: index > 0 })))
     .sort((a, b) => a.at - b.at);
   const strip = el("section", { class: "operation-timeline" });
   strip.setAttribute("aria-label", "Next hour");
@@ -526,7 +613,7 @@ function routineTimeline(routines, now = Date.now()) {
   const active = routines.filter((routine) => routineState(routine) === "active").length;
   strip.appendChild(el("div", { class: "operation-timeline-head" }, [
     el("strong", { text: "Next hour" }),
-    el("span", { class: "operation-timeline-range mono", text: `${clockHm(now)} → ${clockHm(now + horizon)}` }),
+    el("span", { class: "operation-timeline-range mono", text: `${clockHm(now, { zone: false })} → ${clockHm(now + horizon)}` }),
     el("span", { class: "operation-timeline-summary", text: due.length
       ? `${fires} fire${fires === 1 ? "" : "s"} from ${active} active routine${active === 1 ? "" : "s"}`
       : "nothing is due in the next hour" }),
@@ -540,19 +627,26 @@ function routineTimeline(routines, now = Date.now()) {
   // Labels are stacked into rows so two routines due in the same minute
   // stay legible: each label takes the first row where it does not overlap
   // the previous label in that row (width estimated from the name length).
+  // A routine's later slots reuse its first slot's row and carry no label of
+  // their own, so a frequent routine marks every slot without repeating its name.
   const rowEnds = [];
+  const routineRows = new Map();
   let rows = 0;
-  due.forEach(({ routine, at }) => {
+  due.forEach(({ routine, at, repeat }) => {
     const pct = Math.min(100, Math.max(0, ((at - now) / horizon) * 100));
-    const halfWidth = routine.name.length * 0.42;
-    let row = rowEnds.findIndex((end) => end <= pct - halfWidth);
-    if (row < 0) row = Math.min(rowEnds.length, TIMELINE_ROWS - 1);
-    rowEnds[row] = pct + halfWidth;
+    let row = routineRows.get(routine.name);
+    if (!repeat || row === undefined) {
+      const halfWidth = routine.name.length * 0.42;
+      row = rowEnds.findIndex((end) => end <= pct - halfWidth);
+      if (row < 0) row = Math.min(rowEnds.length, TIMELINE_ROWS - 1);
+      rowEnds[row] = pct + halfWidth;
+      routineRows.set(routine.name, row);
+    }
     rows = Math.max(rows, row + 1);
     const fires = routine.enabled && routine.effective !== false;
     const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"} row-${row}` }, [
       el("span", { class: "operation-timeline-mark" }),
-      el("span", { class: "operation-timeline-label mono", text: routine.name }),
+      repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name }),
     ]);
     tick.style.left = `${pct}%`;
     tick.title = `${routine.name} · ${clockHm(at)}${fires ? "" : " · paused"}`;
@@ -573,7 +667,7 @@ function routineRow(payload, routine, workspaceId) {
     el("strong", { text: routine.name }),
     state === "blocked" ? el("span", { class: "operation-state blocked", text: "blocked" }) : null,
   ]);
-  const cadence = routine.trigger?.deliveries_landed
+  const cadence = routineEventDriven(routine)
     ? [el("span", { class: "operation-cell-main", text: routineScheduleText(routine) })]
     : [
       el("span", { class: "operation-cell-main", text: cronText(routine.cron) }),
@@ -600,7 +694,7 @@ function routineRow(payload, routine, workspaceId) {
       ], "operation-cell-identity"),
       operationCell("Cadence", cadence),
       routine.enabled
-        ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due) })
+        ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
       operationCell("Last run", lastRun),
     ]),
@@ -610,11 +704,11 @@ function routineRow(payload, routine, workspaceId) {
         field("Source workspace", routine.source),
         field("Schedule", routineScheduleText(routine)),
         field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
-        field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due)),
+        field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger)),
         field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
       ]),
-      renderAutomation(routine.automation, `${detailsKey}:automation`),
+      renderAutomation(routine.automation, `${detailsKey}:automation`, { kind: "routine", name: routine.name, workspace: workspaceId }),
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),
   );
@@ -622,6 +716,7 @@ function routineRow(payload, routine, workspaceId) {
 }
 
 function renderOperations(payload) {
+  noteCronZone(payload);
   lastOperations = payload;
   if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
   const workspace = selectedWorkspaceName();
@@ -632,12 +727,16 @@ function renderOperations(payload) {
   const inactive = workspace
     ? (payload.retired || []).filter((routine) => routine.plugin_inactive && routine.source === workspace)
     : [];
+  // A replica schedules only worktree GC; its owner schedules the rest.
+  const ownerOnly = workspace
+    ? (payload.owner_only || []).filter((routine) => routine.source === workspace)
+    : [];
   const body = $("routines-body");
   body.textContent = "";
   if (!workspace) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this machine is already resolved as ${payload.machine_name}.` }));
   }
-  if (routines.length === 0 && inactive.length === 0) {
+  if (routines.length === 0 && inactive.length === 0 && ownerOnly.length === 0) {
     body.appendChild(el("div", { class: "empty-state", text: workspace ? "No routines are defined by this workspace." : "Select a workspace to list its routines." }));
   } else if (routines.length) {
     body.appendChild(routineTimeline(routines));
@@ -659,6 +758,12 @@ function renderOperations(payload) {
   }
   if (inactive.length) {
     body.appendChild(inactivePluginGroup(inactive.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason })), "fires"));
+  }
+  if (ownerOnly.length) {
+    body.appendChild(inactivePluginGroup(
+      ownerOnly.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason, state: "owner-only" })),
+      "fires", "Owner only", "this replica schedules only worktree GC · enable these on the owner machine",
+    ));
   }
   if (workspace) {
     const toggle = inactivePluginToggle(payload.inactive_plugin_counts?.[workspace] || 0);
@@ -770,7 +875,7 @@ function renderClock(payload) {
       ]),
       el("div", { class: "operation-row-facts operation-clock-facts" }, [
         operationFact("Cadence", cadenceLabel),
-        operationFact("Last tick", clock.last_tick_at ? (relativeTime(clock.last_tick_at) || time(clock.last_tick_at)) : unavailable ? "Unknown" : "Not exposed"),
+        operationFact("Last tick", clock.last_tick_at ? (relativeTime(clock.last_tick_at) || time(clock.last_tick_at)) : unavailable ? "Unknown" : "Not exposed", clock.last_tick_at ? time(clock.last_tick_at) : ""),
         operationFact("Next tick", clockTickText(clock.next_tick_at, clock)),
       ]),
       actions,
@@ -916,7 +1021,8 @@ function autoTaskRow(payload, definition, workspaceId) {
       ].filter(Boolean)),
       el("span", { class: `operation-cell-sub${definition.open_duplicate ? " warn" : ""}`, text: definition.open_duplicate
         ? "still open · scheduler will skip"
-        : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · ") }),
+        : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
+      title: definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
     ]
     : [el("span", { class: "operation-cell-main muted", text: lastEvaluationText(definition) })];
   const next = definition.next_evaluation;
@@ -953,7 +1059,7 @@ function autoTaskRow(payload, definition, workspaceId) {
         field("Open duplicate", duplicate),
         field("Template", [template.crew && `crew ${template.crew}`, template.priority && `priority ${template.priority}`, template.complexity && `complexity ${template.complexity}`, `→ ${template.status || "backlog"}`].filter(Boolean).join(" · ")),
       ]),
-      renderAutomation(definition.automation, `${detailsKey}:automation`),
+      renderAutomation(definition.automation, `${detailsKey}:automation`, { kind: "auto-task", name: definition.name, workspace: getWorkspace() }),
       definition.description ? el("p", { class: "operation-description", text: definition.description }) : null,
       el("p", {
         class: "operation-control-note operation-mint-warning",
@@ -976,8 +1082,9 @@ function syncAutoTaskSchedulerNote() {
     : null;
   note.textContent = "";
   note.className = "operation-control-note auto-tasks-scheduler-note";
+  note.title = "Definitions are stored in .orbit/auto_tasks/ and evaluated on the host sweep clock. Toggle enables or disables a definition; Mint now bypasses its schedule, enabled flag and duplicate checks.";
   if (!scheduler) {
-    note.appendChild(el("span", { text: "Definitions live in .orbit/auto_tasks/ and are evaluated on the host sweep clock. Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe." }));
+    note.appendChild(el("span", { text: "Enabled definitions create tasks automatically when their trigger is due." }));
     return;
   }
   const link = el("a", { class: "operation-run-link operation-routine-link operation-link", text: scheduler.name });
@@ -985,14 +1092,15 @@ function syncAutoTaskSchedulerNote() {
   if (!scheduler.enabled) {
     note.className += " warn";
     note.appendChild(el("span", { text: "The " }));
-    note.append(link, el("span", { text: " routine is paused, so scheduled definitions will not mint until it runs. Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe." }));
+    note.append(link, el("span", { text: " routine is paused, so scheduled tasks will wait until it resumes." }));
     return;
   }
-  note.appendChild(el("span", { text: "Minted by " }));
-  note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}). Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe.` }));
+  note.appendChild(el("span", { text: "Scheduled tasks are created by " }));
+  note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}).` }));
 }
 
 function renderAutoTasks(payload) {
+  noteCronZone(payload);
   lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
@@ -1138,7 +1246,7 @@ function jobRow(job, workspace) {
   });
   const scheduledBy = job.routines.length
     ? job.routines.map((routine) => {
-      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
+      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : routine.trigger?.state ? "on task change" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";
       return chip;
     })
@@ -1185,7 +1293,7 @@ function jobRow(job, workspace) {
         ? el("ul", { class: "operation-recent-runs" }, recent.map((run) => el("li", {}, [
           outcomeDot(run.state),
           runLink(run.run_id, workspace?.id),
-          el("span", { class: "muted", text: `${run.state} · ${relativeTime(run.finished_at || run.started_at || run.created_at) || ""}${durationText(run.duration_ms) ? ` · ${durationText(run.duration_ms)}` : ""}` }),
+          el("span", { class: "muted", text: `${run.state} · ${relativeTime(run.finished_at || run.started_at || run.created_at) || ""}${durationText(run.duration_ms) ? ` · ${durationText(run.duration_ms)}` : ""}`, title: time(run.finished_at || run.started_at || run.created_at) }),
         ])))
         : null,
     ]),
@@ -1195,7 +1303,10 @@ function jobRow(job, workspace) {
 
 function renderJobs(payload) {
   lastJobs = payload;
-  if (payload.routines) lastOperations = payload.routines;
+  if (payload.routines) {
+    lastOperations = payload.routines;
+    noteCronZone(lastOperations);
+  }
   const body = $("jobs-body");
   if (!body) return;
   body.textContent = "";
@@ -1306,6 +1417,13 @@ function autoDrainReasons(payload) {
     complete: workspaceReason || (payload.controls_authorized === false
       ? "Automatic completion requires an authorized operator session; the window can still start with default review completion."
       : ""),
+    // A pull replica cannot approve (`--pull` conflicts with
+    // `--approve-proposed`): the owner's window does that.
+    approve: workspaceReason || (payload.replica === true
+      ? "A pull replica cannot approve proposed tasks; start the window on the owner machine."
+      : payload.controls_authorized === false
+        ? "Approving proposed tasks requires an authorized operator session; the window can still start and leave them for you."
+        : ""),
     // Stop is also the settle-only pass (`orbit run auto --stop`): it delivers
     // recorded settlements and needs no live window, so only a read-only view
     // or a missing operator session blocks it.
@@ -1335,7 +1453,7 @@ function autoDrainCounts(payload) {
   return { eligible, waiting: tasks.length - eligible };
 }
 
-// Readiness reasons that mean "waiting on a running task": a context lock, a
+// Readiness reasons that mean "waiting on another task or run": a context lock, a
 // grouped member, a same-wave deferral, or a live child's claim.
 const AUTO_DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child"]);
 const AUTO_DRAIN_BLOCKED_ROWS = 3;
@@ -1351,6 +1469,34 @@ function autoDrainReason(task) {
 function autoDrainBlocked(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
   return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_LOCK_REASONS.has(autoDrainReason(task)));
+}
+
+// Readiness reasons that mean "waiting on slots or host pressure": a full
+// workspace, a throttle, a scheduled shutdown or stopped admissions.
+const AUTO_DRAIN_CAPACITY_REASONS = new Set(["capacity_saturated", "resource_throttled", "host_shutdown_scheduled", "admissions_stopped", "cpu_light_budget_full"]);
+
+// Every readiness task lands in exactly one pool group, so the group counts add
+// up to the backlog total. Each group keeps its per-reason counts for the
+// stat's tooltip. The word "blocked" is left to the task status.
+const AUTO_DRAIN_POOL_GROUPS = [
+  { key: "eligible", label: "Pool: eligible" },
+  { key: "locks", label: "Pool: waiting on locks" },
+  { key: "capacity", label: "Pool: waiting on capacity" },
+  { key: "other", label: "Pool: waiting, other" },
+];
+
+function autoDrainPool(payload) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const groups = Object.fromEntries(AUTO_DRAIN_POOL_GROUPS.map(({ key, label }) => [key, { key, label, count: 0, reasons: new Map() }]));
+  for (const task of tasks) {
+    const reason = autoDrainReason(task);
+    const key = task.eligible === true ? "eligible"
+      : AUTO_DRAIN_LOCK_REASONS.has(reason) ? "locks"
+      : AUTO_DRAIN_CAPACITY_REASONS.has(reason) ? "capacity" : "other";
+    groups[key].count += 1;
+    groups[key].reasons.set(reason, (groups[key].reasons.get(reason) || 0) + 1);
+  }
+  return AUTO_DRAIN_POOL_GROUPS.map(({ key }) => groups[key]);
 }
 
 // Holder ids for a lock-blocked row. Context locks report
@@ -1402,17 +1548,26 @@ function autoDrainTimeLeft(endsAt) {
 }
 
 function updateDrainIndicators(phase, label) {
+  const aggregate = isAggregateView();
+  const indicatorPhase = aggregate ? "per-workspace" : phase;
+  const indicatorLabel = aggregate ? "Per-workspace drain status" : label;
   const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
   const tabState = $("dock-drain-state");
-  if (tab) tab.dataset.drainState = phase;
-  if (tabState) tabState.textContent = phase === "idle" ? "" : label;
+  if (tab) {
+    tab.dataset.drainState = indicatorPhase;
+    tab.setAttribute("aria-label", `Drain: ${indicatorLabel}`);
+    tab.title = indicatorLabel;
+  }
+  if (tabState) tabState.textContent = aggregate ? "per workspace" : phase === "winding_down" ? label : "";
   const global = $("global-drain-state");
   if (global) {
-    global.hidden = phase === "idle";
-    global.dataset.drainState = phase;
-    global.setAttribute("aria-label", `${label}. Open Drain card`);
+    global.hidden = phase === "idle" && !aggregate;
+    global.dataset.drainState = indicatorPhase;
+    global.setAttribute("aria-label", aggregate
+      ? "Drain status is per workspace. Select a workspace to inspect its live status."
+      : `${label}. Open Drain card`);
     const text = global.querySelector?.('.global-drain-label');
-    if (text) text.textContent = label;
+    if (text) text.textContent = indicatorLabel;
     if (!global.dataset.wired) {
       global.addEventListener("click", () => setActiveTab("auto-drain"));
       global.dataset.wired = "true";
@@ -1428,8 +1583,8 @@ function renderAutoDrainHead(payload) {
   const phase = capacity.drain_phase || (live.runId && !live.admissionsStopped ? "draining" : "idle");
   const running = Number(capacity.running_admitted_workers) || 0;
   const label = phase === "draining" ? "Draining"
-    : phase === "winding_down" ? `Winding down · ${running} workers still running` : "idle";
-  updateDrainIndicators(phase, phase === "winding_down" ? "Winding down" : label);
+    : phase === "winding_down" ? "Winding down" : "idle";
+  updateDrainIndicators(phase, label);
   const card = $("auto-drain-panel");
   if (card) card.dataset.drainState = phase;
   const dot = $("auto-drain-dot");
@@ -1452,15 +1607,43 @@ function renderAutoDrainHead(payload) {
     if (phase === "draining") {
       const left = autoDrainTimeLeft(capacity.ends_at);
       if (left) detail.appendChild(el("span", { class: "drain-left", text: ` · ${left}` }));
-      if (capacity.admitted_workers != null) detail.appendChild(el("span", { text: ` · ${running} running / ${capacity.admitted_workers} admitted` }));
     }
     head.appendChild(detail);
+    if (capacity.admitted_workers != null) head.appendChild(el("span", {
+      class: "drain-window-count",
+      text: `This window: ${running} running of ${capacity.admitted_workers} admitted`,
+    }));
+    const approvals = autoDrainApprovalsLine(payload.approvals);
+    if (approvals) head.appendChild(approvals);
   }
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement) {
-    feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}.`);
+    feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}${phase === "winding_down" ? ` · this window: ${running} still running` : ""}.`);
   }
   announcedDrainState = stateKey;
+}
+
+// Whether the live window was started with approve-proposed, and what its
+// passes have done so far. The payload's `approvals` reports the status
+// drain's own input: `approved_total` counts the whole window, while the
+// held figures describe the latest pass, with each task's reason in the title.
+function autoDrainApprovalsLine(approvals) {
+  if (!approvals || approvals.enabled !== true) return null;
+  const approved = Number(approvals.approved_total);
+  const held = Number(approvals.held_total);
+  const parts = ["Approving proposed tasks"];
+  if (Number.isFinite(approved)) parts.push(`${approved} approved`);
+  if (Number.isFinite(held)) parts.push(`${held} held`);
+  const reasons = Object.entries(approvals.held_by_reason || {})
+    .map(([reason, count]) => `${count} × ${(reason || "unclassified").replaceAll("_", " ")}`);
+  const heldTasks = (Array.isArray(approvals.held) ? approvals.held : [])
+    .map((task) => `${task.task_id}: ${(task.reason || "unclassified").replaceAll("_", " ")}${task.reason === "pilot_verified_no_diff" && task.detail ? ` (${task.detail})` : ""}`);
+  const title = [
+    AUTO_DRAIN_APPROVE_RULE,
+    reasons.length ? `Held in the latest pass: ${reasons.join(", ")}.` : "",
+    heldTasks.join("\n"),
+  ].filter(Boolean).join("\n");
+  return el("span", { class: "drain-window-count drain-approvals", text: parts.join(" · "), title });
 }
 
 function autoDrainDurationControl(payload) {
@@ -1571,6 +1754,44 @@ function autoDrainCompletionControl(payload, reasons) {
   return el("div", { class: "drain-field drain-field-complete" }, [label, group]);
 }
 
+// Approving proposed tasks is a second two-option choice beside completion,
+// in the same segmented style; the amber option is the one that acts on work
+// nobody has looked at yet. Its reason is visible text, not only a tooltip.
+function autoDrainApproveControl(payload, reasons) {
+  const group = el("div", { class: "drain-completion" });
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-labelledby", "auto-drain-approve-label");
+  const option = (value, text, title) => {
+    const input = el("input");
+    input.type = "radio";
+    input.name = "auto-drain-approve";
+    input.value = value;
+    input.checked = autoDrainApproveProposed === (value === "approve");
+    input.disabled = value === "approve" && Boolean(reasons.approve);
+    input.dataset.drainFocus = `approve-${value}`;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      autoDrainApproveProposed = value === "approve";
+      renderAutoDrain(payload);
+    });
+    return el("label", {
+      class: `drain-completion-option${input.checked ? " selected" : ""}${value === "approve" ? " done" : ""}`,
+      title: input.disabled ? reasons.approve : title,
+    }, [input, el("span", { text })]);
+  };
+  group.append(
+    option("leave", "Leave for me", "Proposed tasks stay proposed until you approve them."),
+    option("approve", "Approve qualifying", AUTO_DRAIN_APPROVE_RULE),
+  );
+  const label = el("span", { class: "drain-field-label", text: "Proposed tasks" });
+  label.id = "auto-drain-approve-label";
+  const field = el("div", { class: "drain-field drain-field-approve" }, [label, group]);
+  if (reasons.approve && !reasons.submit) {
+    field.appendChild(el("div", { class: "operation-control-note drain-stop-note disabled-reason", text: reasons.approve }));
+  }
+  return field;
+}
+
 // Why Start is off, in one place so typing in the concurrency field can
 // re-evaluate it without a rebuild.
 function autoDrainStartBlocked(payload) {
@@ -1578,7 +1799,8 @@ function autoDrainStartBlocked(payload) {
   return Boolean(reasons.submit)
     || pendingOperations.has("auto-drain:start")
     || !autoDrainConcurrencyValid()
-    || (autoDrainComplete && Boolean(reasons.complete));
+    || (autoDrainComplete && Boolean(reasons.complete))
+    || (autoDrainApproveProposed && Boolean(reasons.approve));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -1604,26 +1826,28 @@ function autoDrainStartButton(payload, form) {
     const completeLine = autoDrainComplete
       ? `WARNING: ${AUTO_DRAIN_COMPLETE_WARNING}`
       : "Shipped tasks stay in review; a separate action completes them.";
+    const approveProposed = autoDrainApproveProposed;
     const confirmText = [
       `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
       `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
       completeLine,
+      ...(approveProposed ? [`${AUTO_DRAIN_APPROVE_WARNING} ${AUTO_DRAIN_APPROVE_RULE}`] : []),
     ].join("\n");
     if (!window.confirm(confirmText)) return;
     pendingOperations.add(key);
     feedback("auto-drain-operation-feedback", "pending", `Starting a ${duration} auto-delivery window…`);
     renderAutoDrain(payload);
     try {
-      const body = { for_duration: duration, complete: autoDrainComplete };
+      const body = { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed };
       if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
       if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
-      feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`);
+      feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).${result?.approve_proposed === true ? " Approving qualifying proposed tasks." : ""}`);
       await refreshDrainAfterAction();
     } catch (error) {
       if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
@@ -1654,13 +1878,13 @@ const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-deliver
 // The pull drain's stop reads differently from the auto window's: its leaves
 // were assigned by the owner and stay claimed there until they settle.
 const PULL_DRAIN_STOP_CONFIRM = "Stop new admissions for this replica's pull drain? Leaves it already admitted keep running and stay claimed by their owner. This is not cancellation, and cancelling one leaf fails its claim on the owner. Any settlement already recorded is also delivered to its owner.";
-const AUTO_DRAIN_SETTLE_CONFIRM = "Deliver the settlements this workspace has recorded but not yet delivered? No auto-delivery window needs to be live. Nothing is cancelled; running workers are left alone.";
+const AUTO_DRAIN_SETTLE_CONFIRM = "Send completed task results to their owner? This retries results waiting to be delivered, even after the drain has finished. Running tasks keep running.";
 
 // [ORB-12728] Counterpart to `orbit run auto --stop`: stops new admissions on
 // the live coordinator without cancelling it or the workers it already
 // admitted, then runs the settle-only pass that delivers recorded settlements
 // [ORB-13663]. That pass needs no live window, so with none (or with
-// admissions already stopped) the button stays usable as "Settle pending" —
+// admissions already stopped) the button stays usable as "Send pending results" —
 // the remedy for leaves stuck `settling` and claims stranded `running`.
 // Only a read-only view or a missing operator session disables it, and the
 // reason is visible text beside the button rather than a title alone.
@@ -1688,8 +1912,8 @@ function autoDrainStopCopy(payload) {
       ? `${AUTO_DRAIN_STOP_CONFIRM} The pull drain ${live.pullRunId} on this replica is stopped too; its admitted leaves stay claimed by their owner.`
       : autoOpen ? AUTO_DRAIN_STOP_CONFIRM : PULL_DRAIN_STOP_CONFIRM;
     const description = autoOpen
-      ? "Stop new admissions for the live window and deliver recorded settlements."
-      : "Stop new admissions for this replica's pull drain and deliver recorded settlements.";
+      ? "Stop starting new tasks in this window. Tasks already started keep running; send any completed results to their owner."
+      : "Stop starting new tasks on this replica. Tasks already started keep running; send any completed results to their owner.";
     return { label: "Stop", busy: "Stopping…", aria: "Stop admissions", confirm, description };
   }
   const stoppedBy = (stop) => (stop?.actor ? ` (by ${stop.actor})` : "");
@@ -1699,7 +1923,7 @@ function autoDrainStopCopy(payload) {
   const already = stopped.length
     ? `Admissions are already stopped for ${stopped.join(" and ")}. `
     : "No auto-delivery window is live. ";
-  return { label: "Settle pending", busy: "Settling…", aria: "Settle pending settlements", confirm: AUTO_DRAIN_SETTLE_CONFIRM, description: `${already}Deliver settlements recorded for finished or cancelled drains.` };
+  return { label: "Send pending results", busy: "Sending…", aria: "Send pending task results", confirm: AUTO_DRAIN_SETTLE_CONFIRM, description: `${already}Send completed task results to their owner.` };
 }
 
 // The outcome word for the admissions half of a stop result.
@@ -1719,7 +1943,7 @@ function autoDrainStopButton(payload) {
   const button = el("button", {
     class: "operation-button drain-stop",
     text: pending ? copy.busy : copy.label,
-    title: reasons.stop || copy.description,
+    title: reasons.stop || `${copy.description}${autoDrainStopMode(payload) === "settle" ? " (deliver recorded settlements)" : ""}`,
   });
   button.type = "button";
   button.dataset.drainFocus = "stop";
@@ -1733,7 +1957,7 @@ function autoDrainStopButton(payload) {
     const windowLine = targets.length ? `Window: ${targets.join(" and ")} in workspace "${workspace?.name || workspace?.id}"` : `Workspace "${workspace?.name || workspace?.id}"`;
     if (!window.confirm(`${copy.confirm}\n\n${windowLine}`)) return;
     pendingOperations.add(key);
-    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Delivering recorded settlements…");
+    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Sending completed task results…");
     renderAutoDrain(payload);
     try {
       const result = await postJson(visit.path("/api/workflows/auto/stop"), {});
@@ -1784,7 +2008,7 @@ function autoDrainNumber(value) {
 // Capacity in words: how many leaf runs hold a slot against the limit, a bar
 // that shows any overflow past the limit, and one sentence on what a window
 // started now would do with that.
-function autoDrainCapacity(capacity, counts) {
+function autoDrainCapacity(capacity, counts, blocked) {
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
   const free = autoDrainNumber(capacity.free_slots);
@@ -1792,18 +2016,32 @@ function autoDrainCapacity(capacity, counts) {
   const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   let summary;
-  if (Number.isFinite(free) && free <= 0 && known) {
-    const toFinish = Math.max(1, busy - limit + 1);
-    summary = `A window started now admits nothing until ${plural(toFinish, "running task")} ${toFinish === 1 ? "finishes" : "finish"}.`;
+  if (capacity.host_shutdown) {
+    summary = "New tasks cannot start while a host shutdown is scheduled.";
+  } else if (capacity.resource_throttle) {
+    const resources = Array.isArray(capacity.resource_throttle.resources)
+      ? capacity.resource_throttle.resources.map(item => item.resource).join(", ") : "";
+    summary = `New tasks cannot start until the host resource throttle clears${resources ? ` (${resources})` : ""}.`;
+  } else if (capacity.admissions_stopped === true) {
+    summary = "This window has stopped starting new tasks. Tasks already admitted keep running.";
+  } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
+    const toClear = busy - limit + 1;
+    summary = `The workspace leaf limit is reached; ${plural(toClear, "occupied slot")} must clear before another task can start.`;
+  } else if (Number.isFinite(free) && free <= 0) {
+    summary = "No admissions are available in this readiness snapshot.";
   } else if (counts.eligible === 0) {
-    summary = counts.waiting > 0
+    if (blocked > 0) {
+      summary = `No tasks are eligible yet; ${plural(blocked, "pool task")} ${blocked === 1 ? "waits" : "wait"} on task locks or live claims.`;
+    } else {
+      summary = counts.waiting > 0
       ? `Nothing is eligible yet; ${plural(counts.waiting, "task")} ${counts.waiting === 1 ? "waits" : "wait"} in the pool.`
       : "Nothing is waiting in the backlog.";
+    }
   } else {
     summary = `A window started now admits up to ${plural(admits, "task")}.`;
   }
   const head = el("div", { class: "drain-capacity-head" }, [
-    el("span", { class: "drain-capacity-count", text: known ? `${busy} running · limit ${limit}` : "Capacity unknown" }),
+    el("span", { class: "drain-capacity-count", text: known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown" }),
     el("span", {
       class: `drain-capacity-free${Number.isFinite(free) && free <= 0 ? " full" : ""}`,
       text: Number.isFinite(free) ? `${plural(Math.max(0, free), "free slot")}` : "",
@@ -1811,7 +2049,7 @@ function autoDrainCapacity(capacity, counts) {
   ]);
   const bar = el("div", { class: "drain-capacity-bar" });
   bar.setAttribute("role", "img");
-  bar.setAttribute("aria-label", known ? `${busy} of ${limit} slots in use` : "Capacity unknown");
+  bar.setAttribute("aria-label", known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown");
   if (known) {
     const within = Math.min(busy, limit);
     const over = Math.max(0, busy - limit);
@@ -1821,17 +2059,25 @@ function autoDrainCapacity(capacity, counts) {
       el("span", { class: "drain-capacity-over", style: { width: `${(over / scale) * 100}%` } }),
     );
   }
-  return el("div", { class: "drain-capacity" }, [head, bar, el("p", { class: "drain-slots", text: summary })]);
+  const result = el("div", { class: "drain-capacity" }, [head, bar, el("p", { class: "drain-slots", text: summary })]);
+  const pipelineCounts = Object.entries(capacity.leaf_occupancy_by_pipeline || {})
+    .filter(([, count]) => Number(count) > 0);
+  const pipelines = pipelineCounts.map(([pipeline, count]) => `${pipeline}: ${plural(count, "slot")}`);
+  // Legacy wrappers can occupy slots without appearing in the pipeline map.
+  const other = busy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
+  if (pipelines.length && other > 0) pipelines.push(`other: ${plural(other, "slot")}`);
+  if (pipelines.length) result.appendChild(el("p", { class: "drain-slots drain-pipeline-occupancy", text: `Workspace slots by pipeline: ${pipelines.join("; ")}.` }));
+  return result;
 }
 
-function autoDrainStat(tone, label, value) {
+function autoDrainStat(tone, label, value, detail = "") {
   return el("div", { class: `drain-stat ${tone}${value > 0 ? " nonzero" : ""}` }, [
-    el("span", { class: "drain-stat-label", title: label }, [el("span", { class: "drain-stat-dot" }), el("span", { text: label })]),
+    el("span", { class: "drain-stat-label", title: detail ? `${label} (${detail})` : label }, [el("span", { class: "drain-stat-dot" }), el("span", { text: label })]),
     el("span", { class: "drain-stat-value mono", text: String(value) }),
   ]);
 }
 
-// One line per task waiting on a running one: who waits on whom, the holder's
+// One line per pool task waiting on another task or run: who waits on whom, the holder's
 // slot phase, and the lock between them. Capped so the card stays a card;
 // Locked files below carries the full per-task lock picture.
 function autoDrainBlockedList(tasks, occupancy, workspace) {
@@ -1842,7 +2088,7 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
     }
   }
   const list = el("ul", { class: "drain-blocked" });
-  list.setAttribute("aria-label", "Tasks blocked by a running task");
+  list.setAttribute("aria-label", "Pool tasks waiting on locks or live claims");
   for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
     const taskId = autoDrainTaskId(task);
     const holder = autoDrainHolders(task)[0] || null;
@@ -1876,23 +2122,52 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
 }
 
 // A task whose `os:` tags this host's OS does not satisfy waits for a host of
-// its own (a pull-drain follower on that OS, say). Readiness names the wait,
-// and the card lists it so an idle drain does not read as an empty backlog.
+// its own (a pull-drain follower on that OS, say), and one a pilot found needs
+// native evidence from another OS waits for the `os:` tag readiness names.
+// The card lists both so an idle drain does not read as an empty backlog.
+const AUTO_DRAIN_HOST_WAIT_REASONS = new Set(["host_os_mismatch", "native_os_required"]);
+
 function autoDrainHostWaits(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  return tasks.filter((task) => task.eligible !== true && autoDrainReason(task) === "host_os_mismatch");
+  return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_HOST_WAIT_REASONS.has(autoDrainReason(task)));
+}
+
+// [ORB-14698] Tasks every crew of which a provider usage limit keeps out of
+// admission. Each detail names the window, its use, the reset and the crews
+// skipped; the wait lifts by itself then.
+function autoDrainProviderLimitWaits(payload) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  return tasks.filter((task) => task.eligible !== true && autoDrainReason(task) === "provider_limit");
 }
 
 function autoDrainHostWaitList(tasks, workspace) {
-  const list = el("ul", { class: "drain-blocked drain-host-waits" });
-  list.setAttribute("aria-label", "Tasks waiting for a host of another OS");
+  return autoDrainWaitList(tasks, workspace, {
+    className: "drain-host-waits",
+    label: "Tasks waiting for a host of another OS",
+    fallback: "waits for a host of another OS",
+  });
+}
+
+function autoDrainProviderLimitWaitList(tasks, workspace) {
+  return autoDrainWaitList(tasks, workspace, {
+    className: "drain-provider-limit-waits",
+    label: "Tasks waiting for a provider usage limit to reset",
+    fallback: "waits for a provider usage limit to reset",
+    reason: "provider limit",
+  });
+}
+
+function autoDrainWaitList(tasks, workspace, { className, label, fallback, reason }) {
+  const list = el("ul", { class: `drain-blocked ${className}` });
+  list.setAttribute("aria-label", label);
   for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
     const taskId = autoDrainTaskId(task);
     list.appendChild(el("li", { class: "drain-blocked-row" }, [
       el("div", { class: "drain-blocked-line" }, [
         el("span", { class: "drain-blocked-who mono" }, [
           taskId ? taskLink(taskId, workspace?.id) : el("span", { text: "task not supplied" }),
-          el("span", { class: "drain-muted", text: ` ${typeof task.detail === "string" && task.detail ? task.detail : "waits for a host of another OS"}` }),
+          reason ? el("span", { class: "drain-wait-reason", text: ` ${reason}` }) : null,
+          el("span", { class: "drain-muted", text: ` ${typeof task.detail === "string" && task.detail ? task.detail : fallback}` }),
         ]),
       ]),
     ]));
@@ -1903,6 +2178,17 @@ function autoDrainHostWaitList(tasks, workspace) {
   return list;
 }
 
+// A throttle reading in the unit the top bar uses: CPU as load per core
+// ("load 1.6× cores"), memory and disk as percentages. A threshold is bare
+// (no leading label) and keeps two decimals so 0.75× does not round to 0.8×.
+function throttleReading(resource, percent, threshold = false) {
+  if (resource === "cpu") {
+    const load = cpuLoadMultiple(Number(percent), threshold);
+    return threshold ? `${load} cores` : `load ${load} cores`;
+  }
+  return threshold ? `${percent}%` : `${resource} ${Math.round(Number(percent))}%`;
+}
+
 // Sustained host pressure holds every new admission until it clears, so the
 // card names the resource, value, threshold and since-when instead of leaving
 // an idle drain to read as an empty backlog.
@@ -1910,9 +2196,28 @@ function autoDrainThrottleNote(capacity) {
   const resources = capacity?.resource_throttle?.resources;
   if (!Array.isArray(resources) || resources.length === 0) return null;
   const held = resources
-    .map(item => `${item.resource} ${Math.round(Number(item.percent))}% (throttled at ≥ ${item.high_percent}% since ${time(item.since)}; resumes below ${item.resume_percent}%)`)
+    .map(item => `${throttleReading(item.resource, item.percent)} (throttled at ≥ ${throttleReading(item.resource, item.high_percent, true)} since ${time(item.since)}; resumes below ${throttleReading(item.resource, item.resume_percent, true)})`)
     .join("; ");
   const note = el("p", { class: "operation-control-note drain-throttle-note", text: `Admissions throttled: ${held}. Running tasks are not touched.` });
+  note.setAttribute("role", "status");
+  return note;
+}
+
+// [ORB-14698] Each provider usage window that keeps crews out of admission,
+// with its use, threshold, reset and the crews skipped until then. Readings
+// below their threshold do not hold anything, so they are not shown here.
+function autoDrainProviderLimitNote(readings) {
+  const gated = (Array.isArray(readings) ? readings : []).filter(reading => reading?.gated === true);
+  if (gated.length === 0) return null;
+  const lines = gated.map((reading) => {
+    const label = `${reading.provider}${reading.scope ? ` [${reading.scope}]` : ""} ${reading.window || "usage window"}`;
+    const used = reading.used_percent == null ? "exhausted" : `${reading.used_percent}% ≥ ${reading.threshold}%`;
+    // A ledger budget in dollars leaves out invocations that recorded no cost.
+    const usage = reading.partial === true ? `${used} (partial: some invocations report no cost)` : used;
+    const crews = Array.isArray(reading.crews) && reading.crews.length ? reading.crews.join(", ") : "no configured crew";
+    return `${label} ${usage} until ${time(reading.until)}: ${crews} skipped`;
+  });
+  const note = el("p", { class: "operation-control-note drain-provider-limit-note", text: `Provider limits: ${lines.join("; ")}.` });
   note.setAttribute("role", "status");
   return note;
 }
@@ -1928,6 +2233,8 @@ function renderAutoDrain(payload) {
   renderAutoDrainHead(payload);
   const throttle = autoDrainThrottleNote(payload.capacity);
   if (throttle) body.appendChild(throttle);
+  const providerLimits = autoDrainProviderLimitNote(payload.provider_limits);
+  if (providerLimits) body.appendChild(providerLimits);
   const reasons = autoDrainReasons(payload);
   if (reasons.submit) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: reasons.submit }));
@@ -1938,15 +2245,17 @@ function renderAutoDrain(payload) {
   // Read top to bottom: what the queue looks like now, then the window you
   // could start against it.
   body.append(
-    autoDrainCapacity(payload.capacity || {}, counts),
-    el("div", { class: "drain-stats" }, [
-      autoDrainStat("eligible", "Eligible now", counts.eligible),
-      autoDrainStat("blocked", "Blocked by running", blocked.length),
-    ]),
+    autoDrainCapacity(payload.capacity || {}, counts, blocked.length),
+    el("div", { class: "drain-stats" }, autoDrainPool(payload).map(group => autoDrainStat(
+      group.key, group.label, group.count,
+      group.key === "eligible" ? "" : [...group.reasons].map(([reason, n]) => `${reason} ${n}`).join(", "),
+    ))),
   );
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
   const hostWaits = autoDrainHostWaits(payload);
   if (hostWaits.length > 0) body.appendChild(autoDrainHostWaitList(hostWaits, selectedWorkspace()));
+  const limitWaits = autoDrainProviderLimitWaits(payload);
+  if (limitWaits.length > 0) body.appendChild(autoDrainProviderLimitWaitList(limitWaits, selectedWorkspace()));
   const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
   // The concurrency field and the Start button are built apart but depend on
   // each other; they meet here.
@@ -1955,7 +2264,7 @@ function renderAutoDrain(payload) {
     el("div", { class: "drain-form" }, [
       durationLabel,
       autoDrainDurationControl(payload),
-      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload, form), autoDrainCompletionControl(payload, reasons)]),
+      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload, form), autoDrainCompletionControl(payload, reasons), autoDrainApproveControl(payload, reasons)]),
       form.problem,
       el("div", { class: "drain-actions" }, [autoDrainStartButton(payload, form), autoDrainStopButton(payload)]),
       autoDrainStopNote(payload),
@@ -1970,8 +2279,9 @@ function fetchAndRenderAutoDrain() {
     return requestPanel("auto-drain-body", "unselected", () => Promise.resolve({}), renderAutoDrain, "auto-drain-live");
   }
   const query = autoDrainConcurrency && autoDrainConcurrencyValid() ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
-  const path = `/api/workflows/auto/readiness${query}`;
-  return requestPanel("auto-drain-body", path, () => fetchJson(path), renderAutoDrain, "auto-drain-live");
+  const scope = "/api/workflows/auto/readiness";
+  const path = `${scope}${query}`;
+  return requestPanel("auto-drain-body", scope, () => fetchJson(path), renderAutoDrain, "auto-drain-live");
 }
 
 function throwFirstPanelError(results) {
@@ -1980,13 +2290,19 @@ function throwFirstPanelError(results) {
   if (errors.length) throw errors.find(error => error.networkFailure) || errors[0];
 }
 
-export async function fetchAndRenderOperations() {
+export async function fetchAndRenderOperations(subtab = context.getOperationsSubtab()) {
+  if (subtab === "auto-tasks") {
+    await fetchAndRenderAutoTasks();
+    return;
+  }
   const routines = fetchJson(withInactivePlugins("/api/routines"));
+  if (subtab === "jobs") {
+    await fetchAndRenderJobs(routines);
+    return;
+  }
   throwFirstPanelError(await Promise.allSettled([
     requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
     requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),
-    fetchAndRenderAutoTasks(),
-    fetchAndRenderJobs(routines),
   ]));
 }
 

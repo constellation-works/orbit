@@ -8,6 +8,8 @@ mod evidence;
 mod fields;
 pub(super) mod filing;
 mod grouping;
+mod landed_repair;
 mod log_signature;
+mod operator_cover;
 mod repair_assessment;
 mod runner_os;

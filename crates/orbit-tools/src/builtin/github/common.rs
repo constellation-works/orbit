@@ -177,21 +177,49 @@ pub(super) fn push_optional_flag(
     key: &str,
     flag: &str,
 ) -> Result<(), OrbitError> {
-    let Some(value) = input.get(key).and_then(Value::as_str) else {
+    let Some(value) = optional_gh_value(input, key)? else {
         return Ok(());
+    };
+    args.push(flag.to_string());
+    args.push(value);
+    Ok(())
+}
+
+/// Append one positional argument when `key` is present.
+///
+/// `gh repo view` takes `[HOST/]OWNER/REPO` as a positional argument and has
+/// no `--repo` flag. The value uses the same leading-`-` rejection as
+/// [`push_optional_flag`]: `gh` would otherwise parse it as a flag.
+pub(super) fn push_optional_positional(
+    args: &mut Vec<String>,
+    input: &Value,
+    key: &str,
+) -> Result<(), OrbitError> {
+    let Some(value) = optional_gh_value(input, key)? else {
+        return Ok(());
+    };
+    args.push(value);
+    Ok(())
+}
+
+/// Read an optional `gh` argument, or reject one that starts with `-`.
+///
+/// Missing, non-string, and blank values are absent. A present value is
+/// trimmed; the rejection message quotes that trimmed text.
+fn optional_gh_value(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
+    let Some(value) = input.get(key).and_then(Value::as_str) else {
+        return Ok(None);
     };
     let value = value.trim();
     if value.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     if value.starts_with('-') {
         return Err(OrbitError::InvalidInput(format!(
             "invalid `{key}`: \"{value}\"; must not start with `-`"
         )));
     }
-    args.push(flag.to_string());
-    args.push(value.to_string());
-    Ok(())
+    Ok(Some(value.to_string()))
 }
 
 /// The `owner/name` path segment for a `gh api repos/...` endpoint.

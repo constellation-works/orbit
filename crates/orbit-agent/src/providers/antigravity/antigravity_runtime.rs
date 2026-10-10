@@ -62,8 +62,7 @@ impl AgentRuntimeFactory for AntigravityFactory {
     fn build(&self, cfg: &AgentConfig) -> Result<Box<dyn AgentRuntime>, OrbitError> {
         match &cfg.provider_options {
             ProviderOptions::Antigravity => {
-                validate_antigravity_model(cfg.model.as_deref())
-                    .map_err(OrbitError::InvalidInput)?;
+                validate_antigravity_model(cfg.model.as_deref())?;
                 Ok(Box::new(AntigravityRuntime::new(
                     cfg.command.clone(),
                     cfg.model.clone(),

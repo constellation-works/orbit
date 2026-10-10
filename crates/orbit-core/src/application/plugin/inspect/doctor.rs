@@ -20,7 +20,7 @@ use crate::OrbitRuntime;
 use crate::application::plugin::lifecycle::build_pin_drift;
 use crate::runtime::plugin::backend::plugin_backend;
 use crate::runtime::plugin::build_witness::verify_build_record;
-use crate::runtime::plugin::paths::{plugin_install_root, read_pin_file};
+use crate::runtime::plugin::paths::{plugin_install_root, plugin_namespace_dir, read_pin_file};
 use crate::runtime::plugin::requirements::host_api_deprecation;
 use crate::runtime::plugin::sandbox_mask::plugin_trees_masked;
 
@@ -40,14 +40,15 @@ pub struct PluginDoctorResult {
 /// finding an active plugin carries (an unsandboxed backend).
 pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
     let summaries = list_plugins(runtime)?;
-    let invalid_pin_file = read_pin_file(&runtime.paths().local_dir)
-        .err()
-        .map(|error| PluginDoctorResult {
-            intentional: false,
-            plugin: "pin file".to_string(),
-            status: PluginStatus::Inactive,
-            message: error.to_string(),
-        });
+    let invalid_pin_file =
+        read_pin_file(&runtime.shared_root())
+            .err()
+            .map(|error| PluginDoctorResult {
+                intentional: false,
+                plugin: "pin file".to_string(),
+                status: PluginStatus::Inactive,
+                message: error.to_string(),
+            });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
     let builds = build_rows(runtime, &summaries)?;
@@ -71,6 +72,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).
+    // Include pruned versions, not just the current install tree.
     let mut dangling = Vec::new();
     for summary in &summaries {
         if summary.install_path.is_empty() {
@@ -78,7 +80,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         }
         for (link, target) in super::super::skills::dangling_plugin_skill_links(
             &runtime.global_root(),
-            Path::new(&summary.install_path),
+            &plugin_namespace_dir(&runtime.global_root(), &summary.name),
         ) {
             dangling.push(PluginDoctorResult {
                 intentional: false,
@@ -527,7 +529,7 @@ fn stale_seeded_definition_rows(
                 continue;
             }
             let Some((namespace, seeded_version)) =
-                crate::runtime::plugin::definitions::read_definition_provenance(&path)
+                crate::runtime::plugin::definitions::read_definition_provenance(&dir, &path)
             else {
                 continue;
             };

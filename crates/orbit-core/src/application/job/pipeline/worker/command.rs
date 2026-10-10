@@ -131,6 +131,7 @@ pub(crate) fn workspace_auto_run_input(
     max_active_leaf_runs: Option<u32>,
     completion: crate::application::workflow::CompletionPolicy,
     allowed_crews: &[String],
+    approve_proposed: bool,
 ) -> Result<Value, OrbitError> {
     if max_active_leaf_runs == Some(0) {
         return Err(OrbitError::InvalidInput(
@@ -161,6 +162,12 @@ pub(crate) fn workspace_auto_run_input(
     // inherits the same window without re-deriving it from configuration.
     if !allowed_crews.is_empty() {
         input.insert("allowed_crews".to_string(), json!(allowed_crews));
+    }
+    // [ORB-14117] Like completion, the key's presence is the durable record
+    // that an operator granted this drain approval authority over proposed
+    // work; the task-pilot apply step verifies it before approving anything.
+    if approve_proposed {
+        input.insert("approve_proposed".to_string(), json!(true));
     }
     Ok(Value::Object(input))
 }
@@ -313,6 +320,7 @@ pub(crate) struct WorkerCommandConfig {
     /// it in the caller's cgroup.
     containment: Option<WorkerLimits>,
     strict_containment: bool,
+    environment: Option<orbit_config::ExecutionEnvPolicy>,
 }
 
 impl WorkerCommandConfig {
@@ -322,6 +330,7 @@ impl WorkerCommandConfig {
             root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
             containment: None,
             strict_containment: false,
+            environment: None,
         }
     }
 
@@ -337,9 +346,26 @@ impl WorkerCommandConfig {
         self
     }
 
+    /// Carry runtime credentials into the trusted worker without changing the
+    /// parent's environment. Explicit worker edits retain precedence.
+    pub(crate) fn environment(mut self, policy: orbit_config::ExecutionEnvPolicy) -> Self {
+        self.environment = Some(policy);
+        self
+    }
+
     /// The command that runs `run_id`'s worker from `workspace`.
     pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
         let mut command = self.build_uncontained(workspace, run_id)?;
+        if let Some(policy) = &self.environment {
+            for (name, value) in policy.agent_subprocess_env(&[]) {
+                if !command
+                    .get_envs()
+                    .any(|(held, _)| held == OsStr::new(&name))
+                {
+                    command.env(name, value);
+                }
+            }
+        }
         if self.strict_containment {
             command.env(STRICT_WORKER_CONTAINMENT_ENV, "1");
         } else {

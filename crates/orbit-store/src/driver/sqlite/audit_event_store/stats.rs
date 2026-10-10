@@ -129,32 +129,4 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))
     }
-
-    /// Sorted `duration_ms` values for audit events with NULL `tool_name`
-    /// at or after `since`. Mirror of [`Self::get_audit_event_durations`]
-    /// for the synthetic `"unknown"` bucket that
-    /// [`Self::get_audit_event_aggregates_by_tool`] surfaces — that aggregate
-    /// folds NULL tool names into `"unknown"` for counts, and this method
-    /// lets the caller compute the same bucket's percentiles.
-    pub fn get_audit_event_durations_null_tool(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<i64>, OrbitError> {
-        let conn = self.read()?;
-
-        let sql = "SELECT duration_ms FROM audit_events \
-                   WHERE tool_name IS NULL AND timestamp >= ?1 \
-                   ORDER BY duration_ms ASC";
-
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        let rows = stmt
-            .query_map(params![since.to_rfc3339()], |row| row.get::<_, i64>(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
-    }
 }

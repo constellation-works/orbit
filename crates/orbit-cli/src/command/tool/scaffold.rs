@@ -49,6 +49,10 @@ pub struct ToolScaffoldArgs {
 }
 
 impl Execute for ToolScaffoldArgs {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "tool scaffolding creates user-owned source directories, outside Orbit state"
+    )]
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
         eprintln!("{SCAFFOLD_DEPRECATION}");
         let script_path = PathBuf::from(&self.path);
@@ -66,8 +70,15 @@ impl Execute for ToolScaffoldArgs {
         }
 
         let script = EXTERNAL_TOOL_TEMPLATE.replace("__ORBIT_TOOL_NAME__", &tool_name);
-        fs::write(&script_path, script)
-            .map_err(|error| OrbitError::Io(format!("write {}: {error}", script_path.display())))?;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "generated executable source is not Orbit state; --force preserves in-place overwrite behavior for user files"
+        )]
+        {
+            fs::write(&script_path, script).map_err(|error| {
+                OrbitError::Io(format!("write {}: {error}", script_path.display()))
+            })?;
+        }
         make_executable(&script_path)?;
 
         let manifest = ExternalToolManifest {
@@ -78,9 +89,15 @@ impl Execute for ToolScaffoldArgs {
         };
         let manifest_yaml = serde_yaml::to_string(&manifest)
             .map_err(|error| OrbitError::InvalidInput(format!("serialize manifest: {error}")))?;
-        fs::write(&manifest_path, manifest_yaml).map_err(|error| {
-            OrbitError::Io(format!("write {}: {error}", manifest_path.display()))
-        })?;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "generated sidecar source is not Orbit state; --force preserves in-place overwrite behavior for user files"
+        )]
+        {
+            fs::write(&manifest_path, manifest_yaml).map_err(|error| {
+                OrbitError::Io(format!("write {}: {error}", manifest_path.display()))
+            })?;
+        }
 
         let text = format!(
             "Created starter plugin:\n  executable: {script}\n  manifest:   {manifest}\n\nNext steps:\n  orbit tool add {script}\n  orbit tool show {tool_name}\n  orbit mcp serve\n\nTo author this as a v2 plugin instead: orbit plugin scaffold <namespace>",

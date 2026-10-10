@@ -208,6 +208,115 @@ fn write_status_plugin(source: &Path, namespace: &str, extra_spec: &str) {
     .expect("write manifest");
 }
 
+#[test]
+fn upgrade_refuses_a_tampered_recorded_source_and_accepts_an_explicit_source() {
+    let fixture = Fixture::new();
+    let source = fixture.source("victim");
+    let source_arg = source.to_str().expect("utf8 source");
+    let permissions = "  permissions:\n    network: any\n";
+    write_status_plugin(&source, "victim", permissions);
+    let payload = "upgrade-payload.txt";
+    std::fs::write(source.join(".orbit-plugin").join(payload), b"trusted-v1")
+        .expect("write trusted payload");
+    fixture
+        .orbit()
+        .args([
+            "plugin", "add", source_arg, "--enable", "--grant", "network",
+        ])
+        .assert()
+        .success();
+
+    // A backend with orbit_tools can write its own state tree and orbit.db,
+    // but cannot write the victim's installed tree or grant witness.
+    let attacker = fixture
+        .home
+        .join(".orbit/state/plugins/attacker/replacement");
+    write_status_plugin(&attacker, "victim", permissions);
+    std::fs::write(attacker.join(".orbit-plugin").join(payload), b"attacker")
+        .expect("write attacker payload");
+    let connection =
+        Connection::open(fixture.home.join(".orbit/orbit.db")).expect("open the plugin store");
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE plugins SET source = ?1 WHERE name = 'victim'",
+                [attacker.to_str().expect("utf8 attacker source")],
+            )
+            .expect("tamper with the recorded source"),
+        1
+    );
+    let record = || {
+        connection
+            .query_row(
+                "SELECT source, enabled, grants_json, manifest_digest, install_path \
+                 FROM plugins WHERE name = 'victim'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .expect("read victim record")
+    };
+    let tampered_record = record();
+    let installed = fixture.home.join(".orbit/plugins/victim/0.1.0");
+    let witness = fixture.home.join(".orbit/plugins/.grants/victim.json");
+    let authorized = std::fs::read(&witness).expect("read grant witness");
+
+    // Missing and blank explicit sources must fail in the upgrade use case,
+    // before the forged same-namespace source can inherit the victim's grants.
+    for explicit in [None, Some(""), Some(" \t ")] {
+        let mut command = fixture.orbit();
+        command.args(["plugin", "upgrade", "victim"]);
+        if let Some(explicit) = explicit {
+            command.arg(explicit);
+        }
+        command.assert().failure().stderr(predicate::str::contains(
+            "orbit plugin upgrade victim <source>",
+        ));
+        assert_eq!(
+            std::fs::read(installed.join(payload)).expect("read installed payload"),
+            b"trusted-v1",
+            "an untrusted recorded source must not replace the installed code"
+        );
+        assert_eq!(record(), tampered_record, "refusal preserves the host row");
+        assert_eq!(
+            std::fs::read(&witness).expect("read grant witness after refusal"),
+            authorized,
+            "refusal preserves the victim's authorization"
+        );
+    }
+
+    std::fs::write(source.join(".orbit-plugin").join(payload), b"trusted-v2")
+        .expect("update trusted payload");
+    fixture
+        .orbit()
+        .args(["plugin", "upgrade", "victim", source_arg])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(installed.join(payload)).expect("read upgraded payload"),
+        b"trusted-v2",
+        "the caller's explicit source takes precedence over the forged database value"
+    );
+    let upgraded = record();
+    assert_eq!(upgraded.0, source_arg);
+    assert!(
+        upgraded.1,
+        "a safe explicit upgrade preserves enabled state"
+    );
+    assert_eq!(upgraded.2, tampered_record.2, "safe grants carry over");
+    assert_eq!(
+        std::fs::read(&witness).expect("read carried grant witness"),
+        authorized
+    );
+}
+
 fn stdout_json(output: &std::process::Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
@@ -221,6 +330,10 @@ fn stdout_json(output: &std::process::Output) -> Value {
 #[cfg(unix)]
 #[test]
 fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
+    if !orbit_exec::macos_sandbox_test_guard("plugin_error_is_json_on_tool_run_with_a_nonzero_exit")
+    {
+        return;
+    }
     let fixture = Fixture::new();
     let source = fixture.source("errors");
     write_status_plugin(&source, "errors", "");
@@ -265,7 +378,65 @@ fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
 
 #[cfg(unix)]
 #[test]
+fn derived_plugin_groups_expand_tilde_roots_and_anchor_relative_roots() {
+    let fixture = Fixture::new();
+    let source = fixture.source("shapes");
+    write_fixture_plugin(&source);
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("UTF-8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "enable", "shapes"])
+        .assert()
+        .success();
+
+    for raw in ["~/.orbit", "~//.orbit", ".orbit"] {
+        let cwd = if raw == ".orbit" {
+            &fixture.home
+        } else {
+            &fixture.work
+        };
+        for use_flag in [false, true] {
+            let mut command = fixture.orbit();
+            command.current_dir(cwd);
+            if use_flag {
+                command
+                    .args(["--root", raw])
+                    .env("ORBIT_ROOT", "unused-env-root");
+            } else {
+                command.env("ORBIT_ROOT", raw);
+            }
+            let output = command
+                .args([
+                    "shapes",
+                    "recommend",
+                    "roots",
+                    "--explain",
+                    "--format",
+                    "json",
+                ])
+                .output()
+                .expect("explain plugin command under selected root");
+            assert!(output.status.success(), "{raw}: {output:?}");
+            let explained = stdout_json(&output);
+            assert_eq!(explained["tool"], "shapes.recommend");
+            assert_eq!(explained["input"]["query"], "roots");
+            assert!(!cwd.join("~").exists());
+            assert!(!cwd.join("unused-env-root").exists());
+        }
+    }
+}
+
+#[test]
 fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_derived_group_is_the_same_operation_and_result_as_tool_run",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let source = fixture.source("shapes");
     write_fixture_plugin(&source);
@@ -444,6 +615,11 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 #[cfg(unix)]
 #[test]
 fn unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let source = fixture.source("shapes");
     write_fixture_plugin(&source);
@@ -546,6 +722,16 @@ fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
                 .is_some_and(|diagnostic| diagnostic.contains(expected)),
             "{json}"
         );
+        let tool = format!("{namespace}.status");
+        let preview = fixture
+            .orbit_as_operator()
+            .args(["tool", "run", &tool, "--dry-run", "--format", "json"])
+            .output()
+            .expect("preview inactive plugin");
+        assert!(preview.status.success(), "{preview:?}");
+        let preview = stdout_json(&preview);
+        assert_eq!(preview["policy_allowed"], false, "{preview}");
+        assert_eq!(preview["policy_denial_reason"], json["diagnostic"]);
     }
 }
 
@@ -589,6 +775,135 @@ fn enable_warns_when_a_grant_was_not_requested() {
     );
 }
 
+/// `--grant fs=data --grant fs=cache` used to record `fs=data,cache`. The next
+/// process then refused the row: `cache` is not a path continuation, so the
+/// plugin could not run even though enable had succeeded.
+#[test]
+fn enable_records_bare_fs_roots_that_load_as_the_same_roots() {
+    let fixture = Fixture::new();
+    let source = fixture.source("scoped");
+    write_status_plugin(
+        &source,
+        "scoped",
+        "  permissions:\n    fs:\n      read: [\"{{plugin_state}}\"]\n",
+    );
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args([
+            "plugin", "enable", "scoped", "--grant", "fs=data", "--grant", "fs=cache",
+        ])
+        .assert()
+        .success();
+
+    let shown = fixture
+        .orbit()
+        .args(["plugin", "show", "scoped", "--format", "json"])
+        .output()
+        .expect("show the plugin from a fresh process");
+    assert!(shown.status.success(), "{shown:?}");
+    let shown = stdout_json(&shown);
+    assert_eq!(shown["status"], "active", "{shown}");
+    assert!(shown["diagnostic"].is_null(), "{shown}");
+    assert_eq!(shown["granted"], json!(["fs=data,./cache"]), "{shown}");
+    let permissions = shown["permissions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("permissions: {shown}"));
+    let fs = permissions
+        .iter()
+        .find(|row| row["grant"] == "fs")
+        .unwrap_or_else(|| panic!("fs permission row: {shown}"));
+    assert_eq!(fs["granted"], true, "{fs}");
+    assert_eq!(fs["granted_roots"], json!(["data", "cache"]), "{fs}");
+    let network = permissions
+        .iter()
+        .find(|row| row["grant"] == "network")
+        .unwrap_or_else(|| panic!("network permission row: {shown}"));
+    assert_eq!(
+        network["granted"], false,
+        "the stored row must not gain network: {network}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn enable_accepts_grants_with_host_scope_and_refuses_workspace_scope() {
+    let fixture = Fixture::new();
+    let source = fixture.source("grantable");
+    write_status_plugin(&source, "grantable", "  permissions:\n    network: any\n");
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+
+    let implicit_host = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "enable",
+            "grantable",
+            "--grant",
+            "network",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("enable with implicit host scope");
+    assert!(implicit_host.status.success(), "{implicit_host:?}");
+    let implicit_host = stdout_json(&implicit_host);
+
+    let explicit_host = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "enable",
+            "grantable",
+            "--scope",
+            "host",
+            "--grant",
+            "network",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("enable with explicit host scope");
+    assert!(explicit_host.status.success(), "{explicit_host:?}");
+    let explicit_host = stdout_json(&explicit_host);
+    assert_eq!(explicit_host, implicit_host);
+    assert_eq!(
+        explicit_host["granted"],
+        json!(["network"]),
+        "{explicit_host}"
+    );
+
+    let workspace = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "enable",
+            "grantable",
+            "--scope",
+            "workspace",
+            "--grant",
+            "network",
+        ])
+        .output()
+        .expect("refuse grants with workspace scope");
+    assert!(!workspace.status.success(), "{workspace:?}");
+    let message = String::from_utf8_lossy(&workspace.stderr);
+    assert!(message.contains("--grant"), "{message}");
+    assert!(message.contains("host scope"), "{message}");
+    assert!(
+        message.contains("workspace scope never records grants"),
+        "{message}"
+    );
+}
+
 #[test]
 fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
     let fixture = Fixture::new();
@@ -627,7 +942,7 @@ fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
 /// typed code instead of "unknown command".
 #[cfg(unix)]
 #[test]
-fn a_workspace_disable_is_reported_beside_the_host_state_and_refuses_the_derived_group() {
+fn a_workspace_disable_is_reported_and_refuses_cli_dry_run_with_typed_code() {
     let fixture = Fixture::new();
     let source = fixture.source("switch");
     write_status_plugin(&source, "switch", "");
@@ -706,6 +1021,43 @@ fn a_workspace_disable_is_reported_beside_the_host_state_and_refuses_the_derived
         )
     });
     assert_eq!(error["code"], "plugin_disabled_in_workspace", "{error}");
+
+    let ordinary_run = fixture
+        .orbit_as_operator()
+        .args(["tool", "run", "switch.status", "--format", "json"])
+        .output()
+        .expect("run the disabled plugin tool");
+    assert!(!ordinary_run.status.success(), "{ordinary_run:?}");
+    let ordinary_error: Value =
+        serde_json::from_slice(&ordinary_run.stderr).unwrap_or_else(|parse_error| {
+            panic!(
+                "JSON error on stderr ({parse_error}): {}",
+                String::from_utf8_lossy(&ordinary_run.stderr)
+            )
+        });
+
+    let dry_run = fixture
+        .orbit_as_operator()
+        .args([
+            "tool",
+            "run",
+            "switch.status",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("preview the disabled plugin tool");
+    assert!(!dry_run.status.success(), "{dry_run:?}");
+    let dry_run_error: Value =
+        serde_json::from_slice(&dry_run.stderr).unwrap_or_else(|parse_error| {
+            panic!(
+                "JSON error on stderr ({parse_error}): {}",
+                String::from_utf8_lossy(&dry_run.stderr)
+            )
+        });
+    assert_eq!(ordinary_error["code"], "plugin_disabled_in_workspace");
+    assert_eq!(dry_run_error["code"], ordinary_error["code"]);
 
     // A host disable leaves nothing for a workspace enable to widen.
     fixture
@@ -1055,6 +1407,9 @@ fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
+    if !orbit_exec::macos_sandbox_test_guard("scaffold_validate_test_and_install_run_end_to_end") {
+        return;
+    }
     let fixture = Fixture::new();
     // Installation refuses sources inside a workspace repository, so this
     // end-to-end install exercises the explicit external destination.
@@ -1552,6 +1907,11 @@ fn copy_tree(from: &Path, to: &Path) {
 #[cfg(unix)]
 #[test]
 fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     // The fixture is a plugin root; this source is that `.orbit-plugin/`.
     let source = fixture.source("uvdemo").join(".orbit-plugin");
@@ -1626,7 +1986,7 @@ fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgr
 
     fixture
         .orbit()
-        .args(["plugin", "upgrade", "uvdemo"])
+        .args(["plugin", "upgrade", "uvdemo", &source_arg])
         .assert()
         .success();
     let upgraded = call();
@@ -1742,4 +2102,83 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
     );
     assert_eq!(std::fs::read_to_string(&manifest).unwrap(), yaml);
     assert_eq!(std::fs::read(&copied).unwrap(), backend_bytes);
+}
+
+#[test]
+fn plugin_show_and_derived_groups_accept_the_global_json_shorthand() {
+    let fixture = Fixture::new();
+    let source = fixture.source("jsonfixture");
+    write_status_plugin(&source, "jsonfixture", "");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "add",
+            source.to_str().expect("utf8 source"),
+            "--enable",
+        ])
+        .assert()
+        .success();
+    for args in [
+        &["plugin", "show", "jsonfixture", "--json"][..],
+        &["jsonfixture", "status", "--explain", "--json"],
+        &["--json", "jsonfixture", "status", "--explain"],
+    ] {
+        let output = fixture
+            .orbit()
+            .args(args)
+            .output()
+            .expect("run JSON shorthand");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+        assert!(document.is_object(), "{args:?}");
+    }
+}
+
+#[test]
+fn plugin_json_tool_input_keeps_its_meaning_alongside_global_output_json() {
+    let fixture = Fixture::new();
+    let source = fixture.source("jsoninput");
+    write_status_plugin(&source, "jsoninput", "");
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
+    let mut text = std::fs::read_to_string(&manifest).expect("fixture manifest");
+    text.push_str("      input_schema:\n        type: object\n        properties:\n          json: { type: boolean }\n");
+    std::fs::write(manifest, text).expect("write tool-input schema");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ])
+        .assert()
+        .success();
+    for args in [
+        &["--json", "jsoninput", "status", "--json", "--explain"][..],
+        &["jsoninput", "--json", "status", "--json", "--explain"],
+        &[
+            "jsoninput",
+            "status",
+            "--json",
+            "--format",
+            "json",
+            "--explain",
+        ],
+    ] {
+        let output = fixture.orbit().args(args).output().expect("plugin explain");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_slice(&output.stdout).expect("JSON output");
+        assert_eq!(document["input"], json!({"json": true}));
+    }
 }

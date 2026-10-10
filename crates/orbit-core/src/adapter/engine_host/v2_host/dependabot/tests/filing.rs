@@ -1,9 +1,12 @@
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
+use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
+use crate::adapter::engine_host::v2_host::test_support::{
+    runtime_with_workspace_config, runtime_with_workspace_layout,
+};
 
 pub(in crate::adapter::engine_host::v2_host) fn expanded_snapshot(
     dependabot: Vec<Value>,
@@ -109,4 +112,112 @@ fn sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields() 
             .expect("persisted")
             .contains(SENTINEL)
     );
+}
+
+#[test]
+fn dependabot_bump_uses_low_pool_without_changing_identity_tag() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &dependabot_bump_uses_low_pool_without_changing_identity_tag,
+    )) {
+        return;
+    }
+
+    let (_root, runtime, _repo) = runtime_with_workspace_config(Some(
+        r#"[workflow]
+default_crew = "system"
+low_complexity_crews = ["fixture"]
+
+[crews.fixture]
+provider = "codex"
+model = "fixture-model"
+backend = "cli"
+
+[crews.system]
+provider = "codex"
+model = "system-model"
+backend = "cli"
+"#,
+    ));
+    let snapshot = expanded_snapshot(
+        vec![json!({
+            "number": 73,
+            "state": "open",
+            "severity": "high",
+            "ecosystem": "npm",
+            "package": "source-map-js",
+            "manifest_path": "website/package-lock.json",
+            "vulnerable_range": "<1.2.2",
+            "first_patched_version": "1.2.2"
+        })],
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let output = file(&runtime, snapshot, json!({}));
+    let entry = &output["filed"][0];
+    let key = entry["key"].as_str().expect("filed identity key");
+    let task = runtime
+        .get_task(entry["task_id"].as_str().expect("filed task id"))
+        .expect("persisted task");
+
+    assert_eq!(task.complexity, Some(TaskComplexity::Low));
+    assert_eq!(task.crew.as_deref(), Some("fixture"));
+    assert!(task.tags.contains(&format!("dependabot:{key}")));
+}
+
+#[test]
+fn dependabot_alert_ecosystems_match_open_pr_branch_names() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &dependabot_alert_ecosystems_match_open_pr_branch_names,
+    )) {
+        return;
+    }
+
+    let (_root, runtime, _repo) = runtime_with_workspace_layout();
+    for (ecosystem, branch_ecosystem, package, manifest_path) in [
+        (
+            "npm",
+            "npm_and_yarn",
+            "@babel/core",
+            "website/package-lock.json",
+        ),
+        ("rust", "cargo", "serde", "Cargo.lock"),
+        (
+            "actions",
+            "github_actions",
+            "actions/checkout",
+            ".github/workflows/ci.yml",
+        ),
+        ("go", "go_modules", "github.com/example/module", "go.mod"),
+        ("rubygems", "bundler", "rack", "Gemfile.lock"),
+    ] {
+        let mut snapshot = expanded_snapshot(
+            vec![json!({
+                "number": 100,
+                "state": "open",
+                "severity": "high",
+                "ecosystem": ecosystem,
+                "package": package,
+                "manifest_path": manifest_path,
+                "vulnerable_range": "<1.2.2",
+                "first_patched_version": "1.2.2"
+            })],
+            Vec::new(),
+            Vec::new(),
+        );
+        snapshot["open_dependabot_pull_requests"] = json!([{
+            "title": format!("chore(deps): update {package}"),
+            "head_branch": format!(
+                "dependabot/{branch_ecosystem}/{manifest_path}/{package}-1.2.2"
+            )
+        }]);
+
+        let output = file(&runtime, snapshot, json!({}));
+        assert_eq!(output["filed_count"], 0, "alert ecosystem {ecosystem}");
+        assert_eq!(
+            output["skipped_dependabot_pr"].as_array().map(Vec::len),
+            Some(1),
+            "alert ecosystem {ecosystem} should match its Dependabot branch"
+        );
+    }
 }

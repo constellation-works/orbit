@@ -160,6 +160,12 @@ pub(super) trait CiQueries {
     /// GitHub itself reports it, never inferred from a naming convention.
     fn repo_view(&self) -> Result<Value, OrbitError>;
     fn open_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
+    /// A bounded page of closed pull requests, merged ones included.
+    fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
+    /// Closed pull requests with this head branch, merged ones included.
+    fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError>;
+    /// Open pull requests with this head branch.
+    fn open_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError>;
     /// Recent runs across the whole repository, without a branch filter.
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError>;
@@ -175,8 +181,14 @@ pub(super) trait CiQueries {
         max_bytes: usize,
         cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError>;
+    /// The annotation GitHub left on one job when a workflow concurrency
+    /// group cancelled it, if any.
+    fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError>;
     /// Read all current heads from `origin` once for this sweep.
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError>;
+    /// Whether commit `ancestor` is reachable from commit `descendant`. An
+    /// error means ancestry could not be established either way.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError>;
 }
 
 /// The production implementation: `gh` and `git`, run on the host.
@@ -204,6 +216,50 @@ impl HostCiQueries {
 }
 
 impl HostCiQueries {
+    fn pull_requests(&self, state: &str, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        let request = github_cli::pr_list_request(&json!({"state": state, "limit": limit}))?;
+        let stdout = self.run_gh(request, "gh pr list")?;
+        let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
+        Ok(parsed
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(github_cli::project_pull_request)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn pull_requests_for_branch(
+        &self,
+        branch: &str,
+        state: &str,
+    ) -> Result<Vec<Value>, OrbitError> {
+        let input = json!({"head": branch, "limit": 100});
+        let request = match state {
+            "closed" => github_cli::closed_pr_head_request(&input)?,
+            "open" => github_cli::open_pr_head_request(&input)?,
+            _ => {
+                return Err(OrbitError::InvalidInput(
+                    "unsupported pull request state for head query".to_string(),
+                ));
+            }
+        };
+        let label = format!("gh pr list {state} head");
+        let stdout = self.run_gh(request, &label)?;
+        let parsed = github_cli::parse_gh_json(&stdout, &label)?;
+        Ok(parsed
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(github_cli::project_pull_request)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Attach each failed job's runner labels from the jobs API, the evidence
     /// a filed repair's `os:` tag comes from. Best effort: the labels only
     /// route the repair, so a failed read is recorded on the view and the
@@ -277,18 +333,19 @@ impl CiQueries for HostCiQueries {
     }
 
     fn open_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
-        let request = github_cli::pr_list_request(&json!({"state": "open", "limit": limit}))?;
-        let stdout = self.run_gh(request, "gh pr list")?;
-        let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
-        Ok(parsed
-            .as_array()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .map(github_cli::project_pull_request)
-                    .collect()
-            })
-            .unwrap_or_default())
+        self.pull_requests("open", limit)
+    }
+
+    fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        self.pull_requests("closed", limit)
+    }
+
+    fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
+        self.pull_requests_for_branch(branch, "closed")
+    }
+
+    fn open_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
+        self.pull_requests_for_branch(branch, "open")
     }
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
@@ -358,6 +415,13 @@ impl CiQueries for HostCiQueries {
         })
     }
 
+    fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError> {
+        let request = github_cli::job_annotations_request(&json!({"job": job_id.to_string()}))?;
+        let stdout = self.run_gh(request, "gh api check-run annotations")?;
+        let listing = github_cli::parse_gh_json(&stdout, "gh api check-run annotations")?;
+        Ok(github_cli::concurrency_cancellation(&listing).map(|message| redact_all(&message)))
+    }
+
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
         let output = super::super::vcs::git::git_output(
             &self.repo_root,
@@ -366,6 +430,36 @@ impl CiQueries for HostCiQueries {
         Ok(RemoteBranchHeads::from_heads(parse_remote_branch_heads(
             &output,
         )))
+    }
+
+    /// Answered from the host checkout. A run commit this checkout has not
+    /// fetched yet is fetched by object id first; that writes no ref.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError> {
+        use super::super::vcs::git::{git_command_success, git_success};
+
+        for sha in [ancestor, descendant] {
+            if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "run commit '{sha}' is not a full commit id"
+                )));
+            }
+        }
+        let mut missing = Vec::new();
+        for sha in [ancestor, descendant] {
+            let object = format!("{sha}^{{commit}}");
+            if !git_command_success(&self.repo_root, &["cat-file", "-e", &object])? {
+                missing.push(sha);
+            }
+        }
+        if !missing.is_empty() {
+            let mut args = vec!["fetch", "--no-tags", "--quiet", "origin"];
+            args.extend(missing);
+            git_success(&self.repo_root, &args)?;
+        }
+        git_command_success(
+            &self.repo_root,
+            &["merge-base", "--is-ancestor", ancestor, descendant],
+        )
     }
 }
 

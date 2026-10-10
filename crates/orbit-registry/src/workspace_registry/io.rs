@@ -47,8 +47,9 @@ pub fn load_registry() -> Result<WorkspaceRegistry, OrbitError> {
 
 /// Run `op` while holding the exclusive lock for the registry at `path`.
 ///
-/// `load_registry_from` and `save_registry_to` are each atomic on their own,
-/// but a caller that loads, edits, and saves is not: two such callers (the
+/// `load_registry_from` protects its maintenance writes and `save_registry_to`
+/// is atomic on its own, but a caller that loads, edits, and saves is not:
+/// two such callers (the
 /// scheduled sweep validating checkouts, `orbit workspace init` registering a
 /// new one) interleave, and the second save silently drops the first one's
 /// edit. Wrap the whole read-modify-write in this. The owning runtime must
@@ -63,6 +64,10 @@ pub fn with_registry_lock<T>(
 }
 
 /// Load, migrate, and validate a registry from an explicit path.
+///
+/// Migration re-reads and persists under [`with_registry_lock`], preserving
+/// concurrent registrations. Already-current registries need no lock. The lock
+/// is re-entrant, so callers can hold it across a larger read-modify-write.
 pub fn load_registry_from(path: &Path) -> Result<WorkspaceRegistry, OrbitError> {
     load_registry_from_with_writer(path, write_registry)
 }
@@ -75,8 +80,7 @@ pub fn load_registry_from_with_machine(
     path: &Path,
     identity: &MachineIdentityState,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let snapshot = read_registry_snapshot(path, |_| Ok(identity.into()))?;
-    persist_migration(snapshot, write_registry)
+    load_registry_from_with_context_and_writer(path, |_| Ok(identity.into()), write_registry)
 }
 
 /// Load and validate a registry without creating a lock or persisting migrations.
@@ -101,8 +105,25 @@ pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let snapshot = read_registry_snapshot(path, registry_machine_context)?;
-    persist_migration(snapshot, writer)
+    load_registry_from_with_context_and_writer(path, registry_machine_context, writer)
+}
+
+// Shared context-aware persistence boundary. Crate visibility supports fault
+// injection and deterministic interleaving between reading bytes and resolving
+// their machine context, without altering the public loader contract.
+pub(crate) fn load_registry_from_with_context_and_writer(
+    path: &Path,
+    context_for: impl Fn(&Path) -> Result<WorkspaceRegistryMachineContext, OrbitError>,
+    writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    let snapshot = read_registry_snapshot(path, &context_for)?;
+    if !snapshot.load.migration_required {
+        return Ok(snapshot.load.registry);
+    }
+    with_registry_lock(path, || {
+        let current = read_registry_snapshot(path, context_for)?;
+        persist_migration(current, writer)
+    })
 }
 
 /// A parsed registry together with the validated path it was read from, so a

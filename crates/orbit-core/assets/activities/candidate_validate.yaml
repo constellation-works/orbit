@@ -14,7 +14,14 @@ spec:
     by default), recorded as `validation_env`. A failing command fails the
     step with its output after its log is attached, so step recovery can
     repair the candidate and retry; a command that fails for lack of a tool
-    fails as a `validation_environment` failure that no recovery repairs.
+    fails as a `validation_environment` failure that no recovery repairs. A
+    network-inconclusive failure (curl status 000, DNS, TLS timeout) is rerun
+    up to twice with backoff. A failure that survives is rerun on `base_sha`
+    in a clean detached worktree, cached per host, base and command so
+    concurrent candidates share one base run, and its log is attached beside
+    the candidate's; a failure the base shares fails as a typed
+    `baseline_red` that no recovery repairs and that holds the task in the
+    backlog until `base_ref` moves to a commit where the command passes.
     With `ownership_base_sha`, every path the candidate changed since that
     commit is first attributed to the delivered tasks; a path no selector owns
     widens a task's selectors with review provenance rather than failing. An
@@ -36,6 +43,11 @@ spec:
       # The base the candidate was synchronized onto. The candidate must
       # contain it; a later advance of the base tip is not a refusal.
       base_sha:
+        type: [string, "null"]
+      # The ref the run synchronized onto (`origin/<base>` or the local
+      # branch). A `baseline_red` hold lifts only after the command passes on
+      # a new tip of this ref.
+      base_ref:
         type: [string, "null"]
       # The implementation head a before-PR reviewer commit sits on. Paths
       # changed since it are attributed to the delivered tasks, widening

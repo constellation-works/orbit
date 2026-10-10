@@ -13,7 +13,9 @@ use orbit_common::OrbitError;
 use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest};
 use orbit_store::contracts::{ReviewInvocationRecord, ReviewRelease};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{ReviewAttempt, ReviewAttemptState, ReviewLedger};
+use orbit_types::workflow::{
+    ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewerInvocationEvent, seconds_between,
+};
 use serde_json::json;
 
 use super::super::REVIEW_AUDIT;
@@ -105,22 +107,34 @@ pub(super) fn release_abandoned(
     release(runtime, workspace_id, &ledger, attempt, bound, now)
 }
 
-/// Record a reviewer invocation starting or finishing for its attempt.
+/// Record a reviewer invocation starting or finishing for its attempt. A
+/// start returns the seconds until the deadline the store bounded by the
+/// review's remaining minutes.
 pub(crate) fn record_reviewer_invocation(
     runtime: &OrbitRuntime,
     request: &ReviewerInvocationRequest,
-) -> Result<(), OrbitError> {
-    runtime.review_store()?.review_record_invocation(
+) -> Result<Option<u64>, OrbitError> {
+    let now = Utc::now();
+    let ledger = runtime.review_store()?.review_record_invocation(
         &runtime.workspace_id()?,
         &ReviewInvocationRecord {
             lineage_key: &request.lineage_key,
             attempt_id: &request.attempt_id,
             run_id: &request.run_id,
             event: request.event,
-            now: Utc::now(),
+            now,
         },
     )?;
-    Ok(())
+    if !matches!(request.event, ReviewerInvocationEvent::Started) {
+        return Ok(None);
+    }
+    Ok(ledger
+        .attempts
+        .iter()
+        .find(|attempt| attempt.attempt_id == request.attempt_id)
+        .and_then(|attempt| attempt.reviewer_running.as_ref())
+        .filter(|running| running.run_id == request.run_id)
+        .map(|running| seconds_between(now, running.deadline)))
 }
 
 fn release(

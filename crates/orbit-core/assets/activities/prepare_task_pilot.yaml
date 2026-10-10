@@ -20,7 +20,12 @@ spec:
     `excluded` itemizes only a bounded sample of routine exclusions; the full
     breakdown is always available via `excluded_total` and
     `excluded_by_reason`, with `excluded_sample_truncated` and
-    `excluded_omitted_count` marking what the sample left out.
+    `excluded_omitted_count` marking what the sample left out. In a
+    workspace registered for PR delivery whose Git remotes name no network
+    host, a task the PR pipeline would deliver is excluded as
+    `pr_forge_remote_missing`, and `pr_forge_refusal` carries the refusal
+    naming the remotes and the fixes; a `delivery:task_local_pipeline` tag
+    keeps a task eligible.
   input_schema_json:
     type: object
     properties:
@@ -88,5 +93,9 @@ spec:
         type: boolean
       excluded_omitted_count:
         type: number
+      pr_forge_refusal:
+        oneOf:
+          - type: string
+          - type: "null"
   action: prepare_task_pilot
   config: {}

@@ -198,7 +198,7 @@ fn ensure_write_anchor(
     }
 
     if let Some(parent) = grant.anchor.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
             OrbitError::Execution(format!(
                 "create write-grant anchor parent `{}` (rule `{}`): {error}",
                 parent.display(),
@@ -238,7 +238,7 @@ fn ensure_write_anchor(
                 })?;
         }
         WriteAnchorKind::Directory => {
-            std::fs::create_dir(&grant.anchor).map_err(|error| {
+            orbit_common::fs::io::create_private_dir(&grant.anchor).map_err(|error| {
                 OrbitError::Execution(format!(
                     "create write-grant anchor directory `{}` (rule `{}`): {error}",
                     grant.anchor.display(),

@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-09-28
+last_validated: 2026-10-09
 ---
 
 # Spec: Task Bundle V2
@@ -216,7 +216,7 @@ The initial registry projections are:
 
 - `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
 - `task_bundle_tags(task_id, workspace_id, tag)`.
-- `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`.
+- `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`, and `covered_by` may store a GitHub PR external key.
 
 Indexes are generated data. The bundle envelope is canonical, and repair/rebuild paths may delete and regenerate index rows from bundles. The `task_bundle_index.updated_at` value is the envelope version stamp. Query paths should treat a missing row, incomplete index, or `updated_at` mismatch as a cache miss: rebuild from registered bundles when possible, otherwise fall back to bundle reads rather than treating the index as proof that tasks do not exist.
 
@@ -251,8 +251,9 @@ settled mismatch the rule above calls corruption.
 Readers must therefore observe the writer's coordination rather than infer
 intent from bytes:
 
-- A writer holds that task's exclusive bundle lock (`<bundle>/task.yaml`, via
-  its sibling lock file) for the whole multi-file publication.
+- A writer holds that task's exclusive bundle lock (the `<task-id>.bundle` file
+  beside the bundle directory, never unlinked) for the whole multi-file
+  publication.
 - A reader that assembles a **complete** bundle must hold the same lock in
   shared mode. It then observes only settled bundles, so a genuine mismatch
   still fails the read (`task_bundle_corrupt`) with no tolerance widened.
@@ -290,6 +291,8 @@ files:
 ```
 
 Artifact paths must be relative, UTF-8, slash-separated, canonical paths and must not contain `.`, `..`, or leading `./` components. Writers that ingest hand-authored manifests should normalize leading `./` before validation. `sha256` must be a 64-character lowercase hex SHA-256 digest; writer code should format digest bytes with lowercase hex (`{:x}`), not uppercase.
+
+An optional `writer` records the trusted class of the latest put: `system` for Orbit's own deterministic machinery, `operator` for a human operator surface with no agent identity outside a managed run. Orbit stamps it from the write path; tool input cannot set it, and it is absent for agent tool calls, claimed-worker evidence and entries written before it existed. Review evidence counts only from accepted classes ([review gate design §4](../../review-gate/2_design.md)).
 
 `path` is the logical artifact name; readers must open the separate `blob` path from the manifest. Existing manifests may use `files/<path>`. Replacement writes use immutable, content-addressed files under `artifacts/files/`, then atomically publish the complete updated manifest. A failure before manifest publication leaves the previous artifact set and hashes intact. Unreferenced blobs from interrupted or superseded writes may remain and are ignored by readers.
 
@@ -348,8 +351,22 @@ such query with terminal statuses ordered last, not two queries: the index
 orders non-terminal tasks before done, archived and rejected ones, each
 partition newest first, and the limit spans both.
 Missing/stale indexes require a lightweight bundle scan (task fields only) and
-best-effort index repair; task-field errors encountered reading that scan
-propagate. An update racing selected-row hydration causes one rescan with
+best-effort index repair from the same scan; task-field errors encountered
+reading that scan propagate. A registry opened read-only never takes a repair
+ticket or writes freshness proofs: its fallback logs only at debug and leaves
+the writer's repair gate untouched. Writable readers still attempt repair.
+Index fields and tags are loaded in one SQLite snapshot; the freshness probe
+retries once before accepting a mismatch, because a writer may finish publishing
+between the snapshot and an envelope probe. Completed task creation and update
+publish the generated row before returning, including history-only updates.
+A refused writable repair is recorded per process,
+registry and workspace against the envelope stamps of every registered task
+and the targets it found unresolved (ORB-14181). While that evidence holds,
+reads serve from the scan without retrying the rebuild, and at most one read
+attempts a repair at a time; a supported write, a created or deleted task, a
+restored target, or a retry interval re-admits one attempt. The relation
+validator stays strict, and the warning names each canonical edge that blocks
+publication. An update racing selected-row hydration causes one rescan with
 filter-before-limit semantics. In-flight creation/deletion retains the
 existing list-read tolerance.
 
@@ -365,8 +382,10 @@ newest 50 from workspace metadata before hydration and shares one request-scoped
 global dependency-status projection. Storage and rendering run on the blocking
 pool, including cold workspace selection and runtime construction in the
 shared workspace extractor. Envelope validation remains linear in the
-workspace's corpus size; there is no persistent validation cache or content
-integrity audit added.
+workspace's corpus size. Persisted envelope stamps can spare a parse while the
+file identity, modification time and index-row fingerprint still agree;
+read-only processes consume those proofs and writable scans record new ones.
+They do not audit off-page bodies, event logs or artifacts.
 
 ### Reproducing the bounded-read measurements
 
@@ -374,7 +393,8 @@ The ORB-11205 measurements came from an ignored `task_list_io_benchmark`
 store test and the dashboard's ignored `task_response_benchmark` harness. The
 store harness was retired with the store unit tests. To reproduce the
 measurements, check out `630bc95d241c1441de9c31f980bc016948b84f5d`, the last
-commit with `crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
+commit with the historical source
+`630bc95d241c1441de9c31f980bc016948b84f5d:crates/orbit-store/src/repository/task/v2/tests/listing_bench.rs`,
 and follow that file's module docs. It generated three temporary workspaces of
 `ORBIT_TASK_BENCH_SIZE` tasks (100, 1000 or 10000), with
 `ORBIT_TASK_BENCH_MODE=baseline` running the frozen settled-index read
@@ -389,3 +409,13 @@ used unoptimized test binaries with debug information disabled and temporary
 corpora on Linux tmpfs. These are warm-cache measurements, not controlled
 cold-cache or production-release latency claims. Small-corpus pool/metadata
 overhead and concurrent-request RSS must be reported alongside improvements.
+
+### Operator coverage relations
+
+`covered_by` is associative metadata targeting a task ID or a GitHub PR
+external reference (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`).
+It does not create a dependency or enter cycle reachability. Numeric PR
+references resolve in the checkout's repository. The CI-failure filer uses it
+on archived/rejected exact-key sweep tasks to retain operator coverage;
+[CI recovery guidance](../../../../plugin/skills/orbit-orchestrate/references/recovery.md)
+describes open, landed, unavailable and abandoned cover handling.

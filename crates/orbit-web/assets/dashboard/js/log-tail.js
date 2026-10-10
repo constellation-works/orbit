@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router's `#auto-drain` redirect.
 
-import { el, fetchJson } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +30,7 @@ const LOG_STREAM_RETRY_MIN_MS = 1000;
 const LOG_STREAM_RETRY_MAX_MS = 15000;
 const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
 let logStreamOffset = 0;
+let logAgentStreamOffset = 0;
 let logStreamRetryTimer = null;
 let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 // True once the snapshot resolved and a live stream is owed. A hidden tab
@@ -37,6 +38,14 @@ let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 // hold a permit for nothing); this flag tells the visibility handler to reopen
 // it from `logStreamOffset` instead of before there is an offset to resume.
 let logStreamWanted = false;
+// The stream stays closed until a snapshot succeeds. Opening it at offset 0
+// after a failed snapshot would replay history that the next snapshot also
+// renders. Retries share the stream's backoff, and the same disconnected
+// status, until that cursor exists.
+let logSnapshotReady = false;
+let logSnapshotRetryTimer = null;
+let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 // ORB-10972: the log lives in the Tasks tab's right dock, which has two modes
@@ -56,9 +65,9 @@ function loadLogPanelPrefs() {
     const parsed = raw ? JSON.parse(raw) : {};
     // `status` is the Drain mode's name before ORB-12898; a stored one opens as Drain.
     const dockMode = parsed.dockMode === "status" ? "drain" : parsed.dockMode;
-    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain" };
+    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain", showAgent: parsed.showAgent !== false };
   } catch (_) {
-    return { dockMode: "drain" };
+    return { dockMode: "drain", showAgent: true };
   }
 }
 
@@ -367,19 +376,44 @@ function wireDockModeToggle() {
 // just the Tasks tab where the dock is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
 // enough to keep the bar live everywhere.
-function updateLogStatusBar(ev) {
+//
+// The bar follows the dock's agent toggle: while agent stdout is hidden, relays
+// never replace the line, so an operator glancing at it sees the newest Orbit
+// event rather than a drain's raw agent traffic. Both candidates are kept so
+// flipping the toggle can redraw the bar without waiting for another event.
+let statusNewestEvent = null;
+let statusQuietEvent = null;
+
+function trackLogStatusEvent(ev) {
+  statusNewestEvent = ev;
+  if (ev.agent_stdout !== true) statusQuietEvent = ev;
+}
+
+function noteLogStatusEvent(ev) {
+  if (!ev) return;
+  trackLogStatusEvent(ev);
+  refreshLogStatusBar();
+}
+
+function refreshLogStatusBar() {
+  writeLogStatusBar(logPanelPrefs.showAgent ? statusNewestEvent : statusQuietEvent);
+}
+
+function writeLogStatusBar(ev) {
   const bar = $("log-statusbar");
   if (!bar || !ev) return;
-  let timeStr = ev.ts || "";
-  if (timeStr && timeStr.includes("T")) {
-    const d = new Date(timeStr);
-    if (!isNaN(d.getTime())) timeStr = d.toLocaleTimeString("en-US", { hour12: false });
-  }
+  const { text: timeStr, title: timeTitle } = logTime(ev.ts);
   const t = $("log-statusbar-time");
   const ag = $("log-statusbar-source");
   const m = $("log-statusbar-message");
-  if (t) t.textContent = timeStr;
-  if (ag) ag.textContent = ev.source || "";
+  if (t) {
+    t.textContent = timeStr;
+    t.title = timeTitle;
+  }
+  if (ag) {
+    ag.textContent = ev.source || "";
+    ag.title = ev.target || ev.source || "";
+  }
   if (m) {
     m.innerHTML = ev.message_html || "";
     m.dataset.level = getLogClass(ev.level, ev.code);
@@ -395,6 +429,16 @@ function wireLogPanelResize() {
   wireDockResize();
 }
 
+// The dock and status bar are too narrow for a zone on every line, so the
+// wall-clock time carries its full date and zone in the title.
+function logTime(ts) {
+  const raw = ts || "";
+  if (!raw.includes("T")) return { text: raw, title: "" };
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return { text: raw, title: "" };
+  return { text: formatClock(d, { zone: false }), title: formatDateTime(d, { seconds: true }) };
+}
+
 function getLogClass(level, code) {
   if (code === "DENY") return "deny";
   if (code === "OK") return "ok";
@@ -407,17 +451,11 @@ function renderLogEvent(ev, isFresh) {
   const row = el("div", { class: "log-line" + (isFresh ? " fresh" : "") });
   row.dataset.code = ev.code || "";
   row.dataset.level = ev.level || "info";
+  row.dataset.agentStdout = String(ev.agent_stdout === true);
 
-  let timeStr = ev.ts || "";
-  if (timeStr && timeStr.includes("T")) {
-    const d = new Date(timeStr);
-    if (!isNaN(d.getTime())) {
-      timeStr = d.toLocaleTimeString("en-US", {hour12: false});
-    }
-  }
-
-  const tSpan = el("span", { class: "t", text: timeStr });
-  const agSpan = el("span", { class: "ag", text: ev.source || "" });
+  const { text: timeStr, title: timeTitle } = logTime(ev.ts);
+  const tSpan = el("span", { class: "t", text: timeStr, title: timeTitle });
+  const agSpan = el("span", { class: "ag", text: ev.source || "", title: ev.target || ev.source || "" });
   const lvClass = getLogClass(ev.level, ev.code);
   // ORB-10972: the dock is 336px, so the level is carried by a coloured
   // keyline on the row rather than a 42px text column — that width goes to the
@@ -439,36 +477,112 @@ function renderLogEvent(ev, isFresh) {
   return row;
 }
 
+function clearLogSnapshotRetry() {
+  if (logSnapshotRetryTimer !== null) {
+    clearTimeout(logSnapshotRetryTimer);
+    logSnapshotRetryTimer = null;
+  }
+}
+
+function scheduleLogSnapshotRetry() {
+  clearLogSnapshotRetry();
+  if (document.hidden || logSnapshotReady) return;
+  const delay = logSnapshotRetryMs;
+  logSnapshotRetryMs = Math.min(logSnapshotRetryMs * 2, LOG_STREAM_RETRY_MAX_MS);
+  logSnapshotRetryTimer = setTimeout(() => {
+    logSnapshotRetryTimer = null;
+    loadLogSnapshot();
+  }, delay);
+}
+
+// Returns false when the dock is absent. That is not a server failure, so the
+// caller must not mark the snapshot ready and must not open a stream.
+function applyLogSnapshot(payload) {
+  const inner = $("logInner");
+  if (!inner) return false;
+  inner.innerHTML = "";
+  logRows = [];
+  const events = payload && Array.isArray(payload.events) ? payload.events : [];
+  if (
+    payload &&
+    typeof payload.offset === "number" &&
+    Number.isFinite(payload.offset) &&
+    payload.offset >= 0
+  ) {
+    logStreamOffset = payload.offset;
+    logAgentStreamOffset = Number.isFinite(payload.agent_offset) && payload.agent_offset >= 0
+      ? payload.agent_offset : 0;
+  }
+  events.slice().reverse().forEach(ev => {
+    const row = renderLogEvent(ev, false);
+    inner.appendChild(row);
+    logRows.push(row);
+  });
+  applyLogFilters();
+  statusNewestEvent = null;
+  statusQuietEvent = null;
+  events.forEach(trackLogStatusEvent);
+  refreshLogStatusBar();
+  connectLogStream();
+  return true;
+}
+
+function loadLogSnapshot() {
+  if (document.hidden || logSnapshotReady) return;
+  // A selected host that cannot be shown is not asked again until a refresh
+  // finds it reachable; the retry keeps its place in the backoff meanwhile.
+  if (isHostUnavailable()) {
+    scheduleLogSnapshotRetry();
+    return;
+  }
+  const attempt = ++logSnapshotAttempt;
+  fetchJson("/api/log?limit=50").then((payload) => {
+    if (attempt !== logSnapshotAttempt || logSnapshotReady) return;
+    if (!applyLogSnapshot(payload)) return;
+    logSnapshotReady = true;
+    logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    clearLogSnapshotRetry();
+  }).catch((error) => {
+    if (attempt !== logSnapshotAttempt || logSnapshotReady) return;
+    console.error(error);
+    setLogStreamConnected(false);
+    scheduleLogSnapshotRetry();
+  });
+}
+
+// ORB-14680: the tail follows the selected host. Another host's log has its
+// own offsets, so a switch drops the rows and cursor and starts from that
+// host's snapshot, exactly as a first load does.
+let logHost = null;
+
+function restartLogTailForHost() {
+  if (getHost() === logHost) return;
+  logHost = getHost();
+  logSnapshotAttempt += 1;
+  clearLogSnapshotRetry();
+  closeLogStream();
+  logStreamWanted = false;
+  logSnapshotReady = false;
+  logStreamOffset = 0;
+  logAgentStreamOffset = 0;
+  logBuffered = [];
+  logBufferedDropped = 0;
+  logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+  logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+  loadLogSnapshot();
+}
+
 export function initLogTail() {
+  logHost = getHost();
+  onWorkspaceChange(restartLogTailForHost);
   wireLogVisibility();
   wireLogPanelResize();
   wireDockSplitter();
   wireLogWrapToggle();
   fitLogPanelToViewport();
-  fetchJson("/api/log?limit=50").then((payload) => {
-    const inner = $("logInner");
-    if (!inner) return;
-    inner.innerHTML = "";
-    logRows = [];
-    const events = payload && Array.isArray(payload.events) ? payload.events : [];
-    if (
-      payload &&
-      typeof payload.offset === "number" &&
-      Number.isFinite(payload.offset) &&
-      payload.offset >= 0
-    ) {
-      logStreamOffset = payload.offset;
-    }
-    events.slice().reverse().forEach(ev => {
-      const row = renderLogEvent(ev, false);
-      inner.appendChild(row);
-      logRows.push(row);
-    });
-    applyLogFilters();
-    if (events.length > 0) updateLogStatusBar(events[events.length - 1]);
-    connectLogStream();
-  }).catch(console.error);
-  
+  syncLogFilterPills();
+  loadLogSnapshot();
+
   const followBtn = $("log-follow-tail");
   if (followBtn) {
     followBtn.addEventListener("click", () => {
@@ -488,7 +602,18 @@ export function initLogTail() {
     });
   }
 
-  document.querySelectorAll("#side-dock .filter-pill").forEach(pill => {
+  const agentBtn = $("log-show-agent");
+  if (agentBtn) {
+    agentBtn.addEventListener("click", () => {
+      logPanelPrefs = { ...logPanelPrefs, showAgent: !logPanelPrefs.showAgent };
+      saveLogPanelPrefs(logPanelPrefs);
+      syncLogFilterPills();
+      applyLogFilters();
+      refreshLogStatusBar();
+    });
+  }
+
+  document.querySelectorAll("#side-dock .filter-pill[data-filter]").forEach(pill => {
     pill.addEventListener("click", () => {
       const filter = pill.dataset.filter;
       if (filter === "all") {
@@ -581,10 +706,15 @@ function enforceLogBounds() {
 // carries the same fact for assistive tech, so both are written from the one
 // active-filter set rather than from the click target.
 function syncLogFilterPills() {
-  for (const pill of document.querySelectorAll("#side-dock .filter-pill")) {
+  for (const pill of document.querySelectorAll("#side-dock .filter-pill[data-filter]")) {
     const on = activeLogFilters.has(pill.dataset.filter);
     pill.classList.toggle("on", on);
     pill.setAttribute("aria-pressed", String(on));
+  }
+  const agentBtn = $("log-show-agent");
+  if (agentBtn) {
+    agentBtn.classList.toggle("on", logPanelPrefs.showAgent);
+    agentBtn.setAttribute("aria-pressed", String(logPanelPrefs.showAgent));
   }
 }
 
@@ -607,6 +737,7 @@ function applyLogFilters() {
       if (activeLogFilters.has("deny") && lvClass === "deny") show = true;
       if (activeLogFilters.has("warn") && lvClass === "warn") show = true;
     }
+    if (!logPanelPrefs.showAgent && row.dataset.agentStdout === "true") show = false;
     row.style.display = show ? "" : "none";
     if (show) visibleCount++;
   }
@@ -617,8 +748,11 @@ function applyLogFilters() {
 
 function rememberStreamOffset(lastEventId) {
   if (!lastEventId) return;
-  const parsed = Number.parseInt(lastEventId, 10);
+  const [operational, agent] = lastEventId.split(":");
+  const parsed = Number(operational);
   if (Number.isFinite(parsed) && parsed >= 0) logStreamOffset = parsed;
+  const agentParsed = Number(agent);
+  if (Number.isFinite(agentParsed) && agentParsed >= 0) logAgentStreamOffset = agentParsed;
 }
 
 function setLogStreamConnected(connected) {
@@ -646,7 +780,15 @@ function closeLogStream() {
 
 function handleLogVisibilityChange() {
   if (document.hidden) {
+    // Invalidate an in-flight snapshot so a late failure cannot arm a retry
+    // while this tab is hidden. A late success is discarded with it; becoming
+    // visible loads a fresh cursor before any stream opens.
+    logSnapshotAttempt += 1;
+    clearLogSnapshotRetry();
     closeLogStream();
+  } else if (!logSnapshotReady) {
+    logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    loadLogSnapshot();
   } else if (logStreamWanted && !logStream) {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     connectLogStream();
@@ -664,7 +806,7 @@ function connectLogStream() {
   closeLogStream();
   // A hidden tab opens nothing; becoming visible reconnects from the offset.
   if (document.hidden) return;
-  logStream = new EventSource(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}`);
+  logStream = new EventSource(withHost(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}&agent_from=${encodeURIComponent(String(logAgentStreamOffset))}`));
   logStream.onopen = () => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);
@@ -675,7 +817,7 @@ function connectLogStream() {
     rememberStreamOffset(e.lastEventId);
     try {
       const ev = JSON.parse(e.data);
-      updateLogStatusBar(ev);
+      noteLogStatusEvent(ev);
       if (logFollowTail) {
         const inner = $("logInner");
         const row = renderLogEvent(ev, true);

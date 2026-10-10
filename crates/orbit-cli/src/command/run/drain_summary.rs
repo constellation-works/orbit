@@ -8,10 +8,13 @@
 //! place. It is additive: the drain's state and every existing field are
 //! unchanged.
 
+use std::collections::BTreeMap;
+
 use orbit_core::JobRun;
 use orbit_core::application::job::run_error_step;
 use orbit_types::workflow::{
-    DrainAdmissionPass, DrainWaitingTask, JobRunState, PipelineState, ResourceThrottle,
+    DrainAdmissionPass, DrainApprovalReport, DrainCapacity, DrainWaitingTask, JobRunState,
+    PipelineState, ResourceThrottle,
 };
 use serde_json::{Value, json};
 
@@ -34,6 +37,10 @@ pub(super) struct DrainLeafSummary {
     pub(super) unreadable: usize,
     pub(super) failed_leaves: Vec<FailedLeaf>,
     pub(super) waiting: WaitingBacklog,
+    /// What an `--approve-proposed` drain approved and held [ORB-14117].
+    pub(super) approvals: Option<DrainApprovalReport>,
+    /// Shared occupancy at the last pass, separate from this drain's outcomes.
+    pub(super) capacity: Option<DrainCapacity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,13 +64,28 @@ pub(super) struct WaitingBacklog {
     pub(super) queued: Option<u64>,
     /// The subset of `queued` a lock conflict kept out, with the blocking tasks.
     pub(super) deferred: Vec<WaitingTask>,
+    /// The full count behind `deferred`, which a pull drain bounds. Records
+    /// that predate it read 0, so use [`Self::deferred_count`].
+    pub(super) deferred_total: u64,
     /// Backlog tasks the drain could not admit at all, with the reason.
     pub(super) excluded: Vec<WaitingTask>,
     pub(super) excluded_total: u64,
     /// Host resource pressure that held the last pass [ORB-13901].
     pub(super) resource_throttle: Option<ResourceThrottle>,
     pub(super) recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the owner gave the answer the lists above report, for a pull
+    /// drain; unset for a local one, which classifies afresh each pass.
+    pub(super) waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Tasks kept off this host by reason code, whole (pull drains).
+    pub(super) by_reason: BTreeMap<String, u64>,
+    /// Consecutive owner answers that kept tasks off this host and claimed
+    /// none (pull drains).
+    pub(super) idle_passes: u32,
 }
+
+/// Consecutive idle owner answers after which a pull drain says why it
+/// claims nothing, rather than leaving the per-task lines to be added up.
+const IDLE_SUMMARY_PASSES: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct WaitingTask {
@@ -80,9 +102,7 @@ impl DrainLeafSummary {
 
     /// Whether the drain left admissible or excluded work unstarted.
     fn has_starved_tasks(&self) -> bool {
-        self.waiting.queued.is_some_and(|queued| queued > 0)
-            || !self.waiting.deferred.is_empty()
-            || self.waiting.excluded_total > 0
+        self.waiting.has_starved_tasks()
     }
 
     pub(super) fn to_json(&self) -> Value {
@@ -118,10 +138,13 @@ impl DrainLeafSummary {
             "waiting": {
                 "queued": self.waiting.queued,
                 "deferred": tasks(&self.waiting.deferred),
+                "deferred_total": self.waiting.deferred_count(),
                 "excluded": tasks(&self.waiting.excluded),
                 "excluded_total": self.waiting.excluded_total,
             },
             "resource_throttle": self.waiting.resource_throttle,
+            "capacity": self.capacity,
+            "approvals": self.approvals,
         })
     }
 
@@ -142,6 +165,19 @@ impl DrainLeafSummary {
                 String::new()
             },
         )];
+        if let Some(capacity) = &self.capacity {
+            lines.push(format!(
+                "{} occupied={} inherited={} limit={} (last admission pass {})",
+                bold("Capacity:"),
+                capacity.active_leaf_runs,
+                capacity.inherited_leaf_runs,
+                capacity.max_active_leaf_runs,
+                self.waiting
+                    .recorded_at
+                    .map(|at| at.to_rfc3339())
+                    .unwrap_or_default(),
+            ));
+        }
         if self.has_failed_leaves() {
             let note = if drain_state == JobRunState::Success {
                 " (the drain's own `success` only means it ran; it does not observe its leaves)"
@@ -177,30 +213,156 @@ impl DrainLeafSummary {
         if let Some(throttle) = self.waiting.resource_throttle.as_ref() {
             lines.push(throttle_line(throttle, self.waiting.recorded_at));
         }
-        if self.has_starved_tasks() {
-            let queued = self.waiting.queued.unwrap_or(0);
+        if let Some(approvals) = &self.approvals {
+            lines.extend(approval_lines(approvals));
+        }
+        lines.extend(self.waiting.lines());
+        lines
+    }
+}
+
+impl WaitingBacklog {
+    fn has_starved_tasks(&self) -> bool {
+        self.queued.is_some_and(|queued| queued > 0)
+            || self.deferred_count() > 0
+            || self.excluded_total > 0
+    }
+
+    /// Deferred tasks in all, listed or not.
+    fn deferred_count(&self) -> u64 {
+        self.deferred_total.max(self.deferred.len() as u64)
+    }
+
+    /// The `Still waiting:` block, and for a pull drain that has found nothing
+    /// claimable here several passes running, the `idle:` line that says why.
+    fn lines(&self) -> Vec<String> {
+        use crate::output::color::bold;
+        if !self.has_starved_tasks() {
+            return Vec::new();
+        }
+        let answered = self
+            .waiting_recorded_at
+            .map(|answered| {
+                format!(
+                    " (the owner answered {})",
+                    answered.format("%Y-%m-%d %H:%M:%SZ")
+                )
+            })
+            .unwrap_or_default();
+        let mut lines = vec![format!(
+            "{} {} admissible, {} deferred and {} excluded backlog task(s) were never started at the last pass{answered}",
+            bold("Still waiting:"),
+            self.queued.unwrap_or(0),
+            self.deferred_count(),
+            self.excluded_total,
+        )];
+        for task in &self.deferred {
+            lines.push(format!("  {}", waiting_line(task, "lock conflict")));
+        }
+        let deferred_listed = self.deferred.len() as u64;
+        if self.deferred_count() > deferred_listed {
             lines.push(format!(
-                "{} {} admissible and {} excluded backlog task(s) were never started at the last pass",
-                bold("Still waiting:"),
-                queued,
-                self.waiting.excluded_total,
+                "  ... and {} more deferred",
+                self.deferred_count() - deferred_listed
             ));
-            for task in &self.waiting.deferred {
-                lines.push(format!("  {}", waiting_line(task, "lock conflict")));
-            }
-            for task in &self.waiting.excluded {
-                lines.push(format!("  {}", waiting_line(task, "excluded")));
-            }
-            let listed = self.waiting.excluded.len() as u64;
-            if self.waiting.excluded_total > listed {
-                lines.push(format!(
-                    "  ... and {} more excluded",
-                    self.waiting.excluded_total - listed
-                ));
-            }
+        }
+        for task in &self.excluded {
+            lines.push(format!("  {}", waiting_line(task, "excluded")));
+        }
+        let listed = self.excluded.len() as u64;
+        if self.excluded_total > listed {
+            lines.push(format!(
+                "  ... and {} more excluded",
+                self.excluded_total - listed
+            ));
+        }
+        if let Some(line) = self.idle_line() {
+            lines.push(line);
         }
         lines
     }
+
+    fn idle_line(&self) -> Option<String> {
+        let kept_off: u64 = self.by_reason.values().sum();
+        if self.idle_passes < IDLE_SUMMARY_PASSES || kept_off == 0 {
+            return None;
+        }
+        let mut by_count = self.by_reason.iter().collect::<Vec<_>>();
+        by_count.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        let causes = by_count
+            .into_iter()
+            .map(|(reason, count)| format!("{count} {}", kept_off_cause(reason)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "  idle: {kept_off} backlog task(s) kept off this host for {} consecutive passes ({causes})",
+            self.idle_passes,
+        ))
+    }
+}
+
+/// What a pull drain's reason code says about the tasks it counts.
+fn kept_off_cause(reason: &str) -> &str {
+    match reason {
+        "context_lock_conflict" => "footprint holds",
+        "dependency_not_done" => "unmet dependencies",
+        "host_os_mismatch" => "for another OS",
+        "native_os_required" => "needing native evidence from another OS",
+        "crew_unavailable" => "needing a crew this host cannot run",
+        "owner_hold" => "held on the owner",
+        "invalid_candidate" => "invalid",
+        other => other,
+    }
+}
+
+/// The `Approved:` line for an `--approve-proposed` drain, then each held
+/// proposed task with the reason it stayed proposed.
+fn approval_lines(report: &DrainApprovalReport) -> Vec<String> {
+    let closed = if report.closed_total > 0 {
+        format!(
+            "; {} closed as already fixed ({})",
+            report.closed_total,
+            report.closed.join(", ")
+        )
+    } else {
+        String::new()
+    };
+    let mut lines = vec![format!(
+        "{} {} proposed task(s) moved to backlog{closed}; {} held{}",
+        crate::output::color::bold("Approved:"),
+        report.approved_total,
+        report.held_total,
+        if report.held_by_reason.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                report
+                    .held_by_reason
+                    .iter()
+                    .map(|(reason, count)| format!("{reason}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
+    )];
+    for task in &report.held {
+        let task = WaitingTask {
+            task_id: task.task_id.clone(),
+            reason: task.reason.clone(),
+            blocked_by: task.blocked_by.clone(),
+            detail: task.detail.clone(),
+        };
+        lines.push(format!("  {}", waiting_line(&task, "held")));
+    }
+    let listed = report.held.len() as u64;
+    if report.held_total > listed {
+        lines.push(format!(
+            "  ... and {} more held",
+            report.held_total - listed
+        ));
+    }
+    lines
 }
 
 /// The `Throttled:` line for a drain whose last pass host pressure held.
@@ -226,6 +388,13 @@ pub(super) fn pass_throttle_line(pass: &DrainAdmissionPass) -> Option<String> {
         .map(|throttle| throttle_line(throttle, Some(pass.recorded_at)))
 }
 
+/// The `Still waiting:` lines for a pull drain, which has no leaf summary of
+/// its own: they come from the owner's last answer, as the drain recorded it
+/// [ORB-14475].
+pub(super) fn pass_waiting_lines(pass: &DrainAdmissionPass) -> Vec<String> {
+    waiting_backlog(pass).lines()
+}
+
 fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     let mut line = format!(
         "Task {}: {}",
@@ -235,10 +404,23 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     if !task.blocked_by.is_empty() {
         line.push_str(&format!(" blocked-by={}", task.blocked_by.join(",")));
     }
-    // A host-OS wait names the host it waits for; other details (long repair
-    // instructions) stay in `--json`.
-    if task.reason.as_deref() == Some("host_os_mismatch")
-        && let Some(detail) = &task.detail
+    // A host-OS wait names the host it waits for, and a native-OS
+    // requirement the tag to add. A local-route review hold names the
+    // remedy. A verified-no-diff hold names the pilot's evidence and the
+    // commits it cites. Other details (long repair instructions) stay in `--json`.
+    if matches!(
+        task.reason.as_deref(),
+        Some(
+            "host_os_mismatch"
+                | "native_os_required"
+                | "local_route_before_pr"
+                | "local_route_before_landing"
+                | "crew_unavailable"
+                | "owner_hold"
+                | "invalid_candidate"
+                | "pilot_verified_no_diff"
+        )
+    ) && let Some(detail) = &task.detail
     {
         line.push_str(&format!(" ({detail})"));
     }
@@ -260,6 +442,11 @@ pub(super) fn summarize_drain_leaves(
     let state = state?;
     let mut summary = DrainLeafSummary {
         waiting: last_pass_waiting(state),
+        approvals: state.drain_approvals.clone(),
+        capacity: state
+            .drain_last_pass
+            .as_ref()
+            .and_then(|pass| pass.capacity.clone()),
         ..DrainLeafSummary::default()
     };
     for dispatch in state
@@ -298,7 +485,10 @@ pub(super) fn summarize_drain_leaves(
             _ => summary.running += 1,
         }
     }
-    if summary.admitted == 0 && summary.waiting == WaitingBacklog::default() {
+    if summary.admitted == 0
+        && summary.waiting == WaitingBacklog::default()
+        && summary.approvals.is_none()
+    {
         return None;
     }
     Some(summary)
@@ -307,9 +497,14 @@ pub(super) fn summarize_drain_leaves(
 /// What the drain's last admission pass left waiting, from the record it keeps
 /// on its own run state.
 fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
-    let Some(pass) = state.drain_last_pass.as_ref() else {
-        return WaitingBacklog::default();
-    };
+    state
+        .drain_last_pass
+        .as_ref()
+        .map(waiting_backlog)
+        .unwrap_or_default()
+}
+
+fn waiting_backlog(pass: &DrainAdmissionPass) -> WaitingBacklog {
     let tasks = |tasks: &[DrainWaitingTask]| -> Vec<WaitingTask> {
         tasks
             .iter()
@@ -324,9 +519,13 @@ fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
     WaitingBacklog {
         queued: Some(pass.queued),
         deferred: tasks(&pass.deferred),
+        deferred_total: pass.deferred_total,
         excluded: tasks(&pass.excluded),
         excluded_total: pass.excluded_total,
         resource_throttle: pass.resource_throttle.clone(),
         recorded_at: Some(pass.recorded_at),
+        waiting_recorded_at: pass.waiting_recorded_at,
+        by_reason: pass.waiting_by_reason.clone(),
+        idle_passes: pass.consecutive_idle_passes,
     }
 }

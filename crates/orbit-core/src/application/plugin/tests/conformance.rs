@@ -132,6 +132,11 @@ fn sentinel(dir: &Path) -> String {
 #[cfg(unix)]
 #[test]
 fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_config_templated_write_root_outside_scratch_needs_fs_consent",
+    ) {
+        return;
+    }
     if !super::fixture::enter_isolated_child(
         module_path!(),
         "a_config_templated_write_root_outside_scratch_needs_fs_consent",
@@ -225,6 +230,11 @@ fn write_secret_plugin(fixture: &PluginFixture, namespace: &str, golden: &str) -
 #[cfg(unix)]
 #[test]
 fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
+    ) {
+        return;
+    }
     if !super::fixture::enter_isolated_child(
         module_path!(),
         "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",

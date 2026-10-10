@@ -1,9 +1,10 @@
 //! Exact delivery evidence and owner completion authority for distributed handoffs.
-//! These records do not claim an automated review or execute a merge.
+//! These records execute no merge; a before-PR review they carry is evidence
+//! the owner verifies, never authority on its own.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{ReviewTiming, automation::SourceRevision};
+use super::{ReviewTiming, ReviewVerdict, automation::SourceRevision};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +20,11 @@ pub enum HandoffDelivery {
         number: u64,
     },
     LocalCandidate,
+    /// A clean base with a digest-pinned clean-tree verifier checkpoint.
+    /// Covers both a no-op implementation and work already satisfied on base.
+    NoDiff {
+        evidence: HandoffArtifactRef,
+    },
     AlreadyLanded {
         covering_commit: String,
         evidence: HandoffArtifactRef,
@@ -37,18 +43,91 @@ pub struct HandoffCandidate {
     pub delivery: HandoffDelivery,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What the leaf's review settled. `not_required` keeps its original
+/// spelling, so handoffs recorded before before-PR evidence existed still
+/// read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffReviewDisposition {
+    /// The claim's contract captured `review.before_pr = false`: no reviewed
+    /// SHA, verdict or reviewer artifact exists, and none is invented.
     NotRequired,
+    /// The leaf ran the before-PR gate the claim's contract captured
+    /// [ORB-13895].
+    BeforePr(Box<HandoffReviewEvidence>),
+    /// The leaf reviewed its open pull request before handing it off, as
+    /// the claim's contract captured `review.before_landing` [ORB-14849].
+    BeforeLanding(Box<HandoffReviewEvidence>),
 }
 
-/// No reviewed SHA, verdict or reviewer artifact exists when review is disabled.
+/// The leaf's review of the candidate it hands off. Every field is
+/// a claim the owner checks against the certificate artifact it holds and
+/// its own observation of the candidate; none is trusted on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffReviewEvidence {
+    /// The review attempt the certificate was issued for.
+    pub attempt_id: String,
+    pub verdict: ReviewVerdict,
+    /// The head the verdict binds to: the candidate after the reviewer's fix
+    /// commit when it made one. It must be the handed-off candidate.
+    pub reviewed_head_sha: String,
+    /// The base the reviewer examined the candidate against.
+    pub reviewed_base_sha: String,
+    /// The reviewer's own fix commit (the candidate's last commit), when it
+    /// fixed findings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_commit: Option<String>,
+    pub reviewer_crew: String,
+    /// The run the reviewer was invoked from.
+    pub reviewer_run_id: String,
+    /// The settled [`ReviewCertificate`](super::ReviewCertificate) in an owner-accessible task artifact.
+    pub certificate: HandoffArtifactRef,
+    /// Further reviewer evidence (manifest, report) the owner holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<HandoffArtifactRef>,
+    /// [ORB-14478] The result and log of every `host_sandbox_test` the
+    /// leaf's host ran for this verdict, which the owner re-reads and checks
+    /// against the certificate and candidate tree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_evidence: Vec<HandoffArtifactRef>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffReview {
     pub policy: ReviewTiming,
     pub disposition: HandoffReviewDisposition,
+}
+
+impl HandoffReview {
+    /// The disposition of a claim admitted with `review.before_pr = false`.
+    pub fn not_required() -> Self {
+        Self {
+            policy: ReviewTiming::None,
+            disposition: HandoffReviewDisposition::NotRequired,
+        }
+    }
+
+    /// The review evidence this handoff carries, before-PR or
+    /// before-landing, if any.
+    pub fn evidence(&self) -> Option<&HandoffReviewEvidence> {
+        match &self.disposition {
+            HandoffReviewDisposition::BeforePr(evidence)
+            | HandoffReviewDisposition::BeforeLanding(evidence) => Some(evidence.as_ref()),
+            HandoffReviewDisposition::NotRequired => None,
+        }
+    }
+
+    /// The timing the disposition records evidence for: `None` when it
+    /// carries none.
+    pub fn evidence_timing(&self) -> ReviewTiming {
+        match &self.disposition {
+            HandoffReviewDisposition::BeforePr(_) => ReviewTiming::BeforePr,
+            HandoffReviewDisposition::BeforeLanding(_) => ReviewTiming::BeforeLanding,
+            HandoffReviewDisposition::NotRequired => ReviewTiming::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

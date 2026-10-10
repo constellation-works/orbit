@@ -1,0 +1,149 @@
+#![allow(missing_docs)]
+#![allow(clippy::expect_used)]
+// [ORB-14815] Deterministic end-to-end coverage for the Claude executor's
+// completion guard. The fake `claude` binary drives Orbit's real runtime,
+// runner, and envelope adapter. A second `result` turn of prose after the
+// envelope turn (a scheduled wake-up) must never stand in for the envelope.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use orbit_core::OrbitRuntime;
+use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
+use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
+use orbit_types::workflow::ExecutorDef;
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+
+const ENVELOPE: &str =
+    r#"{"schemaVersion":1,"status":"success","result":{"edited":true},"error":null}"#;
+
+/// Final `result` document of a turn that ended with the envelope in
+/// `structured_output`, as `claude -p --json-schema` writes it.
+fn envelope_turn() -> String {
+    format!(
+        r#"printf '%s\n' '{{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{ENVELOPE}}}'
+exit 0"#
+    )
+}
+
+/// The wake-up turn: prose only, no envelope, after the envelope turn was
+/// displaced. Shape copied from the `result_index` 1 capture in ORB-14750.
+fn prose_only_wakeup_turn() -> &'static str {
+    r#"printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Loop check: nothing to act on, so I stopped the loop","result_index":1,"queued_turn_count":0}'
+exit 0"#
+}
+
+fn fake_claude(dir: &Path, body: &str) -> PathBuf {
+    let program = dir.join("claude");
+    let script = format!(
+        "#!/bin/sh\ncat > '{}'\n{body}\n",
+        dir.join("stdin.txt").display()
+    );
+    std::fs::write(&program, script).expect("write fake claude");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake claude");
+    }
+    program
+}
+
+fn claude_resource() -> ExecutorResource {
+    serde_yaml::from_str(include_str!("../../assets/executors/claude.yaml"))
+        .expect("parse embedded Claude executor")
+}
+
+fn dispatch(program: &Path) -> DispatchOutcome {
+    let resource = claude_resource();
+    assert_eq!(resource.schema_version, EXECUTOR_RESOURCE_SCHEMA_VERSION);
+    let mut def = ExecutorDef::from_resource_spec(
+        resource.metadata.name.clone(),
+        resource.spec.clone(),
+        resource.spec.created_at,
+        resource.spec.updated_at,
+    );
+    def.command = Some(program.to_string_lossy().into_owned());
+    def.sandbox = None;
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    runtime
+        .upsert_executor_def(&def)
+        .expect("seed Claude executor");
+
+    let audit_dir = tempfile::tempdir().expect("audit tempdir");
+    let audit = V2AuditWriter::with_disk_sinks(
+        audit_dir.path(),
+        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        "ws_test",
+        "claude-fake",
+        "claude:claude-opus-4-8".to_string(),
+        None,
+    )
+    .expect("build audit writer");
+
+    dispatch_v2_activity(V2DispatchInput {
+        activity_name: "claude_fake_agent",
+        spec: &ActivityV2Spec::AgentLoop(spec()),
+        fs_profile: None,
+        input: serde_json::json!({"prompt": "Finish the task and return the envelope."}),
+        audit,
+        run_id: "claude-fake",
+        host: Some(&runtime),
+    })
+    .expect("dispatch Claude CLI backend")
+}
+
+fn spec() -> AgentLoopSpec {
+    AgentLoopSpec {
+        tool_disallow_list: None,
+        instruction: "Return the requested Orbit response envelope.".to_string(),
+        tools: Vec::new(),
+        on_denial: OnDenial::Terminate,
+        model: Some("claude-opus-4-8".to_string()),
+        reasoning_effort: None,
+        max_iterations: 1,
+        backend: None,
+        provider: Provider::Claude,
+        wall_clock_timeout_seconds: 60,
+        require_response_envelope: true,
+        require_completion_envelope: true,
+        proc_allowed_programs: None,
+        proc_disallowed_programs: None,
+        trusted_host_execution: false,
+    }
+}
+
+/// Positive control: the same harness accepts a turn that carries the
+/// envelope, so the failure below is the guard and not a broken fixture.
+#[test]
+fn envelope_turn_satisfies_the_completion_guard() {
+    let dir = tempfile::tempdir().expect("fake claude tempdir");
+    let program = fake_claude(dir.path(), &envelope_turn());
+    let outcome = dispatch(&program);
+
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+    assert_eq!(
+        outcome.output["completion_envelope_satisfied"],
+        serde_json::Value::Bool(true)
+    );
+}
+
+/// The exit-0 capture from ORB-14750 / ORB-14733: the only result is prose.
+/// Exit 0 without an envelope stays a failure.
+#[test]
+fn exit_zero_prose_only_wakeup_result_fails_the_completion_guard() {
+    let dir = tempfile::tempdir().expect("fake claude tempdir");
+    let program = fake_claude(dir.path(), prose_only_wakeup_turn());
+    let outcome = dispatch(&program);
+
+    assert!(!outcome.success, "a prose-only result must not succeed");
+    assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
+    assert_eq!(
+        outcome.output["completion_envelope_required"],
+        serde_json::Value::Bool(true)
+    );
+    assert_eq!(
+        outcome.output["completion_envelope_satisfied"],
+        serde_json::Value::Bool(false)
+    );
+}

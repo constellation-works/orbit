@@ -33,10 +33,30 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_start_requests()
     }
 
+    fn accepted_handoffs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.accepted_handoffs(),
+            None => Ok(Vec::new()),
+        }
+    }
+
     fn landing_attempts(
         &self,
     ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
         self.claim_boundary()?.landing_attempts()
+    }
+
+    fn kept_claim_candidate(
+        &self,
+        task_id: &str,
+        machine_id: &str,
+    ) -> Result<Option<crate::contracts::KeptClaimCandidate>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.kept_claim_candidate(task_id, machine_id),
+            None => Ok(None),
+        }
     }
 
     fn mutate_execution_claim(
@@ -47,6 +67,12 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
         self.claim_boundary()?
             .mutate_execution_claim(context, mutation_id, mutation)
+    }
+    fn verify_worker_claim(
+        &self,
+        context: &crate::contracts::ClaimInvocation,
+    ) -> Result<(), OrbitError> {
+        self.claim_boundary()?.verify_worker_claim(context)
     }
     fn inspect_execution_claims(
         &self,
@@ -71,8 +97,12 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
         params: TaskCreateParams,
         key: &str,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         self.create_task_with_key(params, Some(key))
+    }
+
+    fn automation_task_for_key(&self, key: &str) -> Result<Option<Task>, OrbitError> {
+        self.in_boundary(|| self.automation_task_for_key(key))
     }
 
     fn task_candidates(
@@ -81,6 +111,13 @@ impl TaskStoreBackend for TaskV2Store {
         limit: usize,
     ) -> Result<crate::contracts::TaskCandidates, OrbitError> {
         self.in_boundary(|| self.task_candidates(filter, limit))
+    }
+    fn task_candidate_keys(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
+        self.in_boundary(|| self.task_candidate_keys(filter, limit))
     }
     fn query_task_rows(
         &self,
@@ -96,6 +133,12 @@ impl TaskStoreBackend for TaskV2Store {
         list_read: bool,
     ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
         self.in_boundary(|| self.get_task_row(id, list_read))
+    }
+    fn task_envelopes_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError> {
+        self.in_boundary(|| self.task_envelopes_for_ids(ids))
     }
 
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {

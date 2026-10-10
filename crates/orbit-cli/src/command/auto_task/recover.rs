@@ -31,9 +31,6 @@ pub struct AutoTaskRecoverArgs {
     /// for settings adoption, action reissue, or history-replay apply.
     #[arg(long)]
     pub reason: Option<String>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for AutoTaskRecoverArgs {

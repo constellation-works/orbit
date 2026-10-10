@@ -33,7 +33,7 @@
 //! - **A new drain** for the same owner, whose refill carries every earlier
 //!   admission for that owner forward, whichever drain made it.
 //!
-//! Once settled, a leaf's `target/` build output is reclaimed by the drain's
+//! Once settled, a leaf's declared rebuildable output is reclaimed by the drain's
 //! next pass ([`OrbitRuntime::reclaim_settled_leaf_build_output`]); its
 //! checkout is left to worktree GC.
 //!
@@ -51,19 +51,18 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use orbit_common::OrbitError;
-use orbit_engine::run_worktree_has_build_output;
-use orbit_store::contracts::{
-    JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
-};
-
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, release_settlement,
+    PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
 };
 use crate::OrbitRuntime;
 use crate::application::distributed::{
     PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, is_owner_transport_failure,
+};
+use orbit_common::OrbitError;
+use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
+use orbit_store::contracts::{
+    JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
 
 /// Why a settle-only pass releases unlaunched work no live drain carries.
@@ -111,11 +110,8 @@ impl OrbitRuntime {
         if !run.state.is_terminal() {
             return Ok(Some(record));
         }
-        let final_recovery = jobs
-            .read_run_state(run_id)?
-            .and_then(|state| state.final_recovery);
-        let settlement =
-            leaf_failure_settlement(&record, &run, diagnostic, final_recovery.as_ref());
+        let state = jobs.read_run_state(run_id)?;
+        let settlement = leaf_failure_settlement(&record, &run, diagnostic, state.as_ref());
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -226,7 +222,7 @@ impl OrbitRuntime {
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
-            &LocalPullMutation::Settle(Box::new(release_settlement(record, why))),
+            &LocalPullMutation::Settle(Box::new(operator_cancel_release(record, why))),
         ) {
             Ok(settling) => Ok(settling),
             Err(error) => {
@@ -334,7 +330,7 @@ impl OrbitRuntime {
     /// owner (`Settling`), with when the oldest was recorded.
     ///
     /// Read-only: it reads through the same schema-free path as
-    /// [`Self::settle_pending_pulls`], so a workspace that never pulled
+    /// `Self::settle_pending_pulls`, so a workspace that never pulled
     /// reports nothing and keeps no pull tables. It contacts no owner.
     pub fn pending_pull_settlements(&self) -> Result<PendingPullSettlements, OrbitError> {
         let jobs = self.stores().jobs();
@@ -412,8 +408,8 @@ impl OrbitRuntime {
                         record,
                         "no_owner_route",
                         Some(
-                            "this runtime has no federated owner route; add the owner to \
-                             ~/.orbit/mcp-destinations.toml"
+                            "this runtime has no federated owner route; register the owner \
+                             with `orbit host add <ssh-target>`"
                                 .into(),
                         ),
                     )
@@ -499,17 +495,17 @@ impl OrbitRuntime {
                 return 0;
             }
         };
+        // Skip settled history with no output before paying for Git queries.
+        let patterns = self.worktree_reclaim_patterns();
         let repo_root = &self.paths().repo_root;
-        // Cheap probes first, so a pass over a long settled history costs a
-        // row read and a stat per leaf, and Git runs only where there is
-        // something to reclaim.
         let leaves = admissions
             .into_iter()
             .filter(|record| record.phase == LocalPullPhase::Settled)
             .filter_map(|record| record.leaf_run_id)
             .filter(|leaf| {
                 jobs.get_job_run(leaf).ok().flatten().is_some_and(|run| {
-                    run.state.is_terminal() && run_worktree_has_build_output(repo_root, &run)
+                    run.state.is_terminal()
+                        && run_worktree_has_reclaim_output(repo_root, &run, &patterns)
                 })
             })
             .collect::<Vec<_>>();

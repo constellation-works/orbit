@@ -8,9 +8,12 @@ spec:
     Terminate a claimed leaf at its typed delivery handoff. Re-observes the
     candidate, refuses one the validation evidence no longer pins, and records
     the handoff as this claim's durable pending settlement before anything is
-    sent to the owner. It merges nothing, completes nothing, and asserts no
-    review: the recorded disposition is `not_required` under `review_policy =
-    none`.
+    sent to the owner. It merges nothing and completes nothing. Its review
+    disposition is `not_required` unless the leaf ran the before-PR gate and
+    passes that review's evidence, which must name the candidate handed off;
+    the owner judges it against the review contract the claim captured.
+    A NoDiff handoff rechecks its clean-base verifier report and needs no
+    before-PR reviewer; owner completion authority still applies.
   input_schema_json:
     type: object
     required: [workspace_path, candidate, validation]
@@ -25,6 +28,9 @@ spec:
       # Same shape as `claim_validate`: `pr_open` emits a JSON string.
       pull_request:
         type: [string, integer, "null"]
+      no_diff_evidence:
+        type: [object, "null"]
+        description: Digest-pinned verifier report from the NoDiff validation step.
       candidate:
         type: object
         description: The candidate the required validation actually ran on.
@@ -38,6 +44,17 @@ spec:
       # (else `summary`), `comment` and `context_files_added` compose the
       # handoff's summary, which acceptance writes as the owner's.
       implementation:
+        type: [object, "null"]
+      # The before-PR review the leaf ran on this candidate: verdict,
+      # reviewed head/base, reviewer commit, crew and run, and the
+      # owner-held certificate and reviewer artifacts. Absent when the claim
+      # captured no before-PR review.
+      review_evidence:
+        type: [object, "null"]
+      # The settled before-landing verdict on the published head,
+      # in the same shape. Absent unless the claim captured
+      # `review.before_landing`; never set together with `review_evidence`.
+      landing_review_evidence:
         type: [object, "null"]
   output_schema_json:
     type: object

@@ -144,7 +144,7 @@ fn ensure_linux_provider_directory(
     home: Option<&Path>,
 ) -> Result<PathBuf, DispatchError> {
     let validated = validated_linux_provider_state_root(path, home)?;
-    std::fs::create_dir_all(&validated).map_err(|error| {
+    orbit_common::fs::io::create_private_dir_all(&validated).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "create Linux provider state root `{}`: {error}",
             validated.display()

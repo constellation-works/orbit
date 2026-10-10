@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use orbit_automation::routines::loader::retired_routine_job_reason;
@@ -90,10 +89,16 @@ pub(crate) fn reconcile_default_routines(
         .iter()
         .map(|(name, _)| *name)
         .collect();
-    let mut next_assets = BTreeMap::new();
-    let mut next_provenance = BTreeMap::new();
+    // Create-only carries every recorded entry forward; only absent defaults
+    // gain new ones.
+    let (mut next_assets, mut next_provenance) = match &previous {
+        Some(previous) if mode.creates_only() => {
+            (previous.assets.clone(), previous.routine_provenance.clone())
+        }
+        _ => (BTreeMap::new(), BTreeMap::new()),
+    };
 
-    if let Some(previous) = &previous {
+    if let Some(previous) = previous.as_ref().filter(|_| !mode.creates_only()) {
         for (name, rendered_digest) in &previous.assets {
             if shipped.contains(name.as_str()) {
                 continue;
@@ -233,6 +238,12 @@ pub(crate) fn reconcile_default_routines(
             }
         };
 
+        if present && mode.creates_only() {
+            // Its recorded provenance was carried forward above, so an edited
+            // or user-authored definition is never rewritten.
+            continue;
+        }
+
         if let Some(provenance) = previous_provenance {
             let binding = if overwrite_bindings {
                 requested_binding.clone()
@@ -340,7 +351,7 @@ pub(crate) fn reconcile_default_routines(
                 );
                 continue;
             } else {
-                if mode == ManagedAssetReconcileMode::Apply {
+                if mode.writes() {
                     write_confined_routine(&path, &rendered)?;
                 }
                 result.refreshed += 1;
@@ -369,7 +380,7 @@ pub(crate) fn reconcile_default_routines(
             if !present {
                 let rendered = render_routine_template(name, template, &requested_binding)?;
                 let rendered_digest = sha256_hex(rendered.as_bytes());
-                if mode == ManagedAssetReconcileMode::Apply {
+                if mode.writes() {
                     write_confined_routine(&path, &rendered)?;
                 }
                 result.refreshed += 1;
@@ -562,7 +573,7 @@ pub(crate) fn reconcile_default_routines(
                 ),
             });
         } else {
-            if mode == ManagedAssetReconcileMode::Apply {
+            if mode.writes() {
                 write_confined_routine(&path, &rendered)?;
             }
             result.refreshed += 1;
@@ -590,14 +601,16 @@ pub(crate) fn reconcile_default_routines(
     // it wears no shipped name. Left alone it loads as retired on every tick
     // while every surface advises a sync that reports `unchanged` forever
     // [DANI-10502], so judge it by content exactly as a tracked file is judged.
-    reconcile_untracked_retired_routines(
-        routines_dir,
-        previous.as_ref(),
-        &shipped,
-        preservation_confined,
-        mode,
-        &mut result,
-    )?;
+    if !mode.creates_only() {
+        reconcile_untracked_retired_routines(
+            routines_dir,
+            previous.as_ref(),
+            &shipped,
+            preservation_confined,
+            mode,
+            &mut result,
+        )?;
+    }
 
     let next = ManagedAssetManifest {
         schema_version: ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
@@ -606,7 +619,7 @@ pub(crate) fn reconcile_default_routines(
         routine_provenance: next_provenance,
         opted_out: Default::default(),
     };
-    if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&next) {
+    if mode.writes() && previous.as_ref() != Some(&next) {
         let encoded = encode_managed_asset_manifest(&next)?;
         let recorded = record_managed_manifest_write(
             &manifest_path,
@@ -864,9 +877,12 @@ fn refuse_unconfined_preservation(
 
 /// Write a managed routine definition under the catalog confinement
 /// contract: the catalog must be a real directory (created when absent) and
-/// the definition a regular file or absent. On Unix the open also refuses a
-/// final-component link (`O_NOFOLLOW`), so a link that appears after
-/// inspection is still not written through.
+/// the definition a regular file or absent. Stage and sync the complete
+/// content before renaming it into place, then sync the catalog directory.
+/// Readers keep the previous complete file until replacement, and a failed
+/// staging write leaves it untouched. The staging file is created exclusively
+/// with `O_NOFOLLOW` on Unix; rename replaces a final-component link that
+/// appears after inspection without writing through it.
 pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), OrbitError> {
     let routines_dir = path.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -875,12 +891,13 @@ pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), O
         ))
     })?;
     match inspect_catalog_entry(routines_dir, CatalogEntryKind::Directory)? {
-        CatalogEntry::Missing => fs::create_dir_all(routines_dir).map_err(|error| {
-            OrbitError::Io(format!(
-                "create routine catalog '{}': {error}",
-                routines_dir.display()
-            ))
-        })?,
+        CatalogEntry::Missing => orbit_common::fs::io::create_private_dir_all(routines_dir)
+            .map_err(|error| {
+                OrbitError::Io(format!(
+                    "create routine catalog '{}': {error}",
+                    routines_dir.display()
+                ))
+            })?,
         CatalogEntry::Present => {}
         CatalogEntry::Unsafe => {
             return Err(OrbitError::InvalidInput(unconfined_detail(routines_dir)));
@@ -889,20 +906,10 @@ pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), O
     if inspect_catalog_entry(path, CatalogEntryKind::File)? == CatalogEntry::Unsafe {
         return Err(OrbitError::InvalidInput(unconfined_detail(path)));
     }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    options
-        .open(path)
-        .and_then(|mut file| file.write_all(content.as_bytes()))
-        .map_err(|error| {
-            OrbitError::Io(format!(
-                "write managed routine '{}': {error}",
-                path.display()
-            ))
-        })
+    atomic_write_text(path, content).map_err(|error| {
+        OrbitError::Io(format!(
+            "write managed routine '{}': {error}",
+            path.display()
+        ))
+    })
 }

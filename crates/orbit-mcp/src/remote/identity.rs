@@ -51,10 +51,12 @@ pub struct McpServerIdentity {
 /// Resolve the accepting machine and build its trusted session envelope.
 ///
 /// `remote_caller_machine_id` is an opaque label forwarded by the SSH proxy or
-/// the federated mux. It marks the session as SSH-originated for audit and
-/// names the calling machine; it is not an authenticated principal and grants
-/// nothing. `SSH_CONNECTION`, when present, contributes only the best-effort
-/// caller IP.
+/// the federated mux. Its presence marks the session as SSH MCP, without
+/// proving SSH origination. It names the calling machine for audit and remote
+/// drain receipt/claim fences; it grants no capability and is not an
+/// authenticated principal. Local account access and SSH login are trusted
+/// owner access, so a caller able to start this server can choose the label.
+/// `SSH_CONNECTION`, when present, contributes only the best-effort caller IP.
 ///
 /// `authority` is what this server process was started to serve, and a session
 /// that arrived over SSH is stamped with it exactly as a local one is: the

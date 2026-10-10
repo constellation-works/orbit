@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -10,9 +10,9 @@ use serde_json::Value;
 use crate::{OrbitRuntime, V2AuditEventFilter};
 
 use super::run_projection::{
-    audit_steps_from_events, bound_provider_processes, enclosing_step_id,
-    latest_timestamp_from_envelope_rows, provider_processes_from_events, read_invocation_blob,
-    recovery_attempts_from_partitioned_rows, step_index_by_id,
+    audit_step_attempts_from_events, audit_steps_from_events, bound_provider_processes,
+    enclosing_step_id, latest_timestamp_from_envelope_rows, provider_processes_from_events,
+    read_invocation_blob, recovery_attempts_from_partitioned_rows, step_index_by_id,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,10 +61,29 @@ pub struct RunRecoveryAttempt {
     pub attempted_at: Option<DateTime<Utc>>,
     pub failed_step_id: String,
     pub recovery_activity: String,
+    /// Whether the recovery activity completed (`succeeded`) or not
+    /// (`failed`); completion alone is not a repair.
     pub outcome: String,
     pub failure_phase: Option<String>,
     pub diagnostic: Option<String>,
     pub diagnostic_truncated: bool,
+    /// [ORB-14152] The durable decision the executor read back, absent for
+    /// historical events and attempts without a decision slot.
+    pub decision: Option<RunRecoveryDecision>,
+    /// Whether the executor made its single post-recovery attempt of the
+    /// failed step. That attempt's own outcome is the
+    /// `step.post_recovery_attempt` audit event.
+    pub retry_admitted: bool,
+}
+
+/// The read-back recovery decision, bounded like the attempt diagnostic.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRecoveryDecision {
+    /// `verified`, `absent`, `invalid` or `unavailable`.
+    pub status: String,
+    /// `retry` or `not_recovered` when `verified`.
+    pub verdict: Option<String>,
+    pub detail: Option<String>,
 }
 
 /// The recovery portion of a run's persisted audit trail.
@@ -128,7 +147,7 @@ pub struct RunCliInvocationRecord {
     pub stdout: String,
     pub stderr: String,
     /// True when
-    /// [`read_blob_text_preview_best_effort`](super::run_projection::read_blob_text_preview_best_effort)
+    /// `read_blob_text_preview_best_effort`
     /// cut the blob before its end. Independent of the caller's own
     /// line-budget truncation check, which cannot see past whatever window
     /// was read here.
@@ -170,9 +189,59 @@ pub struct RunProviderProcess {
     /// The complete captured stdout, once the child finished. Readable after a
     /// failed step too, whose output never reaches the pipeline state.
     pub stdout_blob_ref: Option<String>,
+    /// Cumulative admission waits, including a timed-out invocation whose
+    /// failed step never checkpointed an output.
+    pub build_budget_waits: Option<orbit_common::process::build_budget::BuildBudgetWaits>,
+    /// Descendants the supervisor found stopped past its threshold, from
+    /// `cli.invocation.stopped_descendant` events, oldest first.
+    pub stopped_descendants: Vec<RunStoppedDescendant>,
+}
+
+/// A descendant of a provider child that stayed stopped (state `T`) past the
+/// supervisor's threshold, and what the supervisor did about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunStoppedDescendant {
+    pub ts: Option<DateTime<Utc>>,
+    pub pid: u32,
+    pub pid_start_time: Option<String>,
+    pub command: Option<String>,
+    pub stopped_ms: Option<u64>,
+    /// The supervisor delivered `SIGKILL` to it.
+    pub ended: bool,
+    pub error: Option<String>,
+    /// The same process was still stopped when this projection was read.
+    pub still_stopped: bool,
+}
+
+impl RunStoppedDescendant {
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "ts": self.ts.map(|ts| ts.to_rfc3339()),
+            "pid": self.pid,
+            "pid_start_time": self.pid_start_time,
+            "command": self.command,
+            "stopped_ms": self.stopped_ms,
+            "ended": self.ended,
+            "error": self.error,
+            "still_stopped": self.still_stopped,
+        })
+    }
 }
 
 impl RunProviderProcess {
+    /// The stopped descendant an open, live child is blocked on: one the
+    /// supervisor found stopped past its threshold that is still stopped now.
+    /// Such a child is alive but not making progress.
+    pub fn blocked_on_stopped_descendant(&self) -> Option<&RunStoppedDescendant> {
+        if self.finished || self.liveness != ProcessLiveness::Alive {
+            return None;
+        }
+        self.stopped_descendants
+            .iter()
+            .rev()
+            .find(|descendant| descendant.still_stopped)
+    }
+
     /// The operator-facing projection of one provider child.
     ///
     /// Shared by the CLI and the registered/MCP run-show surfaces so both
@@ -198,6 +267,15 @@ impl RunProviderProcess {
             "latest_message": self.latest_message,
             "latest_message_truncated": self.latest_message_truncated,
             "stdout_blob_ref": self.stdout_blob_ref,
+            "build_budget_waits": self.build_budget_waits,
+            "stopped_descendants": self
+                .stopped_descendants
+                .iter()
+                .map(RunStoppedDescendant::to_json)
+                .collect::<Vec<_>>(),
+            "blocked_on_stopped_descendant": self
+                .blocked_on_stopped_descendant()
+                .map(RunStoppedDescendant::to_json),
         })
     }
 }
@@ -462,6 +540,17 @@ impl OrbitRuntime {
         ))
     }
 
+    /// Read every finished step attempt, retaining failures overwritten by a
+    /// later retry in the final-step projection.
+    pub fn collect_run_audit_step_attempts(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<RunAuditStep>, OrbitError> {
+        Ok(audit_step_attempts_from_events(
+            &self.collect_run_audit_events(run_id)?,
+        ))
+    }
+
     /// Recover the most recent bounded recovery-attempt evidence for a run.
     ///
     /// The event writer independently redacts and bounds its diagnostic, but
@@ -484,7 +573,7 @@ impl OrbitRuntime {
     /// [ORB-11625] The previous list path scanned each run's full v2 envelope
     /// (`limit: 50_000`) and opened the audit store once per row. This loads
     /// only `step_recovery_attempted` rows, capped per run at
-    /// [`RECOVERY_FETCH_PER_RUN`], and a presence set for `unavailable` vs
+    /// `RECOVERY_FETCH_PER_RUN`, and a presence set for `unavailable` vs
     /// `not_attempted`. A page-wide LIMIT is not used: it would starve later
     /// runs with shorter histories. Store-handle reuse is ORB-11632; this
     /// method must not add a per-run `Store::open`.
@@ -556,6 +645,38 @@ impl OrbitRuntime {
         limit: Option<usize>,
         blob_preview_max_bytes: Option<usize>,
     ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
+        self.collect_run_cli_invocations_filtered(
+            run_id,
+            limit,
+            blob_preview_max_bytes,
+            None,
+            &HashSet::new(),
+        )
+    }
+
+    /// Collect full CLI invocation records for a run that are not in
+    /// `seen_event_ids`, optionally limited to one `step_id`.
+    ///
+    /// The step and seen-set filters apply to event metadata before any blob
+    /// is opened, so a caller that polls a live run and records the returned
+    /// `event_id`s reads each invocation's stdout/stderr at most once.
+    pub fn collect_new_run_cli_invocations(
+        &self,
+        run_id: &str,
+        step_id: Option<&str>,
+        seen_event_ids: &HashSet<String>,
+    ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
+        self.collect_run_cli_invocations_filtered(run_id, None, None, step_id, seen_event_ids)
+    }
+
+    fn collect_run_cli_invocations_filtered(
+        &self,
+        run_id: &str,
+        limit: Option<usize>,
+        blob_preview_max_bytes: Option<usize>,
+        step_id: Option<&str>,
+        seen_event_ids: &HashSet<String>,
+    ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
         if limit == Some(0) {
             return Ok(Vec::new());
         }
@@ -568,7 +689,10 @@ impl OrbitRuntime {
         let mut records = Vec::new();
 
         for event in events {
-            if event.body_kind.as_deref() != Some("cli_invocation_finished") {
+            if event.body_kind.as_deref() != Some("cli_invocation_finished")
+                || seen_event_ids.contains(&event.event_id)
+                || step_id.is_some_and(|step_id| event.step_id.as_deref() != Some(step_id))
+            {
                 continue;
             }
             let stdout_blob_ref = event

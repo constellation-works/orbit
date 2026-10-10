@@ -51,10 +51,10 @@ assuming a value.
 | `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). Shipped `crew: system` steps resolve onto it. |
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
 | `workflow.auto_ship` | Opt-in for `orbit run ship-sweep` unattended ship dispatch. The seeded `ship-sweep` routine does not read it. |
-| `operation.review_policy` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. |
-| `operation.review_crew` | Crew for before-PR automatic review. After-landing review uses the delivery auto-task's template crew. |
-| `operation.review_reviewer_starts` | Fresh reviewer starts per delivery run lineage (a run and its resumes). Retrying a failed reviewer step continues its start; reviewing a changed candidate, including a completion rebase, takes a new one (1..=10, default 3). |
-| `operation.review_minutes` | Reviewer runtime minutes per delivery run lineage; once spent, no new reviewer start is admitted. A fresh delivery run starts a new lineage (1..=1440, default 90). `operation.review_repair_cycles` is retired and ignored with a warning: the reviewer fixes its findings in one commit, and an unfixable finding rejects the candidate. |
+| `review.before_pr` | Before-PR review: hold PR creation for a fresh reviewer that fixes what it finds (default `false`). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
+| `review.before_landing` | Before-landing review: open the PR first and review it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (default `false`). PR route only. Config load fails while it and `review.before_pr` are both on: one review layer before landing. |
+| `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
+| `operation.review_crew` | Crew for automatic review: the before-PR or before-landing reviewer and, when set, every review task the after-landing auto-task mints. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
@@ -67,6 +67,14 @@ assuming a value.
 | `pr.close_on_terminal` | Close a task's open Orbit-authored delivery and `[BLOCKED]` PRs when it lands, is rejected or is archived (default `true`). Branches are kept; a forge error is only a warning. |
 | `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for that closure. Empty uses the `gh` login on this machine. |
 
+`operation.review_policy` and `operation.review_minutes` are deprecated: they
+still load, translated with a warning (`before-pr` → `review.before_pr = true`;
+`after-landing` enables `delivery-code-review` until an operator toggles it;
+`none` turns neither on), and a later release makes them errors. Move them to
+`[review]` and the auto-task flag. `operation.review_reviewer_starts` and
+`operation.review_repair_cycles` are ignored with a warning; delete them.
+`orbit config show` reports both review switches with their sources.
+
 Use `orbit config keys` to distinguish fixed registry keys from settings
 authored as TOML. Read-only identity keys are listed and refused by
 `config set`. Named crew fields are also settable as
@@ -74,8 +82,12 @@ authored as TOML. Read-only identity keys are listed and refused by
 even though those keys are not listed by `orbit config keys`. Creating a crew
 still requires a `[crews.<name>]` table with `model` and `provider`. Set
 workspace ship mode with
-`orbit workspace init --ship-mode pr|local`; verify the registered workspace
-with `orbit workspace show`. Base branch and ship mode govern source delivery,
+`orbit workspace init --ship-mode pr|local`, or rebind a registered workspace
+without re-initializing it with `orbit workspace ship-mode pr|local` (no
+argument prints the current mode); verify with `orbit workspace show`. PR mode
+needs a Git remote on a forge host: when no remote names a network host, ship
+and the drain refuse untagged tasks before dispatch and `orbit doctor` warns on
+its `forge-remote` row. Base branch and ship mode govern source delivery,
 not task snapshot publication.
 
 ## Crews
@@ -111,19 +123,23 @@ disabled crew. Enable one with:
 orbit config set crews.gemini.enabled true
 ```
 
-`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `fable`;
-Codex: `astra`, `sol`, `terra`, `luna`; one crew each for Antigravity, Gemini,
+`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
+Codex: `astra`, `sol`, `luna`; one crew each for Antigravity, Gemini,
 Grok, Copilot, Cursor, Pi, OpenCode), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points the two lane
 keys at enabled crews:
 `workflow.default_crew` is the preferred family's default (`opus` on a Claude
 host) and `workflow.system_crew` is the cheapest tier of the preferred family
-(`luna` when Codex is present, else `sonnet`, `grok`, …). Interactive init
+(`luna` when Codex is present, else `haiku`, `grok`, …). Interactive init
 offers those enabled crews by name; `--non-interactive` writes the
 recommendations. Init does not write a `custom` or `system` crew table: the
 `system` name shipped job steps use resolves onto `system_crew` at load, and an
 explicit user-authored `[crews.system]` table wins if one exists. The four
-`workflow.*_complexity_crews` pools are scaffolded as `[]`. A user-authored
+`workflow.*_complexity_crews` pools are seeded from the detected families
+(Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `sol` /
+`sol` / `astra`; both: `haiku, luna` / `sol, sonnet` / `opus` / `opus, astra`;
+grok joins `medium`, `antigravity` or else `gemini` joins `low`; other families
+leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
 work, run `orbit config set workflow.system_crew <crew>`. With no supported
 agent CLI, every crew is written disabled and no lane key is set, so nothing
@@ -175,14 +191,20 @@ See [first-run.md](first-run.md) for the Linux prerequisite.
 
 ## Crew selection and actual execution
 
-For ship dispatch, an explicit run crew overrides `task.crew`, which overrides
-`workflow.default_crew`; environment/system fallbacks apply only when no higher
-selection exists. `task.crew` is fixed when the task is created: a creation
-without a crew draws one from the complexity pool, falling back to
-`default_crew`, and records a `crew_assigned` history entry naming `explicit`,
-`pool:<complexity>`, or `default`. Status transitions never change it, and
-dispatch only reads it. An empty crew string on task update re-draws for the
-task's current complexity rather than leaving the field empty. Discover actual
+For ship dispatch, an explicit run crew overrides the task's explicit pin,
+validated pool assignment, or `default` fallback. Otherwise the complexity pool
+and default chain apply as described below. A creation without a crew draws
+from its complexity pool, falling back to `default_crew`, and stores
+`crew_source` as `explicit`, `pool:<complexity>`, or `default`, also recorded
+in assignment history. A complexity re-rate redraws a pool-sourced crew from
+another tier or a `default` fallback and records the previous and new sources
+and crews in `crew_redrawn` history; explicit crews stay pinned. A `default`
+fallback is not an explicit pin. Status transitions alone preserve the choice.
+Admission revalidates pool assignments and `default` fallbacks against the
+current tier and enabled pool members, recovering legacy provenance from
+assignment history when needed, without writing to the task. An empty crew
+string on task update re-draws for the task's current complexity rather than
+leaving the field empty. Discover actual
 crew names through the connected server's crew discovery when available, or
 inspect effective configuration; executor names are not a list of crew names.
 

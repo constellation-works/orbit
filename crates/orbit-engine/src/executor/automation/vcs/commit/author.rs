@@ -53,6 +53,12 @@ pub(super) fn reviewer_author(reviewer_model: &str) -> GitAuthor {
     )
 }
 
+/// The author of a step recovery's working-tree repair, which Orbit commits
+/// for the agent: the recovery sandbox keeps Git metadata read-only.
+pub(super) fn recovery_author() -> GitAuthor {
+    GitAuthor::new("orbit-recovery", "orbit-recovery@orbit.local")
+}
+
 pub(super) fn git_author_for_task(task: &Task) -> Option<GitAuthor> {
     git_author_for_implemented_by(task.implemented_by.as_deref())
 }

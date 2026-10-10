@@ -12,6 +12,7 @@ use super::history::RunHistoryArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
 use super::readiness::ReadinessCommand;
+use super::settlements::RunSettlementsArgs;
 use super::ship;
 use super::show::RunShowArgs;
 use super::sweep;
@@ -25,16 +26,17 @@ Workflow entrypoints:
   orbit run ship [task_id ...] [--complete]
   orbit run ship-sweep [--dry-run] [--json]
   orbit run task-pilot [task_id ...]
-  orbit run job <job_id> [--input key=value] [--json] [--debug]
+  orbit run job <job_id> [--input key=value] [--json]
   orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
 
 Run history:
-  orbit run history [--limit 50]
+  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50]
   orbit run history -j <job_id>
   orbit run show [run_id] [-s step_id] [--json]
   orbit run logs [run_id] [-s step_id] [--json]
   orbit run events [run_id] [-s step_id] [--type event_type] [--json]
   orbit run trace [run_id] [--json]
+  orbit run settlements [--since 7d] [--json]
 
 Maintenance:
   orbit run cancel <run_id>
@@ -43,7 +45,7 @@ Maintenance:
 
 #[derive(Args)]
 #[command(
-    about = "Run a job workflow (supports run ship / job)",
+    about = "Run workflows, drain the backlog, and inspect runs",
     arg_required_else_help = true,
     subcommand_required = true,
     override_usage = "orbit run <COMMAND>",
@@ -62,11 +64,12 @@ Workflows:
   agent       Invoke an agent on the host for exploration or debugging (operator only)
 
 Audits:
-  history    Show recent job runs, optionally filtered to one job
+  history    Show recent job runs filtered by job, task, state or time
   show       Show structured state and step summary for a job run
   logs       Print raw stdout/stderr captured for a job run
   events     Show audit events recorded for a job run
   trace      Show audit event parent/child trace for a job run
+  settlements  Show failure and release settlements claimed leaves sent this owner
 
 Maintenance:
   cancel       Cancel a pending or running job run
@@ -105,7 +108,7 @@ pub enum RunSubcommand {
     TaskPilot(task_pilot::TaskPilotCommand),
     /// Explain why backlog tasks can or cannot start in auto-drain
     Readiness(ReadinessCommand),
-    /// Show recent job runs, optionally filtered to one job
+    /// Show recent job runs filtered by job, task, state or time
     History(RunHistoryArgs),
     /// Show structured state and step summary for a job run
     Show(RunShowArgs),
@@ -115,6 +118,8 @@ pub enum RunSubcommand {
     Events(RunEventsArgs),
     /// Show audit event parent/child trace for a job run
     Trace(RunTraceArgs),
+    /// Show failure and release settlements claimed leaves sent this owner
+    Settlements(RunSettlementsArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
     /// Change how many tasks a running drain keeps in flight
@@ -141,6 +146,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::Logs(command) => command.execute(runtime),
             RunSubcommand::Events(command) => command.execute(runtime),
             RunSubcommand::Trace(command) => command.execute(runtime),
+            RunSubcommand::Settlements(command) => command.execute(runtime),
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Job(command) => command.execute(runtime),

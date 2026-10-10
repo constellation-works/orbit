@@ -53,11 +53,12 @@ pub struct OrbitRuntime {
     /// stays registry-neutral; it only carries the refusal supplied by that
     /// owner so every task-record writer shares one fail-closed gate.
     coordination_write_owner: Option<Arc<str>>,
-    automation_machine_identity: Option<Arc<str>>,
+    automation_execution_location: Option<Arc<orbit_types::task::ExecutionLocation>>,
     /// The operating system admission matches a task's `os:` tags against.
     /// This binary's own by default; a fixture composes another so one process
     /// can stand in for a host of each OS.
     host_os: Option<orbit_types::task::HostOs>,
+    pub(crate) ci_failure_time: Option<chrono::DateTime<chrono::Utc>>,
     /// Supplied by the same registry-owning composition layer, for reads that
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
@@ -103,6 +104,13 @@ pub enum HostLifetime {
 }
 
 impl OrbitRuntime {
+    /// Set the observation clock for deterministic CI-failure filing.
+    /// Without an override, filing uses the current UTC time.
+    pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
+        self.ci_failure_time = Some(now);
+        self
+    }
+
     /// Only the accepting transport's authenticated facts may label artifact bytes.
     pub(crate) fn artifact_origin(
         &self,
@@ -220,8 +228,9 @@ impl OrbitRuntime {
             owner_coordinator: None,
             drain_owner_transport: None,
             coordination_write_owner: None,
-            automation_machine_identity: None,
+            automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            ci_failure_time: None,
             workspace_catalog: None,
             host_signals: default_host_signal_probe(),
             task_pr_forge: default_task_pr_forge(),
@@ -247,6 +256,7 @@ impl OrbitRuntime {
             logical_workspace_id: "ws_memory".to_string(),
             task_partition_id: "ws_memory".to_string(),
             owner_machine_id: None,
+            checkout_role: None,
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,
             base_branch: None,
@@ -277,8 +287,9 @@ impl OrbitRuntime {
             owner_coordinator: None,
             drain_owner_transport: None,
             coordination_write_owner: None,
-            automation_machine_identity: None,
+            automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            ci_failure_time: None,
             workspace_catalog: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),
@@ -351,20 +362,34 @@ impl OrbitRuntime {
     }
 
     /// Registry-owning composition supplies stable machine identity; Core never discovers it.
-    pub fn with_automation_machine_identity(mut self, machine_id: Option<String>) -> Self {
-        self.context
-            .set_execution_location(machine_id.as_ref().map(|machine_id| {
-                orbit_types::task::ExecutionLocation {
-                    machine_id: machine_id.clone(),
-                    machine_name: None,
-                }
-            }));
-        self.automation_machine_identity = machine_id.map(Arc::from);
+    pub fn with_automation_machine_identity(self, machine_id: Option<String>) -> Self {
+        self.with_automation_execution_location(machine_id.map(|machine_id| {
+            orbit_types::task::ExecutionLocation {
+                machine_id,
+                machine_name: None,
+            }
+        }))
+    }
+
+    /// Supply the executing machine's stable identity and configured display name.
+    pub fn with_automation_execution_location(
+        mut self,
+        location: Option<orbit_types::task::ExecutionLocation>,
+    ) -> Self {
+        self.context.set_execution_location(location.clone());
+        self.automation_execution_location = location.map(Arc::new);
         self
     }
 
     pub fn automation_machine_identity(&self) -> Option<&str> {
-        self.automation_machine_identity.as_deref()
+        self.automation_execution_location()
+            .map(|location| location.machine_id.as_str())
+    }
+
+    pub(crate) fn automation_execution_location(
+        &self,
+    ) -> Option<&orbit_types::task::ExecutionLocation> {
+        self.automation_execution_location.as_deref()
     }
 
     /// Registered owner of the bound workspace, when composition supplied a
@@ -473,6 +498,22 @@ impl OrbitRuntime {
         paths
     }
 
+    /// Why coordination writes are unavailable from this runtime, if they are.
+    ///
+    /// Replica checkouts name the owner in their capability refusal. Claimed
+    /// workers are refused because their writes must use the owner route.
+    pub fn coordination_task_write_refusal(&self) -> Option<OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Some(OrbitError::PolicyDenied(
+                "claimed coordination writes require the owner route".into(),
+            ));
+        }
+        let owner_machine_id = self.coordination_write_owner.as_deref()?;
+        Some(OrbitError::CapabilityRefused(format!(
+            "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
+        )))
+    }
+
     /// Refuse control-plane work in a replica checkout.
     ///
     /// The refusal is a catalog-role capability outcome, not a malformed call:
@@ -480,17 +521,7 @@ impl OrbitRuntime {
     /// apart from "that request was invalid", so this reports
     /// `CapabilityRefused` [ORB-11012].
     pub(crate) fn ensure_coordination_task_write_permitted(&self) -> Result<(), OrbitError> {
-        if self.worker_invocation().is_some() {
-            return Err(OrbitError::PolicyDenied(
-                "claimed coordination writes require the owner route".into(),
-            ));
-        }
-        let Some(owner_machine_id) = self.coordination_write_owner.as_deref() else {
-            return Ok(());
-        };
-        Err(OrbitError::CapabilityRefused(format!(
-            "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
-        )))
+        self.coordination_task_write_refusal().map_or(Ok(()), Err)
     }
 
     pub(crate) fn coordination_task_reads_visible(&self) -> bool {
@@ -502,17 +533,23 @@ impl OrbitRuntime {
         self.coordination_write_owner.as_deref()
     }
 
-    /// Returns in-process events recorded during this session only. Not persisted across process
-    /// boundaries — the log is empty at startup and discarded on exit. For the persistent CLI
-    /// audit log written on every invocation, see [`OrbitRuntime::list_audit_events`].
+    /// The owner machine id when this runtime is a replica checkout, so a
+    /// surface can tell that owner-only drain controls are not offered here.
+    pub fn replica_owner_machine(&self) -> Option<&str> {
+        self.coordination_write_owner()
+    }
+
+    /// Returns at most `limit` recent in-process session events, newest first.
+    /// The log retains only the newest [`event_bus::SESSION_EVENT_CAPACITY`] events;
+    /// session IDs remain stable when older events are discarded. Only returned events are cloned.
+    /// The log is empty at startup and discarded on exit. For the persistent CLI audit log,
+    /// see [`OrbitRuntime::list_audit_events`].
     pub fn list_session_events(&self, limit: usize) -> Result<Vec<Audit>, OrbitError> {
-        let events = self.event_log.snapshot();
-        let audits = events
+        let audits = self
+            .event_log
+            .recent(limit)
             .into_iter()
-            .enumerate()
-            .map(|(idx, event)| orbit_event_to_audit((idx + 1) as i64, event))
-            .rev()
-            .take(limit)
+            .map(|(id, event)| orbit_event_to_audit(id, event))
             .collect();
         Ok(audits)
     }
@@ -537,6 +574,17 @@ impl OrbitRuntime {
     /// the caller supplied an authoritative binding.
     pub fn workspace_runtime_binding(&self) -> Option<&WorkspaceRuntimeBinding> {
         self.workspace_binding.as_deref()
+    }
+
+    /// Ship mode an unattended drain delivers in.
+    ///
+    /// The bound workspace's mode, or [`ShipMode::Local`] when this runtime
+    /// has no workspace binding. Automatic admission, readiness and
+    /// `orbit doctor` share this so they cannot disagree with the drain about
+    /// a local-only route [ORB-14168].
+    pub fn automatic_delivery_ship_mode(&self) -> ShipMode {
+        self.workspace_runtime_binding()
+            .map_or(ShipMode::Local, |binding| binding.ship_mode)
     }
 
     /// Short label naming this runtime's workspace in a refusal: the
@@ -631,7 +679,17 @@ impl OrbitRuntime {
         orbit_store::compose::ensure_sqlite_store_ready(&self.context.persistence().audit_db)
     }
 
+    /// Identity used by this runtime's workspace-partitioned stores. A
+    /// selected explicit root uses its logical workspace binding; a checkout
+    /// uses its persisted partition ID, which may differ from the logical ID.
     pub fn workspace_id(&self) -> Result<String, OrbitError> {
+        if let Some(id) = builder::selected_explicit_root_workspace_id(
+            self.context.global_root(),
+            &self.context.paths().orbit_dir,
+            self.workspace_runtime_binding(),
+        ) {
+            return Ok(id.to_owned());
+        }
         workspace_id_for_orbit_dir(&self.context.paths().orbit_dir)
     }
 
@@ -684,6 +742,14 @@ impl OrbitRuntime {
             .workflow_required_validation_commands()
     }
 
+    /// Commands before-PR review settlement may rerun on the host to confirm
+    /// a reviewer's red-base claim (`[review] baseline_commands`), beside
+    /// the required validation commands [ORB-14434]. A review admission
+    /// captures them, and a failure of one is never a diagnostic [ORB-14684].
+    pub fn review_baseline_commands(&self) -> &[String] {
+        self.context.settings().review_baseline_commands()
+    }
+
     /// The note a drain submission shows when this host declares no required
     /// validation commands, so "no check" reads as a configured choice rather
     /// than a silent gap. `None` when commands are configured.
@@ -722,6 +788,27 @@ impl OrbitRuntime {
             return None;
         }
         self.validation_environment().preflight_warning()
+    }
+
+    /// The operator-added `execution.env.pass` names this runtime has no
+    /// non-empty child-environment value for [ORB-14777], including clock
+    /// credentials supplied as runtime defaults. Names only, never values.
+    /// Agents this runtime starts, directly or through a detached worker,
+    /// do not receive them.
+    pub fn unset_env_pass_names(&self) -> Vec<String> {
+        self.execution_env_policy().unset_pass_names()
+    }
+
+    /// The `execution.env.pass` names this workspace's agents may receive.
+    pub fn env_pass_names(&self) -> Vec<String> {
+        self.execution_env_policy().pass_names().to_vec()
+    }
+
+    /// The warning for [`Self::unset_env_pass_names`], for drain/ship starts
+    /// and `orbit doctor`. `None` when every pass-listed variable is set.
+    pub fn unset_env_pass_warning(&self) -> Option<String> {
+        let unset = self.unset_env_pass_names();
+        (!unset.is_empty()).then(|| unset_env_pass_message(&unset))
     }
 
     /// `[workflow] distributed_completion`: `review` or `done`.
@@ -811,6 +898,11 @@ impl OrbitRuntime {
         self.context.codex_execution_policy()
     }
 
+    /// `execution.proc_spawn_max_timeout_minutes`, in milliseconds.
+    pub(crate) fn proc_spawn_max_timeout_ms(&self) -> u64 {
+        self.context.proc_spawn_max_timeout_ms()
+    }
+
     pub fn list_executor_defs(
         &self,
     ) -> Result<Vec<orbit_types::workflow::ExecutorDef>, OrbitError> {
@@ -875,4 +967,16 @@ fn orbit_event_to_audit(id: i64, event: OrbitEvent) -> Audit {
         message: event_type,
         created_at: Utc::now(),
     }
+}
+
+/// The shared wording for pass-listed variables missing from the launching
+/// environment [ORB-14777].
+fn unset_env_pass_message(unset: &[String]) -> String {
+    format!(
+        "`execution.env.pass` names {} unset or empty in this environment, so agents will not \
+         receive {}; a provider that needs one falls back to another login. Drains inherit the \
+         launching shell's environment: start them from a login shell",
+        unset.join(", "),
+        if unset.len() == 1 { "it" } else { "them" },
+    )
 }

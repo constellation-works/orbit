@@ -1,11 +1,11 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 ---
 # Command Pattern
 
-In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/lib.rs:414`:
+In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/tool.rs`:
 
 ```rust
 pub trait Tool: Send + Sync {

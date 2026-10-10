@@ -28,7 +28,7 @@ fn make_args(path: PathBuf) -> TailArgs {
         target: None,
         level: None,
         since: None,
-        json: false,
+        json_lines: false,
         path: Some(path),
     }
 }
@@ -45,7 +45,7 @@ fn append_during_initial_history_read_is_emitted_once_at_handoff() {
     let mut args = make_args(path.clone());
     args.lines = 2;
     args.follow = true;
-    args.json = true;
+    args.json_lines = true;
     args.target = Some("orbit.test".to_string());
     let mut follower =
         spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
@@ -71,6 +71,40 @@ fn append_during_initial_history_read_is_emitted_once_at_handoff() {
         output.lines().collect::<Vec<_>>(),
         [first, during, sentinel]
     );
+}
+
+// The initial-read hook forces the rotation/handoff race deterministically.
+#[cfg(unix)]
+#[test]
+fn rotation_during_initial_read_keeps_the_old_reader_and_restarts_the_new_file() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    let first = json!({"fields": {"message": "first"}}).to_string();
+    write_fixture(&path, std::slice::from_ref(&first));
+    let mut archive_writer = OpenOptions::new().append(true).open(&path).unwrap();
+
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let mut args = make_args(path.clone());
+    args.follow = true;
+    args.json_lines = true;
+    let mut follower =
+        spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
+    reached_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("initial reader paused");
+
+    std::fs::rename(&path, dir.path().join("archive.jsonl")).unwrap();
+    let old = json!({"fields": {"message": "old-file-rest"}}).to_string();
+    writeln!(archive_writer, "{old}").unwrap();
+    let new = json!({"fields": {"message": "new-file-start"}}).to_string();
+    write_fixture(&path, std::slice::from_ref(&new));
+    resume_tx.send(()).unwrap();
+    follower.wait_until_ready();
+
+    let output = follower.collect_through("new-file-start");
+    follower.finish();
+    assert_eq!(output.lines().collect::<Vec<_>>(), [first, old, new]);
 }
 
 fn spawn_follower_with_args(

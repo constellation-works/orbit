@@ -2,10 +2,12 @@
 //!
 //! Every visible dashboard tab polls the same endpoints. Keying by the live
 //! runtime plus a request key collapses overlapping polls into one compute,
-//! and a runtime rebuild naturally starts a fresh cache namespace. Three memos
-//! use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
-//! cutoffs such as `24h` still hit), audited plugin panel reads, and
-//! `/api/diagnostics/errors` (keyed by its row limit).
+//! and a runtime rebuild naturally starts a fresh cache namespace. Dashboard
+//! memos use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
+//! cutoffs such as `24h` still hit), audited plugin panel reads,
+//! `/api/diagnostics/errors` (keyed by its time range and row limit), and
+//! `/api/diagnostics/friction` (keyed by month and row limit), and
+//! `/api/scoreboard` (keyed by the canonical window).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -19,10 +21,17 @@ use serde_json::Value;
 /// still move, long enough that overlapping dashboard polls collapse.
 pub(crate) const AUDIT_SUMMARY_TTL: Duration = Duration::from_secs(15);
 
+/// Freshness bound for scoreboard summaries and their joined incident scans.
+pub(crate) const SCOREBOARD_TTL: Duration = Duration::from_secs(15);
+
 /// Freshness bound for a cached diagnostics error list. The Errors tab polls
 /// every 30s and each miss scans up to 50k audit rows plus stderr blobs, so
 /// this only needs to collapse overlapping tabs, not hide new errors long.
 pub(crate) const DIAGNOSTICS_ERRORS_TTL: Duration = Duration::from_secs(15);
+
+/// Freshness bound for cached friction rows. Matches the diagnostics errors
+/// memo so overlapping Runs-tab polls share one bounded audit/blob scan.
+pub(crate) const DIAGNOSTICS_FRICTION_TTL: Duration = Duration::from_secs(15);
 
 /// In-process TTL cache and single-flight gate for one dashboard server.
 pub(crate) struct RuntimeMemo<K> {
@@ -100,7 +109,9 @@ impl<K: Eq + Hash> RuntimeMemo<K> {
 
     fn slot(&self, key: (usize, K)) -> Arc<Slot> {
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
-        slots.retain(|_, slot| slot.keep());
+        // Callers own a clone before acquiring the gate and through compute.
+        // Keep their slots so pruning cannot create a second gate for a key.
+        slots.retain(|_, slot| Arc::strong_count(slot) > 1 || slot.keep());
         Arc::clone(slots.entry(key).or_insert_with(|| {
             Arc::new(Slot {
                 gate: tokio::sync::Mutex::new(()),
@@ -118,8 +129,8 @@ impl Slot {
         Arc::ptr_eq(&live, runtime).then(|| Arc::clone(&cached.body))
     }
 
-    /// Drop expired or orphaned ready entries. Empty slots stay: they are
-    /// either in flight or reusable after a failed compute.
+    /// Drop expired or orphaned ready entries once no caller owns the slot.
+    /// Empty slots stay reusable after a failed compute.
     fn keep(&self) -> bool {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         guard

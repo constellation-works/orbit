@@ -2,14 +2,18 @@
 //!
 //! - Backlog admission (`list_backlog_tasks`, the deterministic action every
 //!   drain and ship selection runs): its total order, dependency readiness,
-//!   and exclusion of work whose files an active task holds.
+//!   exclusion of work whose files an active task holds, and the bounded
+//!   surface a lock-blocked high-priority task reserves [ORB-14310].
 //! - The operator's exclusive workspace claim [ORB-10709]: workflow
 //!   submission refuses everyone but the holder until the claim expires.
 //! - Review admission and settlement provenance [ORB-13916]: deterministic
 //!   evidence is system-authored while reviewer writes retain their identity.
 //! - Host resource throttling [ORB-13901]: under an injected probe, sustained
 //!   pressure holds drain waves and ship discovery, warns through readiness,
-//!   run show and MCP, and lifts below the resume mark.
+//!   run show and MCP, and lifts below the resume mark. CPU pressure alone
+//!   still admits CPU-light auto-tasks within a reserved budget [ORB-14624].
+//! - Frozen-batch expiry [ORB-14624]: a task whose frozen delivery batch
+//!   nears its deadline sorts ahead of same-priority backlog.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -18,7 +22,7 @@
 #![allow(missing_docs)]
 
 use std::collections::BTreeSet;
-use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,20 +46,29 @@ use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// How long one isolated test may run before it is killed and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+mod replay_crew;
+mod reservation_grants;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent
-/// waits up to [`CHILD_DEADLINE`] and reaps the child on any exit.
+/// waits under the shared child-test hang guard and reaps the child on any
+/// exit.
 pub(super) fn isolated(test: &str) -> bool {
+    isolated_with_ignored(test, false)
+}
+
+/// The same isolation for an opt-in measurement selected with `--ignored`.
+#[cfg(target_os = "linux")]
+pub(super) fn isolated_ignored(test: &str) -> bool {
+    isolated_with_ignored(test, true)
+}
+
+fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
     const MARKER: &str = "ORBIT_TEST_DISPATCH_ADMISSION_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
     let home = TempDir::new().unwrap();
-    let stdout_path = home.path().join("stdout.log");
-    let stderr_path = home.path().join("stderr.log");
     // libtest names a test by its module path below the crate root.
     let qualified = if test.contains("::") {
         test.to_string()
@@ -74,45 +87,22 @@ pub(super) fn isolated(test: &str) -> bool {
         .env(MARKER, test)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout_path).unwrap())
-        .stderr(std::fs::File::create(&stderr_path).unwrap());
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break Some(status);
-        }
-        if started.elapsed() > CHILD_DEADLINE {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    drop(child);
-    let read = |path: &Path| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .unwrap()
-            .read_to_string(&mut text)
-            .unwrap();
-        text
-    };
-    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
-    let status = status
-        .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    orbit_common::test_env::assert_child_test_passed(&qualified, status, stdout, stderr);
-    false
-}
-
-/// Kills and reaps the isolated child however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        .current_dir(home.path());
+    if ignored {
+        command.arg("--ignored");
     }
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, &qualified, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        &qualified,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    if ignored {
+        std::io::stdout().write_all(&output.stdout).unwrap();
+    }
+    false
 }
 
 fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
@@ -122,7 +112,9 @@ fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
     let workspace = repo.join(".orbit");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("build runtime")
+        .with_host_resource_probe(PressureProbe::calm());
     (root, runtime, repo)
 }
 
@@ -137,7 +129,7 @@ struct Seed<'a> {
     task_type: TaskType,
     tags: &'a [&'a str],
     dependencies: Vec<String>,
-    context_files: &'a [&'a str],
+    context_files: Option<&'a [&'a str]>,
 }
 
 impl Default for Seed<'_> {
@@ -149,12 +141,23 @@ impl Default for Seed<'_> {
             task_type: TaskType::Chore,
             tags: &[],
             dependencies: Vec::new(),
-            context_files: &[],
+            context_files: None,
         }
     }
 }
 
 fn seed(runtime: &OrbitRuntime, seed: Seed<'_>) -> Task {
+    let context_files = match seed.context_files {
+        Some(selectors) => selectors.iter().map(ToString::to_string).collect(),
+        None => {
+            let name = format!(
+                "fixture-{}.txt",
+                runtime.list_task_metadata().unwrap().len()
+            );
+            std::fs::write(runtime.paths().repo_root.join(&name), "fixture\n").unwrap();
+            vec![format!("file:{name}")]
+        }
+    };
     runtime
         .add_task(TaskAddParams {
             title: seed.title.to_string(),
@@ -163,7 +166,7 @@ fn seed(runtime: &OrbitRuntime, seed: Seed<'_>) -> Task {
             plan: "Fixture plan.".to_string(),
             tags: seed.tags.iter().map(ToString::to_string).collect(),
             dependencies: seed.dependencies,
-            context_files: seed.context_files.iter().map(ToString::to_string).collect(),
+            context_files,
             priority: seed.priority,
             complexity: TaskComplexity::Medium,
             task_type: Some(seed.task_type),
@@ -191,6 +194,111 @@ fn admitted(output: &Value) -> Vec<String> {
         .iter()
         .map(|id| id.as_str().expect("task id").to_string())
         .collect()
+}
+
+/// Selector-free backlog work is admitted on the first auto/ship pass, even
+/// while another task holds the workspace, and reserves no context locks.
+#[test]
+fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
+    if !isolated("empty_context_is_admitted_on_auto_ship_and_readiness_without_locks") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    seed(
+        &runtime,
+        Seed {
+            status: TaskStatus::InProgress,
+            context_files: Some(&["dir:."]),
+            ..Seed::default()
+        },
+    );
+    let selector_free = seed(
+        &runtime,
+        Seed {
+            context_files: Some(&[]),
+            ..Seed::default()
+        },
+    );
+    let no_diff = seed(
+        &runtime,
+        Seed {
+            title: "side effects only",
+            context_files: Some(&[]),
+            tags: &["no-diff-expected"],
+            ..Seed::default()
+        },
+    );
+    for input in [
+        json!({}),
+        json!({"task_ids": [selector_free.id, no_diff.id]}),
+    ] {
+        let output = list_backlog_tasks(&runtime, input);
+        assert_eq!(
+            admitted(&output),
+            vec![selector_free.id.clone(), no_diff.id.clone()],
+            "{output}"
+        );
+        assert_eq!(output["excluded"], json!([]), "{output}");
+    }
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let wave = runtime
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"run_id": drain, "max_active_leaf_runs": 2}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([selector_free.id, no_diff.id]),
+        "{wave}"
+    );
+    let shown = as_operator(&runtime, "orbit.workflow.run.show", json!({"id": drain}));
+    assert_eq!(shown["drain_last_pass"]["excluded_total"], 0, "{shown}");
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    for id in [&selector_free.id, &no_diff.id] {
+        let ready = readiness_task(&readiness, id);
+        assert_eq!(ready["eligible"], true, "{ready}");
+        assert_eq!(ready["reason"], "ready", "{ready}");
+        let reservation = reserve_locks(&runtime, id);
+        assert_eq!(reservation["reserved"], true, "{reservation}");
+        assert_eq!(reservation["reserved_files"], json!([]), "{reservation}");
+    }
+}
+
+/// The shipped documentation chore mints with a locking scope, so a drain can
+/// admit it without pilot preparation and withhold overlapping work.
+#[test]
+fn doc_duties_mints_an_admissible_locking_context() {
+    if !isolated("doc_duties_mints_an_admissible_locking_context") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    std::fs::create_dir_all(&definitions).unwrap();
+    std::fs::write(
+        definitions.join("doc-duties.yaml"),
+        include_str!("../../assets/auto_tasks/doc-duties.yaml"),
+    )
+    .unwrap();
+    let minted = runtime.auto_task_mint("doc-duties").unwrap();
+    assert!(
+        !minted.context_files.is_empty(),
+        "the documentation chore must reserve its edits"
+    );
+    assert_eq!(
+        admitted(&list_backlog_tasks(&runtime, json!({}))),
+        vec![minted.id.clone()]
+    );
+    let reservation = reserve_locks(&runtime, &minted.id);
+    assert_eq!(reservation["reserved"], true, "{reservation}");
+    assert!(
+        !reservation["reserved_files"].as_array().unwrap().is_empty(),
+        "{reservation}"
+    );
 }
 
 /// Automatic dispatch order is total: critical work first, then the
@@ -362,7 +470,7 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
         Seed {
             title: "holder",
             status: TaskStatus::InProgress,
-            context_files: &["crates/foo/src/lib.rs"],
+            context_files: Some(&["crates/foo/src/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -370,7 +478,7 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
         &runtime,
         Seed {
             title: "locked",
-            context_files: &["crates/foo/src/lib.rs"],
+            context_files: Some(&["crates/foo/src/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -378,7 +486,7 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
         &runtime,
         Seed {
             title: "free",
-            context_files: &["crates/bar/src/lib.rs"],
+            context_files: Some(&["crates/bar/src/lib.rs"]),
             ..Seed::default()
         },
     );
@@ -397,6 +505,454 @@ fn backlog_admission_excludes_work_locked_by_an_active_task() {
             }]
         }])
     );
+}
+
+/// Write each workspace-relative fixture file so its selector expands.
+fn write_files(repo: &Path, files: &[&str]) {
+    for file in files {
+        let path = repo.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "fixture\n").unwrap();
+    }
+}
+
+/// Move an active holder out of the lock surface, as a finished delivery does.
+fn release(runtime: &OrbitRuntime, task_id: &str) {
+    for status in [TaskStatus::Review, TaskStatus::Done] {
+        runtime
+            .update_task_as_human(
+                task_id,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(status),
+                    execution_summary: Some("Fixture delivery finished.".into()),
+                    ..Default::default()
+                },
+                "fixture operator".into(),
+            )
+            .unwrap();
+    }
+}
+
+fn excluded_entry<'a>(output: &'a Value, task: &str) -> &'a Value {
+    output["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == task)
+        .unwrap_or_else(|| panic!("{task} is not excluded: {output:#}"))
+}
+
+/// A critical task that needs two locks, released one at a time, is admitted
+/// ahead of the lower-ranked task overlapping the lock that frees first. That
+/// task used to take the freed lock on every pass, so the critical task never
+/// saw all of its locks free at once [ORB-14310]. Work that does not overlap
+/// the reserved surface keeps admitting throughout.
+#[test]
+fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free() {
+    if !isolated("a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_free")
+    {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    write_files(&repo, &["a.rs", "b.rs", "free.rs"]);
+    let holder_a = seed(
+        &runtime,
+        Seed {
+            title: "holder a",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["a.rs"]),
+            ..Seed::default()
+        },
+    );
+    let holder_b = seed(
+        &runtime,
+        Seed {
+            title: "holder b",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["b.rs"]),
+            ..Seed::default()
+        },
+    );
+    // Older than the critical task, so age alone would put it first.
+    let overlapping = seed(
+        &runtime,
+        Seed {
+            title: "overlapping",
+            context_files: Some(&["b.rs"]),
+            ..Seed::default()
+        },
+    );
+    let critical = seed(
+        &runtime,
+        Seed {
+            title: "critical",
+            priority: TaskPriority::Critical,
+            task_type: TaskType::Feature,
+            context_files: Some(&["a.rs", "b.rs"]),
+            ..Seed::default()
+        },
+    );
+    let unrelated = seed(
+        &runtime,
+        Seed {
+            title: "unrelated",
+            context_files: Some(&["free.rs"]),
+            ..Seed::default()
+        },
+    );
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    // Both locks held: each waits on its holder, and the critical task's
+    // reservation covers nothing the lock filter has not already withheld.
+    let wave = classify(&runtime, &drain);
+    assert_eq!(wave["loose_task_ids"], json!([unrelated.id]), "{wave:#}");
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(
+        excluded_entry(&output, &overlapping.id)["reason"],
+        "context_lock_conflict"
+    );
+
+    // The first lock frees. The overlapping task would take it; the
+    // reservation withholds it and names the critical task.
+    release(&runtime, &holder_b.id);
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([unrelated.id]),
+        "only non-overlapping work admits while the critical task waits: {wave:#}"
+    );
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(admitted(&output), vec![unrelated.id.clone()]);
+    let withheld = excluded_entry(&output, &overlapping.id);
+    assert_eq!(withheld["reason"], "surface_reserved", "{output:#}");
+    assert_eq!(
+        withheld["conflicts"],
+        json!([{"requested_file": "file:b.rs", "locking_task_id": critical.id}])
+    );
+    assert!(
+        withheld["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(&critical.id)),
+        "{withheld}"
+    );
+    let reserving = excluded_entry(&output, &critical.id);
+    assert_eq!(reserving["reason"], "context_lock_conflict");
+    assert_eq!(
+        reserving["conflicts"],
+        json!([{"requested_file": "file:a.rs", "locking_task_id": holder_a.id}])
+    );
+    assert!(reserving["detail"].is_string(), "{reserving}");
+
+    // The drain's persisted pass and readiness report the same wait.
+    let pass = runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("last pass");
+    let recorded = pass
+        .excluded
+        .iter()
+        .find(|task| task.task_id == overlapping.id)
+        .expect("the pass records the withheld task");
+    assert_eq!(recorded.reason.as_deref(), Some("surface_reserved"));
+    assert_eq!(recorded.blocked_by, vec![critical.id.clone()]);
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let waiting = readiness_task(&readiness, &overlapping.id);
+    assert_eq!(waiting["eligible"], false);
+    assert_eq!(waiting["reason"], "surface_reserved");
+    assert_eq!(waiting["blocking_task_ids"], json!([critical.id]));
+    assert_eq!(readiness_task(&readiness, &unrelated.id)["reason"], "ready");
+
+    // The second lock frees: the critical task takes the wave ahead of the
+    // overlapping task, which now defers behind it.
+    release(&runtime, &holder_a.id);
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([critical.id, unrelated.id]),
+        "{wave:#}"
+    );
+    let deferred = wave["deferred_conflicts"].as_array().unwrap();
+    assert_eq!(deferred.len(), 1, "{wave:#}");
+    assert_eq!(deferred[0]["task_id"], overlapping.id);
+    assert_eq!(deferred[0]["blocking_task_ids"], json!([critical.id]));
+}
+
+/// Reservations are bounded so a stuck task cannot freeze the queue
+/// [ORB-14310]: only critical and high-priority lock-blocked tasks reserve, at
+/// most two per pass in dispatch order, and a task ranked ahead of a reserving
+/// task is never withheld by it.
+#[test]
+fn surface_reservations_are_bounded_by_priority_count_and_rank() {
+    if !isolated("surface_reservations_are_bounded_by_priority_count_and_rank") {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    write_files(
+        &repo,
+        &[
+            "held/h1.rs",
+            "held/h2.rs",
+            "held/h3.rs",
+            "held/m.rs",
+            "h1.rs",
+            "h2.rs",
+            "h3.rs",
+            "m.rs",
+        ],
+    );
+    seed(
+        &runtime,
+        Seed {
+            title: "holder",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["dir:held"]),
+            ..Seed::default()
+        },
+    );
+    let lock_blocked = |title, priority, files: &'static [&'static str]| {
+        seed(
+            &runtime,
+            Seed {
+                title,
+                priority,
+                task_type: TaskType::Feature,
+                context_files: Some(files),
+                ..Seed::default()
+            },
+        )
+    };
+    let high_1 = lock_blocked("high 1", TaskPriority::High, &["held/h1.rs", "h1.rs"]);
+    let high_2 = lock_blocked("high 2", TaskPriority::High, &["held/h2.rs", "h2.rs"]);
+    let high_3 = lock_blocked("high 3", TaskPriority::High, &["held/h3.rs", "h3.rs"]);
+    let medium = lock_blocked("medium", TaskPriority::Medium, &["held/m.rs", "m.rs"]);
+    let low = |title, files: &'static [&'static str]| {
+        seed(
+            &runtime,
+            Seed {
+                title,
+                priority: TaskPriority::Low,
+                context_files: Some(files),
+                ..Seed::default()
+            },
+        )
+    };
+    let behind_1 = low("behind high 1", &["h1.rs"]);
+    let behind_2 = low("behind high 2", &["h2.rs"]);
+    let behind_3 = low("behind high 3", &["h3.rs"]);
+    let behind_medium = low("behind medium", &["m.rs"]);
+    let ahead = seed(
+        &runtime,
+        Seed {
+            title: "critical ahead",
+            priority: TaskPriority::Critical,
+            context_files: Some(&["h2.rs"]),
+            ..Seed::default()
+        },
+    );
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+
+    assert_eq!(
+        admitted(&output),
+        vec![ahead.id, behind_3.id, behind_medium.id],
+        "a third high task and a medium task reserve nothing; a critical task \
+         ranked ahead of a reservation is not withheld by it: {output:#}"
+    );
+    for (withheld, reserving) in [(&behind_1, &high_1), (&behind_2, &high_2)] {
+        let entry = excluded_entry(&output, &withheld.id);
+        assert_eq!(entry["reason"], "surface_reserved", "{output:#}");
+        assert_eq!(entry["conflicts"][0]["locking_task_id"], reserving.id);
+    }
+    for (task, reserves) in [
+        (&high_1, true),
+        (&high_2, true),
+        (&high_3, false),
+        (&medium, false),
+    ] {
+        let entry = excluded_entry(&output, &task.id);
+        assert_eq!(entry["reason"], "context_lock_conflict");
+        assert_eq!(entry["detail"].is_string(), reserves, "{entry}");
+    }
+}
+
+/// An in-progress `no-diff-expected` task does not exclude overlapping backlog
+/// work. An ordinary holder still does, and the tagged task still waits on
+/// its own dependency and on that ordinary lock [ORB-14247].
+#[test]
+fn no_diff_expected_does_not_hold_a_context_lock() {
+    if !isolated("no_diff_expected_does_not_hold_a_context_lock") {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    for file in [
+        "crates/review/lib.rs",
+        "crates/ordinary/lib.rs",
+        "crates/elsewhere/lib.rs",
+    ] {
+        let path = repo.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "fixture\n").unwrap();
+    }
+    let review = seed(
+        &runtime,
+        Seed {
+            title: "review holder",
+            status: TaskStatus::InProgress,
+            tags: &["no-diff-expected"],
+            context_files: Some(&["dir:crates/review"]),
+            ..Seed::default()
+        },
+    );
+    let repair = seed(
+        &runtime,
+        Seed {
+            title: "overlapping repair",
+            context_files: Some(&["file:crates/review/lib.rs"]),
+            ..Seed::default()
+        },
+    );
+    let ordinary = seed(
+        &runtime,
+        Seed {
+            title: "ordinary holder",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["file:crates/ordinary/lib.rs"]),
+            ..Seed::default()
+        },
+    );
+    let ordinary_overlap = seed(
+        &runtime,
+        Seed {
+            title: "ordinary overlap",
+            context_files: Some(&["file:crates/ordinary/lib.rs"]),
+            ..Seed::default()
+        },
+    );
+    let tagged_overlap = seed(
+        &runtime,
+        Seed {
+            title: "tagged task still waits on an ordinary lock",
+            tags: &["no-diff-expected"],
+            context_files: Some(&["file:crates/ordinary/lib.rs"]),
+            ..Seed::default()
+        },
+    );
+    let unfinished = seed(
+        &runtime,
+        Seed {
+            title: "unfinished dependency",
+            status: TaskStatus::InProgress,
+            ..Seed::default()
+        },
+    );
+    let tagged_dependent = seed(
+        &runtime,
+        Seed {
+            title: "tagged task still waits on its dependency",
+            tags: &["no-diff-expected"],
+            dependencies: vec![unfinished.id.clone()],
+            context_files: Some(&["file:crates/elsewhere/lib.rs"]),
+            ..Seed::default()
+        },
+    );
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(admitted(&output), vec![repair.id.clone()], "{output}");
+    let excluded = output["excluded"].as_array().expect("excluded");
+    assert!(
+        excluded.iter().all(|entry| entry["id"] != repair.id),
+        "the repair overlapping only the no-diff holder must not be excluded: {output}"
+    );
+    assert!(
+        excluded.iter().all(|entry| {
+            entry["conflicts"].as_array().is_none_or(|conflicts| {
+                conflicts
+                    .iter()
+                    .all(|conflict| conflict["locking_task_id"] != review.id)
+            })
+        }),
+        "no context_lock_conflict names the no-diff-expected task: {output}"
+    );
+    let ordinary_exclusion = excluded
+        .iter()
+        .find(|entry| entry["id"] == ordinary_overlap.id)
+        .expect("ordinary overlap is excluded");
+    assert_eq!(ordinary_exclusion["reason"], "context_lock_conflict");
+    assert_eq!(
+        ordinary_exclusion["conflicts"],
+        json!([{
+            "requested_file": ordinary_overlap.context_files[0],
+            "locking_task_id": ordinary.id
+        }])
+    );
+    let tagged_exclusion = excluded
+        .iter()
+        .find(|entry| entry["id"] == tagged_overlap.id)
+        .expect("a tagged task still conflicts with an ordinary holder");
+    assert_eq!(tagged_exclusion["reason"], "context_lock_conflict");
+    assert_eq!(
+        tagged_exclusion["conflicts"][0]["locking_task_id"],
+        ordinary.id
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .expect("readiness");
+    let repair_ready = readiness_task(&readiness, &repair.id);
+    assert_eq!(repair_ready["eligible"], true, "{repair_ready}");
+    assert_eq!(repair_ready["reason"], "ready", "{repair_ready}");
+    let ordinary_waiting = readiness_task(&readiness, &ordinary_overlap.id);
+    assert_eq!(ordinary_waiting["reason"], "context_lock_conflict");
+    assert_eq!(
+        ordinary_waiting["conflicts"][0]["locking_task_id"],
+        ordinary.id
+    );
+    let dependent = readiness_task(&readiness, &tagged_dependent.id);
+    assert_eq!(dependent["reason"], "unmet_dependency", "{dependent}");
+    assert!(
+        !admitted(&output).contains(&tagged_dependent.id),
+        "a tagged task with an unfinished dependency is not admitted"
+    );
+
+    let review_grant = reserve_locks(&runtime, &review.id);
+    assert_eq!(review_grant["reserved"], true, "{review_grant}");
+    assert_eq!(review_grant["reserved_files"], json!([]), "{review_grant}");
+    assert!(
+        review_grant["reservation_id"].as_str().is_some(),
+        "release still has a reservation id: {review_grant}"
+    );
+    let repair_grant = reserve_locks(&runtime, &repair.id);
+    assert_eq!(
+        repair_grant["reserved"], true,
+        "a drain's lock grant is not blocked by the no-diff reservation: {repair_grant}"
+    );
+    let ordinary_grant = reserve_locks(&runtime, &ordinary_overlap.id);
+    assert_eq!(ordinary_grant["reserved"], false, "{ordinary_grant}");
+    assert!(
+        ordinary_grant["conflicts"]
+            .as_array()
+            .is_some_and(|conflicts| {
+                conflicts
+                    .iter()
+                    .any(|conflict| conflict["held_by_id"] == ordinary.id)
+            }),
+        "an ordinary holder still denies the grant: {ordinary_grant}"
+    );
+}
+
+fn reserve_locks(runtime: &OrbitRuntime, task_id: &str) -> Value {
+    runtime
+        .run_deterministic(
+            "reserve_locks",
+            &json!({}),
+            &json!({ "task_ids": [task_id], "ttl_seconds": 120 }),
+            ToolContext::default(),
+        )
+        .expect("reserve locks")
 }
 
 // ---------------------------------------------------------------------------
@@ -476,12 +1032,68 @@ fn a_held_workspace_claim_gates_dispatch_to_its_holder() {
         matches!(resume, OrbitError::WorkspaceClaimHeld(_)),
         "resume takes the same gate: {resume:?}"
     );
+    for stranger in [None, Some("wrong-token")] {
+        let foreground = runtime
+            .replay_job_run_with_claim("missing", stranger)
+            .unwrap_err();
+        let detached = runtime
+            .submit_replay_run("missing", None, stranger, JobRunTrigger::dashboard())
+            .unwrap_err();
+        for error in [foreground, detached] {
+            assert!(
+                matches!(error, OrbitError::WorkspaceClaimHeld(_)),
+                "{error:?}"
+            );
+        }
+    }
+    assert!(matches!(
+        runtime.replay_job_run("missing").unwrap_err(),
+        OrbitError::WorkspaceClaimHeld(_)
+    ));
+    assert!(matches!(
+        runtime
+            .replay_job_run_with_claim("missing", Some(token))
+            .unwrap_err(),
+        OrbitError::NotFound { .. }
+    ));
+    assert!(matches!(
+        runtime
+            .submit_replay_run("missing", None, Some(token), JobRunTrigger::dashboard())
+            .unwrap_err(),
+        OrbitError::NotFound { .. }
+    ));
 
     let holder = ship(&runtime, Some(token));
     assert!(
         matches!(holder, OrbitError::NotFound { .. }),
         "the holder passes the gate, got {holder:?}"
     );
+}
+
+#[test]
+fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
+    if !isolated("a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let source = running_run(
+        &runtime,
+        "replay_fixture",
+        json!({"task_ids": ["some-task"]}),
+    );
+    let replica = runtime.with_coordination_write_owner(Some("owner-machine".into()));
+    let before = replica.list_job_runs(Default::default()).unwrap();
+    let foreground = replica.replay_job_run(&source).unwrap_err();
+    let detached = replica
+        .submit_replay_run(&source, None, None, JobRunTrigger::dashboard())
+        .unwrap_err();
+    for error in [foreground, detached] {
+        assert!(
+            matches!(error, OrbitError::CapabilityRefused(_)),
+            "{error:?}"
+        );
+    }
+    assert_eq!(replica.list_job_runs(Default::default()).unwrap(), before);
 }
 
 /// An expired claim stops gating dispatch with no release.
@@ -528,7 +1140,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
     use orbit_core::application::task::TaskUpdateParams;
     use orbit_types::workflow::{
         REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
-        REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewCertificate, ReviewVerdict,
+        REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewCertificate, ReviewTiming, ReviewVerdict,
     };
 
     for verdict in [
@@ -544,7 +1156,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
             workspace.join("config.toml"),
-            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n",
+            "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"reviewers\"\n[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n",
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &workspace)
@@ -587,12 +1199,17 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         let admission = ReviewAdmission {
             contract_version: REVIEW_CONTRACT_VERSION,
             policy_version: policy.version,
-            timing: policy.review_policy.value.timing(),
-            timing_source: policy.review_policy.source.label().into(),
+            timing: ReviewTiming::BeforePr,
+            timing_source: policy.review_before_pr.source.label().into(),
             crew: policy.review_crew.value.clone(),
             crew_source: policy.review_crew.source.label().into(),
             budget: policy.review_budget(),
+            required_validation_commands: Some(
+                runtime.workflow_required_validation_commands().to_vec(),
+            ),
+            baseline_commands: runtime.review_baseline_commands().to_vec(),
             captured_at: Utc::now(),
+            host_evidence: Vec::new(),
         };
         let run = runtime
             .insert_job_run(
@@ -651,7 +1268,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
                     "disposition": {"kind": if repaired { "repaired" } else { "open" }},
                 }])
             } else { json!([]) },
-            "validation": [{"command": "fixture check", "outcome": "passed", "role": "required"}],
+            "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
             "escalation": null,
         });
         // The public agent tools share the owner-write helper with the old
@@ -742,20 +1359,27 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         );
         // Gate settlement does not create synthetic history stubs. Existing
         // human creation history must survive without new human entries; a
-        // repair outside the selectors adds only the system's widening
-        // provenance.
+        // repair outside the selectors records the semantic scope update and
+        // the widening provenance, both attributed to the system.
         let history = runtime.get_task_history(&task.id).unwrap();
         assert_eq!(history[..history_before.len()], history_before[..]);
         let added = &history[history_before.len()..];
         if repaired {
-            let [widened] = added else {
-                panic!("expected one widening entry, got {added:?}");
+            let [updated, widened] = added else {
+                panic!("expected a scope update and its widening entry, got {added:?}");
             };
+            assert_eq!(updated.event, "updated");
+            assert_eq!(
+                updated.by, "system",
+                "ORB-14296: the semantic scope update must not borrow the operator's identity"
+            );
             assert_eq!(widened.by, "system");
             assert_eq!(widened.event, CONTEXT_FILES_WIDENED_EVENT);
             let widening =
                 ContextFilesWidening::from_note(widened.note.as_deref().unwrap()).unwrap();
+            assert_eq!(widening.run_id, run.run_id);
             assert_eq!(widening.step, ContextWideningStep::Review);
+            assert_eq!(widening.activity, "review_gate_settle");
             assert_eq!(
                 widening.selectors,
                 ["file:coupled.txt", "file:undeclared.txt"]
@@ -776,10 +1400,11 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
 // Host resource throttle
 // ---------------------------------------------------------------------------
 
-/// A host whose CPU and memory readings and sample time a test sets; every
-/// filesystem reads 10%.
+/// A host whose CPU, memory and filesystem readings and sample time a test
+/// sets; every filesystem reads the same, 10% unless a test raises it.
 pub(super) struct PressureProbe {
     reading: Mutex<(Option<f64>, Option<f64>, DateTime<Utc>)>,
+    disk: Mutex<f64>,
     samples: AtomicUsize,
 }
 
@@ -787,8 +1412,21 @@ impl PressureProbe {
     pub(super) fn calm() -> Arc<Self> {
         Arc::new(Self {
             reading: Mutex::new((Some(10.0), Some(10.0), Utc::now())),
+            disk: Mutex::new(10.0),
             samples: AtomicUsize::new(0),
         })
+    }
+
+    /// Hold `set` above its high mark across the ten-second sustain window:
+    /// one sample twelve seconds ago, then one now.
+    fn sustain(&self, runtime: &OrbitRuntime, set: impl Fn(&Self)) {
+        set(self);
+        self.reading.lock().unwrap().2 = Utc::now() - chrono::Duration::seconds(12);
+        assert!(
+            runtime.resource_admission().throttle.is_none(),
+            "one sample is not sustained"
+        );
+        self.reading.lock().unwrap().2 = Utc::now();
     }
 
     /// Memory at `percent`, observed at `at`.
@@ -825,6 +1463,7 @@ impl HostResourceProbe for PressureProbe {
     fn sample(&self, paths: &[PathBuf]) -> HostResourceSample {
         self.samples.fetch_add(1, Ordering::SeqCst);
         let (cpu, memory, at) = *self.reading.lock().unwrap();
+        let disk = *self.disk.lock().unwrap();
         HostResourceSample {
             sampled_at: at,
             cpu_percent: cpu,
@@ -833,7 +1472,7 @@ impl HostResourceProbe for PressureProbe {
                 .iter()
                 .map(|path| DiskSample {
                     path: path.clone(),
-                    used_percent: Some(10.0),
+                    used_percent: Some(disk),
                 })
                 .collect(),
         }
@@ -909,8 +1548,8 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     let mut warm = std::process::Command::new(std::env::current_exe().unwrap());
     warm.args(["--exact", &qualified, "--nocapture", "--test-threads=1"])
         .env(WARM_ROOT, root.path());
-    let output = orbit_common::process::run_bounded_capped(&mut warm, CHILD_DEADLINE, 64 * 1024)
-        .expect("bounded independent probe process");
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut warm, &qualified, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,
         output.status,
@@ -1043,7 +1682,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         &runtime,
         Seed {
             title: "running",
-            context_files: &["file:src/running.rs"],
+            context_files: Some(&["file:src/running.rs"]),
             ..Seed::default()
         },
     );
@@ -1051,7 +1690,7 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         &runtime,
         Seed {
             title: "queued",
-            context_files: &["file:src/queued.rs"],
+            context_files: Some(&["file:src/queued.rs"]),
             ..Seed::default()
         },
     );
@@ -1238,4 +1877,473 @@ fn a_disabled_throttle_admits_under_pressure_without_sampling() {
         .unwrap();
     assert_eq!(readiness["capacity"]["resource_throttle"], Value::Null);
     assert_eq!(probe.samples(), 0, "a disabled throttle samples nothing");
+}
+
+// ---------------------------------------------------------------------------
+// CPU-light admission and frozen-batch expiry [ORB-14624]
+// ---------------------------------------------------------------------------
+
+/// The tags an after-landing review auto-task carries.
+const LIGHT_TAGS: &[&str] = &["code-review", "no-diff-expected", "auto-task:code-review"];
+
+/// CPU pressure from cargo-heavy leaves used to hold a review auto-task for
+/// hours. While CPU alone holds admissions, `no-diff-expected` auto-task
+/// leaves start up to the reserved light budget and an implementation leaf
+/// still waits; once the budget is taken a further light leaf waits too, and
+/// readiness names the light-budget reason.
+#[test]
+fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
+    if !isolated("a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget") {
+        return;
+    }
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let implementation = seed(
+        &runtime,
+        Seed {
+            title: "implementation",
+            priority: TaskPriority::High,
+            ..Seed::default()
+        },
+    );
+    // Tagged `no-diff-expected` but filed by hand: the exemption is for
+    // automated reading work, not for anything that promises no diff.
+    let manual_no_diff = seed(
+        &runtime,
+        Seed {
+            title: "manual no-diff",
+            tags: &["no-diff-expected"],
+            ..Seed::default()
+        },
+    );
+    let light: Vec<Task> = ["review one", "review two", "review three"]
+        .into_iter()
+        .map(|title| {
+            seed(
+                &runtime,
+                Seed {
+                    title,
+                    tags: LIGHT_TAGS,
+                    ..Seed::default()
+                },
+            )
+        })
+        .collect();
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    probe.sustain(&runtime, |probe| probe.cpu(Some(195.0)));
+    let wave = classify(&runtime, &drain);
+    assert_eq!(
+        wave["resource_throttle"]["resources"][0]["resource"], "cpu",
+        "{wave}"
+    );
+    assert_eq!(
+        wave["loose_task_ids"],
+        json!([light[0].id, light[1].id]),
+        "the reserved budget admits light leaves in queue order and nothing else: {wave}"
+    );
+    assert_eq!(wave["free_slots"], 2, "{wave}");
+    assert_eq!(
+        wave["cpu_light_budget"],
+        json!({"reserved": 2, "active": 0, "remaining": 2, "applies": true}),
+        "{wave}"
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(readiness["capacity"]["free_slots"], 2, "{readiness:#}");
+    let first = readiness_task(&readiness, &light[0].id);
+    assert_eq!(first["reason"], "ready", "{first}");
+    assert_eq!(first["cpu_light"], true, "{first}");
+    for refused in [&implementation.id, &manual_no_diff.id] {
+        let entry = readiness_task(&readiness, refused);
+        assert_eq!(entry["reason"], "resource_throttled", "{entry}");
+        assert_eq!(entry["cpu_light"], Value::Null, "{entry}");
+    }
+
+    // The admitted pair are live leaves now; the budget is spent.
+    for task in &light[..2] {
+        running_run(
+            &runtime,
+            "task_auto_pipeline",
+            json!({"task_ids": [task.id]}),
+        );
+    }
+    let full = classify(&runtime, &drain);
+    assert_eq!(full["loose_task_ids"], json!([]), "{full}");
+    assert_eq!(full["free_slots"], 0, "{full}");
+    assert_eq!(
+        full["cpu_light_budget"],
+        json!({"reserved": 2, "active": 2, "remaining": 0, "applies": true}),
+        "{full}"
+    );
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    assert_eq!(
+        readiness["capacity"]["cpu_light_budget"]["remaining"], 0,
+        "{readiness:#}"
+    );
+    let waiting = readiness_task(&readiness, &light[2].id);
+    assert_eq!(waiting["reason"], "cpu_light_budget_full", "{waiting}");
+    assert!(
+        waiting["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.starts_with("2 of 2 reserved CPU-light leaves")),
+        "{waiting}"
+    );
+    assert_eq!(
+        readiness_task(&readiness, &implementation.id)["reason"],
+        "resource_throttled"
+    );
+
+    // Below the resume mark every slot opens again.
+    probe.cpu(Some(10.0));
+    probe.reading.lock().unwrap().2 = Utc::now();
+    let resumed = classify(&runtime, &drain);
+    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
+    assert_eq!(
+        resumed["loose_task_ids"],
+        json!([light[2].id, implementation.id]),
+        "{resumed}"
+    );
+    assert_eq!(resumed["cpu_light_budget"]["applies"], false, "{resumed}");
+}
+
+/// Memory and disk pressure hold light leaves like any other: an agent
+/// session costs memory and its artifacts cost disk, whatever CPU does.
+#[test]
+fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
+    if !isolated("memory_and_disk_pressure_still_hold_light_auto_tasks") {
+        return;
+    }
+    let probe = PressureProbe::calm();
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let light = seed(
+        &runtime,
+        Seed {
+            title: "review",
+            tags: LIGHT_TAGS,
+            ..Seed::default()
+        },
+    );
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    let assert_held = |pressure: &str| {
+        let wave = classify(&runtime, &drain);
+        assert_eq!(wave["loose_task_ids"], json!([]), "{pressure}: {wave}");
+        assert_eq!(wave["free_slots"], 0, "{pressure}: {wave}");
+        assert_eq!(
+            wave["cpu_light_budget"]["applies"], false,
+            "{pressure}: {wave}"
+        );
+        let readiness = runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        let entry = readiness_task(&readiness, &light.id);
+        assert_eq!(entry["reason"], "resource_throttled", "{pressure}: {entry}");
+        assert_eq!(entry["cpu_light"], true, "{pressure}: {entry}");
+    };
+
+    // Memory beside CPU holds the light leaf a CPU-only throttle admits.
+    probe.sustain(&runtime, |probe| {
+        probe.cpu(Some(195.0));
+        probe.memory(95.0, Utc::now());
+    });
+    assert_held("memory and cpu");
+
+    probe.cpu(Some(10.0));
+    probe.memory(10.0, Utc::now());
+    let open = classify(&runtime, &drain);
+    assert_eq!(open["loose_task_ids"], json!([light.id]), "{open}");
+
+    probe.sustain(&runtime, |probe| probe.memory(95.0, Utc::now()));
+    assert_held("memory");
+
+    probe.memory(10.0, Utc::now());
+    probe.sustain(&runtime, |probe| *probe.disk.lock().unwrap() = 95.0);
+    assert_held("disk");
+}
+
+/// A frozen delivery batch within two hours of its deadline sorts ahead of
+/// same-priority backlog, including corrective work, so it is not left to
+/// expire in the queue; one further from its deadline keeps its place.
+#[test]
+fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
+    if !isolated("a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog") {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
+    let older = seed(
+        &runtime,
+        Seed {
+            title: "older chore",
+            ..Seed::default()
+        },
+    );
+    let corrective = seed(
+        &runtime,
+        Seed {
+            title: "corrective",
+            task_type: TaskType::Bug,
+            ..Seed::default()
+        },
+    );
+    let high = seed(
+        &runtime,
+        Seed {
+            title: "high priority",
+            priority: TaskPriority::High,
+            task_type: TaskType::Bug,
+            ..Seed::default()
+        },
+    );
+    let expiring = seed(
+        &runtime,
+        Seed {
+            title: "expiring full review",
+            tags: &["no-diff-expected", "auto-task:full-review"],
+            ..Seed::default()
+        },
+    );
+    let distant = seed(
+        &runtime,
+        Seed {
+            title: "distant review",
+            tags: &["no-diff-expected", "auto-task:friction-curation"],
+            ..Seed::default()
+        },
+    );
+    admitted_frozen_batch(
+        &runtime,
+        "code-review",
+        &expiring.id,
+        chrono::Duration::minutes(90),
+    );
+    admitted_frozen_batch(
+        &runtime,
+        "friction-curation",
+        &distant.id,
+        chrono::Duration::hours(5),
+    );
+
+    let order = admitted(&list_backlog_tasks(&runtime, json!({})));
+    assert_eq!(
+        order,
+        vec![
+            high.id.clone(),
+            expiring.id.clone(),
+            corrective.id.clone(),
+            older.id.clone(),
+            distant.id.clone(),
+        ],
+        "a higher priority still leads; the expiring batch leads its priority"
+    );
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    let listed: Vec<&str> = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["task_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, order.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        readiness_task(&readiness, &expiring.id)["frozen_batch_deadline"].is_string(),
+        "{readiness:#}"
+    );
+    assert_eq!(
+        readiness_task(&readiness, &distant.id)["frozen_batch_deadline"],
+        Value::Null
+    );
+}
+
+/// A surface reservation follows frozen-batch expiry in the queue's order:
+/// expiry can promote ordinary work ahead of higher-priority work, or break a
+/// same-priority tie with older corrective work [ORB-15110].
+#[test]
+fn surface_reservations_follow_frozen_batch_expiry_order() {
+    if !isolated("surface_reservations_follow_frozen_batch_expiry_order") {
+        return;
+    }
+    for (reserver_type, expiring_priority) in [
+        (TaskType::Feature, TaskPriority::Medium),
+        (TaskType::Bug, TaskPriority::High),
+    ] {
+        let (_root, runtime, repo) = runtime();
+        let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
+        write_files(&repo, &["held.rs", "foo/expiring.rs", "foo/ordinary.rs"]);
+        let holder = seed(
+            &runtime,
+            Seed {
+                title: "lock holder",
+                status: TaskStatus::InProgress,
+                context_files: Some(&["held.rs"]),
+                ..Seed::default()
+            },
+        );
+        let reserver = seed(
+            &runtime,
+            Seed {
+                title: "older high-priority reserver",
+                priority: TaskPriority::High,
+                task_type: reserver_type,
+                context_files: Some(&["held.rs", "dir:foo"]),
+                ..Seed::default()
+            },
+        );
+        let expiring = seed(
+            &runtime,
+            Seed {
+                title: "expiring overlapping work",
+                priority: expiring_priority,
+                task_type: TaskType::Feature,
+                context_files: Some(&["foo/expiring.rs"]),
+                ..Seed::default()
+            },
+        );
+        let ordinary = seed(
+            &runtime,
+            Seed {
+                title: "ordinary overlapping work",
+                context_files: Some(&["foo/ordinary.rs"]),
+                ..Seed::default()
+            },
+        );
+        let before = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            excluded_entry(&before, &expiring.id)["reason"],
+            "surface_reserved",
+            "without expiry the reserver ranks ahead: {before:#}"
+        );
+        admitted_frozen_batch(
+            &runtime,
+            "code-review",
+            &expiring.id,
+            chrono::Duration::minutes(90),
+        );
+
+        let output = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            admitted(&output),
+            vec![expiring.id.clone()],
+            "expiry-aware order must let overlapping work ahead of the reserver admit: {output:#}"
+        );
+        let waiting = excluded_entry(&output, &reserver.id);
+        assert_eq!(waiting["reason"], "context_lock_conflict", "{waiting}");
+        assert_eq!(waiting["conflicts"][0]["locking_task_id"], holder.id);
+        let withheld = excluded_entry(&output, &ordinary.id);
+        assert_eq!(withheld["reason"], "surface_reserved", "{withheld}");
+        assert_eq!(withheld["conflicts"][0]["locking_task_id"], reserver.id);
+
+        let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+        let wave = classify(&runtime, &drain);
+        assert_eq!(wave["loose_task_ids"], json!([expiring.id]), "{wave:#}");
+        let readiness = runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        let ready = readiness_task(&readiness, &expiring.id);
+        assert_eq!(ready["eligible"], true, "{ready}");
+        assert_eq!(ready["reason"], "ready", "{ready}");
+        assert!(ready["frozen_batch_deadline"].is_string(), "{ready}");
+
+        // With both batches expiring, priority or age puts the reserver
+        // first again: expiry must be considered on both sides.
+        admitted_frozen_batch(
+            &runtime,
+            "friction-curation",
+            &reserver.id,
+            chrono::Duration::minutes(90),
+        );
+        let both_expiring = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            excluded_entry(&both_expiring, &expiring.id)["reason"],
+            "surface_reserved",
+            "the reserver's expiry must also affect ranking: {both_expiring:#}"
+        );
+    }
+}
+
+/// Record `task_id` as the admitted action of a frozen batch on this
+/// workspace's `name` consumer, due `remaining` from now — the state delivery
+/// automation leaves after minting the batch's task.
+pub(super) fn admitted_frozen_batch(
+    runtime: &OrbitRuntime,
+    name: &str,
+    task_id: &str,
+    remaining: chrono::Duration,
+) {
+    use orbit_types::workflow::automation::{
+        AutomationState, BatchAttempt, BatchState, CoverageBatch, CoverageClass, SourceRevision,
+    };
+    let consumer = format!(
+        "{}/{}/auto-task/{name}",
+        runtime.automation_machine_identity().unwrap(),
+        runtime.workspace_id().unwrap()
+    );
+    let revision = |commit: &str| SourceRevision {
+        commit: commit.to_string(),
+        tree: format!("{commit}-tree"),
+    };
+    let baseline = AutomationState {
+        members: None,
+        consumer: consumer.clone(),
+        epoch: "epoch".into(),
+        trigger: None,
+        repository: "fixture-repo".into(),
+        branch: "main".into(),
+        generation: 0,
+        baseline: revision("base"),
+        observed: revision("base"),
+        covered: revision("base"),
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        lookup_retries: Default::default(),
+        active: None,
+        stall: None,
+    };
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_initialize(&baseline).unwrap());
+    let mut admitted = baseline.clone();
+    admitted.generation = 1;
+    admitted.observed = revision("landing");
+    admitted.pending_commits = vec!["landing".into()];
+    admitted.active = Some(BatchAttempt {
+        batch: CoverageBatch {
+            schema_version: 1,
+            id: format!("batch-{name}"),
+            consumer,
+            epoch: "epoch".into(),
+            repository: "fixture-repo".into(),
+            branch: "main".into(),
+            coverage: CoverageClass::LandedCodeReviewV1,
+            from_exclusive: revision("base"),
+            through_inclusive: revision("landing"),
+            commits: vec!["landing".into()],
+            deliveries: vec![],
+            exclusions: vec![],
+            created_at: Utc::now() - chrono::Duration::hours(8),
+            max_attempts: 1,
+            retry_until: Utc::now() + remaining,
+        },
+        input_digest: "input-digest".into(),
+        attempt: 1,
+        action_key: format!("automation:batch-{name}:1"),
+        action_id: Some(task_id.to_string()),
+        state: BatchState::Admitted,
+        reason: None,
+        retry_after: None,
+        reissue: None,
+    });
+    assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }

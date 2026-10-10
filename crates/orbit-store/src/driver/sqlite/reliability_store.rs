@@ -8,11 +8,12 @@
 //! of magnitude (friction F2026-08-031), so any rate derived from those fields
 //! would be confidently wrong. Durations and counts do not share that defect.
 //!
-//! Both queries are workspace-scoped. `job_runs` carries `workspace_id`
-//! directly; `invocations` does not, so it is scoped by joining each
-//! invocation back to the run that produced it. An invocation whose owning run
-//! is absent from `job_runs` is therefore excluded rather than attributed to an
-//! arbitrary workspace.
+//! Both queries are workspace-scoped. `job_runs` and `invocations` both carry
+//! `workspace_id`; run ids are only unique within a workspace, so an
+//! invocation counts only when its own workspace matches and its run, joined
+//! on `(workspace_id, run_id)`, is present in `job_runs`. A legacy invocation
+//! recorded without a workspace, or one whose run is absent, is excluded
+//! rather than attributed to an arbitrary workspace.
 //!
 //! Windows are half-open (`since <= ts < until`) and compared as RFC3339 text,
 //! matching every other timestamp filter in this crate (see
@@ -109,8 +110,8 @@ impl Store {
                        COUNT(DISTINCT i.job_run_id) AS job_run_count
                 FROM invocations i
                 INNER JOIN job_runs jr
-                        ON jr.run_id = i.job_run_id AND jr.workspace_id = ?1
-                WHERE i.ts >= ?2 AND i.ts < ?3
+                        ON jr.workspace_id = i.workspace_id AND jr.run_id = i.job_run_id
+                WHERE i.workspace_id = ?1 AND i.ts >= ?2 AND i.ts < ?3
                 GROUP BY i.activity_id
                 ORDER BY invocation_count DESC, i.activity_id ASC
                 "#,
@@ -175,8 +176,8 @@ impl Store {
                    COUNT(DISTINCT CASE WHEN {matching_predicate} THEN i.job_run_id END)
             FROM invocations i
             INNER JOIN job_runs jr
-                    ON jr.run_id = i.job_run_id AND jr.workspace_id = ?1
-            WHERE i.ts >= ?2 AND i.ts < ?3
+                    ON jr.workspace_id = i.workspace_id AND jr.run_id = i.job_run_id
+            WHERE i.workspace_id = ?1 AND i.ts >= ?2 AND i.ts < ?3
             "#
         );
 

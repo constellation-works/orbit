@@ -17,7 +17,11 @@ use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 use super::*;
 
+pub(super) mod archive;
+mod git;
 mod import;
+mod inspect;
+mod publish;
 
 fn open_registry(global: &Path) -> TaskRegistryStore {
     TaskRegistryStore::open(&task_registry_path(global)).expect("open registry")
@@ -60,6 +64,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             pr_status: None,
             job_run_id: None,
             crew: None,
+            crew_source: None,
             orchestrator: Some("archive-orchestrator".to_string()),
             relations,
             tags: vec!["migration".to_string()],
@@ -124,6 +129,7 @@ fn seed_artifact_blob(
     fs::write(&blob_path, bytes).expect("write blob");
     ArtifactManifestFileV2 {
         origin: None,
+        writer: None,
         path: path.to_string(),
         blob,
         sha256: format!("{:x}", Sha256::digest(bytes)),

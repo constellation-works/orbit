@@ -29,7 +29,8 @@
 
 use std::path::Path;
 
-use orbit_common::{OrbitError, SqliteContention};
+use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::{OrbitError, SqliteContention, StorageLayer};
 use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
 use crate::contracts::{
@@ -354,12 +355,74 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_plugin_build_record,
     },
+    // Run ids are only unique within a workspace, yet invocations were keyed
+    // by run id alone, so a run-id collision across workspaces read the other
+    // workspace's invocations into run detail and reliability counts.
+    Migration {
+        version: 36,
+        name: "invocation_workspace_scope",
+        // An older writer records invocations without a workspace, and no
+        // workspace-scoped read matches those rows.
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::apply_invocation_workspace_scope,
+    },
+    Migration {
+        version: 37,
+        name: "audit_tool_call_index",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_audit_tool_call_index,
+    },
+    // Every run listing walked each run's pipeline-state overflow chain to
+    // reach the columns `ALTER TABLE` had appended after it. The state moves
+    // to a 1:1 side table and the column is dropped.
+    Migration {
+        version: 38,
+        name: "job_run_states",
+        // Drops `job_runs.pipeline_state_json`, which binaries without this
+        // migration read and write for every run's state.
+        compat: MigrationCompatibility::Breaking,
+        apply: super::apply_job_run_states,
+    },
+    // Recency-ordered run pages (the dashboard's aggregate run list) sorted
+    // every run of the workspace for want of an index over the recency
+    // expression. Pure `CREATE INDEX IF NOT EXISTS`, which an older binary
+    // ignores and SQLite maintains on its writes.
+    Migration {
+        version: 39,
+        name: "job_runs_recency_index",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_job_runs_recency_index,
+    },
+    // ORB-14695: the host's provider usage limits. A new table only, which an
+    // older binary never reads, so drains on older binaries keep writing.
+    Migration {
+        version: 40,
+        name: "provider_limit_observations",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_limit_observations,
+    },
+    // ORB-14696: a provider's own usage-window reading on the same rows. New
+    // nullable or defaulted columns only, so older binaries keep writing.
+    Migration {
+        version: 41,
+        name: "provider_limit_readings",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_provider_limit_readings,
+    },
+    // ORB-14699: the provider an invocation ran on, beside its agent. One new
+    // nullable column, so older binaries keep inserting.
+    Migration {
+        version: 42,
+        name: "invocation_provider",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_invocation_provider,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 35;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 42;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 
@@ -506,9 +569,11 @@ fn write_compat_record(
         params![COMPAT_KEY, record.encode()?, crate::now_string()],
     )
     .map_err(|error| {
-        OrbitError::Migration(format!(
-            "failed to record schema compatibility metadata at v{version}: {error}"
-        ))
+        sqlite_error(
+            StorageLayer::Migration,
+            &error,
+            format!("failed to record schema compatibility metadata at v{version}: {error}"),
+        )
     })?;
     Ok(())
 }
@@ -591,10 +656,14 @@ fn apply_one(
     ensure_schema_meta_table(&tx)?;
 
     (migration.apply)(&tx).map_err(|error| {
-        OrbitError::Migration(format!(
-            "failed to apply migration v{} ({}): {error}",
-            migration.version, migration.name
-        ))
+        OrbitError::storage(
+            StorageLayer::Migration,
+            error.is_readonly_or_access_failure(),
+            format!(
+                "failed to apply migration v{} ({}): {error}",
+                migration.version, migration.name
+            ),
+        )
     })?;
 
     tx.execute(
@@ -607,10 +676,14 @@ fn apply_one(
         ],
     )
     .map_err(|e| {
-        OrbitError::Migration(format!(
-            "failed to record migration v{} ({}) in schema_meta: {e}",
-            migration.version, migration.name
-        ))
+        sqlite_error(
+            StorageLayer::Migration,
+            &e,
+            format!(
+                "failed to record migration v{} ({}) in schema_meta: {e}",
+                migration.version, migration.name
+            ),
+        )
     })?;
     write_compat_record(&tx, migrations, migration.version)?;
 
@@ -646,10 +719,14 @@ fn migration_begin_error(
         }));
     }
 
-    OrbitError::Migration(format!(
-        "failed to begin transaction for migration v{} ({}): {error}",
-        migration.version, migration.name
-    ))
+    sqlite_error(
+        StorageLayer::Migration,
+        &error,
+        format!(
+            "failed to begin transaction for migration v{} ({}): {error}",
+            migration.version, migration.name
+        ),
+    )
 }
 
 fn newer_than_supported(
@@ -675,10 +752,14 @@ pub(super) fn commit_migration_error(migration: &Migration, error: rusqlite::Err
         ));
     }
 
-    OrbitError::Migration(format!(
-        "failed to commit migration v{} ({}): {error}",
-        migration.version, migration.name
-    ))
+    sqlite_error(
+        StorageLayer::Migration,
+        &error,
+        format!(
+            "failed to commit migration v{} ({}): {error}",
+            migration.version, migration.name
+        ),
+    )
 }
 
 fn ensure_schema_meta_table(conn: &Connection) -> Result<(), OrbitError> {
@@ -691,7 +772,7 @@ fn ensure_schema_meta_table(conn: &Connection) -> Result<(), OrbitError> {
             updated_at TEXT NOT NULL
         );",
     )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    .map_err(sqlite_store_error)
 }
 
 fn validate_registry(migrations: &[Migration]) -> Result<(), OrbitError> {

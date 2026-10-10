@@ -8,10 +8,15 @@
 //!
 //! 1. **Blocked tasks.** A terminal run failure or interruption blocks every
 //!    coupled task (`runtime::task::block_on_run_failure`; `workflow_run_failed`
-//!    or `workflow_run_interrupted`), and `blocked` is not in the
-//!    workflow-admission allowlist. If the resumed run replays
-//!    `worktree_setup`, admission rejects the very task the resume exists to
-//!    recover — a catch-22.
+//!    or `workflow_run_interrupted`). The run's own failure handoff can block
+//!    the task first (`pr_failure_handoff`, `pr_conflict_blocked`,
+//!    `validation_environment_blocked`, `review_gate_escalation`), and
+//!    finalization then leaves that block in place because `blocked` is not
+//!    blockable again. `blocked` is also outside the workflow-admission
+//!    allowlist. If the resumed run replays `worktree_setup`, admission
+//!    rejects the very task the resume exists to recover — a catch-22.
+//!    Resume readmits a block only when that latest system entry attributes
+//!    itself to this lineage. An operator block stays untouched.
 //! 2. **Ownership drift.** When checkpoints *are* reused, `worktree_setup` is
 //!    skipped, so nothing re-claims the task. Downstream delivery steps keep
 //!    consuming the checkpointed `steps.<worktree>.output.job_run_id` as their
@@ -19,9 +24,10 @@
 //!    intervening failed attempt. `load_handoff_context` then fails closed with
 //!    "task ... no longer belongs to job run ...".
 //!
-//! 3. **Delivery stage.** A final-recovery escalation can block a task after
-//!    promotion to review. Reusing that promotion checkpoint must restore
-//!    review, rather than readmitting implementation that completion skips.
+//! 3. **Delivery stage.** A final-recovery escalation, or a failure-handoff
+//!    block attributed to this lineage, can block a task after promotion to
+//!    review. Reusing that promotion checkpoint must restore review, rather
+//!    than readmitting implementation that completion skips.
 //!
 //! These are repaired by reconciling against the run's **explicit retry
 //! lineage** — the source run, its `retry_source_run_id` ancestors, and the
@@ -48,6 +54,7 @@ use crate::application::job::pipeline::{
 };
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
+use crate::runtime::task::resumed_task_run_id;
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
 /// A lineage this deep is pathological; the bound keeps a corrupted cycle from
@@ -73,7 +80,7 @@ pub(crate) struct ResumePlan {
     pub(crate) lineage: BTreeSet<String>,
     /// Ancestors only: a superseding descendant cannot donate review authority.
     ancestors: BTreeSet<String>,
-    /// Successful host promotion checkpoints reused before pending completion.
+    /// Successful host promotion checkpoints in the reused prefix.
     review_checkpoints: BTreeMap<String, Value>,
     /// The batch id the reused checkpoints will keep handing to delivery steps.
     /// `None` when nothing is reused (`worktree_setup` re-runs and re-claims).
@@ -149,6 +156,17 @@ impl OrbitRuntime {
         if source
             .input
             .as_ref()
+            .is_some_and(orbit_types::workflow::run_input_declares_review_reconciliation)
+        {
+            return Err(OrbitError::JobValidation(format!(
+                "job run '{source_run_id}' was an operator-admitted review reconciliation and \
+                 cannot be resumed; its admission covered that attempt only. Submit its request \
+                 key again with `orbit task reconcile-review submit` to admit another attempt"
+            )));
+        }
+        if source
+            .input
+            .as_ref()
             .is_some_and(run_input_declares_trusted_host)
         {
             return Err(OrbitError::JobValidation(format!(
@@ -157,12 +175,22 @@ impl OrbitRuntime {
                  `orbit.agent.invoke` to authorize another one"
             )));
         }
-        if !matches!(
-            source.state,
-            JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
-        ) {
+        // [ORB-14617] A run held because the forge refused its push resumes
+        // from its checkpoints. Every other hold names its own resumption
+        // (an evidence hold queues a fresh review on receipt).
+        let forge_held = source.state == JobRunState::Held
+            && self
+                .read_run_state(&source.run_id)?
+                .is_some_and(|state| state.forge_hold.is_some());
+        if !forge_held
+            && !matches!(
+                source.state,
+                JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
+            )
+        {
             return Err(OrbitError::JobValidation(format!(
-                "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run",
+                "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
+                 or one held because the forge refused its push",
                 source_run_id, source.state
             )));
         }
@@ -423,12 +451,17 @@ impl OrbitRuntime {
             );
             let restamp = plan.checkpoint_batch_id.as_ref()
                 .filter(|batch| task.job_run_id.as_ref() != Some(batch));
-            if restored.is_none() && restamp.is_none() {
+            let owner = plan.checkpoint_batch_id.as_deref().unwrap_or(expected_owner);
+            // The batch binding is needed by handoff checks; the history entry
+            // couples cleanup to this attempt without changing that binding.
+            let recouple = task.status == TaskStatus::InProgress
+                && resumed_task_run_id(&history, owner) != Some(resumed_run_id);
+            if restored.is_none() && restamp.is_none() && !recouple {
                 return Ok(());
             }
             let stage = restored.unwrap_or(task.status);
             let note = format!(
-                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}",
+                "resume lineage reconciliation: run '{resumed_run_id}' resumes '{}'; stage={stage}; blocking_run={}; reused_promotion={}; owner_run_id={owner}",
                 plan.source.run_id, blocking_run.unwrap_or("-"), checkpoint.is_some(),
             );
             self.with_mutation(|| {
@@ -455,7 +488,14 @@ impl OrbitRuntime {
     }
 }
 
-/// Only system-written workflow blocks carry stage-restoration provenance.
+/// The run a system block attributes itself to, when resume may undo it.
+///
+/// Workflow failure and interruption notes carry `, run_id=<id>,`. Final
+/// recovery carries `run_id=` inside its escalation prefix. The run's own
+/// failure handoff (`pr_failure_handoff`, `pr_conflict_blocked`,
+/// `validation_environment_blocked`, `review_gate_escalation` in
+/// `executor::automation::vcs::failure`) carries `: run=<id>,`. Any other
+/// block, including an operator decision, returns `None` and stays put.
 fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
     if entry.by != SYSTEM_ACTOR_LABEL || entry.to_status != Some(TaskStatus::Blocked) {
         return None;
@@ -469,12 +509,29 @@ fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
             .strip_prefix("final recovery (run_id=")?
             .split_once(") escalated:")
             .map(|(id, _)| id),
+        "pr_failure_handoff"
+        | "pr_conflict_blocked"
+        | "validation_environment_blocked"
+        | "review_gate_escalation"
+        | orbit_types::workflow::FORGE_UNAVAILABLE_EXPIRED_EVENT => failure_handoff_run_id(note),
         _ => None,
     }
 }
 
+/// `run=<id>` in a failure-handoff note, bounded by the next comma or semicolon.
+fn failure_handoff_run_id(note: &str) -> Option<&str> {
+    let id = note
+        .split_once(": run=")?
+        .1
+        .split([',', ';'])
+        .next()?
+        .trim();
+    (!id.is_empty()).then_some(id)
+}
+
 /// Resolve host actions, never agent claims or a step name alone. A promotion
-/// must be in the reused prefix, name the task, and precede unfinished completion.
+/// must be in the reused prefix and name the task. Later failed steps and
+/// exhaustion of the job do not discard the stage already reached.
 fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Value> {
     let mut promoted = BTreeMap::new();
     for (index, step) in job.steps.iter().enumerate() {
@@ -523,7 +580,7 @@ fn review_checkpoints(job: &JobV2, state: &PipelineState) -> BTreeMap<String, Va
             }
         }
     }
-    BTreeMap::new()
+    promoted
 }
 
 /// The batch/ownership id embedded in the earliest successful checkpoint that

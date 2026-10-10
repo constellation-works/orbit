@@ -1,6 +1,62 @@
 use super::super::redaction::redact_all;
 use crate::test_env::scoped;
 
+/// Credential/session classification and the numeric floor prevent the owner
+/// reply corruption incident without exempting session credentials.
+#[test]
+fn env_redaction_preserves_session_metadata_and_small_counters() {
+    use super::super::redaction::redact_sensitive_env_text;
+
+    for name in [
+        "XDG_SESSION_ID",
+        "XDG_SESSION_TYPE",
+        "XDG_SESSION_CLASS",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "SESSION_MANAGER",
+        "TERM_SESSION_ID",
+    ] {
+        let _env = scoped([(name, Some("ordinary-session-metadata-35912"))]);
+        assert_eq!(
+            redact_sensitive_env_text("ordinary-session-metadata-35912"),
+            "ordinary-session-metadata-35912",
+            "non-credential session metadata: {name}"
+        );
+    }
+    for digits in ["35912", "12345678901", "123456789012"] {
+        let _env = scoped([("MY_SESSION_TOKEN", Some(digits))]);
+        let raw = format!("hash-prefix-{digits}-suffix");
+        let expected = if digits.len() < 12 {
+            raw.clone()
+        } else {
+            "hash-prefix-[REDACTED_ENV]-suffix".into()
+        };
+        assert_eq!(
+            redact_sensitive_env_text(&raw),
+            expected,
+            "numeric floor: {digits}"
+        );
+    }
+    for name in [
+        "GITHUB_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "MY_SESSION_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "OAUTH_ACCESS",
+        "SESSION_COOKIE",
+        "SESSION_KEY_ID",
+        "XDG_SESSION_TOKEN",
+        "XDG_SESSION_KEY_ID",
+        "MY_SESSION_ID",
+    ] {
+        let _env = scoped([(name, Some("realistic-credential-value-a8b92c6d"))]);
+        assert_eq!(
+            redact_sensitive_env_text("prefix realistic-credential-value-a8b92c6d suffix"),
+            "prefix [REDACTED_ENV] suffix",
+            "credential still scrubbed: {name}"
+        );
+    }
+}
+
 #[test]
 fn redact_all_scrubs_key_query_params_case_insensitively() {
     let raw = concat!(

@@ -48,11 +48,19 @@ The two gates are independent:
 
 - **Entering the backlog takes an explicit approval.** You give it in the
   dashboard or the CLI, or your agent gives it with `orbit.task.update` when
-  you ask; the task's history records who. No run, flag, or schedule approves
-  a `proposed` task, with one exception you opt into: an enabled CI failure
-  sweep promotes the repair tasks it files once its pilot validates them.
+  you ask; the task's history records who. You can also authorize a local
+  drain with `orbit run auto --approve-proposed`: on every pass it pilots
+  qualifying `proposed` tasks and approves those it verifies, including tasks
+  filed during the window. A task qualifies with the `no-diff-expected` tag,
+  or with context files and an assessed complexity. Duplicate, already-landed,
+  conflict or warning findings keep it proposed, as does `no-auto-approve`.
+  This is off by default and refused with `--pull`; only the owner approves
+  work. An enabled CI failure sweep can also promote the repair tasks it
+  files once its pilot validates them.
 - **Completing out of `review`** can instead be authorized per run with
-  `--complete`. It never approves `proposed` work. See
+  `--complete`, or for distributed handoffs with the owner's
+  `workflow.distributed_completion = "done"`. Completion never approves
+  `proposed` work. See
   [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).
 
 An [auto-task](../scheduling/#auto-task) files each recurring task at the

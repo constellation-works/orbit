@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_engine::ci_run_event::is_branch_event;
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 
 use super::fields::{run_order, value_string};
@@ -108,11 +110,11 @@ pub(super) fn split_deferred_failures(
     (complete, deferred)
 }
 
-/// A newer green push on the same branch is stronger evidence than an older
-/// red finding. The collector normally moves that red run to
-/// `stale_or_superseded`; retaining this check at filing keeps a replayed or
-/// hand-constructed snapshot from filing a repair after the branch is already
-/// green.
+/// A newer green branch-event run (push, schedule or dispatch) of the same
+/// workflow on the same branch is stronger evidence than an older red finding.
+/// The collector normally moves that red run to `stale_or_superseded`; retaining
+/// this check at filing keeps a replayed or hand-constructed snapshot from
+/// filing a repair after the branch is already green.
 pub(super) fn exclude_already_repaired(
     failures: Vec<Value>,
     evidence: &Value,
@@ -120,7 +122,7 @@ pub(super) fn exclude_already_repaired(
     let mut remaining = Vec::new();
     let mut repaired = Vec::new();
     for failure in failures {
-        let Some(green) = newer_green_push_run(&failure, evidence) else {
+        let Some(green) = newer_green_branch_run(&failure, evidence) else {
             remaining.push(failure);
             continue;
         };
@@ -145,7 +147,7 @@ pub(super) fn exclude_already_repaired(
         if repaired_ids.contains(&run_id_key(stale).unwrap_or_default()) {
             continue;
         }
-        let Some(green) = newer_green_push_run(stale, evidence) else {
+        let Some(green) = newer_green_branch_run(stale, evidence) else {
             continue;
         };
         repaired.push(json!({
@@ -162,7 +164,7 @@ pub(super) fn exclude_already_repaired(
     (remaining, repaired)
 }
 
-fn newer_green_push_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a Value> {
+fn newer_green_branch_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a Value> {
     let workflow = value_string(failure, "workflow");
     let branch = value_string(failure, "head_branch");
     let failure_order = run_order(failure);
@@ -174,7 +176,7 @@ fn newer_green_push_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a 
     runs.filter(|run| {
         value_string(run, "workflow") == workflow
             && value_string(run, "head_branch") == branch
-            && value_string(run, "event") == "push"
+            && is_branch_event(&value_string(run, "event"))
             && run_order(run) > failure_order
             && run_is_completed_success(run)
     })
@@ -194,8 +196,9 @@ fn superseding_green_run<'a>(failure: &Value, evidence: &'a Value) -> Option<&'a
             return None;
         }
         let superseded_by = entry.get("superseded_by")?;
-        (value_string(superseded_by, "event") == "push" && run_is_completed_success(superseded_by))
-            .then_some(superseded_by)
+        (is_branch_event(&value_string(superseded_by, "event"))
+            && run_is_completed_success(superseded_by))
+        .then_some(superseded_by)
     })
 }
 
@@ -263,7 +266,9 @@ fn job_evidence_gap(failure: &Value, schema_version: u64) -> Option<&'static str
         return Some("job log source is incomplete");
     }
     if selected_diagnostic(failure).is_none()
-        && (value_string(failure, "log_excerpt").trim().is_empty()
+        && (strip_ansi_sequences(&value_string(failure, "log_excerpt"))
+            .trim()
+            .is_empty()
             || failure.get("log_truncated").and_then(Value::as_bool) != Some(false))
     {
         return Some("job diagnostic evidence is missing or truncated");
@@ -383,6 +388,13 @@ pub(super) fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         .filter(|run| run.get("investigated").and_then(Value::as_bool) == Some(true))
         .filter_map(|run| run.get("run_id").cloned())
         .collect::<Vec<_>>();
+    // Errors collection already demoted after repeating across sweeps: they
+    // never block filing, but the sweep's audit still names them.
+    let persistent_errors = evidence
+        .get("persistent_retryable_errors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     json!({
         "latest_runs_discovered": latest_run_ids.len(),
         "latest_run_ids": latest_run_ids,
@@ -399,7 +411,26 @@ pub(super) fn audit_summary(evidence: &Value, failures: &[Value]) -> Value {
         "retryable_errors": 0,
         "already_repaired_count": 0,
         "already_repaired_run_ids": [],
+        "pending_supersession": 0,
+        "pending_supersession_run_ids": [],
+        "persistent_retryable_errors": persistent_errors.len(),
+        "persistent_retryable_error_details": persistent_errors,
     })
+}
+
+/// Count every failure held back for a possible repair, with its run ids:
+/// collection's in-flight-descendant holds and filing's landed-repair holds.
+pub(super) fn pending_audit(mut audit: Value, pending: &[Value]) -> Value {
+    let mut run_ids = Vec::new();
+    for entry in pending {
+        match entry.get("run_ids").and_then(Value::as_array) {
+            Some(ids) => run_ids.extend(ids.iter().cloned()),
+            None => run_ids.extend(entry.get("run_id").cloned()),
+        }
+    }
+    audit["pending_supersession"] = json!(pending.len());
+    audit["pending_supersession_run_ids"] = json!(run_ids);
+    audit
 }
 
 pub(super) fn filing_audit(mut audit: Value, filed: &[Value], skipped_existing: &[Value]) -> Value {

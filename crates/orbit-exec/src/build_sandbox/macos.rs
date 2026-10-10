@@ -42,7 +42,7 @@ const MACOS_RUNTIME_LITERALS: &[&str] = &[
 ];
 
 /// The SBPL profile for an offline phase. `spec.network` is not rendered:
-/// [`command`] refuses a networked phase before compiling.
+/// `command` refuses a networked phase before compiling.
 pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
     let mut profile = String::from("(version 1)\n(deny default)\n");
     // `stat` on any path: path resolution walks every ancestor of the build

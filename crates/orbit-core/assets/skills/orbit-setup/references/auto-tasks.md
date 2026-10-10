@@ -124,6 +124,15 @@ orbit auto-task delete <name> --reason "<why>"   # remove it for good
 orbit auto-task restore <name>          # reinstate a deleted shipped default
 ```
 
+On a shipped default, `toggle` and `update` of settings fields — `enabled`,
+the schedule, dedupe, and the template's crew, priority, complexity, and added
+tags — are stored in `.orbit/auto_tasks/.orbit-auto-task-settings.json` and
+applied over the bundled body, which keeps receiving upstream fixes on
+`orbit workspace sync`. Changing any other field forks the definition: Orbit
+then preserves the file as written and stops refreshing it, and `show` reports
+`body: forked` with the differing fields. `orbit workspace sync` moves an older
+fork that differs only in settings back under management.
+
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
 `show` first; mint only when creating that task is intended. Over MCP:
@@ -140,7 +149,9 @@ CLI-only.
 `toggle off` pauses a definition and keeps it listed. `delete` removes it: the
 YAML file, its scheduler cursor, and — for a `deliveries_landed` definition —
 its consumer state. Every delete writes an audit record naming who deleted
-what and the optional `--reason`.
+what and the optional `--reason`. A delete that fails leaves the definition
+and its cursor in place; if it failed releasing a pinned ref, the consumer
+reset before it stays applied, recorded as its own audited reset.
 
 - It refuses while a task minted from the definition is still open and names
   those tasks. Finish or close them, or pass `--force`; a forced delete leaves
@@ -166,17 +177,18 @@ what and the optional `--reason`.
 A user-authored definition records no opt-out: delete simply removes it.
 `delete` and `restore` are CLI-only; over MCP, disable a definition instead.
 
-Required tools in a template extend the selected agent activity's baseline;
-they do not replace it or bypass runtime capability, policy, filesystem,
+Required tools in a template extend an allowlist activity's baseline; in a
+deny-list activity they cannot override `tool_disallow_list`.
+They do not replace it or bypass runtime capability, policy, filesystem,
 subprocess, or authentication checks. Invalid, inactive, wildcard, or
 non-agent-facing names fail dispatch before the provider starts.
 
 A template that declares exactly `github.auth.status`, `github.run.list`,
 `github.run.view`, `github.run.logs`, and `github.pr.list` is the worked
 example. A minted instance therefore runs under
-`effective_tools = agent_implement baseline ∪ those five names`. Ordinary
-implementation tasks that request nothing keep the original baseline and
-cannot call GitHub tools. Inclusion is only allowlist membership — a
+`effective_tools = activity baseline ∪ those five names` for allowlist mode.
+The shipped deny-list `agent_implement` already includes those GitHub reads;
+tasks requesting nothing keep that baseline. Inclusion is only tool membership — a
 structured `github.auth.status` answer may still report `available: false` or
 `authenticated: false` when the lane has no GitHub CLI or no credentials.
 That is unavailable evidence, not a clean CI result.
@@ -209,7 +221,7 @@ plugin being removed.
   suite, and files a task for each non-duplicate issue found. In agent-executor
   sandboxes and linked job-run worktrees, the managed `.git` mount is read-only
   by design (must not be worked around by chmod or host-side gitdir writes).
-  Use `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base` to build a
+  Use `mkdir -p .orbit/tmp/base && git archive <sha> | tar -x -C .orbit/tmp/base` to build a
   baseline revision without writing `.git`, and `git show HEAD:<path> > <path>`
   to revert a tracked file when `git checkout --` cannot take `index.lock`.
 - **`friction-curation`** (`medium`) — daily. Deduplicates the open friction corpus against
@@ -229,25 +241,47 @@ plugin being removed.
 - **`full-code-review`** (`medium`) — on demand (`orbit auto-task mint
   full-code-review`); its monthly cron stays off until you enable it. The minted
   task is a coordinator: it pins the integration branch's tip, splits the tree
-  into review areas of roughly 90k lines along package and module boundaries,
-  and files one area-review chore per area, tagged `full-code-review` and
-  `no-diff-expected` (never `code-review`), at `hard` complexity or below with
-  no pinned crew. Each area reviewer reads its whole area at that commit and
-  files confirmed findings as bugs tagged `code-review` and `full-code-review`;
+  into review areas of at most 25,000 tracked text lines, preferring package
+  and module boundaries where they fit that bound, and files one area-review
+  chore per area, tagged `full-code-review` and `no-diff-expected` (never
+  `code-review`), at `hard` complexity or below with no pinned crew. Each area
+  reviewer reads its whole area at that commit in partitions of at most 10,000
+  lines and files confirmed findings as bugs tagged `code-review` and
+  `full-code-review`;
   a clean area is a successful no-op.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
   records typed coverage evidence. Hands-on QA of recent changes is
   `qa-sweep`; a full pre-release sign-off is `qa-full-sweep` when that
   workspace definition is present.
-- **`doc-duties`** (`low`) — daily. Validates a small batch of the oldest
-  workspace documentation against current behavior, and corrects factual drift
-  and broken links. A batch whose claims are already accurate is a successful
-  no-diff run.
+- **`doc-duties`** (`low`) — daily. Validates a small batch of the
+  least-recently-attempted workspace documentation against current behavior,
+  and corrects factual drift and broken links. Each run attaches a
+  `doc-duties-ledger.json` artifact recording an outcome (`clean`, `fixed`,
+  `partial` or `skipped`) and attempt date per selected document, plus a
+  cumulative `state` map of every path's two latest attempts. A run reads only
+  the newest readable ledger's `state` (older ledgers without it are read
+  through the 60-run window), so attempts survive task-history truncation.
+  Selection orders by the latest attempt, then `last_validated` frontmatter,
+  then the git last-touched date, so a skipped document rotates to the back. A
+  document whose two latest attempts were `skipped` or `partial` is held back
+  and reported as needing its own task. A batch whose claims
+  are already accurate is a successful no-diff run with validated no-diff
+  evidence. Its template declares `dir:.`
+  because a batch may include root and workspace-specific documents, and omits
+  `no-diff-expected` so it holds a context lock while correcting drift.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
 - **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
-  evidence for recurring failures that nobody has filed, and records one
-  friction or proposed task per untracked pattern.
+  evidence, and on an owner the failure and release settlements its followers'
+  claimed leaves sent (`orbit run settlements --no-reconcile`), for failures
+  that nobody has filed. It folds parent pipelines into their child by the
+  recorded `root_cause` (a parent of a `held` child is no failure), splits
+  review refusals by escalation category, and also files a single blocking
+  failure of a deterministic Orbit action or tool limit. Each untracked
+  pattern, its mechanism verified in code, becomes one `proposed` fix task
+  tagged `run-failure-patterns` and `no-auto-approve`, so it waits for human
+  approval; a friction replaces the task only when no cause can be
+  established, never both.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
@@ -281,6 +315,17 @@ A definition scheduled on `deliveries_landed` (the shipped
 which landings it has examined, and mints an examination task when the debt is
 due. That recorded position — "observed commit X" — is what a rewritten branch
 history breaks.
+
+When the checkout has an `origin` remote, the consumer observes
+`origin/<branch>`, not the local branch. Each pass fetches that one ref and
+leaves the worktree, index, and local branch untouched, so a pull request
+merged on the remote is seen even when the checkout was not fast-forwarded. A
+failed fetch defers as `source_fetch_failed` and does not fall back to the
+local ref; that deferral retries. `orbit doctor`'s `review` row names the
+observed commit and the remote-tracking head, and it is not ok while the cursor
+trails that head past the batch's `max_wait_minutes`. A repository with no
+remote still watches `refs/heads/<branch>`. Doctor compares the remote-tracking
+ref already in the checkout and does not itself fetch.
 
 ### A rewritten history is proved, or it stalls
 

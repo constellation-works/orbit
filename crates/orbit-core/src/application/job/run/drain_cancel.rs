@@ -17,8 +17,11 @@
 //!   never a leaf another live drain carries. A leaf whose stop cannot be
 //!   confirmed keeps its claim (`unstopped_leaves`). If the drain worker
 //!   itself cannot be confirmed stopped, cancellation fails before finalizing
-//!   the drain or changing its carried claims. A local auto drain's
+//!   the drain or changing its carried claims. Each released claim returns to
+//!   the owner's backlog even under `--block`, which only sets how the stopped
+//!   leaves' own local task couplings are left. A local auto drain's
 //!   `--force` also stops the children its cancel would otherwise detach,
+//!   returning their tasks to backlog unless blocking was requested and
 //!   reporting unconfirmed stops in `unstopped_children`.
 //!
 //! A drain that is queued, or whose worker is conclusively gone, has nothing
@@ -33,10 +36,12 @@ use orbit_store::contracts::{
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunStateUpdate};
+use orbit_types::workflow::{
+    JobRun, JobRunState, PipelineState, RunStateUpdate, TaskCancellationPolicy,
+};
 use serde_json::json;
 
-use super::actions::cancellation_result;
+use super::actions::{CancellationRequest, cancellation_note, cancellation_result};
 use super::owner::{
     RunOwnerLiveness, run_owner_liveness, run_owner_unstoppable_reason, signal_run_owner_confirmed,
 };
@@ -65,11 +70,43 @@ impl OrbitRuntime {
         reason: Option<&str>,
         force: bool,
     ) -> Result<JobRunCancelResult, OrbitError> {
+        self.cancel_job_run_with_options_and_policy(run_id, actor, source, reason, force, true)
+    }
+
+    /// Select the task disposition for an operator cancellation. The
+    /// compatibility entry point above keeps the historical blocked outcome;
+    /// CLI and dashboard requests use backlog unless the operator chooses
+    /// `block_task`.
+    pub fn cancel_job_run_with_options_and_policy(
+        &self,
+        run_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        force: bool,
+        block_task: bool,
+    ) -> Result<JobRunCancelResult, OrbitError> {
+        // The shared cancellation path persists the task disposition before
+        // signalling so a worker that exits during the signal observes it.
+        // Refuse pull-drain owners already known to be unstoppably local or
+        // unverifiable first, leaving the drain state untouched when no
+        // signal can occur. Keep the injected signal seam below deterministic.
+        if force
+            && let Some(run) = self.get_job_run_backend(run_id)?
+            && run.job_id == PULL_DRAIN_JOB
+            && run.state == JobRunState::Running
+            && run_owner_unstoppable_reason(&run).is_some()
+        {
+            signal_run_owner_confirmed(&run)?;
+        }
         self.cancel_job_run_with_options_and_signal(
             run_id,
-            actor,
-            source,
-            reason,
+            CancellationRequest {
+                actor,
+                source,
+                reason,
+                block_task,
+            },
             force,
             signal_run_owner_confirmed,
         )
@@ -80,9 +117,7 @@ impl OrbitRuntime {
     pub(super) fn cancel_job_run_with_options_and_signal<F>(
         &self,
         run_id: &str,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
         force: bool,
         signal: F,
     ) -> Result<JobRunCancelResult, OrbitError>
@@ -92,31 +127,42 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-        let reason = reason.map(str::trim).filter(|reason| !reason.is_empty());
+        let request = CancellationRequest {
+            reason: request
+                .reason
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty()),
+            ..request
+        };
         if run.job_id == PULL_DRAIN_JOB {
             // Forcing an ended drain still stops the leaves it left running.
             if force {
-                return self.force_cancel_pull_drain(&run, actor, source, reason, signal);
+                return self.force_cancel_pull_drain(&run, request, signal);
             }
             if run.state == JobRunState::Running
                 && run_owner_liveness(&run) != RunOwnerLiveness::Stopped
             {
-                return self.request_graceful_drain_cancel(&run, actor, source, reason);
+                return self.request_graceful_drain_cancel(&run, request);
             }
         }
         if force && run.job_id == LOCAL_DRAIN_JOB {
-            return self.force_cancel_local_drain(&run, actor, source, reason, signal);
+            return self.force_cancel_local_drain(&run, request, signal);
         }
-        self.cancel_job_run_with_reason(run_id, actor, source, reason)
+        self.cancel_job_run_with_reason_and_policy_and_signal(
+            run_id,
+            request.actor,
+            request.source,
+            request.reason,
+            request.block_task,
+            signal,
+        )
     }
 
     /// Mark a running pull drain `cancelling` and report what it waits for.
     fn request_graceful_drain_cancel(
         &self,
         run: &JobRun,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
     ) -> Result<JobRunCancelResult, OrbitError> {
         let mut requested = false;
         let mut terminal = false;
@@ -127,14 +173,27 @@ impl OrbitRuntime {
                     terminal = true;
                     return Ok(());
                 }
-                requested =
-                    state.set_drain_cancel(actor.into(), source.into(), reason.map(Into::into));
+                requested = state.set_drain_cancel(
+                    request.actor.into(),
+                    request.source.into(),
+                    request.reason.map(Into::into),
+                );
+                state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                    block: request.block_task,
+                    note: cancellation_note(request.actor, request.reason),
+                });
                 Ok(())
             },
         )?;
         if terminal {
             // The drain finished while this request was on its way.
-            return self.cancel_job_run_with_reason(&run.run_id, actor, source, reason);
+            return self.cancel_job_run_with_reason_and_policy(
+                &run.run_id,
+                request.actor,
+                request.source,
+                request.reason,
+                request.block_task,
+            );
         }
         match update {
             RunStateUpdate::Updated => {}
@@ -150,8 +209,15 @@ impl OrbitRuntime {
                     run.job_id.clone(),
                     run.input.clone().unwrap_or_else(|| json!({})),
                 );
-                requested =
-                    state.set_drain_cancel(actor.into(), source.into(), reason.map(Into::into));
+                requested = state.set_drain_cancel(
+                    request.actor.into(),
+                    request.source.into(),
+                    request.reason.map(Into::into),
+                );
+                state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                    block: request.block_task,
+                    note: cancellation_note(request.actor, request.reason),
+                });
                 self.write_run_state(&run.run_id, &state)?;
             }
         }
@@ -159,20 +225,28 @@ impl OrbitRuntime {
             self.record_pipeline_audit(
                 GRACEFUL_CANCEL_AUDIT,
                 Some(&run.run_id),
-                Some(actor),
+                Some(request.actor),
                 AuditEventStatus::Success,
                 json!({
                     "run_id": run.run_id,
-                    "actor": actor,
-                    "source": source,
-                    "reason": reason,
+                    "actor": request.actor,
+                    "source": request.source,
+                    "reason": request.reason,
+                    "block_task": request.block_task,
                     "requested_at": Utc::now().to_rfc3339(),
                 }),
                 None,
             )?;
         }
-        let mut result =
-            cancellation_result(run, "cancelling", run.state, false, None, actor, source);
+        let mut result = cancellation_result(
+            run,
+            "cancelling",
+            run.state,
+            false,
+            None,
+            request.actor,
+            request.source,
+        );
         // Settlements already recorded go out now; the drain releases its
         // own unlaunched claims on its next pass.
         result.pull_settlements = self.settle_pending_pulls();
@@ -190,24 +264,25 @@ impl OrbitRuntime {
         if run.state.is_terminal() {
             return Ok(());
         }
-        let cancel = self
-            .read_run_state(run_id)?
-            .and_then(|state| state.drain_cancel)
-            .ok_or_else(|| {
-                OrbitError::JobValidation(format!("job run '{run_id}' is not being cancelled"))
-            })?;
+        let state = self.read_run_state(run_id)?.ok_or_else(|| {
+            OrbitError::JobValidation(format!("job run '{run_id}' has no cancellation state"))
+        })?;
+        let cancel = state.drain_cancel.ok_or_else(|| {
+            OrbitError::JobValidation(format!("job run '{run_id}' is not being cancelled"))
+        })?;
         let (actor, source) = (cancel.actor.as_str(), cancel.source.as_str());
         let reason = cancel.reason.as_deref();
+        let block_task = state
+            .task_cancellation_policy
+            .as_ref()
+            .is_none_or(|policy| policy.block);
         let request_id = audit_execution_id("cancel");
-        self.record_cancellation_request(&run, &request_id, actor, source)?;
+        self.record_cancellation_request(&run, &request_id, actor, source, reason, block_task)?;
         let now = Utc::now();
         let duration_ms = run
             .started_at
             .map(|started| now.signed_duration_since(started).num_milliseconds().max(0) as u64);
-        let diagnostic = match reason {
-            Some(reason) => format!("run cancelled by {actor}: {reason}"),
-            None => format!("run cancelled by {actor}"),
-        };
+        let diagnostic = cancellation_note(actor, reason);
         self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             run_id,
             JobRunState::Cancelled,
@@ -259,9 +334,7 @@ impl OrbitRuntime {
     fn force_cancel_pull_drain<F>(
         &self,
         run: &JobRun,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
         signal: F,
     ) -> Result<JobRunCancelResult, OrbitError>
     where
@@ -274,14 +347,17 @@ impl OrbitRuntime {
             .collect::<Vec<_>>();
         // Confirm the drain stopped before finalizing it or releasing claims:
         // a non-stopping signal outcome must not let it keep admitting work.
-        let mut result =
-            self.cancel_job_run_cascading(&run.run_id, actor, source, reason, signal, 0)?;
-        let cause = match reason {
+        let mut result = self.cancel_job_run_cascading(&run.run_id, request, signal, 0)?;
+        let cause = match request.reason {
             Some(reason) => format!(
                 "drain {} was cancelled with --force by {actor}: {reason}",
-                run.run_id
+                run.run_id,
+                actor = request.actor
             ),
-            None => format!("drain {} was cancelled with --force by {actor}", run.run_id),
+            None => format!(
+                "drain {} was cancelled with --force by {}",
+                run.run_id, request.actor
+            ),
         };
         let jobs = self.stores().jobs();
         let still_carried = || -> Result<Vec<LocalPullAdmission>, OrbitError> {
@@ -313,7 +389,7 @@ impl OrbitRuntime {
             if !launched {
                 continue;
             }
-            match self.stop_released_leaf(&record, &leaf_run, actor, source, reason, &cause) {
+            match self.stop_released_leaf(&record, &leaf_run, request, &cause) {
                 Ok(true) => result.forced_runs.push(leaf),
                 Ok(false) => {}
                 Err(why) => {
@@ -354,13 +430,15 @@ impl OrbitRuntime {
     /// confirmed leaves the release held — never delivered while the leaf
     /// still runs — until the leaf is seen to stop. Either is the `Err`
     /// reason.
+    ///
+    /// The operator's `block_task` choice rides the leaf's own cancellation
+    /// (its local task coupling), but never the claim: the release recorded
+    /// above sends the owner's task to the backlog whichever way it is set.
     fn stop_released_leaf(
         &self,
         record: &LocalPullAdmission,
         leaf: &JobRun,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
         cause: &str,
     ) -> Result<bool, String> {
         if leaf.state == JobRunState::Running
@@ -381,20 +459,13 @@ impl OrbitRuntime {
         if !matches!(settling.settlement, Some(ClaimMutation::Release(_))) {
             return Ok(false);
         }
-        self.cancel_job_run_cascading(
-            &leaf.run_id,
-            actor,
-            source,
-            reason,
-            signal_run_owner_confirmed,
-            0,
-        )
-        .map_err(|error| {
-            format!(
-                "stop unconfirmed: {error}; its release is held, and reaches the owner only \
+        self.cancel_job_run_cascading(&leaf.run_id, request, signal_run_owner_confirmed, 0)
+            .map_err(|error| {
+                format!(
+                    "stop unconfirmed: {error}; its release is held, and reaches the owner only \
                  once the leaf is seen to stop"
-            )
-        })?;
+                )
+            })?;
         Ok(true)
     }
 
@@ -403,16 +474,13 @@ impl OrbitRuntime {
     fn force_cancel_local_drain<F>(
         &self,
         run: &JobRun,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
         signal: F,
     ) -> Result<JobRunCancelResult, OrbitError>
     where
         F: FnOnce(&JobRun) -> Result<String, OrbitError>,
     {
-        let mut result =
-            self.cancel_job_run_cascading(&run.run_id, actor, source, reason, signal, 0)?;
+        let mut result = self.cancel_job_run_cascading(&run.run_id, request, signal, 0)?;
         // The stopped parent can no longer persist another dispatch. Its
         // cancellation closes open dispatches but preserves their lineage,
         // so include closed records too: detached children may still run.
@@ -429,14 +497,7 @@ impl OrbitRuntime {
         for child in children {
             // Keep every child's failure in the result, including unreadable
             // or missing run records, and continue stopping its siblings.
-            match self.cancel_job_run_cascading(
-                &child,
-                actor,
-                source,
-                reason,
-                signal_run_owner_confirmed,
-                0,
-            ) {
+            match self.cancel_job_run_cascading(&child, request, signal_run_owner_confirmed, 0) {
                 Ok(cancelled) if cancelled.outcome == "cancelled" => {
                     result.forced_runs.push(child);
                 }

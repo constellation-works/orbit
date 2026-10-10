@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.28.1 — 2026-10-10
+
+### Highlights
+
+- **Provider-limit-aware routing**: drains and crew-pool draws skip crews whose provider is near or at its usage limit and resume them after the reset. `orbit run readiness` shows the limits and gated crews, and operators can declare rolling budgets for providers that report no usage. ([ORB-14697])
+- **Before-landing review**: `review.before_landing` reviews a task's open PR while hosted CI runs, and the PR lands only on an accepted review. It is an alternative to before-PR review and is off by default. ([ORB-14849])
+- **Dashboard host switcher**: pick a registered host above the workspace picker, and every panel, action, log tail and resource chip follows it. The selection is URL-addressable as `?host=`. ([ORB-14680])
+- **Run history by task**: `orbit run history` shows each run's task and duration and filters by `--task`, `--state` and `--since`, so you can find the run that delivered a task and how long it took. ([ORB-14597])
+- **Declared reclaim paths**: `worktree.reclaim` globs declare which build outputs in kept run worktrees may be swept, replacing the hard-coded `target/`. ([ORB-14850])
+- **macOS `.env` deny hardening**: renaming a containing directory out of the workspace no longer bypasses a `**/.env` sandbox deny on macOS. ([ORB-14929])
+- **Claude worker token on macOS**: a Claude activity that receives neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is now refused before `claude` starts, instead of falling back to the Claude Desktop login, which the Desktop revokes mid-run (HTTP 401). Create a token with `claude setup-token` and list it in `[execution.env] pass`. For scheduled runs, the clock tick now exports credentials from `~/.orbit/clock.env` (mode `0600`) under the names `pass` admits, and `orbit doctor`'s `claude-worker-token` row warns when a routed Claude crew would run without the token. ([ORB-15154])
+
+## 0.28.0 — 2026-10-08
+
+### Breaking Changes
+
+- **Distributed pull protocol**: the revision goes from 5 to 10, and a newer owner refuses older followers → run matching owner and follower versions. ([ORB-14261])
+- **Job-run state migration**: SQLite migration 38 moves run state into `job_run_states` and drops `job_runs.pipeline_state_json`. It is declared Breaking, so older binaries refuse the migrated store. ([ORB-14585])
+- **`terra` is no longer a built-in crew**: a config that names terra without defining `[crews.terra]` must define it. Existing `[crews.terra]` tables keep working. ([ORB-14672])
+
+### Highlights
+
+- **Host registry and routing**: `orbit host add|list|show|remove` keeps a registry of named hosts. Task IDs route to the host that owns their prefix, `--host` selects one explicitly, and Settings › Hosts manages the registry from the dashboard. ([ORB-14448])
+- **Linux sandbox setup**: Linux installs can use Orbit's signed, pinned Bubblewrap when the host wrapper is missing, and package-manager discovery follows host capabilities. `orbit init` finishes with a readiness warning if preparation fails, and execution stays fail-closed until the sandbox is ready. ([ORB-14075])
+- **Faster run, dashboard and scoreboard queries**: run listings no longer scan every run's pipeline state, and scoreboard failure aggregation and cold dashboard paths are optimized, taking pages that took many seconds down to a fraction of that. ([ORB-14585])
+- **Distributed claimed review and recovery**: claimed PR work runs the owner's before-PR review contract and gets one automatic repair when landing stops on a stale or conflicting base. Operators can reconcile a merged PR whose final head differs from the candidate. ([ORB-13908])
+- **Proposed-task intake**: `orbit run auto --approve-proposed` promotes qualifying proposed tasks and holds uncertain ones. The dashboard auto-drain panel offers it when starting a window, and proposed and backlog tasks show a readiness chip. ([ORB-14117])
+- **Built-in Haiku crew**: fresh configs ship a Claude Haiku crew, and `orbit init` seeds complexity pools from the provider families it detects. ([ORB-14671])
+
+## 0.27.0
+
+### Breaking Changes
+
+- **Review config split**: before-PR review is `review.before_pr`; after-landing review is the `delivery-code-review` auto-task's `enabled` flag and now covers follower landings. `operation.review_policy` and `review_minutes` still load with a warning, and `review.minutes` now limits one candidate's review. ([ORB-13992], [ORB-13894])
+- **`delivery-qa` auto-task removed**: it is no longer seeded, and the `integrated_qa_v1` coverage is refused for new or updated schedules. Existing copies still load. QA is covered by `qa-sweep` and `qa-full-sweep`. ([ORB-13993])
+
+### Highlights
+
+- **Final recovery for blocked tasks**: a task that ends up `blocked` after its step recovery is used up now gets one last recovery agent, drawn from `workflow.final_recovery_crews` (default `sol:100, opus:20`). That agent can repair, requeue or resume the task instead of leaving it for an operator; `[]` turns it off. ([ORB-13898])
+- **Before-PR reviewer fixes what it finds**: the reviewer commits its fixes as a second commit on the candidate instead of sending the task back for rework. Each candidate gets one review, limited by `review.minutes`. ([ORB-13989])
+- **Re-runs resume from a preserved candidate**: re-running a task that has a `[BLOCKED]` candidate rebases and re-validates that candidate instead of implementing it again. ([ORB-13985])
+- **Host resource throttle**: Orbit samples CPU, memory and disk, shows them as KPI chips and in a Settings › System tab on the dashboard, and holds drain and ship admissions while the host is under pressure. It is on by default, with warnings over the CLI and MCP. ([ORB-11415])
+- **Agent invocations you can wait on**: `orbit run agent --wait` returns the agent's structured answer (summary, findings, next steps), `orbit run logs --follow` streams output, and `orbit_workflow_run_show` reports progress while it runs. ([ORB-13899])
+- **Orbit closes its own PRs**: when a task lands, is rejected or is archived, Orbit closes the task's open delivery and `[BLOCKED]` PRs that it authored, keeping the PR that landed open. Human PRs are never touched. Turn it off with `pr.close_on_terminal = false`. ([ORB-13984])
+
 ## 0.26.0
 
 ### Breaking Changes

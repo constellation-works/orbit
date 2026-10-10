@@ -15,12 +15,12 @@ mod write;
 // `commit` reaches these through `super::`.
 use super::types::TaskBundleV2;
 use jsonl::scan_jsonl_records;
-use read::read_required_text;
+use read::{read_required_bytes, read_required_text};
 
 pub(crate) use artifacts::copy_artifact_blobs;
 pub(crate) use commit::{
     PENDING_WRITE_FILE_NAME, PendingWriteGuard, publish_envelope, recover_pending_bundle_at,
-    truncate_jsonl_file,
+    recover_pending_write, truncate_jsonl_file,
 };
 pub(crate) use jsonl::append_jsonl_row;
 pub(crate) use read::{

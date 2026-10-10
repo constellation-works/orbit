@@ -16,7 +16,7 @@ use std::sync::Arc;
 use super::*;
 use command::*;
 use log::*;
-use supervisor::PipelineWorkerSupervisor;
+use supervisor::{PipelineWorkerSupervisor, WorkerLaunchError};
 
 use super::admission::pipeline_run_is_runnable;
 use super::wait::PIPELINE_WAIT_MIN_POLL_SECONDS;

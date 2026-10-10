@@ -63,6 +63,10 @@ base_branch = "main"
 enabled = true
 cpu_high_percent = 90
 cpu_resume_percent = 85
+# While only CPU holds admissions, up to this many `no-diff-expected`
+# auto-task leaves (reviews, curation) still start; memory and disk pressure
+# hold them too. 0 holds them with everything else.
+cpu_light_leaves = 2
 memory_high_percent = 90
 memory_resume_percent = 85
 disk_high_percent = 90
@@ -77,16 +81,29 @@ disk_resume_percent = 85
 # log_max_total_mb   = 500  # total MiB budget across archives; oldest pruned first (>= 1)
 # log_max_file_mb    = 100  # roll the active log once it exceeds N MiB (>= 1, <= log_max_total_mb)
 
+# [review]
+# Before-PR review: hold PR creation for a fresh reviewer from
+# operation.review_crew on the PR route. The reviewer fixes what it finds in
+# its own commit on the candidate; findings it cannot fix block the task. A
+# drain or ship captures before_pr at submission, so a run in flight keeps it.
+# Each candidate gets one review, bounded by `minutes` (its fix commit and
+# final validation included).
+# before_pr = false
+#
+# Before-landing review: open the PR first, then have the same kind of
+# reviewer review the open PR while hosted CI runs on it. A reviewer fix is
+# validated and pushed to the PR; the PR lands only at the head the review
+# settled, and any other outcome leaves it open with the task in review.
+# Loading fails while before_pr and before_landing are both on: there is one
+# review layer before landing.
+# before_landing = false
+# minutes = 30
+#
+# After-landing review has no key here: it is the `delivery-code-review`
+# auto-task, switched with `orbit auto-task toggle delivery-code-review on`.
+# It freezes landed deliveries into batches and mints one review task per
+# batch on the machine that owns the workspace; `orbit doctor` fails while it
+# is enabled but cannot run.
+
 # [operation]
-# Automatic review policy. `before-pr` holds PR creation for a fresh reviewer
-# from `review_crew` on the PR route. `after-landing` enables this workspace's
-# `delivery-code-review` auto-task whatever its own `enabled` says: it freezes
-# landed deliveries on the base branch into batches and mints one review task
-# per batch, with `review_crew` as its crew when set. It runs only on the
-# machine that owns the workspace; `orbit doctor` fails while that consumer is
-# missing, owned elsewhere, wedged, stalled or watching a branch that does not
-# exist. The lineage budget keys (review_reviewer_starts, review_minutes) bound
-# one before-PR delivery run and its resumes. The reviewer fixes what it finds
-# in its own commit on the candidate; findings it cannot fix block the task.
-# review_policy = "none"       # or "before-pr", "after-landing"
-# review_crew = "sol"          # reviewer crew for before-pr and after-landing
+# review_crew = "sol"          # crew for before-PR review and after-landing review tasks

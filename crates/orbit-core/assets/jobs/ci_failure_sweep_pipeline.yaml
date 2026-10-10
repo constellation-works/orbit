@@ -12,8 +12,18 @@
 # - `file` (deterministic): clusters the snapshot's current, non-stale failures
 #   by root cause and files each surviving cluster as a `proposed` bug task
 #   carrying that evidence inline. Filing is deduped against still-open tasks
-#   by failure key. Completed owners require structured diagnostic, validation,
+#   by failure key. Operator covered_by relations retain archived/rejected
+#   ownership while a task or PR cover is open; uncovered decisions hold for
+#   ci_failure.operator_suppression_hours (default 6). Every hold is reported
+#   with its key, reason, owner and cover/expiry, and is never piloted. A failure
+#   on a checkout containing a landed cover files a repair naming the failed fix.
+#   Equal normalized test signatures across jobs share one task listing all jobs.
+#   Completed owners require structured diagnostic, validation,
 #   delivery and branch proof; covered observations never become pilot candidates.
+#   A failure tested before a done repair of the same signature landed, or a
+#   lone red run whose workflow is still running on a descendant commit, is
+#   held in `pending_supersession` instead of filed; the latter only until it
+#   reproduces on the previous completed run or outlives a 30-minute window.
 #   Proposed is the quarantine boundary: an active auto-drain
 #   cannot see the finding yet.
 # - `pilots` (bounded fan-out): invokes the existing task_pilot_pipeline once
@@ -50,8 +60,18 @@
 #   handoff; no current failure is consumed as a clean result.
 # - Bounded investigation makes progress across sweeps rather than re-spending
 #   its budget on the same refs: red runs on branches origin no longer has are
-#   reported as `ref_no_longer_exists` instead of current, and the last
-#   investigation slot rotates through whatever the cap left over.
+#   reported as `ref_no_longer_exists`, and those whose pull request closed at
+#   the branch's current head with no open pull request as
+#   `pull_request_closed`, instead of current, and the last investigation slot
+#   rotates through whatever the cap left over.
+#   If the global closed-PR page is unavailable, selected candidates are
+#   checked by head; a failed or truncated check stays deferred.
+# - A job a workflow concurrency group cancelled (its check-run annotation says
+#   so) is inconclusive from its view and annotations; its incomplete log is
+#   never read, so it cannot fail the sweep.
+# - A run-scoped retryable error with the same run, job and operation on three
+#   consecutive sweeps degrades to `persistent_retryable_errors`, a reported
+#   note that no longer fails the sweep. Errors naming no run never degrade.
 # - Checkout identity is read from the runner-log stream before the bounded
 #   excerpt is formed. The extractor scans no more than 8 MiB per log and
 #   marks the identity incomplete if that hard limit is reached; it never

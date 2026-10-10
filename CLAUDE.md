@@ -20,10 +20,13 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 
 ## Gates
 
-`make ci-fast`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot and sandbox profile goldens after an intentional surface or policy change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
+`make ci-fast`, `make ci-test-affected`, `make ci-lint`, and `make goldens` must pass before a task moves to `review`. `make ci-fast` checks formatting and repository guardrails; it runs no Rust tests. `make ci-test-affected` runs full test targets for changed crates and their transitive workspace dependents; focused test filters do not replace it. See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci) for base selection and the required-command policy. `make goldens UPDATE=1` regenerates CLI help / MCP snapshot and sandbox profile goldens after an intentional surface or policy change — review the diff. Full `make ci` runs in CI on every PR; don't run it per task.
+
+Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, and `cargo test` / `nextest`) sequentially when they share a target directory. If they need to overlap, give them separate `CARGO_TARGET_DIR` values. Running two gates concurrently in one target can replace `target/debug/orbit` while generation-bound fixtures are active, causing spurious CLI fixture failures (F2026-10-118).
 
 ## Code
 
+- Skill documentation is canonical under `crates/orbit-core/assets/skills/`; edit it there, then run `scripts/sync-plugin-skills.sh` to regenerate the `plugin/skills/` mirror.
 - Layering and scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
 - Lints are configured via `[workspace.lints]`: `unwrap`/`expect` are warned on in production code throughout each crate (tests are exempted at crate roots); propagate errors, using `OrbitError` at crate boundaries. No `print!` (use `tracing`), no lock guards across `.await`.
 - `missing_docs` is a workspace warning that crate roots may allow while documentation is incomplete. It is currently enforced in `orbit-config` and `orbit-web`; the other crate roots opt out.
@@ -36,6 +39,10 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 - Prefer the fewest moving parts: delete dead code and stale docs together, keep compatibility only for an external contract or persisted format.
 - File length is a heuristic, not a limit: past ~800 lines, check whether a file holds more than one responsibility and split along those if so; keep closely related functionality together when splitting would only scatter it.
 - Report commands and outcomes at handoff — passed, failed, not run — never "tested".
+
+## Local Rust CodeQL checks
+
+For Rust changes in this repository, follow the [local CodeQL runbook](docs/runbooks/codeql-local.md), which uses `scripts/codeql-rust-local.sh`. Its extraction checks are required evidence; a query result from incomplete semantic extraction cannot confirm a repair. Only a Linux host can extract every module: elsewhere the script exits 3 without running, and the check is owed by a Linux run recorded as `codeql` external evidence (runbook, Non-Linux hosts).
 
 ## Orbit Workflow
 

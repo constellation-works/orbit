@@ -7,9 +7,9 @@ use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, plugin_store_sqlite, review_store, tool_store_sqlite,
-    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
-    workspace_observational_backends, workspace_policy_def_store,
+    layered_policy_def_store, plugin_store_sqlite, provider_limit_store_from_store, review_store,
+    tool_store_sqlite, v2_audit_store_from_store, workspace_coordinated_backends,
+    workspace_job_run_store, workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -96,20 +96,14 @@ pub(crate) fn build_context_from_roots(
     let task_backends = coordinated.task;
     let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
-    let workspace_id = if is_explicit_data_dir(global_root, &paths.orbit_dir) {
-        binding
-            .map(|binding| binding.logical_workspace_id.clone())
-            .or_else(|| {
-                configured
-                    .as_ref()
-                    .map(|config| config.workspace_id.clone())
-            })
-    } else {
-        configured
-            .as_ref()
-            .map(|config| config.workspace_id.clone())
-    }
-    .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
+    let workspace_id = selected_explicit_root_workspace_id(global_root, &paths.orbit_dir, binding)
+        .map(str::to_owned)
+        .or_else(|| {
+            configured
+                .as_ref()
+                .map(|config| config.workspace_id.clone())
+        })
+        .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
     let import_report = if write_free || configured.is_none() {
         orbit_store::workflow::legacy_state::ImportReport::skipped()
     } else {
@@ -157,6 +151,7 @@ pub(crate) fn build_context_from_roots(
             review: Arc::new(store.clone()),
             v2_audit: v2_audit_store_from_store(store.clone()),
             invocation: invocation_store_from_store(store.clone()),
+            provider_limit: provider_limit_store_from_store(store.clone()),
         }
     } else {
         OrbitHostStore {
@@ -165,6 +160,7 @@ pub(crate) fn build_context_from_roots(
             review: review_store(store.clone())?,
             v2_audit: v2_audit_store_from_store(store.clone()),
             invocation: invocation_store_from_store(store.clone()),
+            provider_limit: provider_limit_store_from_store(store.clone()),
         }
     };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());
@@ -252,6 +248,11 @@ pub(crate) fn build_context_from_roots(
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
+    let proc_spawn_max_timeout_ms = u64::from(
+        runtime_config
+            .snapshot
+            .execution_proc_spawn_max_timeout_minutes,
+    ) * 60_000;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
     let scoring_enabled = runtime_config.scoring_enabled;
@@ -275,6 +276,7 @@ pub(crate) fn build_context_from_roots(
     // layer's policy, as it does for PR settings above.
     let validation_env = orbit_exec::ValidationEnvPolicy {
         login_shell: runtime_config.snapshot.workflow_validation_env_login_shell,
+        interactive: runtime_config.snapshot.workflow_validation_env_interactive,
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
         path_mode: orbit_exec::ValidationPathMode::parse(
             &runtime_config.snapshot.workflow_validation_env_path_mode,
@@ -308,6 +310,7 @@ pub(crate) fn build_context_from_roots(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,
             codex_execution_policy,
+            proc_spawn_max_timeout_ms,
         ),
         OrbitRuntimeSettings::new(
             persistence,
@@ -320,6 +323,7 @@ pub(crate) fn build_context_from_roots(
             workflow_auto_ship,
             runtime_config.resource_throttle.clone(),
             workflow_required_validation_commands,
+            runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,
             workflow_distributed_completion,
             runtime_config.snapshot.task_pilot_freshness(),
@@ -327,10 +331,18 @@ pub(crate) fn build_context_from_roots(
             default_crew,
             runtime_config.complexity_crews.clone(),
             runtime_config.snapshot.final_recovery_crews().to_vec(),
+            runtime_config.snapshot.provider_limit_policy(),
             system_crew,
             runtime_config.system_crew_alias.clone(),
             operation,
             runtime_config.snapshot.worker_containment(),
+            runtime_config
+                .snapshot
+                .machine()
+                .task_prefix
+                .unwrap_or_else(|| "ORB".to_string()),
+            runtime_config.snapshot.worktree_reclaim.clone(),
+            runtime_config.snapshot.worktree_reclaim_below_free_mib,
         ),
     ))
 }
@@ -596,6 +608,19 @@ fn stored_checkout_repo_root(
     Ok(registry
         .find_checkout_by_orbit_dir(workspace_root)?
         .map(|checkout| checkout.repo_root))
+}
+
+/// A shared explicit root's compatibility config names only its first
+/// workspace. The selected logical binding is authoritative there; ordinary
+/// checkout roots retain their persisted partition identity.
+pub(super) fn selected_explicit_root_workspace_id<'a>(
+    global_root: &Path,
+    orbit_dir: &Path,
+    binding: Option<&'a WorkspaceRuntimeBinding>,
+) -> Option<&'a str> {
+    binding
+        .filter(|_| is_explicit_data_dir(global_root, orbit_dir))
+        .map(|binding| binding.logical_workspace_id.as_str())
 }
 
 fn is_explicit_data_dir(global_root: &Path, orbit_dir: &Path) -> bool {

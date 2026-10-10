@@ -1,12 +1,31 @@
 use orbit_common::OrbitError;
 use rusqlite::Connection;
 
-pub(super) fn add_column_if_missing(conn: &Connection, sql: &str) -> Result<(), OrbitError> {
-    match conn.execute(sql, []) {
-        Ok(_) => Ok(()),
-        Err(e) if e.to_string().contains("duplicate column name") => Ok(()),
-        Err(e) => Err(OrbitError::Store(e.to_string())),
+/// Add `column` to `table` with `definition` (its type and constraints),
+/// unless `PRAGMA table_info` already lists it.
+///
+/// SQLite appends an added column to the end of every stored record, after
+/// all existing columns. Reading a column means walking the overflow-page
+/// chain of every large value stored before it, so a column added to a table
+/// that holds an unbounded payload (a JSON checkpoint, a transcript) makes
+/// every read of the new column pay for the whole payload. Never add a column
+/// a listing reads behind such a payload: keep payloads in a 1:1 side table,
+/// as `job_run_states` holds run pipeline state (schema v38).
+pub(super) fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), OrbitError> {
+    if table_has_column(conn, table, column)? {
+        return Ok(());
     }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    Ok(())
 }
 
 pub(super) fn table_exists(conn: &Connection, table: &str) -> Result<bool, OrbitError> {

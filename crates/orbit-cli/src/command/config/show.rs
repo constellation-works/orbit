@@ -20,28 +20,22 @@ pub struct ConfigShowArgs {
     /// therefore collapse to a one-line summary by default.
     #[arg(long)]
     pub all: bool,
-    /// Emit JSON. For global/workspace scope, `source.exists` reports whether
-    /// the selected config file exists, not whether individual keys are set.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ConfigShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
             let effective = load_effective_config(&runtime_config_roots(runtime))?;
-            let review = after_landing_review(runtime);
+            let review = review_switches(runtime);
             let mut json = effective_json(runtime, effective.values());
-            json["review_after_landing"] = review.json;
+            json["review"] = review.json;
             let mut text = effective_text(runtime, effective.values(), self.all);
-            if let Some(line) = review.line {
-                text.push_str(&format!("\nReview after landing: {line}\n"));
-            }
+            text.push_str(&review.text);
             return Ok(Payload::detail(json, text).into());
         }
 
         let store = open_store_for_scope(runtime, self.scope)?;
-        let snapshot = store.snapshot()?;
+        let snapshot = store.snapshot_with_global(&runtime.global_root())?;
         let settings = snapshot.all_values();
 
         Ok(Payload::detail(
@@ -52,37 +46,31 @@ impl Execute for ConfigShowArgs {
     }
 }
 
-/// The after-landing review consumer's health, beside the policy that
-/// configures it [ORB-13896]: `null` and no text line under any other policy.
-struct AfterLandingReview {
+/// Every automatic-review switch with its source [ORB-13992]: before-PR
+/// review (`review.before_pr`, minutes, crew), before-landing review
+/// (`review.before_landing`) and after-landing review (the
+/// `delivery-code-review` auto-task, its next batch and health).
+struct ReviewView {
     json: JsonValue,
-    line: Option<String>,
+    text: String,
 }
 
-fn after_landing_review(runtime: &OrbitRuntime) -> AfterLandingReview {
-    match orbit_core::application::automation::after_landing_health(runtime, chrono::Utc::now()) {
-        Ok(None) => AfterLandingReview {
-            json: JsonValue::Null,
-            line: None,
-        },
-        Ok(Some(health)) => {
-            let line = health.line();
-            let mut json = serde_json::to_value(&health).unwrap_or(JsonValue::Null);
-            json["healthy"] = JsonValue::Bool(health.healthy());
-            json["line"] = JsonValue::String(line.clone());
-            AfterLandingReview {
-                json,
-                line: Some(line),
-            }
-        }
-        Err(error) => {
-            let line = format!("unknown: {error}");
-            AfterLandingReview {
-                json: json!({"healthy": false, "line": line}),
-                line: Some(line),
-            }
-        }
-    }
+fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
+    let json = orbit_core::application::review::review_switches_view(
+        runtime,
+        runtime.operation_policy(),
+        chrono::Utc::now(),
+    );
+    let text = match json["error"].as_str() {
+        Some(error) => format!("\nReview: {error}\n"),
+        None => format!(
+            "\nReview:\n  before-PR: {}\n  before-landing: {}\n  after-landing: {}\n",
+            json["before_pr"]["line"].as_str().unwrap_or_default(),
+            json["before_landing"]["line"].as_str().unwrap_or_default(),
+            json["after_landing"]["line"].as_str().unwrap_or_default(),
+        ),
+    };
+    ReviewView { json, text }
 }
 
 fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> JsonValue {

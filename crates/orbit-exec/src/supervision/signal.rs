@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use orbit_common::OrbitError;
@@ -10,9 +10,8 @@ use orbit_common::OrbitError;
 const MAX_LIVE_PROCESS_GROUPS: usize = 256;
 
 static HANDLER_INSTALL: OnceLock<Mutex<HandlerInstall>> = OnceLock::new();
-static LAST_SIGNAL: AtomicI32 = AtomicI32::new(0);
-static SIGNAL_GEN: AtomicU64 = AtomicU64::new(0);
 /// Signal to re-raise after the last waiter restores the previous disposition.
+/// Shared by every waiter, including those starting during termination.
 /// Written only from the async-signal-safe handler; swapped to `0` on last drop.
 static PENDING_FORWARD: AtomicI32 = AtomicI32::new(0);
 static LIVE_PGIDS: [AtomicU32; MAX_LIVE_PROCESS_GROUPS] =
@@ -29,12 +28,14 @@ struct PreviousHandlers {
 }
 
 /// Process-wide SIGINT/SIGTERM intercept for the duration of one supervised
-/// wait. Install is refcounted: the first live guard swaps in the handlers,
+/// spawn and wait. Install is refcounted: the first live guard swaps in the handlers,
 /// and the last drop restores the previous dispositions and re-raises the
 /// captured signal so a long-running server's original handler (tokio
 /// `ctrl_c` / SIGTERM, or SIG_DFL) still runs. The install mutex is held
 /// only for that refcount/sigaction critical section — never across the
 /// child's lifetime or across `raise` — so concurrent supervisors overlap.
+/// A captured signal stays pending for every overlapping waiter, including
+/// new waits, until the last drop clears and forwards it.
 ///
 /// The handler fans the signal out with `killpg`, so a registered id must be
 /// a process group this supervisor created — never a bare pid. A pid that is
@@ -44,21 +45,25 @@ struct PreviousHandlers {
 /// eagerly ([`Self::release_process_group`]) so a reused pid cannot be
 /// signalled by a later SIGINT/SIGTERM.
 pub(super) struct SignalHandlerGuard {
-    start_gen: u64,
     slot: Option<usize>,
 }
 
 impl SignalHandlerGuard {
-    /// `child_pid` is the supervised child's pid; it is registered for
-    /// handler-side fan-out only when it currently leads its own process group.
-    pub(super) fn install(child_pid: u32) -> Result<Self, OrbitError> {
-        let start_gen = acquire_handlers()?;
-        let slot = if is_child_process_group_leader(child_pid) {
+    /// Install before spawning: a signal in the spawn/registration window
+    /// stays pending until the child is registered and the waiter cleans up.
+    pub(super) fn install() -> Result<Self, OrbitError> {
+        acquire_handlers()?;
+        Ok(Self { slot: None })
+    }
+
+    /// Register only a live group leader. The waiter's pending-signal check
+    /// also covers signals whose handler ran before this slot was populated.
+    pub(super) fn register_process_group(&mut self, child_pid: u32) {
+        self.slot = if is_child_process_group_leader(child_pid) {
             register_pgid(child_pid)
         } else {
             None
         };
-        Ok(Self { start_gen, slot })
     }
 
     /// Stop fanning signals out to the child's group. Call as soon as the
@@ -69,10 +74,9 @@ impl SignalHandlerGuard {
     }
 
     pub(super) fn take_signal(&self) -> Option<i32> {
-        if SIGNAL_GEN.load(Ordering::SeqCst) == self.start_gen {
-            return None;
-        }
-        let signal = LAST_SIGNAL.load(Ordering::SeqCst);
+        // Do not consume the pending signal: late waiters must interrupt too,
+        // so they cannot defer forwarding until their normal completion.
+        let signal = PENDING_FORWARD.load(Ordering::SeqCst);
         (signal != 0).then_some(signal)
     }
 }
@@ -97,14 +101,11 @@ fn signal_name(signal: i32) -> &'static str {
     }
 }
 
-fn acquire_handlers() -> Result<u64, OrbitError> {
+fn acquire_handlers() -> Result<(), OrbitError> {
     let mut state = handler_install()
         .lock()
         .map_err(|_| OrbitError::Execution("signal handler lock poisoned".to_string()))?;
 
-    // Snapshot before this waiter is live so a signal that arrives during
-    // first-install still looks newer than `start_gen` on the first poll.
-    let start_gen = SIGNAL_GEN.load(Ordering::SeqCst);
     if state.refcount == 0 {
         let sigint = install_signal_handler(libc::SIGINT)?;
         let sigterm = match install_signal_handler(libc::SIGTERM) {
@@ -121,7 +122,7 @@ fn acquire_handlers() -> Result<u64, OrbitError> {
         .refcount
         .checked_add(1)
         .ok_or_else(|| OrbitError::Execution("signal handler refcount overflow".to_string()))?;
-    Ok(start_gen)
+    Ok(())
 }
 
 fn release_handlers() {
@@ -249,8 +250,6 @@ fn unregister_pgid(slot: Option<usize>) {
 }
 
 unsafe extern "C" fn termination_signal_handler(signal: libc::c_int) {
-    LAST_SIGNAL.store(signal, Ordering::SeqCst);
-    SIGNAL_GEN.fetch_add(1, Ordering::SeqCst);
     PENDING_FORWARD.store(signal, Ordering::SeqCst);
     // Safety: `getpgrp` is async-signal-safe.
     let own_pgid = unsafe { libc::getpgrp() };

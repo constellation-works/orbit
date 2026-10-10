@@ -15,6 +15,19 @@ UTC host time and a 30-second deadline. The shared process supervisor drains
 output and kills/reaps a timed-out child. Real stores and definition discovery
 exercise cursors, overlap admission and coverage receipts; dispatch adapters
 provide the lifecycle outcomes that Core normally supplies.
+`scheduling/pending_mints.rs` seeds claims with and without recorded task ids
+for enabled and disabled definitions. It compares dry-run and live reports,
+checks that previews leave cursor bytes unchanged, and verifies that live
+recovery consumes recorded mints while retaining unresolved claims without
+reminting.
+`scheduling/failed_members.rs` drives a member consumer through more than 1,000
+distinct failed members that leave the source, beside a backlog of withheld
+task ids, and shows every pass still commits and admits the next wave. It also
+shows each failed member keeps only its own record of the attempt, that the
+store refuses missing, outside, mismatched-attempt, sibling, forged-fingerprint
+and whole-batch records (and one for a member the receipt certified), and that
+a checkpoint whose records carry their whole batch and omit the later defaulted
+`excluded` field resumes, commits a generation bump and is compacted.
 
 Materialization is owned by Core. Its migration coverage joins the existing
 [`workspace_sync`](../../orbit-cli/tests/workspace/workspace_sync.rs) module of the CLI `workspace` integration binary
@@ -23,13 +36,21 @@ at the production CLI boundary, using the checked-in
 No production API visibility or crate dependency is changed for testing.
 
 `review_validation.rs` drives the public review-coverage API with the
-validation records a reviewer files. A superseded attempt that no later required
-pass replaced must fail closed at both consumers. `validation_evidence` gives
+validation records a reviewer files. A superseded attempt with no same-identity
+required pass anywhere in the report must fail closed at both consumers. `validation_evidence` gives
 the gate's escalation reason, and `certificate_acceptable`/`exclusion` refuse
 to spend a certificate whose `validation_complete` flag those records do not
 support. The table covers missing, ambiguous (one-sided or cross-namespace
 identity), invalid (blank or mismatched identity) and non-passing replacements.
-Same-command reruns and shared check identities serve as the accepting controls.
+Same-command reruns and shared check identities serve as the accepting controls
+in both report orders, including replacements establishing captured host checks.
+Different identities remain distinct even when a passing check claims broader
+coverage and runs the same command.
+It also covers an unrelated workspace failure filed as a scope-checked
+`diagnostic`, a failed required check relabeled as a control or diagnostic, a
+required check an earlier report revision recorded and the final records drop
+or relabel, and the deliberate controls and resolved obligations that remain
+coverage.
 
 Focused commands:
 

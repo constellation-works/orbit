@@ -2,12 +2,10 @@ use clap::{Args, Subcommand};
 use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
 };
-use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use serde_json::{Value, json};
 
-use crate::command::mcp::registered_clients_for_workspace;
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::{Domain, Role};
 
@@ -17,7 +15,8 @@ use crate::output::color::{Domain, Role};
     about = "Diagnose workspace health, provider CLIs, and filesystem access",
     long_about = "Diagnose workspace health, provider CLIs, and filesystem access\n\n\
         With no subcommand, checks the workspace: config, database, disk, indexes, locks, and \
-        runs. The subcommands run focused diagnostics for provider CLIs and filesystem access.",
+        runs. Default database checks read the header and schema; --deep also scans every \
+        database page with SQLite quick_check. The subcommands run focused diagnostics for provider CLIs and filesystem access.",
     args_conflicts_with_subcommands = true
 )]
 pub struct DoctorCommand {
@@ -25,17 +24,21 @@ pub struct DoctorCommand {
     #[command(subcommand)]
     pub command: Option<DoctorSubcommand>,
 
-    /// Emit machine-readable JSON instead of the table.
+    /// Scan every database page with SQLite quick_check; default checks only read the header and schema.
     #[arg(long)]
-    pub json: bool,
+    pub deep: bool,
 
-    /// Remove lock files whose recorded holder process is dead before diagnosing the workspace.
+    /// Clear dead holder records under the lock, preserving lock files, before diagnosing the workspace.
     #[arg(long)]
     pub fix_stale_locks: bool,
 
     /// Release only task reservations whose owner/task state is conclusively inactive.
     #[arg(long)]
     pub fix_stale_task_locks: bool,
+
+    /// Restrict writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only).
+    #[arg(long)]
+    pub fix_state_directory_permissions: bool,
 
     /// Remove retired graph state from this worktree and the shared workspace.
     #[arg(long)]
@@ -53,6 +56,10 @@ pub struct DoctorCommand {
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
 
+    /// Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs.
+    #[arg(long)]
+    pub fix_automation_pins: bool,
+
     /// Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles.
     #[arg(long)]
     pub confirm: bool,
@@ -60,18 +67,14 @@ pub struct DoctorCommand {
 
 #[derive(Subcommand)]
 pub enum DoctorSubcommand {
-    /// Show each executor's provider CLI, configured sandbox, and Linux sandbox readiness
+    /// Show each executor's provider CLI, configured sandbox, Linux sandbox readiness, and usage limits
     Providers(ProvidersArgs),
     /// Dry-run a workspace-relative path against a filesystem profile's read and modify rules
     FsAccess(FsAccessArgs),
 }
 
 #[derive(Args)]
-pub struct ProvidersArgs {
-    /// Emit machine-readable JSON instead of the table.
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct ProvidersArgs {}
 
 #[derive(Args)]
 pub struct FsAccessArgs {
@@ -79,9 +82,6 @@ pub struct FsAccessArgs {
     pub profile: String,
     /// Path to check, matched as written against the profile's workspace-relative rules
     pub path: String,
-    /// Emit machine-readable JSON instead of the detail view.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for DoctorCommand {
@@ -93,21 +93,47 @@ impl Execute for DoctorCommand {
             }
             None => {}
         }
+        if self.fix_orphan_task_stores && !self.confirm {
+            return Err(orbit_core::OrbitError::InvalidInput(
+                "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
+                    .to_string(),
+            ));
+        }
         let mut results = Vec::new();
-        if self.fix_stale_locks {
-            let removed = runtime.remove_stale_lock_files()?;
-            eprintln!("Removed {removed} stale lock file(s).");
+        if self.fix_state_directory_permissions {
+            let started = std::time::Instant::now();
+            let repaired = runtime.repair_state_directory_permissions()?;
+            let message = format!(
+                "Restricted {repaired} writable Orbit state director{} to owner-only access.",
+                if repaired == 1 { "y" } else { "ies" }
+            );
+            eprintln!("{message}");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                check_name: "fix-state-directory-permissions".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message,
+                remediation: None,
+            });
+        }
+        if self.fix_stale_locks {
+            let started = std::time::Instant::now();
+            let cleared = runtime.remove_stale_lock_files()?;
+            eprintln!("Cleared {cleared} stale lock holder record(s).");
+            results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-stale-locks".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
-                message: format!("Removed {removed} stale lock file(s)."),
+                message: format!("Cleared {cleared} stale lock holder record(s)."),
                 remediation: None,
             });
         }
         if self.fix_stale_task_locks {
+            let started = std::time::Instant::now();
             let released = runtime.clear_stale_task_reservations()?;
             eprintln!("Released {released} stale task reservation(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-stale-task-locks".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Released {released} stale task reservation(s)."),
@@ -115,9 +141,11 @@ impl Execute for DoctorCommand {
             });
         }
         if self.remove_graph {
+            let started = std::time::Instant::now();
             let removed = runtime.remove_retired_graph_state()?;
             eprintln!("Removed {removed} retired graph location(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "remove-graph".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Removed {removed} retired graph location(s)."),
@@ -125,9 +153,11 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_stale_artifacts {
+            let started = std::time::Instant::now();
             let removed = runtime.remove_stale_definition_artifacts()?;
             eprintln!("Retired {removed} deprecated definition artifact(s).");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-stale-artifacts".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!("Retired {removed} deprecated definition artifact(s)."),
@@ -135,6 +165,7 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_retired_activity_backends {
+            let started = std::time::Instant::now();
             let report = runtime.repair_retired_activity_backends()?;
             eprintln!(
                 "Removed retired spec.backend from {} activity file(s).",
@@ -148,6 +179,7 @@ impl Execute for DoctorCommand {
                 );
             }
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-retired-activity-backends".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: format!(
@@ -158,34 +190,39 @@ impl Execute for DoctorCommand {
             });
         }
         if self.fix_orphan_task_stores {
-            if !self.confirm {
-                return Err(orbit_core::OrbitError::InvalidInput(
-                    "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
-                        .to_string(),
-                ));
-            }
+            let started = std::time::Instant::now();
             let removed = runtime.remove_orphan_task_stores()?;
             let message = orphan_task_store_removal_message(&removed);
             eprintln!("{message}");
             results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 check_name: "fix-orphan-task-stores".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message,
                 remediation: None,
             });
         }
-        results.extend(runtime.doctor_workspace()?);
-        results.push(state_directory_permissions_row(runtime));
-        results.extend(routed_provider_rows(runtime));
-        results.push(mcp_registration_row(
-            runtime,
-            orbit_common::fs::path::home_dir().ok().as_deref(),
-        ));
-        // Machine-global rows, composed here rather than in `doctor_workspace`:
-        // `orbit-cmd` does not know about MCP and must not learn, and this is
-        // the one crate that already assembles both [ORB-11053].
-        results.extend(caller_authorization_rows());
-        results.push(clock_unit_row());
+        if self.fix_automation_pins {
+            let started = std::time::Instant::now();
+            let cleanup =
+                orbit_core::application::automation::release_unreferenced_attempt_pins(runtime)?;
+            let message = automation_pin_cleanup_message(&cleanup);
+            eprintln!("{message}");
+            results.push(WorkspaceDoctorResult {
+                duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                check_name: "fix-automation-pins".to_string(),
+                status: if cleanup.kept.is_empty()
+                    && (cleanup.refused.is_none() || cleanup.retained_unproven == 0)
+                {
+                    WorkspaceDoctorStatus::Ok
+                } else {
+                    WorkspaceDoctorStatus::Warning
+                },
+                message,
+                remediation: None,
+            });
+        }
+        results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
         let failures = results
             .iter()
             .filter(|row| row.status == WorkspaceDoctorStatus::Error)
@@ -195,7 +232,10 @@ impl Execute for DoctorCommand {
             .filter(|row| row.status == WorkspaceDoctorStatus::Warning)
             .count();
 
-        let values = results.iter().map(doctor_row_json).collect::<Vec<_>>();
+        let values = results
+            .iter()
+            .map(orbit_cmd::doctor_row_json)
+            .collect::<Vec<_>>();
         let mut blocks = Vec::new();
         {
             use crate::output::table::{Column, Table};
@@ -214,6 +254,7 @@ impl Execute for DoctorCommand {
                 ]);
             }
             blocks.push(Block::table(table));
+            blocks.push(Block::DoctorFindings(results.clone()));
 
             if failures == 0 && warnings == 0 {
                 blocks.push(Block::text(format!(
@@ -228,172 +269,34 @@ impl Execute for DoctorCommand {
         // Unlike `skill doctor` / `tool doctor`, a failed check exits nonzero
         // so unattended callers (cron, CI, systemd) can alert on it.
         let exit_code = i32::from(failures > 0);
-        Ok(Payload::blocks(Value::Array(values), blocks)
-            .with_exit_code(exit_code)
-            .into())
+        let mut payload = Payload::blocks(Value::Array(values), blocks).with_exit_code(exit_code);
+        if failures > 0 {
+            payload = payload.with_audit_message(findings_audit_message(&results, warnings));
+        }
+        Ok(payload.into())
     }
 }
 
-/// Check only crews that normal workflow routing can select. A disabled crew
-/// is never drawn, so a missing CLI or executor for it is not a readiness
-/// failure; a disabled default or system lane is reported separately as a
-/// config warning. Provider auth is deliberately not probed: a status command
-/// may refresh credentials or call the network, while `doctor` must stay fast
-/// and read-only.
-fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    use std::collections::BTreeSet;
-
-    let config = match ResolvedConfig::load(&ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    )) {
-        Ok(config) => config,
-        Err(error) => {
-            return vec![WorkspaceDoctorResult {
-                check_name: "provider-routing".to_string(),
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("cannot inspect effective crew routing: {error}"),
-                remediation: Some(
-                    "Repair the config reported by `orbit doctor`, then rerun it.".to_string(),
-                ),
-            }];
-        }
-    };
-
-    let mut names = BTreeSet::new();
-    if let Some(name) = &config.default_crew
-        && routing_selects_crew(&config, name)
-    {
-        names.insert(name.clone());
-    }
-    if routing_selects_crew(&config, &config.system_crew) {
-        names.insert(config.system_crew.clone());
-    }
-    for (complexity, entries) in [
-        ("low", &config.complexity_crews.low),
-        ("medium", &config.complexity_crews.medium),
-        ("hard", &config.complexity_crews.hard),
-        ("xhard", &config.complexity_crews.xhard),
-    ] {
-        if let Some(entries) = entries {
-            match canonical_crew_pool(
-                entries,
-                &config.crews,
-                &format!("workflow.{complexity}_complexity_crews"),
-            ) {
-                Ok(pool) => names.extend(
-                    pool.entries
-                        .into_iter()
-                        .filter(|entry| {
-                            entry.weight > 0 && routing_selects_crew(&config, &entry.name)
-                        })
-                        .map(|entry| entry.name),
-                ),
-                Err(error) => {
-                    return vec![WorkspaceDoctorResult {
-                        check_name: "provider-routing".to_string(),
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!("cannot inspect {complexity} crew pool: {error}"),
-                        remediation: Some(
-                            "Repair the config reported by `orbit doctor`, then rerun it."
-                                .to_string(),
-                        ),
-                    }];
-                }
-            }
-        }
-    }
-
-    names.into_iter().map(|name| {
-        let check_name = format!("provider:{name}");
-        let Some(crew) = config.crews.get(&name) else {
-            return WorkspaceDoctorResult {
-                check_name,
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("routed crew '{name}' is not configured"),
-                remediation: Some(format!("Define crew '{name}' in config.toml or change workflow routing.")),
-            };
-        };
-        let provider = &crew.assignment.provider;
-        match runtime.get_executor_def(provider) {
-            Ok(Some(def)) => match def.command.as_deref() {
-                Some(program) => match runtime.locate_provider_launcher(program) {
-                    Some(path) => WorkspaceDoctorResult {
-                        check_name,
-                        status: WorkspaceDoctorStatus::Ok,
-                        message: format!("crew '{name}' uses provider '{provider}'; CLI '{}' found at {} (authentication not checked)", program, path.display()),
-                        remediation: None,
-                    },
-                    None => WorkspaceDoctorResult {
-                        check_name,
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!("crew '{name}' uses provider '{provider}'; CLI '{program}' was not found"),
-                        remediation: Some(format!("Install the '{program}' CLI or change crew '{name}' to an available provider.")),
-                    },
-                },
-                None => WorkspaceDoctorResult {
-                    check_name,
-                    status: WorkspaceDoctorStatus::Skipped,
-                    message: format!("crew '{name}' uses provider '{provider}', which has no CLI command"),
-                    remediation: None,
-                },
-            },
-            Ok(None) => WorkspaceDoctorResult {
-                check_name,
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("crew '{name}' uses provider '{provider}', but no executor definition exists"),
-                remediation: Some(format!("Restore the '{provider}' executor definition or change crew '{name}'.")),
-            },
-            Err(error) => WorkspaceDoctorResult {
-                check_name,
-                status: WorkspaceDoctorStatus::Error,
-                message: format!("cannot inspect provider '{provider}' for crew '{name}': {error}"),
-                remediation: Some("Repair executor storage, then rerun `orbit doctor`.".to_string()),
-            },
-        }
-    }).collect()
-}
-
-/// Provider readiness follows dispatch. A disabled crew is omitted. A name
-/// absent from the registry stays included so the probe can report it missing.
-fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
-    match config.crews.get(name) {
-        Some(crew) => crew.enabled,
-        None => true,
-    }
-}
-
-fn mcp_registration_row(
-    runtime: &OrbitRuntime,
-    home_dir: Option<&std::path::Path>,
-) -> WorkspaceDoctorResult {
-    let workspace_id = runtime
-        .workspace_runtime_binding()
-        .map(|binding| binding.logical_workspace_id.clone())
-        .or_else(|| runtime.workspace_id().ok());
-    let clients = registered_clients_for_workspace(
-        &runtime.paths().repo_root,
-        workspace_id.as_deref(),
-        home_dir,
-    );
-    if clients.is_empty() {
-        WorkspaceDoctorResult {
-            check_name: "mcp-registration".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: "no Orbit MCP client registration found for this workspace".to_string(),
-            remediation: Some("Run `orbit mcp init --auto` in this workspace, or configure a client with `orbit mcp init --client <client>`.".to_string()),
-        }
-    } else {
-        WorkspaceDoctorResult {
-            check_name: "mcp-registration".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: format!(
-                "Orbit MCP registered in: {} (connection not checked)",
-                clients.join(", ")
-            ),
-            remediation: None,
-        }
-    }
+/// The audit message for a completed run that reported failed checks, e.g.
+/// `doctor reported findings: 1 failure (review), 3 warnings`. The prefix is
+/// what lets the incident classifier tell this verdict from a crash.
+fn findings_audit_message(results: &[WorkspaceDoctorResult], warnings: usize) -> String {
+    let failed = results
+        .iter()
+        .filter(|row| row.status == WorkspaceDoctorStatus::Error)
+        .map(|row| row.check_name.as_str())
+        .collect::<Vec<_>>();
+    format!(
+        "{DOCTOR_FINDINGS_MESSAGE_PREFIX}{} {} ({}), {warnings} {}",
+        failed.len(),
+        if failed.len() == 1 {
+            "failure"
+        } else {
+            "failures"
+        },
+        failed.join(", "),
+        if warnings == 1 { "warning" } else { "warnings" },
+    )
 }
 
 /// `orbit doctor fs-access`: the active policy's read and modify verdicts for
@@ -447,6 +350,9 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
                 .is_some_and(|kind| kind.as_str() == "linux-bwrap")
         })
         .then(orbit_core::bootstrap::linux_sandbox_host::probe_bwrap_fresh);
+    // [ORB-14698] The same provider-limit rows `orbit doctor` reports, under
+    // the executor of the provider each concerns.
+    let limit_findings = orbit_cmd::provider_limit_findings(runtime);
     let mut values = Vec::with_capacity(defs.len());
     let mut table = Table::new(vec![
         Column::new("EXECUTOR").fixed(),
@@ -455,6 +361,8 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("FOUND").fixed(),
         Column::new("SANDBOX").fixed(),
         Column::new("READY").fixed(),
+        Column::new("BWRAP").fixed(),
+        Column::new("LIMITS").fixed(),
         Column::new("LAUNCHER").path(),
     ])
     .empty_message("no executors defined");
@@ -470,6 +378,24 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         let readiness = (sandbox == "linux-bwrap")
             .then_some(linux_probe.as_ref())
             .flatten();
+        // Which trusted Bubblewrap the probe selected — the host's or the
+        // one bundled with Orbit — and its version once it passed.
+        let wrapper = readiness.and_then(|probe| probe.source.map(|source| (source, probe)));
+        let limits = limit_findings
+            .iter()
+            .filter(|(provider, _)| provider.as_deref().is_none_or(|name| name == def.name))
+            .map(|(_, row)| row)
+            .collect::<Vec<_>>();
+        // The worst of them, as `orbit doctor` ranks a row.
+        let limit_status = [
+            WorkspaceDoctorStatus::Error,
+            WorkspaceDoctorStatus::Warning,
+            WorkspaceDoctorStatus::Ok,
+            WorkspaceDoctorStatus::Info,
+            WorkspaceDoctorStatus::Skipped,
+        ]
+        .into_iter()
+        .find(|status| limits.iter().any(|row| row.status == *status));
         values.push(json!({
             "name": def.name,
             "executor_type": def.executor_type.to_string(),
@@ -480,7 +406,14 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "sandbox": def.sandbox,
             "sandbox_ready": readiness.map(|probe| probe.available),
             "sandbox_readiness_detail": readiness.map(|probe| probe.detail.as_str()),
+            "sandbox_wrapper": wrapper.map(|(source, _)| source.as_str()),
+            "sandbox_wrapper_path": wrapper.map(|(_, probe)| probe.trusted_path.as_str()),
+            "sandbox_wrapper_version": wrapper.and_then(|(_, probe)| probe.version.as_deref()),
             "allow_fallback": def.allow_fallback,
+            "provider_limits": limits
+                .iter()
+                .map(|row| orbit_cmd::doctor_row_json(row))
+                .collect::<Vec<_>>(),
         }));
         table.add_row(vec![
             def.name.clone(),
@@ -497,229 +430,21 @@ fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
                 || "-".to_string(),
                 |probe| if probe.available { "yes" } else { "no" }.to_string(),
             ),
+            wrapper.map_or_else(
+                || "-".to_string(),
+                |(source, probe)| match &probe.version {
+                    Some(version) => format!("{} {version}", source.as_str()),
+                    None => source.as_str().to_string(),
+                },
+            ),
+            limit_status.map_or_else(
+                || "-".to_string(),
+                |status| status_label(status).to_string(),
+            ),
             launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
         ]);
     }
     Ok(Payload::list(values, table).into())
-}
-
-/// Report Orbit-owned state directories whose write bits let another local
-/// principal replace or unlink private files held beneath them.
-fn state_directory_permissions_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    #[cfg(unix)]
-    {
-        use std::collections::BTreeSet;
-        use std::os::unix::fs::PermissionsExt;
-
-        fn visit(
-            path: &std::path::Path,
-            descend: bool,
-            seen: &mut BTreeSet<std::path::PathBuf>,
-            writable: &mut Vec<(std::path::PathBuf, u32)>,
-        ) -> std::io::Result<()> {
-            if !seen.insert(path.to_path_buf()) {
-                return Ok(());
-            }
-            let metadata = std::fs::symlink_metadata(path)?;
-            if !metadata.is_dir() {
-                return Ok(());
-            }
-            let mode = metadata.permissions().mode() & 0o777;
-            if mode & 0o022 != 0 {
-                writable.push((path.to_path_buf(), mode));
-            }
-            if !descend {
-                return Ok(());
-            }
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    visit(&entry.path(), true, seen, writable)?;
-                }
-            }
-            Ok(())
-        }
-
-        let mut seen = BTreeSet::new();
-        let mut writable = Vec::new();
-        let global = runtime.global_root();
-        let workspace = runtime.paths().orbit_dir.clone();
-        let configured_roots = [
-            (global.clone(), false),
-            (global.join("state"), true),
-            (global.join("tasks"), true),
-            (global.join("cache"), true),
-            (global.join("frictions"), true),
-            (workspace.clone(), false),
-            (workspace.join("state"), true),
-            (workspace.join("tasks"), true),
-            (workspace.join("frictions"), true),
-        ];
-        for (configured_root, descend) in configured_roots {
-            let root = match configured_root.canonicalize() {
-                Ok(root) => root,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => {
-                    return WorkspaceDoctorResult {
-                        check_name: "state-directory-permissions".to_string(),
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!(
-                            "could not resolve Orbit state directory '{}': {error}",
-                            configured_root.display()
-                        ),
-                        remediation: Some(
-                            "Fix the directory access error named above, then rerun `orbit doctor`."
-                                .to_string(),
-                        ),
-                    };
-                }
-            };
-            if let Err(error) = visit(&root, descend, &mut seen, &mut writable) {
-                return WorkspaceDoctorResult {
-                    check_name: "state-directory-permissions".to_string(),
-                    status: WorkspaceDoctorStatus::Error,
-                    message: format!(
-                        "could not inspect Orbit state directory '{}': {error}",
-                        root.display()
-                    ),
-                    remediation: Some(
-                        "Fix the directory access error named above, then rerun `orbit doctor`."
-                            .to_string(),
-                    ),
-                };
-            }
-        }
-
-        if writable.is_empty() {
-            return WorkspaceDoctorResult {
-                check_name: "state-directory-permissions".to_string(),
-                status: WorkspaceDoctorStatus::Ok,
-                message: "all Orbit state directories deny group/world write access".to_string(),
-                remediation: None,
-            };
-        }
-
-        let sample = writable
-            .iter()
-            .take(5)
-            .map(|(path, mode)| format!("{} ({mode:04o})", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let remainder = writable.len().saturating_sub(5);
-        let suffix = if remainder == 0 {
-            String::new()
-        } else {
-            format!(", and {remainder} more")
-        };
-        WorkspaceDoctorResult {
-            check_name: "state-directory-permissions".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!(
-                "{} Orbit state director{} group/world writable: {sample}{suffix}",
-                writable.len(),
-                if writable.len() == 1 {
-                    "y is"
-                } else {
-                    "ies are"
-                }
-            ),
-            remediation: Some(
-                "Remove group/world write permission from every named directory (for example, \
-                 `chmod go-w <directory>`), then rerun `orbit doctor`."
-                    .to_string(),
-            ),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = runtime;
-        WorkspaceDoctorResult {
-            check_name: "state-directory-permissions".to_string(),
-            status: WorkspaceDoctorStatus::Skipped,
-            message: "Unix directory mode checks are not available on this platform".to_string(),
-            remediation: None,
-        }
-    }
-}
-
-/// Whether this machine still carries retired destination-side MCP caller
-/// authorization files [ORB-12564].
-///
-/// One row, and never an error. The files grant and refuse nothing now: an SSH
-/// login to this machine is ownership of it, so a session served over SSH holds
-/// the authority its argv asks for, exactly as a local one does. What is worth
-/// saying is that a ceiling an operator wrote is inert, because the operator
-/// who wrote it has no other way to find out.
-fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
-    let Ok(home) = orbit_common::fs::path::home_dir() else {
-        return Vec::new();
-    };
-    let ignored = orbit_mcp::ignored_caller_authorization_paths(&home.join(".orbit"));
-    if ignored.is_empty() {
-        return vec![WorkspaceDoctorResult {
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: "no retired MCP caller-authorization files; a session served over SSH \
-                      holds the authority its argv asks for"
-                .to_string(),
-            remediation: None,
-        }];
-    }
-    let paths = ignored
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    vec![WorkspaceDoctorResult {
-        check_name: "mcp-callers".to_string(),
-        status: WorkspaceDoctorStatus::Warning,
-        message: format!(
-            "left over from destination-side caller authorization and ignored, capping no \
-             remote MCP session: {}",
-            paths.join(", ")
-        ),
-        remediation: Some(format!(
-            "Delete it: `rm -r {}`. To deny a caller, remove its key from \
-             `~/.ssh/authorized_keys` — that is the only boundary this machine ever had.",
-            paths.join(" ")
-        )),
-    }]
-}
-
-/// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
-fn clock_unit_row() -> WorkspaceDoctorResult {
-    match orbit_core::application::routines::inspect_clock_unit() {
-        Ok(inspection) => clock_unit_row_from_inspection(&inspection),
-        Err(error) => WorkspaceDoctorResult {
-            check_name: "clock-unit".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!("could not inspect the sweep clock unit: {error}"),
-            remediation: Some(
-                "Fix the home-directory or unit-file error named above, then rerun `orbit doctor`."
-                    .to_string(),
-            ),
-        },
-    }
-}
-
-fn clock_unit_row_from_inspection(
-    inspection: &orbit_core::application::routines::ClockUnitInspection,
-) -> WorkspaceDoctorResult {
-    use orbit_core::application::routines::ClockUnitVerdict;
-
-    let status = match inspection.verdict {
-        ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,
-        ClockUnitVerdict::NoUnitInstalled => WorkspaceDoctorStatus::Skipped,
-        ClockUnitVerdict::PathMismatch
-        | ClockUnitVerdict::InvocationMismatch
-        | ClockUnitVerdict::Unrunnable { .. } => WorkspaceDoctorStatus::Warning,
-        ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
-    };
-    WorkspaceDoctorResult {
-        check_name: "clock-unit".to_string(),
-        status,
-        message: inspection.doctor_message(),
-        remediation: inspection.doctor_remediation(),
-    }
 }
 
 fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
@@ -728,6 +453,7 @@ fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
         WorkspaceDoctorStatus::Warning => "warning",
         WorkspaceDoctorStatus::Error => "ERROR",
         WorkspaceDoctorStatus::Skipped => "skipped",
+        WorkspaceDoctorStatus::Info => "info",
     }
 }
 
@@ -742,23 +468,55 @@ fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String
     )
 }
 
-fn human_detail(row: &WorkspaceDoctorResult) -> String {
-    row.remediation.as_ref().map_or_else(
-        || row.message.clone(),
-        |remediation| format!("{}\nAction: {remediation}", row.message),
-    )
+/// Render `--fix-automation-pins`'s outcome: what it reclaimed, why the rest
+/// of its own namespace stayed, and every pin it retained without proof of
+/// ownership.
+fn automation_pin_cleanup_message(
+    cleanup: &orbit_core::application::automation::AttemptPinCleanup,
+) -> String {
+    let mut message = match &cleanup.refused {
+        Some(reason) => format!(
+            "Reclaimed no automation attempt pins: ownership of {} is not proved ({reason}); \
+             retained {} owned pin(s).",
+            cleanup.namespace, cleanup.retained_unproven,
+        ),
+        None => format!(
+            "Reclaimed {} unreferenced automation attempt pin(s) under {}; kept {} in flight, \
+             {} live-run, {} assessed.",
+            cleanup.released.len(),
+            cleanup.namespace,
+            cleanup.retained_active,
+            cleanup.retained_live_run,
+            cleanup.retained_assessed,
+        ),
+    };
+    message.push_str(&format!(
+        " Retained {} legacy shared pin(s) under refs/orbit/automation/ with no recorded owner \
+         and {} pin namespace(s) owned by other Orbit roots or workspaces.",
+        cleanup.retained_legacy, cleanup.foreign_owners,
+    ));
+    if !cleanup.kept.is_empty() {
+        message.push_str(&format!(
+            " Could not delete (moved or locked): {}.",
+            cleanup.kept.join(", ")
+        ));
+    }
+    if !cleanup.unrecognized.is_empty() {
+        message.push_str(&format!(
+            " Left unrecognized refs untouched: {}.",
+            cleanup.unrecognized.join(", ")
+        ));
+    }
+    message
 }
 
-pub(crate) fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
-    json!({
-        "check": row.check_name,
-        "status": match row.status {
-            WorkspaceDoctorStatus::Ok => "ok",
-            WorkspaceDoctorStatus::Warning => "warning",
-            WorkspaceDoctorStatus::Error => "error",
-            WorkspaceDoctorStatus::Skipped => "skipped",
-        },
-        "message": row.message,
-        "remediation": row.remediation,
-    })
+fn human_detail(row: &WorkspaceDoctorResult) -> String {
+    let mut detail = row.remediation.as_ref().map_or_else(
+        || row.message.clone(),
+        |remediation| format!("{}\nAction: {remediation}", row.message),
+    );
+    if row.duration_ms > 1000 {
+        detail.push_str(&format!(" ({:.2} s)", row.duration_ms as f64 / 1000.0));
+    }
+    detail
 }

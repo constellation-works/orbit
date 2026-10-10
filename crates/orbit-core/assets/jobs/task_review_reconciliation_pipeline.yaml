@@ -1,0 +1,68 @@
+# Review reconciliation of an already-merged foreign delivery head.
+#
+# A recovered follower delivery whose pull request merged at a head other
+# than the handed-off candidate carries no validation or review for that
+# head. This job produces both for exactly that head, without rewriting the
+# merged pull request or the original run's identity.
+#
+# Trigger
+# - Only `orbit task reconcile-review submit <task> --request <key>` (the
+#   operator-only `orbit.task.reconcile_review` tool) admits a run. It stamps
+#   the reserved `review_reconciliation_admission` input every other
+#   submission path refuses, and each step re-authenticates against it.
+#
+# Steps
+# - `prepare` re-observes the stopped claim, the accepted handoff, the merged
+#   pull request and the task meaning, and refuses if any changed since
+#   submission.
+# - `validate` runs every command of the contract frozen at submission at the
+#   merged head in a detached checkout, reproduces each failure at the base,
+#   and records every outcome and log.
+# - `review` is an independent read-only reviewer on the frozen crew, pinned
+#   to the merged head.
+# - `settle` records the report, re-observes the binding, and settles one
+#   outcome; findings become one follow-up task.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_review_reconciliation_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 2
+  default_input:
+    task_id: ""
+    reconciliation_id: ""
+
+  steps:
+    - id: prepare
+      target: activity:review_reconciliation_prepare
+      default_input:
+        task_id: "{{ input.task_id }}"
+        reconciliation_id: "{{ input.reconciliation_id }}"
+
+    - id: validate
+      target: activity:review_reconciliation_validate
+      default_input:
+        task_id: "{{ input.task_id }}"
+        reconciliation_id: "{{ input.reconciliation_id }}"
+
+    - id: review
+      target: activity:review_reconciliation_review
+      default_input:
+        task_id: "{{ steps.prepare.output.task_id }}"
+        reconciliation_id: "{{ steps.prepare.output.reconciliation_id }}"
+        workspace_path: "{{ steps.prepare.output.workspace_path }}"
+        inspection_revision: "{{ steps.prepare.output.head }}"
+        source_revision: "{{ steps.prepare.output.head }}"
+        base: "{{ steps.prepare.output.base }}"
+        pull_request_url: "{{ steps.prepare.output.pull_request_url }}"
+        crew: "{{ steps.prepare.output.crew }}"
+
+    - id: settle
+      target: activity:review_reconciliation_settle
+      default_input:
+        task_id: "{{ input.task_id }}"
+        reconciliation_id: "{{ input.reconciliation_id }}"
+        review: "{{ steps.review.output }}"

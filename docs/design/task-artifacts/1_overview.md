@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-05-17
-last_validated: 2026-10-03
+last_validated: 2026-10-09
 status: Draft
 feature: task-artifacts
 doc_role: overview
@@ -13,7 +13,7 @@ tags: ["task-artifacts"]
 
 # Task Artifacts — Overview
 
-Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. The v2 task artifact store keeps prose in Markdown sidecars, narrows `task.yaml` to a metadata envelope, allocates authority-scoped `ORB-00000` IDs from `~/.orbit/tasks/index.sqlite`, and makes `~/.orbit/tasks/workspaces/<workspace-id>/` the canonical local bundle home.
+Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. The v2 task artifact store keeps prose in Markdown sidecars, narrows `task.yaml` to a metadata envelope, allocates authority-scoped `ORB-00000` IDs from `~/.orbit/tasks/index.sqlite`, and makes `~/.orbit/tasks/workspaces/<partition-id>/` the canonical local bundle home.
 
 This document is the entry point. [2_design.md](./2_design.md) describes the live v2 store; [3_vision.md](./3_vision.md) names open questions and prior work; [4_decisions.md](./4_decisions.md) captures the design decisions that constrain implementation.
 
@@ -34,7 +34,7 @@ The v2 artifact matches the work to its readers:
 - Markdown sidecars (`description.md`, `acceptance.md`, `plan.md`, `execution-summary.md`) hold prose and long-form human/agent reasoning.
 - Append-only logs (`events.jsonl`, `comments.jsonl`) carry events and comments without rewriting the envelope.
 - The default `ORB-00000` format uses a five-digit minimum width inside the configured allocation authority and explicitly scopes tasks when they cross registries; bare task IDs remain local search keys, in line with the graph-attribution removal in [T20260506-11].
-- Workspace task bundles live in one canonical local store under `~/.orbit/tasks/workspaces/<workspace-id>/`; task tools resolve them through the registry rather than a checkout-local filesystem view.
+- Workspace task bundles live in one canonical local store under `~/.orbit/tasks/workspaces/<partition-id>/`; task tools resolve them through the registry rather than a checkout-local filesystem view.
 - Local execution bindings stay in `~/.orbit/tasks/index.sqlite` rather than leaking into synced task identity.
 
 ---
@@ -43,7 +43,7 @@ The v2 artifact matches the work to its readers:
 
 ### 2.1 Task bundle
 
-A task bundle is the complete on-disk representation of one task. The canonical bundle lives under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`:
+A task bundle is the complete on-disk representation of one task. The canonical bundle lives under `~/.orbit/tasks/workspaces/<partition-id>/<task-id>/`:
 
 ```text
 ~/.orbit/tasks/
@@ -61,7 +61,7 @@ A task bundle is the complete on-disk representation of one task. The canonical 
         artifacts/
 ```
 
-The canonical directory name is the task ID. Status lives in `task.yaml`; it is not encoded in the path. `.orbit/config.yaml` stores the checkout's `workspace_id` so Orbit can resolve the canonical workspace partition after a repo move or checkout recreation.
+The canonical directory name is the task ID. Status lives in `task.yaml`; it is not encoded in the path. The parent `<partition-id>` is the task-store `workspace_bindings.workspace_id` key in `index.sqlite`. It is a separate namespace from the workspace-registry ID, though `orbit workspace init` can pass its `ws_*` ID through as the partition ID; older checkout bindings can use a generated `<slug>-<hash>` ID. `.orbit/config.yaml` stores the checkout's `workspace_id` for resolving its task-store binding after a repo move or checkout recreation.
 
 ### 2.2 Envelope
 
@@ -94,7 +94,7 @@ Typed links live in a single directed `relations` array on the envelope. Task-to
 
 ### 2.7 Local task store
 
-The canonical bundle lives in the local task store under `~/.orbit/tasks/workspaces/<workspace-id>/<task-id>/`. `~/.orbit/tasks/index.sqlite` holds the machine-local allocator, workspace bindings, local execution overlays, and generated indexes. Task and artifact tools resolve the canonical bundle from that registry; checkouts do not expose task-bundle symlinks.
+The canonical bundle lives in the local task store under `~/.orbit/tasks/workspaces/<partition-id>/<task-id>/`. `~/.orbit/tasks/index.sqlite` holds the machine-local allocator, workspace bindings, local execution overlays, and generated indexes. Task and artifact tools resolve the canonical bundle from that registry; checkouts do not expose task-bundle symlinks.
 
 ---
 

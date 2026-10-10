@@ -1,4 +1,6 @@
 use orbit_types::identity::OrbitId;
+
+use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
     ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskPriority,
     TaskRelation, TaskStatus, TaskType,
@@ -9,6 +11,8 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) artifact_origin: Option<orbit_types::task::ExecutionLocation>,
     pub(crate) job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub(crate) artifact_owner_run_id: Option<String>,
+    /// Trusted writer class the update entry point derived; never task input.
+    pub(crate) artifact_writer: Option<orbit_types::task::ArtifactWriter>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
@@ -31,12 +35,15 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) source_task_id: Option<Option<String>>,
     pub(crate) job_run_id: Option<Option<String>>,
     pub(crate) crew: Option<Option<String>>,
+    pub(crate) crew_source: Option<Option<String>>,
     pub(crate) orchestrator: Option<Option<String>>,
     pub(crate) status_event: Option<String>,
     pub(crate) status_note: Option<String>,
     pub(crate) append_history: Vec<TaskHistoryEntry>,
     pub(crate) append_comments: Vec<TaskComment>,
     pub(crate) upsert_artifacts: Vec<TaskArtifact>,
+    /// Canonical selectors of `context_files` newly authorized for creation.
+    pub(crate) context_creation: Vec<String>,
     /// [ORB-11305] Forwarded to the store as a compare-and-set on the task's
     /// persisted status. Setting it does not itself constitute a history
     /// change — it only constrains one.
@@ -65,6 +72,7 @@ impl TaskRecordUpdateParams {
             || self.source_task_id.is_some()
             || self.job_run_id.is_some()
             || self.crew.is_some()
+            || self.crew_source.is_some()
             || self.orchestrator.is_some()
     }
 
@@ -109,6 +117,11 @@ pub struct TaskAddParams {
     pub crew: Option<String>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
+    /// Creation intent an operator surface's selector screening established
+    /// for `context_files` ([`OrbitRuntime::authorize_missing_context`]).
+    ///
+    /// [`OrbitRuntime::authorize_missing_context`]: crate::OrbitRuntime::authorize_missing_context
+    pub context_creation: ContextCreationAuthorization,
 }
 
 impl Default for TaskAddParams {
@@ -134,6 +147,7 @@ impl Default for TaskAddParams {
             source_task_id: None,
             crew: None,
             orchestrator: None,
+            context_creation: ContextCreationAuthorization::default(),
         }
     }
 }
@@ -167,11 +181,16 @@ pub struct TaskUpdateParams {
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
     pub context_files: Option<Vec<String>>,
+    /// Creation intent an operator surface's selector screening established
+    /// for the replacement `context_files`. Ignored without `context_files`.
+    pub context_creation: ContextCreationAuthorization,
     pub upsert_artifacts: Vec<TaskArtifact>,
     /// Discard the candidate the task's last failed run preserved, so its
     /// next run implements fresh instead of resuming it [ORB-13985].
     /// Recorded as a task history event; refused while a run owns the task.
     pub discard_candidate: bool,
+    /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
+    pub allow_drop_system_tags: bool,
 }
 
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {
@@ -198,6 +217,7 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             crew: p.crew,
             orchestrator: p.orchestrator,
             context_files: p.context_files,
+            context_creation: p.context_creation.authorize,
             upsert_artifacts: p.upsert_artifacts,
             ..Default::default()
         }

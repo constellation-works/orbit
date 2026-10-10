@@ -6,14 +6,17 @@
 //! so asking the outgoing process to converge state would apply the version
 //! the operator is leaving.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    CompatibilityIdentity, GENERATION_CONTRACT, LEGACY_GENERATION_CONTRACT,
+    CompatibilityIdentity, GENERATION_CONTRACT, HandoverCandidate, LEGACY_GENERATION_CONTRACT,
 };
+use orbit_common::process::{BoundedRunError, run_bounded_capped_typed};
 use serde::Serialize;
 
 /// How much of a failing step's stderr to carry into the report.
@@ -22,6 +25,41 @@ const DETAIL_LIMIT: usize = 2000;
 /// How long to keep retrying a freshly written executable that reports
 /// [`std::io::ErrorKind::ExecutableFileBusy`].
 const EXEC_BUSY_WINDOW: Duration = Duration::from_secs(2);
+
+/// How long one convergence step (`migrate`, a clock repair, a state
+/// inspection) may run. The replacement binary may be migrating a large
+/// workspace, so this is generous; it exists so a wedged step cannot hold the
+/// update, and the generation authorities it holds, forever.
+const STEP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Bytes kept from each stream of a convergence step; reports read one line
+/// of stdout or the first 2000 characters of stderr.
+const STEP_OUTPUT_LIMIT: usize = 1024 * 1024;
+
+/// Environment variable bounding each `--version` and `update --contract`
+/// probe of a candidate or installed executable, in seconds.
+pub const PROBE_TIMEOUT_ENV: &str = "ORBIT_UPDATE_PROBE_TIMEOUT_SECS";
+
+/// Default [`PROBE_TIMEOUT_ENV`]. The probes run while every generation
+/// authority is held exclusively, so a candidate that hangs must not hold
+/// every Orbit command on the host refused for longer than this.
+pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The longest [`PROBE_TIMEOUT_ENV`] honoured.
+const MAX_PROBE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// How much of a probe's stdout or stderr is read; a description of a
+/// version or contract is a few hundred bytes.
+const PROBE_OUTPUT_LIMIT: u64 = 1024 * 1024;
+
+/// The configured bound on one probe (see [`PROBE_TIMEOUT_ENV`]).
+fn probe_timeout() -> Duration {
+    std::env::var(PROBE_TIMEOUT_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_PROBE_TIMEOUT, Duration::from_secs)
+        .min(MAX_PROBE_TIMEOUT)
+}
 
 /// What happened to one post-replacement convergence step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -159,9 +197,9 @@ pub fn resolve_installed_executable(executable: &Path) -> PathBuf {
     executable.to_path_buf()
 }
 
-/// Ask `executable` what version it is.
+/// Ask `executable` what version it is, within `probe_timeout()`.
 pub fn probe_version(executable: &Path) -> Result<String, OrbitError> {
-    let output = run_process(Command::new(executable).arg("--version")).map_err(|error| {
+    let output = run_probe(Command::new(executable).arg("--version")).map_err(|error| {
         OrbitError::Execution(format!(
             "failed to run '{} --version': {error}",
             executable.display()
@@ -196,19 +234,112 @@ pub fn probe_version(executable: &Path) -> Result<String, OrbitError> {
 /// that forks in the same window can briefly inherit that descriptor — so a
 /// freshly staged or freshly installed executable is retried for a bounded
 /// period rather than reported as broken.
+///
+/// The step is bounded by [`STEP_TIMEOUT`] and killed with its process group
+/// past it; that is reported as [`std::io::ErrorKind::TimedOut`].
 fn run_process(command: &mut Command) -> std::io::Result<Output> {
     let deadline = Instant::now() + EXEC_BUSY_WINDOW;
     loop {
-        match command.output() {
-            Err(error)
+        match run_bounded_capped_typed(command, STEP_TIMEOUT, STEP_OUTPUT_LIMIT) {
+            Err(BoundedRunError::Spawn(error))
                 if error.kind() == std::io::ErrorKind::ExecutableFileBusy
                     && Instant::now() < deadline =>
             {
                 std::thread::sleep(Duration::from_millis(25));
             }
-            other => return other,
+            Ok(captured) => {
+                return Ok(Output {
+                    status: captured.status,
+                    stdout: captured.stdout,
+                    stderr: captured.stderr,
+                });
+            }
+            Err(BoundedRunError::Spawn(error)) => return Err(error),
+            Err(BoundedRunError::Run(error)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    error.to_string(),
+                ));
+            }
         }
     }
+}
+
+/// Run a short probe of `command` to completion within [`probe_timeout`],
+/// retrying while the OS reports the executable as busy (see
+/// [`run_process`]). A probe that does not exit in time is killed and
+/// reported as [`std::io::ErrorKind::TimedOut`].
+fn run_probe(command: &mut Command) -> std::io::Result<Output> {
+    let timeout = probe_timeout();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let busy_until = Instant::now() + EXEC_BUSY_WINDOW;
+    let mut child = loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < busy_until =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            other => break other?,
+        }
+    };
+    let deadline = Instant::now() + timeout;
+    let stdout = capture(child.stdout.take());
+    let stderr = capture(child.stderr.take());
+    let timed_out = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("it did not finish within {}s", timeout.as_secs()),
+        )
+    };
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill(&mut child);
+            return Err(timed_out());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // A descendant that inherited the pipes can hold them open after the
+    // probe itself exited, so the readers share the probe's deadline.
+    let collect = |pipe: mpsc::Receiver<Vec<u8>>| {
+        pipe.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| timed_out())
+    };
+    Ok(Output {
+        status,
+        stdout: collect(stdout)?,
+        stderr: collect(stderr)?,
+    })
+}
+
+/// Read `pipe` to its end (up to [`PROBE_OUTPUT_LIMIT`]) on its own thread.
+fn capture(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    match pipe {
+        Some(pipe) => {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = pipe.take(PROBE_OUTPUT_LIMIT).read_to_end(&mut bytes);
+                let _ = sender.send(bytes);
+            });
+        }
+        None => {
+            let _ = sender.send(Vec::new());
+        }
+    }
+    receiver
+}
+
+fn kill(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The first non-empty line of a step's own report.
@@ -261,16 +392,26 @@ pub(super) fn probe_writable_state(
 }
 
 /// A trusted release must implement admission before it can replace a protected
-/// installation. Older or unrecognized candidates fail before any installation.
+/// installation. Older or unrecognized candidates fail before any installation,
+/// as does one that does not describe its contract within [`probe_timeout`].
 ///
-/// Returns the compatibility the candidate reports under
-/// `compatibility-generation-v2`, which its pin records so compatible builds
-/// can join it; `None` for a candidate that only speaks
-/// `executable-generation-v1`.
+/// What a candidate's `update --contract` report commits it to.
+pub(super) struct AdmissionContract {
+    /// The compatibility the candidate reports under
+    /// `compatibility-generation-v2`, which its pin records so compatible
+    /// builds can join it; `None` for a candidate that only speaks
+    /// `executable-generation-v1`.
+    pub(super) identity: Option<CompatibilityIdentity>,
+    /// The resume capabilities a live process can hand over to it with; none
+    /// for an `executable-generation-v1` candidate.
+    pub(super) handover: HandoverCandidate,
+}
+
+/// See [`AdmissionContract`] for what the report yields.
 pub(super) fn require_admission_contract(
     executable: &Path,
-) -> Result<Option<CompatibilityIdentity>, OrbitError> {
-    let output = run_process(Command::new(executable).args(["update", "--contract", "--json"]))
+) -> Result<AdmissionContract, OrbitError> {
+    let output = run_probe(Command::new(executable).args(["update", "--contract", "--json"]))
         .map_err(|error| {
             OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
         })?;
@@ -281,9 +422,23 @@ pub(super) fn require_admission_contract(
                 && report["schema_version"] == 1
                 && report["contract"] == LEGACY_GENERATION_CONTRACT =>
         {
-            Ok((report["admission_contract"] == GENERATION_CONTRACT)
-                .then(|| serde_json::from_value(report["compatibility"].clone()).ok())
-                .flatten())
+            let v2 = report["admission_contract"] == GENERATION_CONTRACT;
+            let resume = report["resume"]
+                .as_array()
+                .filter(|_| v2)
+                .map(|resume| {
+                    resume
+                        .iter()
+                        .filter_map(|entry| entry.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(AdmissionContract {
+                identity: v2
+                    .then(|| serde_json::from_value(report["compatibility"].clone()).ok())
+                    .flatten(),
+                handover: HandoverCandidate::reporting(resume),
+            })
         }
         _ => Err(OrbitError::Execution(
             "replacement does not support executable generation admission; nothing was replaced"

@@ -5,11 +5,11 @@ summary: "Threat model and binding decisions for an opt-in spec.build that build
 owner: claude
 status: Accepted
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build.rs", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install.rs", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 ---
 
 # Threat model: install-time spec.build for source-built plugins
@@ -189,7 +189,7 @@ Orbit does not parse lockfiles, so it does not claim to verify them (§4, depend
 **Decision.**
 
 - **Build directory.** A fresh directory created with a random name under the namespace's
-  staging area, `~/.orbit/plugins/<ns>/.build-<nonce>/`, owned by the operator, mode `0700`,
+  staging area, `~/.orbit/plugins/<ns>/.build-<pid>-<nonce>/`, owned by the operator, mode `0700`,
   created one component at a time with no links followed. It holds `src/` (a writable copy of
   the fetched checkout, without `.git`), `home/`, `tmp/` and whatever the phases create. It is
   the only writable path in either phase. Orbit's install pruning (scope §3) skips `.build-*`
@@ -210,7 +210,9 @@ Orbit does not parse lockfiles, so it does not claim to verify them (§4, depend
   resolution does today, so a long build never blocks another namespace's lifecycle operation.
 - **Size caps.** The outputs together are limited to the archive unpack limit
   (`MAX_UNPACKED_BYTES`, 256 MiB). The build directory is limited to 8 GiB, measured by Orbit
-  while the phases run (§4, resource exhaustion).
+  while the phases run and again when each phase exits (§4, resource exhaustion). A directory
+  or entry that cannot be inspected refuses the phase because Orbit cannot verify the cap; a path
+  deleted mid-measurement does not.
 
 **Rationale.** The manifest, schemas, definitions, skills and tests the operator's consent
 covers come from the reviewed commit, and a build script cannot rewrite them. Its only influence
@@ -301,9 +303,11 @@ value. The witness directory is already outside every backend's and agent's writ
 - **A mismatch fails closed.** At `orbit plugin add|upgrade --allow-build`, when the current
   workspace pins that namespace with an `artifact_digest`, an output digest that differs refuses
   the install. Nothing is published, and the refusal shows both digests. At `sync`, an installed
-  build whose recorded commit or artifact digest differs from the pin is unsatisfied. Sync does
-  not enable, toggle on or seed it in that workspace, and `doctor` reports it. A differing pin
-  never causes a rebuild.
+  build whose recorded commit or artifact digest differs from the pin is unsatisfied, and so is a
+  plugin sync has just installed whose recorded build does not satisfy the pin. Sync does not
+  enable, toggle on or seed it in that workspace, and `doctor` reports it. A pin's
+  `enabled: false` still switches the plugin off in that workspace. A differing pin never causes
+  a rebuild.
 - A pin is never consent of any kind. As with grants (scope §3), consent comes only from the
   operator's command line.
 
@@ -410,10 +414,10 @@ deterministic, matching the archive-digest finding that already exists.
 
 | Decision | Where |
 |---|---|
-| `spec.build` schema and validation (§1) | `orbit-types` `plugin/build.rs`; `PluginSpec.build` |
-| Commit fetch and `HEAD` check (§3.1) | `orbit-tools` `plugin/source.rs` (`fetch_git_commit`) |
+| `spec.build` schema and validation (§1) | `crates/orbit-types/src/plugin/build.rs`; `PluginSpec.build` |
+| Commit fetch and `HEAD` check (§3.1) | `crates/orbit-tools/src/plugin/source.rs` (`fetch_git_commit`) |
 | Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
-| Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build.rs` |
+| Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build/` |
 | Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `install.rs` |
 | Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `plugin_store.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
 | Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |

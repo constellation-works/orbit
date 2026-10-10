@@ -1,12 +1,31 @@
-#[cfg(target_os = "macos")]
 use super::super::compile::{MacosLoginKeychainAccess, macos_login_keychain_access};
 #[cfg(target_os = "macos")]
 use super::super::compile_macos_sandbox_profile;
 #[cfg(target_os = "macos")]
 use super::super::test_support::*;
 
-#[cfg(target_os = "macos")]
 use orbit_types::policy::ResolvedFsProfile;
+
+#[test]
+fn keychain_access_diagnostic_grants_antigravity_and_keeps_unknown_providers_denied() {
+    let resolved = ResolvedFsProfile {
+        name: "default".to_string(),
+        read: vec!["/Users/test".to_string()],
+        modify: vec![],
+    };
+    let home = std::ffi::OsStr::new("/Users/test");
+
+    assert_eq!(
+        macos_login_keychain_access("antigravity", Some(home), &resolved),
+        MacosLoginKeychainAccess::Allowed,
+        "Antigravity's login-keychain diagnostic must report its provider carve-out"
+    );
+    assert_eq!(
+        macos_login_keychain_access("future-provider", Some(home), &resolved),
+        MacosLoginKeychainAccess::DeniedByDefaultPolicy,
+        "unknown providers must retain the fail-closed keychain policy"
+    );
+}
 
 /// [ORB-10931] The kernel-level half of the ordering contract: an activity that
 /// denies the keychain directory — or an ancestor of it — must actually lose
@@ -16,7 +35,9 @@ use orbit_types::policy::ResolvedFsProfile;
 #[cfg(target_os = "macos")]
 #[test]
 fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_providers",
+    ) {
         return;
     }
 
@@ -28,7 +49,16 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
         read: vec![home_text.clone()],
         modify: vec![],
     };
-    for provider in ["claude", "copilot", "cursor"] {
+    for provider in ["claude", "copilot", "cursor", "antigravity"] {
+        assert_eq!(
+            macos_login_keychain_access(
+                provider,
+                Some(std::ffi::OsStr::new(&home_text)),
+                &default_allow
+            ),
+            MacosLoginKeychainAccess::Allowed,
+            "the access diagnostic must report the compiled grant for {provider}"
+        );
         assert!(
             fixture.credential_readable(&default_allow, provider),
             "without an overlapping deny, {provider} keeps its keychain read"
@@ -62,8 +92,41 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
 
 #[cfg(target_os = "macos")]
 #[test]
+fn compiled_profile_keeps_unknown_provider_keychain_access_denied() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_keeps_unknown_provider_keychain_access_denied",
+    ) {
+        return;
+    }
+
+    let fixture = SyntheticKeychainHome::create("unknown-keychain-provider");
+    let resolved = ResolvedFsProfile {
+        name: "default".to_string(),
+        read: vec![fixture.home_text()],
+        modify: vec![],
+    };
+
+    assert!(
+        !fixture.credential_readable(&resolved, "future-provider"),
+        "an unknown provider must retain the default user keychain deny"
+    );
+    assert_eq!(
+        macos_login_keychain_access(
+            "future-provider",
+            Some(std::ffi::OsStr::new(&fixture.home_text())),
+            &resolved
+        ),
+        MacosLoginKeychainAccess::DeniedByDefaultPolicy,
+        "unknown providers must fail closed in the access diagnostic"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn compiled_codex_profile_reads_public_ca_material_but_not_private_credentials() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_codex_profile_reads_public_ca_material_but_not_private_credentials",
+    ) {
         return;
     }
 
@@ -188,7 +251,9 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
     // EX_DATAERR), killing every macOS CLI run before the agent started.
     use std::process::Command;
 
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec",
+    ) {
         return;
     }
 
@@ -249,7 +314,9 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
 fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token() {
     use std::process::Command;
 
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token",
+    ) {
         return;
     }
 
@@ -362,7 +429,9 @@ fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_
 #[cfg(target_os = "macos")]
 #[test]
 fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard(
+        "read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec",
+    ) {
         return;
     }
     let parent = sandbox_test_parent("plugin-state");
@@ -417,7 +486,7 @@ fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec()
 #[cfg(target_os = "macos")]
 #[test]
 fn subpath_mask_hides_the_tree_from_a_sandboxed_child() {
-    if !sandbox_exec_can_apply() {
+    if !crate::macos_sandbox_test_guard("subpath_mask_hides_the_tree_from_a_sandboxed_child") {
         return;
     }
 

@@ -4,10 +4,12 @@
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionRunContext,
-    AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+    AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionReviewContract,
+    AdmissionRunContext, AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+    ExecutionLocation,
 };
 use orbit_types::tool::{McpTransport, ToolSessionContext};
+use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -44,14 +46,46 @@ pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), Or
 pub struct DeclaredCallerContract {
     pub caller_version: Option<String>,
     pub caller_schema: Option<u32>,
-    pub caller_review_policy: Option<String>,
+    /// Type-derived pull request fingerprint, declared after discovering that
+    /// the owner supports fingerprint negotiation.
+    pub caller_fingerprint: Option<String>,
+    pub caller_before_pr: Option<bool>,
 }
 
 impl crate::OrbitRuntime {
-    /// This host's effective review policy, as the distributed protocol spells
-    /// it. A follower declares it on every probe and pull.
-    pub(crate) fn local_review_policy_label(&self) -> String {
-        review_policy_label(self.operation_policy().review_policy.value)
+    /// This host's `review.before_pr`. A follower declares it on every probe;
+    /// a pull declares the value its drain captured at submission
+    /// [ORB-13992]. After-landing review never enters the protocol.
+    pub(crate) fn local_review_before_pr(&self) -> bool {
+        self.operation_policy().review_before_pr.value
+    }
+
+    /// Why this executor cannot run the before-PR review the owner's ship
+    /// contract captured, or `None` when it can or none is captured
+    /// [ORB-13908]. A claimed leaf reviews with exactly the captured crew, so
+    /// a follower that cannot resolve it refuses before it claims anything
+    /// rather than claiming a task its gate would escalate.
+    pub(crate) fn claimed_review_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
+        let review = ship.review.as_ref()?;
+        let key = if ship.before_landing {
+            "review.before_landing"
+        } else {
+            "review.before_pr"
+        };
+        let Some(crew) = review.crew.as_deref() else {
+            return Some(format!(
+                "before_pr_reviewer_unavailable: the owner has {key} on but no \
+                 operation.review_crew; a claimed leaf never reviews with its implementer's crew"
+            ));
+        };
+        self.resolve_crew_for_task(Some(crew), None)
+            .err()
+            .map(|error| {
+                format!(
+                    "before_pr_reviewer_unavailable: the owner's {key} review crew `{crew}` \
+                     cannot be resolved on this executor: {error}"
+                )
+            })
     }
 
     /// Only the owner checkout serves the distributed control plane.
@@ -82,8 +116,16 @@ impl crate::OrbitRuntime {
     }
 
     /// Ship configuration as the owner would resolve it at admission.
+    ///
+    /// With `review.before_pr` or `review.before_landing` on it also
+    /// captures the review contract a claimed leaf's gate and the owner's
+    /// acceptance are held to [ORB-13895] [ORB-14849]. It carries no capture time, so a follower that echoes
+    /// the probed contract still matches the owner's current resolution.
     pub(super) fn owner_ship_contract(&self) -> AdmissionShipContract {
         let base_branch = self.workspace_base_branch().to_string();
+        let policy = self.operation_policy();
+        let before_pr = self.local_review_before_pr();
+        let before_landing = policy.review_before_landing.value;
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()
@@ -94,9 +136,20 @@ impl crate::OrbitRuntime {
             },
             landing_branch: base_branch.clone(),
             base_branch,
-            review_policy: review_policy_label(self.operation_policy().review_policy.value),
+            before_pr,
+            before_landing,
             completion: self.workflow_distributed_completion().to_string(),
             authorization_reference: self.owner_completion_authority(),
+            review: (before_pr || before_landing).then(|| AdmissionReviewContract {
+                contract_version: REVIEW_CONTRACT_VERSION,
+                crew: policy.review_crew.value.clone(),
+                budget: policy.review_budget(),
+                required_validation_commands: Some(
+                    self.workflow_required_validation_commands().to_vec(),
+                ),
+                baseline_commands: self.review_baseline_commands().to_vec(),
+                host_evidence: policy.review_host_evidence.value.clone(),
+            }),
         }
     }
 
@@ -121,11 +174,22 @@ impl crate::OrbitRuntime {
         ship: &AdmissionShipContract,
         diagnostics: &mut Vec<String>,
     ) -> Result<Option<AdmissionRefusal>, OrbitError> {
-        if ship.review_policy != "none" {
-            diagnostics.push(format!(
-                "owner review policy is '{}'; v1 admits only 'none'",
-                ship.review_policy
-            ));
+        if let Some(review) = &ship.review {
+            let crew = review
+                .crew
+                .as_deref()
+                .map_or_else(|| "(unset)".to_string(), |crew| format!("`{crew}`"));
+            diagnostics.push(if ship.before_landing {
+                format!(
+                    "owner has review.before_landing on; each claimed leaf reviews its open pull \
+                     request with crew {crew} before it hands off"
+                )
+            } else {
+                format!(
+                    "owner has review.before_pr on; each claimed leaf runs the before-PR review \
+                     with crew {crew} before it opens a pull request"
+                )
+            });
         }
         let machine_id = session_machine_id(session).unwrap_or_else(|| "probe".to_string());
         let request = AdmissionRequest {
@@ -134,7 +198,7 @@ impl crate::OrbitRuntime {
             // pull makes against its own values. Undeclared optional caller
             // fields are unknown, not empty: fill the owner-matching value so
             // those caller-dependent legs are skipped while owner-resolved
-            // ship mode and review policy still run.
+            // ship mode and the owner's review.before_pr still run.
             request_id: "probe".to_string(),
             caller_version: declared
                 .caller_version
@@ -143,10 +207,11 @@ impl crate::OrbitRuntime {
             caller_schema: declared
                 .caller_schema
                 .unwrap_or(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA),
-            caller_review_policy: declared
-                .caller_review_policy
-                .clone()
-                .unwrap_or_else(|| "none".to_string()),
+            caller_before_pr: declared.caller_before_pr.unwrap_or(false),
+            caller_fingerprint: declared.caller_fingerprint.clone(),
+            // Every executor of this binary runs the before-PR gate on its
+            // claimed PR leaves [ORB-13908].
+            review_gate: true,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),
@@ -156,13 +221,16 @@ impl crate::OrbitRuntime {
             crews: None,
             os: None,
         };
-        let identity = trusted_identity(&machine_id, session);
+        let identity = trusted_identity(&machine_id, session, None);
         let refusal = orbit_store::admission_refusal(&identity, &request, owner_binary_version());
         if let Some(refusal) = refusal {
             diagnostics.push(match refusal {
                 AdmissionRefusal::InvalidInput => {
                     "declared caller version, schema, or drain context is missing or malformed"
                         .to_string()
+                }
+                AdmissionRefusal::ProtocolSkew => {
+                    "pull request schema fingerprints differ".to_string()
                 }
                 AdmissionRefusal::ProtocolMismatch => format!(
                     "protocol_mismatch: caller revision {}; owner revision {}",
@@ -179,9 +247,15 @@ impl crate::OrbitRuntime {
                     "ship mode '{}' is not available to this caller",
                     request.ship.mode
                 ),
-                AdmissionRefusal::ReviewPolicyUnsupported => format!(
-                    "review policy must be 'none' on both endpoints; owner '{}', executor '{}'",
-                    request.ship.review_policy, request.caller_review_policy
+                AdmissionRefusal::BeforePrUnsupported => format!(
+                    "owner has {} on; that review runs only on the PR route, and this owner \
+                     ships '{}'",
+                    if request.ship.before_landing {
+                        "review.before_landing"
+                    } else {
+                        "review.before_pr"
+                    },
+                    request.ship.mode
                 ),
             });
         }
@@ -195,18 +269,15 @@ pub fn owner_binary_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-fn review_policy_label(policy: orbit_config::ReviewPolicy) -> String {
-    match policy {
-        orbit_config::ReviewPolicy::None => "none",
-        orbit_config::ReviewPolicy::BeforePr => "before-pr",
-        orbit_config::ReviewPolicy::AfterLanding => "after-landing",
-    }
-    .to_string()
+pub(super) fn on_off(enabled: bool) -> &'static str {
+    if enabled { "on" } else { "off" }
 }
 
-/// The machine a session may speak for. A remote session's forwarded label
-/// names its receipt namespace and nothing else; a local session uses the
-/// accepting machine's own identity.
+/// The machine a session speaks for in receipt and claim ownership checks.
+/// A remote session uses its caller-chosen label, including for bind/settle
+/// fences; a local session uses the accepting machine's own identity. The
+/// remote label is not authenticated: local account access and SSH login
+/// already establish owner access in Orbit's single-user trust model.
 pub(super) fn session_machine_id(session: &ToolSessionContext) -> Option<String> {
     if is_remote(session) {
         return session
@@ -227,14 +298,19 @@ pub(super) fn is_remote(session: &ToolSessionContext) -> bool {
         .is_some_and(|transport| transport != McpTransport::Local)
 }
 
-/// Build store-side identity from trusted session facts alone.
+/// Build store-side identity from session facts. The request may supply a
+/// display name when the transport has none; it never supplies the machine id.
 pub(super) fn trusted_identity(
     machine_id: &str,
     session: &ToolSessionContext,
+    display_name: Option<&str>,
 ) -> AdmissionIdentity {
     let location = ExecutionLocation {
         machine_id: machine_id.to_string(),
-        machine_name: session.caller_machine_name.clone(),
+        machine_name: session
+            .caller_machine_name
+            .clone()
+            .or_else(|| display_name.map(ToOwned::to_owned)),
     };
     if is_remote(session) {
         AdmissionIdentity::trusted_remote(location)
@@ -243,19 +319,73 @@ pub(super) fn trusted_identity(
     }
 }
 
-/// Compare the probe's contract revision before sending any admission fields.
-/// Older owners call this `version_mismatch`; the follower still reports the
-/// protocol-specific refusal with both revisions.
-pub(crate) fn protocol_mismatch(report: &serde_json::Value) -> Option<String> {
+/// Compare the owner's derived request shape before sending admission fields.
+/// Missing fingerprints and legacy revision mismatches fail by the same type.
+pub(crate) fn protocol_skew(report: &serde_json::Value) -> Option<OrbitError> {
+    // Older owners may return a scrubbed identity instead of a typed error.
+    // That says nothing about build compatibility and must not end a drain.
+    if let Some(field) = crate::runtime::tool_exec::corrupted_drain_identity(report) {
+        return Some(OrbitError::OwnerNegotiation(format!(
+            "owner reply identity field `{field}` contains an environment redaction artefact; retry next pass"
+        )));
+    }
     let owner = report
         .get("protocol_schema")
         .and_then(serde_json::Value::as_u64);
-    (owner != Some(u64::from(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA))).then(|| {
+    let fingerprint = report
+        .get("protocol_fingerprint")
+        .and_then(serde_json::Value::as_str);
+    let caller = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    (owner != Some(u64::from(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA)) || fingerprint != Some(caller)).then(|| {
         let owner = owner.map_or_else(|| "unknown".to_string(), |value| value.to_string());
-        format!(
-            "protocol_mismatch: caller revision {}; owner revision {owner}; deploy matching \
-             protocol revisions on both endpoints and restart their long-lived processes",
-            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
-        )
+        OrbitError::ProtocolSkew(format!(
+            "caller revision {}; owner revision {owner}; caller fingerprint {caller}; owner fingerprint {}; deploy matching builds on both endpoints and restart their long-lived processes",
+            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, fingerprint.unwrap_or("unavailable")
+        ))
     })
+}
+
+/// Discover using fields older owners accept, then exchange fingerprints only
+/// with an owner whose response matches. A legacy owner lacking a fingerprint
+/// is refused locally by type, before it can reject a new probe or pull field.
+pub(crate) fn probe_pull_contract(
+    transport: &dyn orbit_tools::DrainOwnerTransport,
+    selector: &str,
+    before_pr: bool,
+) -> Result<serde_json::Value, OrbitError> {
+    let mut input = serde_json::json!({
+        "caller_version": owner_binary_version(),
+        "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        "caller_before_pr": before_pr,
+    });
+    let report = transport
+        .call(selector, "orbit.drain.probe", input.clone())
+        .map_err(owner_protocol_error)?;
+    if let Some(error) = protocol_skew(&report) {
+        return Err(error);
+    }
+    input["caller_fingerprint"] =
+        serde_json::json!(orbit_store::contracts::distributed_drain_protocol_fingerprint());
+    let report = transport
+        .call(selector, "orbit.drain.probe", input)
+        .map_err(owner_protocol_error)?;
+    if let Some(error) = protocol_skew(&report) {
+        return Err(error);
+    }
+    Ok(report)
+}
+
+/// Recover the typed protocol refusal across a structured remote tool error.
+pub(crate) fn owner_protocol_error(error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::RemoteTool { code, message, .. } if code == "protocol_skew" => {
+            OrbitError::ProtocolSkew(
+                message
+                    .strip_prefix("protocol_skew: ")
+                    .unwrap_or(&message)
+                    .to_string(),
+            )
+        }
+        other => other,
+    }
 }

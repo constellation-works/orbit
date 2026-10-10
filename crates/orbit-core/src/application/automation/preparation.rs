@@ -128,30 +128,33 @@ pub(crate) fn instructions(
 ) -> Result<InstructionSnapshot, AutomationError> {
     let source = Source::new(&runtime.paths().repo_root);
 
-    // The pinned tree includes every repository instruction, including nested
-    // selectors. Dirty local instructions cannot certify this pinned source.
-    let paths = source.git(&[
-        "ls-tree",
-        "-r",
-        "--name-only",
-        revision,
-        "--",
-        "**/AGENTS.md",
-        "**/CLAUDE.md",
-    ])?;
+    // `git ls-tree` matches pathspecs literally and rejects glob magic, so
+    // `**/AGENTS.md` lists nothing. Stream the pinned tree and keep
+    // instruction basenames: the full listing of a large repository passes
+    // the cap on one command's output, so it is filtered, not buffered. `-z`
+    // keeps a path that contains spaces or quotes intact. Dirty worktree
+    // files are not in that tree, so they cannot certify it.
+    let paths = source.git_matching_paths(
+        &[
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            revision,
+        ],
+        |path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")),
+    )?;
 
     let mut instructions = Vec::new();
 
-    for path in paths
-        .lines()
-        .filter(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
-    {
+    for path in &paths {
         if instructions.len() >= 50 {
             return Err(AutomationError::Deferred("instruction_scan_budget".into()));
         }
         instructions.push((
             path.to_string(),
-            source.git(&["show", &format!("{revision}:{path}")])?,
+            source.git_preserving_output(&["show", &format!("{revision}:{path}")])?,
         ));
     }
 
@@ -480,6 +483,15 @@ pub(crate) fn active_task_pilot_preparations(
         }
     }
     Ok(prepared_by_task)
+}
+
+impl OrbitRuntime {
+    /// IDs of the tasks an active task-pilot run is preparing; admission holds
+    /// them until the run settles, and read surfaces show them as preparing
+    /// rather than by their readiness gaps.
+    pub fn tasks_in_pilot_preparation(&self) -> Result<BTreeSet<String>, OrbitError> {
+        Ok(active_task_pilot_preparations(self)?.into_keys().collect())
+    }
 }
 
 fn prepared_task_ids(output: &Value, workspace_root: &Path) -> Option<Vec<String>> {

@@ -2,10 +2,39 @@
    inputs, filter chips, empty and loading states, action buttons, status
    pills and state labels, and the shared data table (.scoreboard-table).
 
-   Section titles read as headings, not as shouted mono labels: a title that
-   names a whole section is 13px sans, weight 600, capitalized (its markup
-   text is often lowercase). The small uppercase overline style is for field
-   labels inside a section: rail groups, table heads, fact labels. */
+   Titles are sentence case and never CSS-capitalized: a panel header is 14px
+   sans, a section or card title inside a panel is `.section-title`. The
+   small uppercase overline (`th`, `.col-head`) is for column heads and field
+   labels inside a section. Prose is sans; mono is for ids, metrics,
+   timestamps, code and logs. See docs/design/user-interface/specs/theme.md. */
+
+/* Every column head, whether a real `<th>` or a grid header row, reads the
+   same: a quiet uppercase overline. Tables set only layout on their heads
+   (padding, alignment, stickiness), never font, case or tracking. */
+th,
+.col-head {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  text-align: left;
+}
+
+/* A titled section or card inside a panel. Generated titles are often
+   lowercase data (a label from the server, an actor name), so only the first
+   letter is raised; `capitalize` would also raise every later word. */
+.section-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg);
+}
+.section-title::first-letter { text-transform: uppercase; }
 
 .panel {
   background: var(--bg-elev);
@@ -82,7 +111,7 @@
 #task-search:focus-visible,
 #audit-search:focus-visible,
 #friction-search:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -125,7 +154,7 @@
 
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  padding: 48px 24px; color: var(--fg-dim); font-family: var(--font-mono); font-size: 13px;
+  padding: 48px 24px; color: var(--fg-dim); font-family: var(--font-sans); font-size: 13px;
 }
 .empty-state .icon { font-size: 24px; margin-bottom: 12px; filter: grayscale(100%) opacity(50%); }
 
@@ -154,18 +183,44 @@
 .status-dot.red { background: var(--state-failed); box-shadow: 0 0 8px var(--state-failed); }
 .status-dot.orange { background: var(--state-pending); box-shadow: 0 0 8px var(--state-pending); }
 
+/* Retained dashboard counts and drain state belong to the last clean refresh. */
+.refresh-stale { opacity: .55; }
+
 /* ORB-11658: expandable rows and the collapsible field headers are
    keyboard-operable (role="button" plus Enter/Space), so focus has to be
    visible on them as well. The ring is inset because an outward one on a
    full-bleed row is clipped by the panel's scroll container. */
-.row:focus-visible,
 .artifact-row:focus-visible,
 .audit-row:focus-visible,
 .step-row:focus-visible,
-.runs-row:focus-visible,
 .field-block.collapsible h4:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+/* ORB-14495: a row that holds controls is disclosed by one of its cells, a
+   real button (makeDisclosure) that must still read as that cell's text. The
+   row's own rules (.row .title, .runs-row .id, .knowledge-row .title) supply
+   font, colour and truncation. */
+.disclosure {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  line-height: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 /* Click-to-copy identifiers are real buttons (keyboard-operable) that must
    still read as the plain mono text of the row that hosts them. The row's own
@@ -181,7 +236,7 @@
   cursor: copy;
 }
 .copy-id:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-radius: 2px;
 }
@@ -276,10 +331,17 @@
   background: var(--bg-hover);
 }
 
-/* Cancelling a run from the list is legitimate but rare: it reads as a
-   quiet control until it is the one being pointed at. */
-.action.run-cancel { border-color: transparent; color: var(--fg-dim); }
-.action.run-cancel:hover:not(:disabled) { border-color: #5a2a27; background: var(--danger-wash); color: var(--danger-fg); }
+/* ORB-14485: Cancelling a run is styled as a destructive secondary button. */
+.action.run-cancel {
+  border-color: var(--border);
+  background: var(--bg-elev);
+  color: #e7b8b1;
+}
+.action.run-cancel:hover:not(:disabled) {
+  border-color: #5a2a27;
+  background: var(--danger-wash);
+  color: var(--danger-fg);
+}
 
 @keyframes spin { 100% { transform: rotate(360deg); } }
 .spinner {
@@ -343,6 +405,82 @@
   overflow-x: auto;
 }
 
+/* Scrollable tables fade their edges to show the sideways scroll. Pinned
+   cells need an opaque background so scrolled columns do not show through. */
+@media (max-width: 1183px) {
+  #runs-body {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-elev);
+  }
+}
+
+@media (max-width: 768px) {
+  .scoreboard-table-wrap {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 28px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(255, 255, 255, 0.16), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-elev);
+  }
+  table.scoreboard-table th { z-index: 2; }
+  table.scoreboard-table th:first-child,
+  table.scoreboard-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--bg-elev);
+    box-shadow: inset -1px 0 0 var(--border);
+  }
+  table.scoreboard-table th:first-child {
+    z-index: 3;
+    box-shadow: 0 1px 0 var(--border), inset -1px 0 0 var(--border);
+  }
+  table.scoreboard-table td:first-child { z-index: 1; }
+  table.scoreboard-table tr.clickable:hover td:first-child,
+  table.scoreboard-table tr.audit-row:hover td:first-child {
+    background: color-mix(in srgb, white 3%, var(--bg-elev));
+  }
+  table.scoreboard-table tr.audit-row.expanded td:first-child {
+    background: color-mix(in srgb, #6e9fff 5%, var(--bg-elev));
+  }
+}
+
+/* `.card-table` rows (audit events, errors) restack as cards on phones, so
+   they need no sideways scroll; each table's own CSS places its cells. */
+@media (max-width: 600px) {
+  table.card-table,
+  table.card-table tbody { display: block; width: 100%; }
+  table.card-table thead { display: none; }
+  table.card-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.card-table tbody tr td,
+  table.card-table tbody tr td:first-child {
+    position: static;
+    padding: 1px 0;
+    border: 0;
+    box-shadow: none;
+    /* The row paints the hover and expanded tints; per-cell tints would leave
+       gaps between grid areas. */
+    background: transparent !important;
+    min-width: 0;
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  table.card-table tbody tr.clickable:hover,
+  table.card-table tbody tr.audit-row:hover { background: rgba(255, 255, 255, 0.03); }
+  table.card-table tbody tr.audit-row.expanded { background: rgba(110, 159, 255, 0.05); }
+}
+
 .empty-state.compact {
   align-items: flex-start;
   padding: 16px;
@@ -363,12 +501,6 @@ table.scoreboard-table td {
 }
 
 table.scoreboard-table th {
-  text-align: left;
-  color: var(--fg-dim);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   position: sticky;
   top: 0;
   background: var(--bg-elev);
@@ -378,8 +510,8 @@ table.scoreboard-table th {
 table.scoreboard-table td.num,
 table.scoreboard-table th.num {
   text-align: right;
-  font-family: var(--font-mono);
 }
+table.scoreboard-table td.num { font-family: var(--font-mono); }
 
 table.scoreboard-table td.zero { color: var(--border); }
 
@@ -444,7 +576,7 @@ table.scoreboard-table td.agent.clickable:hover { color: var(--accent); }
 .panel-placeholder {
   padding: 10px 16px;
   color: var(--fg-dim);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 12px;
   font-style: italic;
 }

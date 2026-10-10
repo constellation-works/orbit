@@ -39,7 +39,7 @@ pub(crate) fn resolve_provider_launcher(
 }
 
 /// Where dispatch would launch `program` from, or `None` when it would fail
-/// to find a launchable file. Read-only view of [`resolve_provider_launcher`]
+/// to find a launchable file. Read-only view of `resolve_provider_launcher`
 /// for `orbit doctor providers`, so the diagnostic and dispatch share one
 /// lookup policy. A final lookup path containing parent-directory traversal,
 /// including traversal supplied by `cwd`, is refused before probing it.
@@ -292,7 +292,7 @@ fn resolve_provider_launcher_with_extra_dirs(
 }
 
 /// A provider launcher that dispatch could not find, as named by the
-/// permanent spawn error [`resolve_provider_launcher`] returns.
+/// permanent spawn error `resolve_provider_launcher` returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingLauncher {
     pub program: String,
@@ -314,7 +314,7 @@ fn missing_launcher_message(program: &str, provider: &str) -> String {
 /// note that quotes it. The failure is permanent for its run but not for its
 /// task: installing the launcher fixes it, so callers that re-check blocked
 /// tasks need the program back out of the recorded text. Parsed here, beside
-/// [`missing_launcher_message`], so the format and its reader cannot drift.
+/// `missing_launcher_message`, so the format and its reader cannot drift.
 pub fn missing_launcher_in(text: &str) -> Option<MissingLauncher> {
     let (_, rest) = text.split_once(MISSING_LAUNCHER_PREFIX)?;
     let (program, rest) = rest.split_once(MISSING_LAUNCHER_PROVIDER)?;

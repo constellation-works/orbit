@@ -2,7 +2,7 @@
 //! receives, including claimed-mode tool denial.
 
 use orbit_common::security::child_env::{
-    ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
@@ -114,12 +114,12 @@ pub fn activity_tool_policy_env(
 /// (distributed-drain design §3, "Claimed-mode implementation").
 ///
 /// A claimed leaf's task belongs to another machine. Its injected envelope is
-/// the task and the claim is the authority, so the agent re-reads nothing, and
-/// it returns its execution summary in its output for `claim_handoff` to carry
-/// instead of writing owner task state. Denying the two tools makes that the
-/// only path, rather than relying on the prompt alone; the sandbox in which
-/// the agent runs cannot reach a remote owner anyway.
-pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.show", "orbit.task.update"];
+/// the task and the claim is the authority; `orbit.task.show` may re-read that
+/// task through the claim-scoped owner broker. The agent returns its execution
+/// summary in its output for `claim_handoff` to carry instead of writing owner
+/// task state. Denying task updates makes that the only write path, rather
+/// than relying on the prompt alone.
+pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 
 /// Whether this invocation runs inside a claimed leaf.
 ///
@@ -237,12 +237,15 @@ pub(super) fn activity_policy_env(
 /// run's allowlist [ORB-13427]. Drop those inherited names before this
 /// activity's envelope is stamped. A deny-mode activity restamps its marker,
 /// its list (including an explicit empty list), and the legacy MCP allowlist.
+/// An outer run's activity deadline is dropped too: every invocation stamps
+/// its own.
 pub(super) fn drop_inherited_policy_env(child_env: &mut Vec<(String, String)>) {
     child_env.retain(|(key, _)| {
         ![
             ACTIVITY_TOOL_POLICY_ENV,
             ACTIVITY_TOOLS_DENY_ENV,
             ACTIVITY_NAME_ENV,
+            ACTIVITY_DEADLINE_ENV,
             PROC_ALLOWED_PROGRAMS_ENV,
             PROC_PROGRAM_POLICY_ENV,
             PROC_DISALLOWED_PROGRAMS_ENV,

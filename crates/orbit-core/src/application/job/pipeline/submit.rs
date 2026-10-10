@@ -12,6 +12,8 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) definition: SubmittedDefinition<'a>,
     pub(crate) input: Value,
     pub(crate) resume: Option<&'a ResumePlan>,
+    /// Whole-run replay lineage, without inheriting resume checkpoints.
+    pub(crate) replay_source_run_id: Option<&'a str>,
     pub(crate) actor: Option<&'a str>,
     pub(crate) action_key: Option<&'a str>,
     /// Caller retry key admitted atomically with the run [ORB-13560].
@@ -20,6 +22,10 @@ pub(crate) struct PipelineSubmission<'a> {
     /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
     /// input; every other submission is refused for supplying it.
     pub(crate) trusted_host: bool,
+    /// Whether this submission is the governed review reconciliation
+    /// admission. Only it may carry
+    /// [`REVIEW_RECONCILIATION_ADMISSION_KEY`](orbit_types::workflow::REVIEW_RECONCILIATION_ADMISSION_KEY).
+    pub(crate) reconciliation: bool,
     /// How this run was submitted [ORB-12255].
     pub(crate) trigger: JobRunTrigger,
 }
@@ -66,10 +72,12 @@ impl<'a> PipelineSubmission<'a> {
             definition: SubmittedDefinition::Catalog,
             input,
             resume: None,
+            replay_source_run_id: None,
             actor,
             action_key: None,
             retry_key: None,
             trusted_host: false,
+            reconciliation: false,
             trigger: JobRunTrigger::cli(),
         }
     }
@@ -128,7 +136,9 @@ impl OrbitRuntime {
     /// tag is refused here, before any run exists, when that job cannot
     /// deliver it in `mode` — including when the plugin contributing it is
     /// disabled or uninstalled. The gate resolves the same selection again
-    /// before it reserves anything.
+    /// before it reserves anything. A task the PR pipeline would deliver is
+    /// refused with [`OrbitError::PrForgeRemoteMissing`] when no Git remote of
+    /// the checkout names a network host, since `pr_open` could never succeed.
     ///
     /// [ORB-11187] `completion` is the caller's explicit authorization for this
     /// run to finish delivery and perform the guarded `review -> done`
@@ -223,6 +233,7 @@ impl OrbitRuntime {
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
+        let forge = crate::application::job::delivery::PrForgeCheck::default();
         for task_id in task_ids {
             // A task the pipeline cannot start from (`blocked`, `review`,
             // `done`, `proposed`, ...) would only be discovered after the
@@ -257,7 +268,7 @@ impl OrbitRuntime {
                     &format!("explicit ship task '{task_id}'"),
                 )?;
             }
-            self.resolve_delivery_route(std::slice::from_ref(&task), mode)?;
+            self.resolve_admitted_delivery_route(std::slice::from_ref(&task), mode, &forge)?;
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
@@ -308,10 +319,16 @@ impl OrbitRuntime {
             claim_token,
             trigger,
             false,
+            false,
         )
     }
 
     /// Submit a drain with a strict policy inherited by its leaf workers.
+    ///
+    /// [ORB-14117] `approve_proposed` lets every pass of this drain approve
+    /// qualifying `proposed` tasks into the backlog through the task-pilot
+    /// promotion boundary. Like `completion`, it is only ever raised by a
+    /// per-invocation operator flag.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_containment(
         &self,
@@ -324,6 +341,7 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
         trigger: JobRunTrigger,
         strict_containment: bool,
+        approve_proposed: bool,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
@@ -335,6 +353,7 @@ impl OrbitRuntime {
             false,
         )?
         .into_result()?;
+        self.preflight_git_protection()?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )
@@ -344,6 +363,7 @@ impl OrbitRuntime {
             max_active_leaf_runs,
             completion,
             &self.canonical_allowed_crews(allowed_crews)?,
+            approve_proposed,
         )?;
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
         if strict_containment {
@@ -456,7 +476,7 @@ impl OrbitRuntime {
             },
             ..PipelineSubmission::catalog(&job_name, input.clone(), actor)
         });
-        self.record_submission_audit(&job_name, &input, actor, &result)?;
+        self.record_submission_audit(&job_name, &input, actor, &result);
         result
     }
     /// Submit an operator UI's no-input catalog action through the shared dispatcher.
@@ -530,7 +550,7 @@ impl OrbitRuntime {
             }
             .with_trigger(trigger),
         );
-        self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
+        self.record_submission_audit(job_name, &input, Some("automation"), &result);
         result
     }
     pub fn submit_pipeline_run(
@@ -560,23 +580,31 @@ impl OrbitRuntime {
             PipelineSubmission::catalog(job_name, input.clone(), actor).with_trigger(trigger),
         );
 
-        self.record_pipeline_audit(
-            "pipeline.invoke",
-            result.as_ref().ok().map(|value| value.run_id.as_str()),
-            actor,
-            match &result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "priority": priority,
-                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
-                "input_hash": input_hash(&input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )?;
+        log_best_effort(
+            "record pipeline submission audit",
+            result
+                .as_ref()
+                .ok()
+                .map(|value| value.run_id.as_str())
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "pipeline.invoke",
+                result.as_ref().ok().map(|value| value.run_id.as_str()),
+                actor,
+                match &result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
+                },
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "priority": priority,
+                    "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                    "input_hash": input_hash(&input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
 
         result
     }
@@ -600,28 +628,36 @@ impl OrbitRuntime {
             Some(admission),
         );
 
-        self.record_pipeline_audit(
-            "pipeline.invoke",
-            result.as_ref().ok().and_then(ChildSubmission::run_id),
-            actor,
-            match &result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "priority": priority,
-                "parent_run_id": admission.parent_run_id,
-                "outcome": match &result {
-                    Ok(ChildSubmission::Skipped(reason)) => reason.as_str(),
-                    _ => "submitted",
+        log_best_effort(
+            "record child submission audit",
+            result
+                .as_ref()
+                .ok()
+                .and_then(ChildSubmission::run_id)
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "pipeline.invoke",
+                result.as_ref().ok().and_then(ChildSubmission::run_id),
+                actor,
+                match &result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
                 },
-                "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
-                "input_hash": input_hash(&input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )?;
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "priority": priority,
+                    "parent_run_id": admission.parent_run_id,
+                    "outcome": match &result {
+                        Ok(ChildSubmission::Skipped(reason)) => reason.as_str(),
+                        _ => "submitted",
+                    },
+                    "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
+                    "input_hash": input_hash(&input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
 
         result
     }

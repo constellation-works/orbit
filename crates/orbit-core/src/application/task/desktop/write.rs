@@ -104,7 +104,7 @@ impl OrbitRuntime {
                 .tasks()
                 .lookup_desktop_creation(&key, &digest)?
             {
-                return self.desktop_write_result(&task.id, true, session);
+                return self.desktop_write_result(&task.id, true, None, session);
             }
             let task = self.add_task_admitted_guarded(
                 TaskAddParams {
@@ -121,7 +121,7 @@ impl OrbitRuntime {
                 Some(&key),
                 Some(&digest),
             )?;
-            return self.desktop_write_result(&task.id, false, session);
+            return self.desktop_write_result(&task.id, false, None, session);
         }
         let (id, expected_revision) = match &request.operation {
             DesktopTaskOperation::Edit {
@@ -153,13 +153,15 @@ impl OrbitRuntime {
             if history.note.as_deref() != Some(expected_receipt.as_str()) {
                 return Err(invalid("request identity reused with a different payload"));
             }
-            return self.desktop_write_result(&id, true, session);
+            return self.desktop_write_result(&id, true, None, session);
         }
-        let head = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation {
+        let pull_request = if let DesktopTaskOperation::Review { verdict, .. } = &request.operation
+        {
             self.desktop_observe_pr_head(&self.get_task(&id)?, verdict)?
         } else {
             None
         };
+        let head = pull_request.as_ref().map(|pr| pr.head.clone());
         let mut outcome = None;
         // The status a desktop write replaced, when it changed one.
         let mut previous_status = None;
@@ -183,6 +185,7 @@ impl OrbitRuntime {
             }
             let task = self.get_task(&id)?;
             let mut fields = DesktopTaskFields::default();
+            let mut crew_source = None;
             let mut comment = None;
             let mut status = None;
             match &request.operation {
@@ -215,20 +218,20 @@ impl OrbitRuntime {
                     if let Some(v) = &f.acceptance_criteria {
                         criteria(v)?;
                     }
-                    let v = self
-                        .validate_and_normalize_task_field_edits(
-                            &id,
-                            &task,
-                            TaskUpdateParams {
-                                title: f.title.clone(),
-                                description: f.description.clone(),
-                                acceptance_criteria: f.acceptance_criteria.clone(),
-                                priority: f.priority,
-                                crew: f.crew.clone().map(Some),
-                                ..Default::default()
-                            },
-                        )?
-                        .params;
+                    let validated = self.validate_and_normalize_task_field_edits(
+                        &id,
+                        &task,
+                        TaskUpdateParams {
+                            title: f.title.clone(),
+                            description: f.description.clone(),
+                            acceptance_criteria: f.acceptance_criteria.clone(),
+                            priority: f.priority,
+                            crew: f.crew.clone().map(Some),
+                            ..Default::default()
+                        },
+                    )?;
+                    crew_source = validated.crew_source;
+                    let v = validated.params;
                     fields = DesktopTaskFields {
                         status: None,
                         title: v.title,
@@ -245,7 +248,7 @@ impl OrbitRuntime {
                 DesktopTaskOperation::Review {
                     verdict, complete, ..
                 } => {
-                    self.desktop_validate_verdict(&task, verdict)?;
+                    self.desktop_validate_verdict(&task, verdict, pull_request.as_ref())?;
                     if *complete {
                         if verdict.decision != DesktopReviewDecision::Accept {
                             return Err(invalid("changes requested cannot complete a task"));
@@ -254,15 +257,30 @@ impl OrbitRuntime {
                         if verdict.expected_head != head {
                             return Err(invalid("reviewed PR head changed or cannot be verified"));
                         }
+                        if let Some(reason) = pull_request
+                            .as_ref()
+                            .and_then(|pr| pr.completion_refusal.as_deref())
+                        {
+                            return Err(invalid(reason));
+                        }
                         self.ensure_resolves_are_workspace_local(&task)?;
                         status = Some(TaskStatus::Done);
                     }
-                    comment = Some(format!(
+                    // The audit names where the reviewed run executed and
+                    // which pull request the verdict observed.
+                    let mut audit = format!(
                         "desktop_review_verdict={}\nreviewed_revision={}\nrequest_id={}",
                         serde_json::to_string(verdict).map_err(|e| invalid(&e.to_string()))?,
                         expected_revision,
                         request.request_id
-                    ));
+                    );
+                    if let Some(location) = &task.job_run_machine {
+                        audit.push_str(&format!("\nexecution_machine={}", location.machine_id));
+                    }
+                    if let Some(url) = pull_request.as_ref().and_then(|pr| pr.url.as_deref()) {
+                        audit.push_str(&format!("\npull_request={url}"));
+                    }
+                    comment = Some(audit);
                 }
                 DesktopTaskOperation::Create { .. } => unreachable!(),
             }
@@ -275,6 +293,7 @@ impl OrbitRuntime {
                         payload_digest: digest.clone(),
                         expected_revision: expected_revision.clone(),
                         fields,
+                        crew_source,
                         comment,
                         status,
                     },
@@ -309,6 +328,7 @@ impl OrbitRuntime {
         self.desktop_write_result(
             &id,
             outcome == Some(AtomicTaskMutationOutcome::AlreadyApplied),
+            previous_status,
             session,
         )
     }
@@ -316,14 +336,15 @@ impl OrbitRuntime {
         &self,
         id: &str,
         replayed: bool,
+        previous_status: Option<TaskStatus>,
         session: &ToolSessionContext,
     ) -> Result<DesktopTaskWriteResult, OrbitError> {
         let refresh = || {
             let task = self.get_task(id)?;
             self.stores().task_records().index_task(&task);
-            if task.status == TaskStatus::Done {
-                self.record_resolves_side_effects(&task)?;
-            }
+            // A write that changed no status, and every replay, left the
+            // task where it already was.
+            self.record_resolves_side_effects(previous_status.unwrap_or(task.status), &task);
             Ok(DesktopTaskWriteResult {
                 snapshot: self.desktop_task_snapshot(id, session)?,
                 replayed,

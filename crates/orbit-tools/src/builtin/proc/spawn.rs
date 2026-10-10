@@ -1,13 +1,15 @@
 use std::path::Path;
+use std::time::SystemTime;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::tracing;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::git_config::enforce_no_persistent_git_config;
+use super::rustup_install::enforce_no_workspace_default_rustup_install;
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext};
 
 pub struct ProcSpawnTool;
@@ -16,7 +18,9 @@ impl Tool for ProcSpawnTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "proc.spawn".to_string(),
-            description: "Spawn a process with timeout and capture output".to_string(),
+            description: format!(
+                "Spawn a process with timeout and capture output. The timeout ceiling is {UNSCOPED_MAX_TIMEOUT_MS} ms outside a managed activity; inside one it is the activity's remaining wall-clock budget, at most the operator's execution.proc_spawn_max_timeout_minutes (default 45 min)"
+            ),
             parameters: vec![
                 ToolParam {
                     name: "program".to_string(),
@@ -33,7 +37,7 @@ impl Tool for ProcSpawnTool {
                 ToolParam {
                     name: "timeout_ms".to_string(),
                     description: format!(
-                        "Execution timeout in milliseconds (default {TIMEOUT_DEFAULT_MS}; larger values are clamped to {MAX_TIMEOUT_MS})"
+                        "Execution timeout in milliseconds (default {TIMEOUT_DEFAULT_MS}). Larger values are clamped to the effective ceiling, which the result reports as timeout_ceiling_ms: {UNSCOPED_MAX_TIMEOUT_MS} outside a managed activity, or the smaller of the activity's remaining budget and execution.proc_spawn_max_timeout_minutes inside one"
                     ),
                     param_type: "u64".to_string(),
                     required: false,
@@ -65,14 +69,50 @@ impl Tool for ProcSpawnTool {
 
         enforce_no_persistent_git_config("proc.spawn", &program, &args)?;
 
-        let request = spawn_request(ctx, program, args, proc_spawn_timeout_ms(&input));
+        let requested_timeout_ms = input.get("timeout_ms").and_then(Value::as_u64);
+        let ceiling = TimeoutCeiling::for_context(ctx, SystemTime::now());
+        let timeout_ms = ceiling.clamp(requested_timeout_ms);
+        let request = spawn_request(ctx, program, args, timeout_ms);
+        // The child environment is always ClearAndSet: this boundary composes
+        // it before launch, and the rustup refusal has to see that environment
+        // rather than the worker's ambient one.
+        if let EnvironmentMode::ClearAndSet(ref env) = request.environment_mode {
+            enforce_no_workspace_default_rustup_install(
+                "proc.spawn",
+                &request.program,
+                &request.args,
+                env,
+                ctx.workspace_root.as_deref(),
+            )?;
+        }
         // A managed CLI worker already runs under Bubblewrap (Linux) or
         // sandbox-exec (macOS). Its children inherit that OS boundary. Adding
         // Landlock here would narrow reads again and refuse macOS outright.
         let exec_result = run_process(&request, &NoSandbox)?;
 
-        serde_json::to_value(exec_result)
-            .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))
+        let mut result = serde_json::to_value(&exec_result)
+            .map_err(|e| OrbitError::Execution(format!("serialize exec result: {e}")))?;
+        let timeout_clamped = timeout_ms < requested_timeout_ms.unwrap_or(TIMEOUT_DEFAULT_MS);
+        result["timeout_ms"] = json!(timeout_ms);
+        result["timeout_ceiling_ms"] = json!(ceiling.ms);
+        result["timeout_ceiling_source"] = json!(ceiling.source.as_str());
+        result["timeout_clamped"] = json!(timeout_clamped);
+        if let Some(requested) = requested_timeout_ms {
+            result["requested_timeout_ms"] = json!(requested);
+        }
+        if timeout_clamped {
+            result["timeout_notice"] = json!(format!(
+                "timeout_ms was clamped to {timeout_ms}: {}",
+                ceiling.source.explanation()
+            ));
+        }
+        if exec_result.timed_out {
+            result["hint"] = json!({
+                "transport": "native_shell",
+                "message": "For long-running build, test or make validation, use the provider's native shell session or another long-running transport the lane provides. A proc.spawn timeout is not a validation blocker. Preserve sandboxing and build-budget admission.",
+            });
+        }
+        Ok(result)
     }
 }
 
@@ -116,29 +156,99 @@ fn spawn_request(
     }
 }
 
-/// Ceiling for a caller-supplied `timeout_ms`.
+/// Ceiling for a caller-supplied `timeout_ms` outside a managed activity.
 ///
 /// The supervisor deadline is the only thing that ends a child that never
 /// exits on its own, and `proc.spawn` reads that deadline straight from tool
-/// input — so an asset asking for `u64::MAX` would otherwise disable it. The
-/// ceiling is the longest timeout this crate defines, well above the read-only
-/// commands the shipped activities grant `proc.spawn`.
-const MAX_TIMEOUT_MS: u64 = TIMEOUT_LONG_MS;
+/// input — so an asset asking for `u64::MAX` would otherwise disable it. An
+/// interactive call, or an activity whose host attests no deadline, keeps the
+/// longest timeout this crate defines.
+const UNSCOPED_MAX_TIMEOUT_MS: u64 = TIMEOUT_LONG_MS;
 
-fn proc_spawn_timeout_ms(input: &Value) -> u64 {
-    let Some(requested) = input.get("timeout_ms").and_then(Value::as_u64) else {
-        return TIMEOUT_DEFAULT_MS;
-    };
-    if requested > MAX_TIMEOUT_MS {
-        tracing::warn!(
-            target: "orbit.tool.proc_spawn",
-            requested_timeout_ms = requested,
-            timeout_ms = MAX_TIMEOUT_MS,
-            "proc.spawn timeout exceeds the supervisor maximum and was clamped",
-        );
-        return MAX_TIMEOUT_MS;
+/// What bounded one call's timeout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CeilingSource {
+    /// No activity budget: the fixed 60 s ceiling.
+    Unscoped,
+    /// The activity's remaining wall-clock budget was the smaller bound.
+    ActivityRemaining,
+    /// The operator's per-call ceiling was the smaller bound.
+    Configured,
+}
+
+impl CeilingSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unscoped => "unscoped",
+            Self::ActivityRemaining => "activity_remaining",
+            Self::Configured => "configured",
+        }
     }
-    requested
+
+    fn explanation(self) -> &'static str {
+        match self {
+            Self::Unscoped => {
+                "outside a managed activity with a wall-clock budget, proc.spawn keeps its fixed ceiling"
+            }
+            Self::ActivityRemaining => {
+                "that is all the wall-clock budget the enclosing activity has left"
+            }
+            Self::Configured => {
+                "that is the operator's execution.proc_spawn_max_timeout_minutes ceiling"
+            }
+        }
+    }
+}
+
+/// The largest timeout one call may run with, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimeoutCeiling {
+    ms: u64,
+    source: CeilingSource,
+}
+
+impl TimeoutCeiling {
+    /// Inside an activity with a host-attested budget, the smaller of the
+    /// time it has left and the operator's ceiling; otherwise 60 s.
+    fn for_context(ctx: &ToolContext, now: SystemTime) -> Self {
+        let Some(budget) = ctx.proc_spawn_budget else {
+            return Self {
+                ms: UNSCOPED_MAX_TIMEOUT_MS,
+                source: CeilingSource::Unscoped,
+            };
+        };
+        let remaining_ms = budget.deadline.duration_since(now).map_or(0, |left| {
+            u64::try_from(left.as_millis()).unwrap_or(u64::MAX)
+        });
+        if remaining_ms < budget.max_timeout_ms {
+            Self {
+                ms: remaining_ms,
+                source: CeilingSource::ActivityRemaining,
+            }
+        } else {
+            Self {
+                ms: budget.max_timeout_ms,
+                source: CeilingSource::Configured,
+            }
+        }
+    }
+
+    /// The timeout to run with. A call that names none keeps the default,
+    /// still under the ceiling.
+    fn clamp(self, requested: Option<u64>) -> u64 {
+        let wanted = requested.unwrap_or(TIMEOUT_DEFAULT_MS);
+        if wanted > self.ms {
+            tracing::warn!(
+                target: "orbit.tool.proc_spawn",
+                requested_timeout_ms = wanted,
+                timeout_ms = self.ms,
+                ceiling_source = self.source.as_str(),
+                "proc.spawn timeout exceeds the effective ceiling and was clamped",
+            );
+            return self.ms;
+        }
+        wanted
+    }
 }
 
 pub(crate) fn enforce_program_allowlist(

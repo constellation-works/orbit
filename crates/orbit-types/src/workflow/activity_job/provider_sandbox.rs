@@ -6,6 +6,7 @@
 //! Orbit can tighten per invocation, so their mode is `default`.
 
 use super::Provider;
+use crate::workflow::ProviderSandboxError;
 
 /// Mode used when a provider has no configurable inner sandbox.
 pub const DEFAULT_PROVIDER_SANDBOX: &str = "default";
@@ -56,22 +57,21 @@ pub fn parse_provider_sandbox_label(label: &str) -> Option<(Provider, &str)> {
 }
 
 /// Admit an override mode for this provider, or name the supported values.
-pub fn admit_provider_sandbox_mode(provider: Provider, mode: &str) -> Result<&str, String> {
+pub fn admit_provider_sandbox_mode(
+    provider: Provider,
+    mode: &str,
+) -> Result<&str, ProviderSandboxError> {
     let trimmed = mode.trim();
     if trimmed.is_empty() {
-        return Err(format!(
-            "`provider_sandbox` is empty; expected one of {}",
-            provider_sandbox_modes(provider).join(", ")
-        ));
+        return Err(ProviderSandboxError::Empty { provider });
     }
     if provider_sandbox_modes(provider).contains(&trimmed) {
         return Ok(trimmed);
     }
-    Err(format!(
-        "`provider_sandbox` `{trimmed}` is not supported for {}; expected one of {}",
-        provider.as_str(),
-        provider_sandbox_modes(provider).join(", ")
-    ))
+    Err(ProviderSandboxError::Unsupported {
+        provider,
+        mode: trimmed.to_string(),
+    })
 }
 
 /// Whether `mode` is this provider's least-restrictive inner sandbox.

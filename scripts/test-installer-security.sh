@@ -55,6 +55,9 @@ fi
 if [ -n "${ORBIT_TEST_CALLS:-}" ]; then
   printf '%s\n' "$*" >> "$ORBIT_TEST_CALLS"
 fi
+if [ -n "${ORBIT_TEST_MIRROR_LISTING:-}" ] && [ "${1:-}" = init ]; then
+  (cd "$ORBIT_UPDATE_RELEASE_DIR" && find . -type f | sort) > "$ORBIT_TEST_MIRROR_LISTING"
+fi
 if [ "${ORBIT_TEST_FAIL_HOST_PREP:-0}" = 1 ] && [ "${1:-}" = init ]; then
   exit 1
 fi
@@ -149,6 +152,7 @@ run_shell_install() {
 expect_shell_failure() {
   local release_dir="$1"
   local label="$2"
+  local expected_error="${3:-}"
   local install_dir="$TMP_ROOT/install-$label"
   local marker="$TMP_ROOT/marker-$label"
   local log_file="$TMP_ROOT/$label.log"
@@ -160,6 +164,15 @@ expect_shell_failure() {
   fi
   if [ -e "$marker" ]; then
     echo "FAIL: shell installer executed binary for $label" >&2
+    exit 1
+  fi
+  if [ -e "$install_dir/orbit" ] || [ -L "$install_dir/orbit" ]; then
+    echo "FAIL: shell installer installed binary for $label" >&2
+    exit 1
+  fi
+  if [ -n "$expected_error" ] && ! grep -q "$expected_error" "$log_file"; then
+    echo "FAIL: shell installer rejected $label for an unexpected reason" >&2
+    cat "$log_file" >&2
     exit 1
   fi
 }
@@ -207,6 +220,41 @@ expect_shell_failure "$untrusted_key_release" "untrusted-key"
 expect_shell_failure "$symlink_release" "symlink-member"
 expect_shell_failure "$traversal_release" "traversal-member"
 
+# Use the same malformed dates for both installers and both optional fields.
+malformed_dates=('next-month' '2026-1-01' '2026-01-1' '26-01-01'
+  '20260101' ' 2026-01-01' '2026-01-01 ' '2026-01-01extra')
+MALFORMED_DATES_FILE="$TMP_ROOT/malformed-release-dates.json"
+node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' \
+  "${malformed_dates[@]}" > "$MALFORMED_DATES_FILE"
+VALID_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE"
+TRUSTED_KEYS_FILE="$TMP_ROOT/malformed-trusted-release-keys.txt"
+date_case=0
+for malformed_date in "${malformed_dates[@]}"; do
+  date_case=$((date_case + 1))
+  printf 'current|%s||%s\n' "$malformed_date" "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+  expect_shell_failure "$good_release" "malformed-not-after-$date_case" 'invalid release signing key date'
+  printf 'current|2099-12-31|%s|%s\n' "$malformed_date" "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+  expect_shell_failure "$good_release" "malformed-revoked-at-$date_case" 'invalid release signing key date'
+done
+printf 'current|next-month||%s' "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+expect_shell_failure "$good_release" 'malformed-not-after-no-final-newline' 'invalid release signing key date'
+# A matching valid key must not hide malformed metadata later in the trust set.
+for field in not_after revoked_at; do
+  printf 'current|2099-12-31||%s\n' "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+  if [ "$field" = not_after ]; then
+    printf 'unused|next-month||%s' "$EXPIRED_PUBLIC_KEY" >> "$TRUSTED_KEYS_FILE"
+  else
+    printf 'unused|2099-12-31|next-month|%s' "$EXPIRED_PUBLIC_KEY" >> "$TRUSTED_KEYS_FILE"
+  fi
+  expect_shell_failure "$good_release" "malformed-unused-$field" 'invalid release signing key date'
+done
+printf 'current|||%s' "$CURRENT_PUBLIC_KEY" > "$TRUSTED_KEYS_FILE"
+run_shell_install "$good_release" "$TMP_ROOT/install-empty-dates" "$TMP_ROOT/marker-empty-dates" \
+  > "$TMP_ROOT/empty-dates.log" 2>&1
+test -x "$TMP_ROOT/install-empty-dates/orbit"
+test -f "$TMP_ROOT/marker-empty-dates"
+TRUSTED_KEYS_FILE="$VALID_TRUSTED_KEYS_FILE"
+
 good_install_dir="$TMP_ROOT/install-good"
 good_marker="$TMP_ROOT/marker-good"
 run_shell_install "$good_release" "$good_install_dir" "$good_marker" > "$TMP_ROOT/good.log" 2>&1
@@ -215,6 +263,25 @@ test -f "$good_marker"
 if [[ "$TARGET" == *-unknown-linux-gnu ]]; then
   if ! grep -Fxq 'init --host-prerequisites-only --non-interactive' "$good_marker.calls"; then
     echo "FAIL: shell installer did not invoke Linux onboarding" >&2
+    exit 1
+  fi
+  # A custom base URL is mirrored for preparation, carrying the bundled
+  # Bubblewrap the signed manifest lists for this architecture.
+  case "$TARGET" in
+    x86_64-*) bwrap_asset=orbit-bwrap-x86_64-linux ;;
+    *) bwrap_asset=orbit-bwrap-aarch64-linux ;;
+  esac
+  bwrap_release="$TMP_ROOT/bwrap-release"
+  cp -R "$good_release" "$bwrap_release"
+  printf '%s\n' "not really bwrap" > "$bwrap_release/$bwrap_asset"
+  printf '%s  %s\n' "$(sha256_file "$bwrap_release/$bwrap_asset")" "$bwrap_asset" >> "$bwrap_release/orbit-checksums.txt"
+  sign_checksums "$CURRENT_PRIVATE_KEY" "$bwrap_release/orbit-checksums.txt" "$bwrap_release/orbit-checksums.txt.sig"
+  ORBIT_TEST_MIRROR_LISTING="$TMP_ROOT/mirror-listing" \
+    run_shell_install "$bwrap_release" "$TMP_ROOT/install-bwrap" "$TMP_ROOT/marker-bwrap" > "$TMP_ROOT/bwrap.log" 2>&1
+  expected_listing="$(printf './v0.0.0/%s\n' "$bwrap_asset" orbit-checksums.txt orbit-checksums.txt.sig | sort)"
+  if [ "$(cat "$TMP_ROOT/mirror-listing")" != "$expected_listing" ]; then
+    echo "FAIL: shell installer did not mirror the bundled Bubblewrap for Linux onboarding" >&2
+    cat "$TMP_ROOT/mirror-listing" >&2
     exit 1
   fi
   if ORBIT_TEST_FAIL_HOST_PREP=1 run_shell_install "$good_release" "$TMP_ROOT/install-prep-failure" "$TMP_ROOT/marker-prep-failure" > "$TMP_ROOT/prep-failure.log" 2>&1; then
@@ -249,6 +316,7 @@ ROOT="$ROOT" \
   GOOD_ARCHIVE="$good_archive" \
   SYMLINK_ARCHIVE="$symlink_release/orbit-${TARGET}.tar.gz" \
   TRAVERSAL_ARCHIVE="$traversal_release/orbit-${TARGET}.tar.gz" \
+  MALFORMED_DATES_FILE="$MALFORMED_DATES_FILE" \
   TARGET="$TARGET" \
   node <<'NODE'
 const fs = require('node:fs');
@@ -337,6 +405,27 @@ expectThrow(
   'npm untrusted key rejection'
 );
 installer.verifyChecksumSignature(checksumText, signature, publicKey);
+const malformedDates = JSON.parse(fs.readFileSync(process.env.MALFORMED_DATES_FILE, 'utf8'));
+// Object inputs can preserve newlines that a line-based manifest cannot.
+malformedDates.push('2099-12-31\n', '2099-12-31\r', '2099-12-31\nnext-month');
+for (const malformedDate of malformedDates) {
+  for (const field of ['notAfter', 'revokedAt']) {
+    expectThrow(
+      () => installer.verifyChecksumSignature(checksumText, signature, [
+        { ...trustedKeys[0], [field]: malformedDate },
+      ]),
+      new RegExp(`invalid ${field}`),
+      `npm malformed ${field}: ${JSON.stringify(malformedDate)}`
+    );
+    expectThrow(
+      () => installer.verifyChecksumSignature(checksumText, signature, [
+        trustedKeys[0], { ...trustedKeys[1], [field]: malformedDate },
+      ]),
+      new RegExp(`invalid ${field}`),
+      `npm malformed unused ${field}: ${JSON.stringify(malformedDate)}`
+    );
+  }
+}
 if (
   !Array.isArray(installer.TRUSTED_RELEASE_KEYS) ||
   installer.TRUSTED_RELEASE_KEYS.length !== 1 ||
@@ -390,5 +479,7 @@ ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
   node -e 'const path = require("node:path"); const installer = require(path.join(process.env.ROOT, "npm/scripts/install-binary.js")); installer.acknowledgeTrustedKeysOverride();' \
   > "$TMP_ROOT/npm-keys-override-ack.log" 2>&1
 grep -q "trusting replacement release signing key set" "$TMP_ROOT/npm-keys-override-ack.log"
+
+node --test "$ROOT/npm/tests/install-binary.test.js"
 
 echo "test-installer-security: ok"

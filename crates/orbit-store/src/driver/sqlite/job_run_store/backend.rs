@@ -17,10 +17,11 @@ use super::queries::{
     JOB_RUN_COLUMNS, get_job_run_for_workspace_conn, next_run_id_conn, read_steps_for_runs,
     row_to_job_run, upsert_job_run_for_workspace_conn,
 };
+use super::state::{compact_finished_state_conn, write_state_json_conn};
 use crate::Store;
 use crate::contracts::{
-    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
-    JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunCompletion, JobRunFinalization,
+    JobRunQuery, JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -61,6 +62,30 @@ impl SqliteJobRunStore {
                 update(&mut run)?;
                 upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
                 Ok(found)
+            })
+    }
+
+    /// [`Self::update_run`] for a terminal write: when `update` returns
+    /// `true` the run just finished, and the same transaction compacts its
+    /// pipeline state for that outcome, so no reader ever sees a finished
+    /// run that still carries resume-only state.
+    fn update_run_and_state(
+        &self,
+        run_id: &str,
+        update: impl FnOnce(&mut JobRun) -> Result<bool, OrbitError>,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let Some(mut run) =
+                    get_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, run_id)?
+                else {
+                    return Ok(false);
+                };
+                if update(&mut run)? {
+                    upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
+                    compact_finished_state_conn(&tx.tx, &self.workspace_id, run_id, run.state)?;
+                }
+                Ok(true)
             })
     }
 }
@@ -150,6 +175,9 @@ fn keyed_run_in_window_conn(
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
     fn local_pull_for_run(
         &self,
         run_id: &str,
@@ -199,7 +227,13 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         super::pull::unsettled(&self.store, &self.workspace_id)
     }
     fn drain_leaf_occupancy(&self) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
-        super::pull::drain_occupancy(&self.store, &self.workspace_id)
+        super::pull::drain_occupancy(&self.store, &self.workspace_id, None)
+    }
+    fn drain_leaf_occupancy_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
+        super::pull::drain_occupancy(&self.store, &self.workspace_id, Some(run_id))
     }
     fn mutate_local_pull(
         &self,
@@ -274,7 +308,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         job_id: &str,
         input: serde_json::Value,
         key: &str,
-    ) -> Result<JobRun, OrbitError> {
+    ) -> Result<KeyedJobRunAdmission, OrbitError> {
         validate_path_stem(job_id, "job")?;
         super::super::automation::initialize(&self.store)?;
         self.store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -283,7 +317,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             if let Some(id)=existing {
                 let run=get_job_run_for_workspace_conn(conn,&self.workspace_id,&id)?.ok_or_else(|| OrbitError::Store("automation run missing".into()))?;
                 if run.job_id!=job_id || run.input.as_ref()!=Some(&input) {return Err(OrbitError::InvalidInput("automation job key input changed".into()));}
-                return Ok(run);
+                return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
             }
             let now=Utc::now();
             let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
@@ -291,7 +325,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
             conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(|e|OrbitError::Store(e.to_string()))?;
-            Ok(run)
+            Ok(KeyedJobRunAdmission::Admitted(Box::new(run)))
         })
     }
 
@@ -321,6 +355,14 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError> {
         self.store
             .list_job_run_durations_for_workspace(&self.workspace_id, query)
+    }
+
+    fn list_job_run_completions_filtered(
+        &self,
+        query: &JobRunQuery,
+    ) -> Result<Vec<JobRunCompletion>, OrbitError> {
+        self.store
+            .list_job_run_completions_for_workspace(&self.workspace_id, query)
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
@@ -506,8 +548,10 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let parent_row = tx
                     .tx
                     .query_row(
-                        "SELECT state, pipeline_state_json FROM job_runs \
-                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        "SELECT r.state, s.pipeline_state_json FROM job_runs r \
+                         LEFT JOIN job_run_states s \
+                           ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+                         WHERE r.workspace_id = ?1 AND r.run_id = ?2",
                         rusqlite::params![self.workspace_id, params.parent_run_id],
                         |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                     )
@@ -592,17 +636,12 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 )?;
                 let parent_state_json = serde_json::to_string(&parent_state)
                     .map_err(|error| OrbitError::Store(format!("serialize pipeline state: {error}")))?;
-                tx.tx
-                    .execute(
-                        "UPDATE job_runs SET pipeline_state_json = ?3 \
-                         WHERE workspace_id = ?1 AND run_id = ?2",
-                        rusqlite::params![
-                            self.workspace_id,
-                            params.parent_run_id,
-                            parent_state_json
-                        ],
-                    )
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                write_state_json_conn(
+                    &tx.tx,
+                    &self.workspace_id,
+                    &params.parent_run_id,
+                    &parent_state_json,
+                )?;
                 Ok(ChildJobRunAdmissionOutcome::Admitted(Box::new(run)))
             })
     }
@@ -643,10 +682,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         if self.read_run(run_id)?.is_none() {
             return Ok(false);
         }
-        params
-            .state
-            .validate_step_state()
-            .map_err(OrbitError::JobRunStateTransition)?;
+        params.state.validate_step_state()?;
         let step = JobRunStep {
             step_index: params.step_index as u32,
             target_type: params.target_type,
@@ -692,10 +728,10 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         duration_ms: Option<u64>,
     ) -> Result<JobRunFinalization, OrbitError> {
         let mut outcome = JobRunFinalization::Missing;
-        self.update_run(run_id, |run| {
+        self.update_run_and_state(run_id, |run| {
             if run.state.is_terminal() {
                 outcome = JobRunFinalization::AlreadyTerminal(run.state);
-                return Ok(());
+                return Ok(false);
             }
             let event = match state {
                 JobRunState::Success => RunEvent::Complete,
@@ -703,20 +739,18 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 JobRunState::Timeout => RunEvent::Timeout,
                 JobRunState::Cancelled => RunEvent::Cancel,
                 JobRunState::Interrupted => RunEvent::Interrupt,
+                JobRunState::Held => RunEvent::Hold,
                 other => {
                     return Err(OrbitError::JobRunStateTransition(format!(
                         "cannot finalize to non-terminal state: {other}"
                     )));
                 }
             };
-            run.state = run
-                .state
-                .try_transition(event)
-                .map_err(OrbitError::JobRunStateTransition)?;
+            run.state = run.state.try_transition(event)?;
             run.finished_at = Some(finished_at);
             run.duration_ms = duration_ms;
             outcome = JobRunFinalization::Finalized;
-            Ok(())
+            Ok(true)
         })?;
         Ok(outcome)
     }
@@ -789,6 +823,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError> {
         self.store
             .write_job_run_state_for_workspace(&self.workspace_id, run_id, state)
+    }
+
+    fn initialize_run_state(
+        &self,
+        run_id: &str,
+        state: &PipelineState,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .initialize_job_run_state_for_workspace(&self.workspace_id, run_id, state)
     }
 
     fn update_run_state(

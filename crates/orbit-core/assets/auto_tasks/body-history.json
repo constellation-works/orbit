@@ -1,0 +1,1635 @@
+{
+  "backlog-hygiene": [
+    {
+      "comments": [
+        "## Candidate rules",
+        "## Output",
+        "## Safety and evidence"
+      ],
+      "digest": "745705a6a5dd80671f318841e44059c9f6e4f2e3ba68c0c726079195ee22eb93",
+      "revision": "d234353fd8393b0d2e7a448bb3cf1bf82bbbfa3f",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 7 * * 1"
+        },
+        "tags": [
+          "backlog-hygiene",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Candidate rules",
+        "## Output",
+        "## Safety and evidence"
+      ],
+      "digest": "e699e80599ff59dd8bd4d75eca2af57ff02e2a34951f67d045bfff96577dbeb2",
+      "revision": "4c84ad7a63527d297d01ba42b3bf25b523f80074",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 7 * * 1"
+        },
+        "tags": [
+          "backlog-hygiene",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "code-review": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "06743ccd59300469c5b8b66d0300651f96ee913420a3aaeba90777aa8a1300ce",
+      "revision": "bc73a7f3c14c5a90c98c035a0d3765f5c9bfcea3",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "181720e499a0bf45fc3d6c3ab486158abed910734a29a713666e993e48c66f09",
+      "revision": "721a3f8b89b870bef2a258b88225f59c1ce90733",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "22888620a7de2cb04b7461f9490c49c7d3e1ca3f7493491afa4eb2f98a69646d",
+      "revision": "d2f135df250447cf03c7a80bce81a28b98edbc4f",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "32464b67ef1b46d4f3692fbc953ec146c6ef2fce79c4457ee7b87a269af134a2",
+      "revision": "09e60b0757811368879fd0885f36950f586c0aa0",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "32464b67ef1b46d4f3692fbc953ec146c6ef2fce79c4457ee7b87a269af134a2",
+      "revision": "5e9400246713cbd6efc7c8897fcc14ea64c5e81f",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "39ca2c0bdf994b8c9273c1c6cec1dd384b6520e56b2d4f5b4d4ed12c9f36c6f5",
+      "revision": "64241568ddc93ed29ce86e0982660e4adf5fedf8",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "53b006d86671555b6d35aed8fafa6e71333aa1ffce6d9b1f41c318226dddeb07",
+      "revision": "4f5d5cb175cf720e8822381820ae9a21e59df1e2",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "668329ef57ca3c22222f5b4cb7cafa4b75e6f9e6cfbb354b0f921612ba114374",
+      "revision": "b9f59b5aa66f19ca630139df210a737692fca461",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "a501ff2e5acd57e372c81832d34e0bf9b5f4d5c57e64832c9f02cc329bde53cd",
+      "revision": "536c84994cb5e8dcf7b88d1bd0d75a0e5d3061ca",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "b3d1fbe2e68769d08795480e7fe935e0631de2b05d4c363d1fa8355f8a004fb4",
+      "revision": "076c722f6ec06e51d4b1f9256851b82851e2bb6c",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "cfea58e88119337637e14a9a2bdfe70530dee2a63f4ad2885c9f6c21c234ffac",
+      "revision": "41fe1d294a89177794c5199af4579293b3b53935",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Attribute each finding to the task that introduced it",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "cfea58e88119337637e14a9a2bdfe70530dee2a63f4ad2885c9f6c21c234ffac",
+      "revision": "ded5873bafab7684e9b21eb2ef8d44dc073ad7e7",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Determine the review window",
+        "## File confirmed findings",
+        "## Record the cursor",
+        "## Review the window",
+        "## Rules and command surfaces"
+      ],
+      "digest": "e832a1c88a5d721aa0a1de2f1c9c36511536471af3b7f283dfdb2e19b5ce24ba",
+      "revision": "f374cec047b885fadb5a62a381cd33715aea885d",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "delivery-code-review": [
+    {
+      "comments": [],
+      "digest": "083f320202c34a6b151d311433a9b5f84f4cde5751aeec50447abeaffda4fe1f",
+      "revision": "bc73a7f3c14c5a90c98c035a0d3765f5c9bfcea3",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "3a5b2a787c76258cc99439a2add20a0bdc0b404c7dd469450b0bc2e921a66f72",
+      "revision": "4f5d5cb175cf720e8822381820ae9a21e59df1e2",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "53bf4ea9b8107e4d5a346d0638c9099633bec4be5dd2cdb984bc665aec104675",
+      "revision": "721a3f8b89b870bef2a258b88225f59c1ce90733",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "93b18ce3b82b2b03ebab101b8e08bb1f29615410adb517c391a80c84def19006",
+      "revision": "536c84994cb5e8dcf7b88d1bd0d75a0e5d3061ca",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "adc5b68a4961c15884838dbf380dcde8063b60d2898f21faaf1d17d0ce1a0ae3",
+      "revision": "09e60b0757811368879fd0885f36950f586c0aa0",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "agent-main",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 0,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "adc5b68a4961c15884838dbf380dcde8063b60d2898f21faaf1d17d0ce1a0ae3",
+      "revision": "1bbac7e9b38676650485518247509f2be3f95a4d",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 1,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "adc5b68a4961c15884838dbf380dcde8063b60d2898f21faaf1d17d0ce1a0ae3",
+      "revision": "1f107fa7f28e12883a693eeda95c0d48da098daa",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "__ORBIT_BASE_BRANCH__",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 0,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "adc5b68a4961c15884838dbf380dcde8063b60d2898f21faaf1d17d0ce1a0ae3",
+      "revision": "5e9400246713cbd6efc7c8897fcc14ea64c5e81f",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "agent-main",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 0,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "c3b27efea124ebd16790859ed3ec86c676a1d4ca069ed48c5f41946f0b51883d",
+      "revision": "2c143e01b0edb76f2fc75643f242808d105a3c05",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "deliveries_landed": {
+            "branch": "agent-main",
+            "coverage": "landed_code_review_v1",
+            "max_items": 20,
+            "max_wait_minutes": 360,
+            "retries": 0,
+            "threshold": 3
+          }
+        },
+        "tags": [
+          "delivery-code-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "doc-duties": [
+    {
+      "comments": [
+        "# A batch may edit docs/ and root or workspace-specific documentation.",
+        "# Reserve the workspace until the batch's concrete paths are known.",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "63ab96b1363538b7b7e54461f9256e8df2b2244100ccc37b85b5a73971a61cc0",
+      "revision": "f37c469299f4b0a608547bda579dac5bfa6ce292",
+      "settings": {
+        "complexity": "low",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "749eb357b0349030abdc01abbcbf3c1316cc1967d94d7980f4cdc5b8f191e3ce",
+      "revision": "7983d6ab36a7ca9e7e5ae24a03ea513446f6ce5a",
+      "settings": {
+        "complexity": "low",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# A batch may edit docs/ and root or workspace-specific documentation.",
+        "# Reserve the workspace until the batch's concrete paths are known.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "80b86fa77b115bc24a48669951d3ae856527f7afa307316672837575d45f7236",
+      "revision": "89e66f6ff7e568dc1ddfb2921e38460fe167e2b8",
+      "settings": {
+        "complexity": "low",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# A batch may edit docs/ and root or workspace-specific documentation.",
+        "# Reserve the workspace until the batch's concrete paths are known.",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "96fc6b62af1f24527f4d90c30d3de81a428ae86f001358032145a403270b7fb7",
+      "revision": "7dc976492d963346dd97746d060e5998ae15f0af",
+      "settings": {
+        "complexity": "low",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    }
+  ],
+  "friction-curation": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "1415183b7c5d64ff6905e653fbd3b55ccd96f6d8c8d805f16ec92f0f7c8fb5bb",
+      "revision": "00dec0d9028cb006d516ed3aba36f050c8573cc4",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "3920b6f1fc55920a6466f6a13a6330bbc1bd07eb3c56a089a8de817feafe13ef",
+      "revision": "e811bff6410e205cb9a4a1347668b442d0b0697d",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "431029ad99ffc72b64493e082e7d5967a0e736e6fb4593079ceaedeab073186d",
+      "revision": "3cfc631aa51f87eaf30ad9f22da71f0c8fcbb6d1",
+      "settings": {
+        "crew": "luna",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "466f031f38340e03387d5b6431bdcae63c95475c529f8f7cbb5f583cdbd25db1",
+      "revision": "1af87b9ca2f3220f6a39ec1859905662f0ad425d",
+      "settings": {
+        "crew": "luna",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "50ec41f17b2db444c4954af214f20f5dfe8410620413cc6b781b11d83011ecb0",
+      "revision": "211d0ddf0d5f47b0844c21d656aa85ade8e86025",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "57bf38ff1f2f29b4670d3fec3727dc779767826bfb80089e7475a001d0ceafad",
+      "revision": "575385c1b7c7b8ecee4ffa2594cbab1fa4d5f9c7",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "57bf38ff1f2f29b4670d3fec3727dc779767826bfb80089e7475a001d0ceafad",
+      "revision": "802402560cd8994a4d28b464ebccc00dc9726fb8",
+      "settings": {
+        "crew": "luna",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "5b8ddcfb4207253f3fa304ae6579eede7b67d4af9c2175b11e625b2af9e528bf",
+      "revision": "ca1dd404c3100e9eac87244c812bf0c8de7d4a0a",
+      "settings": {
+        "crew": "luna",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "7b9d6d149fba99f0fc52fd3a4e1c3502f3e79982092fa8c6230ae35889387140",
+      "revision": "03435ee66730dafabf7179a088df60b854ee83b3",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "7b9d6d149fba99f0fc52fd3a4e1c3502f3e79982092fa8c6230ae35889387140",
+      "revision": "5e9400246713cbd6efc7c8897fcc14ea64c5e81f",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fd698e4d6a17f55611d4e2b907abda152469b43e288f24b8ec798139e13c52d7",
+      "revision": "59bca36025323df7d011da12576d9ae9c4bf62d7",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 7 * * *"
+        },
+        "tags": [
+          "friction-curation",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "full-code-review": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "2deb9fb38d46b785141d23721faa37f87a801035af82e27986f9dcee3c7a3463",
+      "revision": "d5ea406418e5807a41b76afce204c3d145ec0a6c",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "4280e63896fa68a7c2040a040f60dd9ceaff28577b12489f4db8637f52cc8586",
+      "revision": "d2f135df250447cf03c7a80bce81a28b98edbc4f",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "6903d40d87c7734dd4634db8c6631ca9c06a929b1bd5dd44efe00cc6ff4a4030",
+      "revision": "bc73a7f3c14c5a90c98c035a0d3765f5c9bfcea3",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "qa-sweep": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "2e9d94f7bd2232c56ae7a2129e53e7932c465dc3131e67116369a814426af6d9",
+      "revision": "0b6a140f747a4377fda915099b5ec4f5a2e90007",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Record the cursor"
+      ],
+      "digest": "37bd6d32137e65315375b4f08b53e3d0a12243eaa889ba5eb7ba95e5488dfb73",
+      "revision": "ded5873bafab7684e9b21eb2ef8d44dc073ad7e7",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "47d5eb339ba4c6bb71068da141001cb71b283ee9eef5c66c40576af2a4159e4b",
+      "revision": "3cfc631aa51f87eaf30ad9f22da71f0c8fcbb6d1",
+      "settings": {
+        "crew": "sonnet",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "51907425c32216dab977bb75617e2395bb7ca0671af13de8aa24f8f7f29890e5",
+      "revision": "55293fee7e088a29d6436062e062daf81c3c3e01",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "51907425c32216dab977bb75617e2395bb7ca0671af13de8aa24f8f7f29890e5",
+      "revision": "d31a4421bc3bf5dd2c22733b876caf8dcfd7d16d",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "6b6162e995f4c9cedd1b03a6395e25f44ddb5d123334bfab5e10cc69308b1aeb",
+      "revision": "32239c86bbe55335ecab0693bff6a0bfbad4b3e5",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Record the cursor"
+      ],
+      "digest": "6f4ca34ae15e0e4cc3bdefe463e384b55020a4deebee26b8296bb5f1e8c79093",
+      "revision": "4f5d5cb175cf720e8822381820ae9a21e59df1e2",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "a0a90c614b2fcdb5c87d7f3c2b32f0309344905757879af3666f966ed823b649",
+      "revision": "575385c1b7c7b8ecee4ffa2594cbab1fa4d5f9c7",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [],
+      "digest": "a0a90c614b2fcdb5c87d7f3c2b32f0309344905757879af3666f966ed823b649",
+      "revision": "d99683cfe6bdba2ecfdcd11ba5207670c59ba3c7",
+      "settings": {
+        "crew": "sonnet",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Record the cursor"
+      ],
+      "digest": "c2c1c34739f8cabd9d4cea322af1fd6636ba0ac7cade007c350034a7b614d5e2",
+      "revision": "721a3f8b89b870bef2a258b88225f59c1ce90733",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "e57232b856f302bfa548e10ea158dd8321e0f9bfd3b37264b04f9d0b1810a14c",
+      "revision": "30d48a7801605f5536d4a67fd2923f2c278740f9",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed."
+      ],
+      "digest": "f953382547a5c9bbb1fca351e80d7f7413bbc3b1af715e3c4ac3c59c62a7a14b",
+      "revision": "f002183f185b29b875f3fa68788440ab82acd5a3",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "run-failure-patterns": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Check coverage before filing",
+        "## Cluster by normalized signature",
+        "## Collect failure evidence",
+        "## Determine the scan window",
+        "## File untracked patterns",
+        "## Record the cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "195fe65f34a64a117666c4394718c961807ac4d9e3792139875fa360a4e25cd3",
+      "revision": "4f5d5cb175cf720e8822381820ae9a21e59df1e2",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Check coverage before filing",
+        "## Cluster by normalized signature",
+        "## Collect failure evidence",
+        "## Determine the scan window",
+        "## File untracked patterns",
+        "## Record the cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "249814a457220390dee7b36951fa3b98d835f5d29b828ed12fbf7e2abe8daf6c",
+      "revision": "bc73a7f3c14c5a90c98c035a0d3765f5c9bfcea3",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Check coverage before filing",
+        "## Cluster by normalized signature",
+        "## Collect failure evidence",
+        "## Determine the scan window",
+        "## File untracked patterns",
+        "## Fold cascades by recorded cause",
+        "## Record the cursor",
+        "## Rules and command surfaces",
+        "## Verify the mechanism in code"
+      ],
+      "digest": "7f9beedd6888af536324feb4a50c3c6b34cce80b00866295679e3de7a6398ee9",
+      "revision": "cd4547936988fa8f84f1a4ebe648983340b419df",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Check coverage before filing",
+        "## Cluster by normalized signature",
+        "## Collect failure evidence",
+        "## Determine the scan window",
+        "## File untracked patterns",
+        "## Record the cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "84659412c4ff5f87b80ac63513abf265f0b01709d77f2411c60e63d1eaed90a4",
+      "revision": "33633d71a18b39b9d5846224431bf7ae90fc5261",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Check coverage before filing",
+        "## Cluster by normalized signature",
+        "## Collect failure evidence",
+        "## Determine the scan window",
+        "## File untracked patterns",
+        "## Record the cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fa620b5c78b965a0459c6a6d15316d8cfc45f8f9d6754780446b44b2eb45bf69",
+      "revision": "1c86c8f315b4b3db27e1ecf288d824d521fe44bf",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "security-review": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "02932a500d24abd4d3daf5328015b2403fe6aa417862c07b920c223df200e89b",
+      "revision": "bc73a7f3c14c5a90c98c035a0d3765f5c9bfcea3",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "1b08f4f25e01de536bf1d186dfb2ffabca2bc9eba424a52cdacf01825e747eac",
+      "revision": "663f2a7dacfaaa0d447dc1582737e267cb9ddbb9",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "3b90cf545cf099e7fb3881038005c6e75d4cde46f43a9571929b53118e5a56b1",
+      "revision": "5e9400246713cbd6efc7c8897fcc14ea64c5e81f",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "3b90cf545cf099e7fb3881038005c6e75d4cde46f43a9571929b53118e5a56b1",
+      "revision": "64241568ddc93ed29ce86e0982660e4adf5fedf8",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "d563f1245607081cbc366a02f698a3b6219eb3540a006f7f28a2aa2964e551f6",
+      "revision": "a4da738e84eef66486245d72c4cf70a6196a673d",
+      "settings": {
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## Pass",
+        "## Review scope",
+        "## Rules and command surfaces"
+      ],
+      "digest": "f37ba968353e79654a50e046699c473d45d7f773be66e8ed96d211f63d867e23",
+      "revision": "721a3f8b89b870bef2a258b88225f59c1ce90733",
+      "settings": {
+        "complexity": "hard",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 8 * * 1"
+        },
+        "tags": [
+          "security-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ]
+}

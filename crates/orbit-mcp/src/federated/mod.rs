@@ -11,7 +11,7 @@
 //! caller that has already chosen one host.
 //!
 //! The mux is deliberately not a fleet registry: remote membership comes only
-//! from the operator's [`DESTINATIONS_FILE`]. The accepting machine is an
+//! from the operator's host file ([`load_destinations`]). The accepting machine is an
 //! implicit local destination and is not declared as an SSH row. No
 //! destination's answer is cached between calls.
 
@@ -20,6 +20,7 @@ mod config;
 mod descriptor;
 mod host;
 mod probe;
+mod task_route;
 
 #[cfg(test)]
 mod tests;
@@ -28,8 +29,7 @@ pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };
 pub use self::config::{
-    DESTINATIONS_FILE, Destination, DestinationTransport, DestinationsFile,
-    MachineQualifiedSelector, RemoteDestination, destinations_path, federated_membership,
+    Destination, DestinationTransport, MachineQualifiedSelector, federated_membership,
     load_destinations,
 };
 pub use self::descriptor::{Capability, CheckoutHealth, Reachability, WorkspaceDescriptor};
@@ -38,4 +38,7 @@ pub use self::probe::{
     CompositeDestinationProbe, DEFAULT_PROBE_TIMEOUT, DEFAULT_ROUTED_DELIVERY_TIMEOUT,
     DestinationProbe, DestinationSnapshot, InProcessDestinationProbe, RoutedSession,
     SshDestinationProbe,
+};
+pub use self::task_route::{
+    ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, id_only_task_target, is_id_routed_tool,
 };

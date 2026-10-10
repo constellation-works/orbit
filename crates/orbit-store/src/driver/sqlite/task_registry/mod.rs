@@ -9,6 +9,8 @@
 //! is split by concern: `workspaces` (checkout and workspace bindings), `bindings`
 //! (task-bundle bindings), `index` (task index rows and projections) and `allocator`
 //! (task-id allocation and prefix authority).
+//! `envelope_stamps` persists the freshness scan's envelope stamps, a derived
+//! cache that spares a cold listing from parsing every envelope.
 //! `relations` validates task relations: target existence, dangling targets, and cycles.
 //! `listing` contains the index reads behind bounded task listing: freshness rows,
 //! filtered selection, and the workspace-scoped status projection.
@@ -18,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 mod allocator;
 mod bindings;
+mod envelope_stamps;
 mod index;
 mod listing;
 mod partition_id;

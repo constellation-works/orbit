@@ -318,6 +318,14 @@ impl OrbitRuntime {
         }))
     }
 
+    /// Whether the configured crew `name` is one `allowlist` permits, by name
+    /// or by the identity it resolves to. A name that no longer resolves is
+    /// not permitted.
+    pub(crate) fn crew_allowlist_permits(&self, allowlist: &CrewAllowlist, name: &str) -> bool {
+        resolve_crew(name.trim(), self.context.settings().crews())
+            .is_ok_and(|crew| allowlist.permits(&crew))
+    }
+
     /// The allowlist carried by a run/activity input, or `None` when the run
     /// placed no restriction on its window.
     pub(crate) fn crew_allowlist_from_input(
@@ -384,9 +392,9 @@ impl OrbitRuntime {
     }
 
     /// Look up the crew a task names, or the configured default, without the
-    /// enabled check. For read surfaces and material fingerprints only: they
-    /// describe the configured crew, disabled or not, and must never launch
-    /// it.
+    /// enabled check. For read surfaces, material fingerprints and startup
+    /// validation of deterministic jobs: these describe the configured crew,
+    /// disabled or not, and must never launch an agent.
     pub fn lookup_crew_for_task(
         &self,
         cli_override: Option<&str>,
@@ -424,11 +432,7 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn resolve_crew_for_run_input(&self, input: &Value) -> Result<Crew, OrbitError> {
-        let cli_override = input
-            .get("crew")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let cli_override = run_input_crew_override(input);
         let claimed = claimed_task_from_input(input)?;
         let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
         self.resolve_crew_for_task(cli_override, task_crew.as_deref())
@@ -468,7 +472,8 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<ResolvedCrewProjection>, OrbitError> {
-        if let Some(run_id) = task.job_run_id.as_deref()
+        if self.task_run_is_local(task)
+            && let Some(run_id) = task.job_run_id.as_deref()
             && let Some(run) = self.get_job_run_backend(run_id)?
             && let (Some(resolved_crew), Some(model)) = (run.resolved_crew, run.crew_model)
         {
@@ -538,10 +543,12 @@ impl OrbitRuntime {
     /// Resolve a run's crew at start, persisting it only when the job at
     /// `yaml_path` can dispatch an agent [ORB-13016].
     ///
-    /// Every job still resolves, so a crew misconfiguration fails the run at
-    /// start as it always has. A job made only of deterministic activities
-    /// records no crew: no model does its work, and a crew drawn for it would
-    /// read as an LLM that never ran.
+    /// Every job still resolves, so a crew misconfiguration (an unknown name,
+    /// no crew selected) fails the run at start as it always has. A job made
+    /// only of deterministic activities records no crew: no model does its
+    /// work, and a crew drawn for it would read as an LLM that never ran. For
+    /// the same reason a disabled crew does not refuse it: on a host with no
+    /// enabled default crew, retention and reap jobs must still run.
     pub(crate) fn record_run_crew_for_job(
         &self,
         run_id: &str,
@@ -551,7 +558,9 @@ impl OrbitRuntime {
         if self.job_definition_dispatches_agent(yaml_path) {
             self.record_run_crew_from_input(run_id, input)?;
         } else {
-            self.resolve_crew_for_run_input(input)?;
+            let claimed = claimed_task_from_input(input)?;
+            let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
+            self.lookup_crew_for_task(run_input_crew_override(input), task_crew.as_deref())?;
         }
         Ok(())
     }
@@ -592,6 +601,15 @@ impl OrbitRuntime {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        // An explicit evidence run may differ from the task's binding (for
+        // example, a recovery run). It still must not resolve a foreign task's
+        // own run ID against a colliding local record [ORB-14635].
+        if let Some(task) = &task
+            && !self.task_run_is_local(task)
+            && input_run_id.is_none_or(|run_id| task.job_run_id.as_deref() == Some(run_id))
+        {
+            return Ok((None, None));
+        }
         let task_run_id = task.as_ref().and_then(|task| task.job_run_id.as_deref());
         let Some(run_id) = input_run_id.or(task_run_id) else {
             return Ok((None, None));
@@ -761,7 +779,7 @@ fn claimed_task_from_input(input: &Value) -> Result<Option<ClaimedTaskSnapshot>,
     }
 }
 
-fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
+pub(crate) fn normalized_task_crew(crew: Option<&str>) -> Option<String> {
     crew.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
@@ -832,4 +850,13 @@ fn hook_dispatches_agent(name: Option<&str>, resolved: Option<&ActivityV2>) -> b
         Some(activity) => matches!(activity.spec, ActivityV2Spec::AgentLoop(_)),
         None => name.is_some(),
     }
+}
+
+/// The run input's explicit `crew`, when it names one.
+fn run_input_crew_override(input: &Value) -> Option<&str> {
+    input
+        .get("crew")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }

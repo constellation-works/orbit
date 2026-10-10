@@ -3,18 +3,24 @@
 //! The installed executable is a copy of this test's `orbit` binary in a
 //! managed directory. Release bytes are a shell stand-in signed by a throwaway
 //! key the child is told to trust. Refusals leave that copy and a seeded
-//! generation record untouched.
+//! generation record untouched. Admission waits for an in-flight clock tick,
+//! and a candidate that hangs while it is probed releases every authority.
 
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
+use orbit_cmd::update::converge::PROBE_TIMEOUT_ENV;
+use orbit_common::fs::generation::{
+    Access, GenerationGuard, Participant, ParticipantRole, QUIESCE_TIMEOUT_ENV, RESUME_MCP_STDIO,
+    executable_generation,
+};
 use orbit_common::test_env;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -49,6 +55,7 @@ impl Install {
         for directory in [&home, &cwd, &mirror, &bin] {
             fs::create_dir_all(directory).expect("fixture directory");
         }
+        crate::git_repo::seal_lookup_boundary(&cwd);
         let executable = super::install_test_binary(&bin);
         let before = fs::read(&executable).expect("installed bytes");
         let (private_key, public_key) = generate_keypair(root.path());
@@ -305,20 +312,25 @@ fn an_archive_with_extra_members_including_traversal_is_rejected() {
 }
 
 #[test]
-fn a_release_that_reports_the_wrong_version_is_rolled_back() {
+fn a_mislabeled_release_is_rejected_without_attempting_the_swap() {
     let install = Install::new(None);
+    // Hold the original inode open so even a swap followed by rollback cannot
+    // pass by reusing its inode number.
+    let original = File::open(&install.executable).expect("installed executable");
     let archive = tar_gz(&candidate_script("0.0.1"));
     install.publish("99.0.0", Some(&archive), true);
 
     let output = install.run(&["update"]);
 
     assert_refused(&output, "version mismatch", "reports itself as 0.0.1");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("changed no workspace state"), "{stderr}");
     install.assert_untouched("version mismatch");
-    assert!(
-        !staging_remains(install.executable.parent().expect("install dir")),
-        "rollback left a staging file"
+    install.assert_no_backup("version mismatch");
+    assert_eq!(
+        original.metadata().expect("original inode").ino(),
+        fs::metadata(&install.executable)
+            .expect("installed inode")
+            .ino(),
+        "a mislabeled release must never be swapped into the installed path, even temporarily"
     );
 }
 
@@ -482,8 +494,292 @@ fn a_stale_writer_and_an_older_binary_never_displace_a_newer_install() {
     let _ = child;
 }
 
-struct ReapedChild {
-    child: Option<Child>,
+/// Hold the installation's host-global authority the way an in-flight
+/// `orbit clock tick` does: registered as a clock tick, for as long as the
+/// guard lives.
+fn clock_tick(install: &Install) -> GenerationGuard {
+    let identity = orbit_core::composition::compiled_compatibility();
+    let digest = "c".repeat(64);
+    let participant = Participant {
+        digest: &digest,
+        identity: &identity,
+        role: ParticipantRole::Clock,
+        access: Access::Write,
+        handover: None,
+    };
+    GenerationGuard::join(
+        &install.home.join(".orbit"),
+        &participant,
+        Duration::ZERO,
+        || Ok(0),
+    )
+    .expect("the clock tick joins")
+}
+
+#[test]
+fn an_update_waits_for_an_in_flight_clock_tick_then_installs() {
+    let install = Install::new(None);
+    let script = candidate_script("99.0.0");
+    install.publish("99.0.0", Some(&tar_gz(&script)), true);
+    let tick = clock_tick(&install);
+    let hold = Duration::from_secs(3);
+
+    let began = Instant::now();
+    let finishing = std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        drop(tick);
+    });
+    let mut command = install.command();
+    command
+        .env(QUIESCE_TIMEOUT_ENV, "60")
+        .args(["update", "--json"]);
+    let output = output_of(&mut command).expect("run orbit update");
+    let waited = began.elapsed();
+    finishing.join().expect("clock tick thread");
+
+    assert!(
+        output.status.success(),
+        "an update beside an in-flight tick must wait for it, not refuse\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated");
+    assert!(
+        waited >= hold,
+        "the update replaced the executable before the tick finished ({waited:?})"
+    );
+    assert_eq!(
+        fs::read(&install.executable).expect("updated bytes"),
+        script
+    );
+}
+
+#[test]
+fn an_update_refuses_a_clock_tick_that_outlasts_the_quiesce_bound() {
+    let install = Install::new(None);
+    install.publish("99.0.0", Some(&tar_gz(&candidate_script("99.0.0"))), true);
+    let _tick = clock_tick(&install);
+
+    let began = Instant::now();
+    let mut command = install.command();
+    command.env(QUIESCE_TIMEOUT_ENV, "1").arg("update");
+    let output = output_of(&mut command).expect("run orbit update");
+
+    assert_refused(
+        &output,
+        "outlasting tick",
+        &format!("pid {} (clock tick, started", std::process::id()),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("after waiting 1s"), "{stderr}");
+    assert!(stderr.contains("orbit clock pause"), "{stderr}");
+    assert!(
+        began.elapsed() >= Duration::from_secs(1),
+        "the update refused before its bound"
+    );
+    assert_eq!(
+        fs::read(&install.executable).expect("installed bytes"),
+        install.before,
+        "a refused update replaced the binary"
+    );
+    install.assert_no_backup("outlasting tick");
+}
+
+/// Hold the installation's host-global authority the way an idle stdio
+/// `orbit mcp serve` does: registered to hand over with `mcp-stdio-v1`.
+fn idle_session(install: &Install) -> GenerationGuard {
+    let identity = orbit_core::composition::compiled_compatibility();
+    let digest = "d".repeat(64);
+    let participant = Participant {
+        digest: &digest,
+        identity: &identity,
+        role: ParticipantRole::McpServe,
+        access: Access::Write,
+        handover: Some(RESUME_MCP_STDIO),
+    };
+    GenerationGuard::join(
+        &install.home.join(".orbit"),
+        &participant,
+        Duration::ZERO,
+        || Ok(0),
+    )
+    .expect("the session joins")
+}
+
+/// A release update stages and probes the release before admission, so it
+/// knows what the release resumes. A session it cannot resume refuses it
+/// untouched; a session it can is admitted beside, named in the report, and
+/// the release is pinned only once that session has released the replaced
+/// generation, as its exec does when it hands over.
+#[test]
+fn a_release_update_admits_a_session_that_hands_over_and_pins_after_it_does() {
+    let install = Install::new(None);
+    let session = idle_session(&install);
+    let record = fs::read(&install.generation).expect("generation record");
+
+    install.publish("98.0.0", Some(&tar_gz(&candidate_script("98.0.0"))), true);
+    let refused = install.run(&["update", "--version", "98.0.0"]);
+    assert_refused(
+        &refused,
+        "a release that cannot resume the session",
+        &format!("does not report the {RESUME_MCP_STDIO} resume capability"),
+    );
+    assert_eq!(
+        fs::read(&install.executable).expect("installed"),
+        install.before
+    );
+    assert_eq!(fs::read(&install.generation).expect("record"), record);
+    assert!(!staging_remains(
+        install.executable.parent().expect("install dir")
+    ));
+    install.assert_no_backup("a release that cannot resume the session");
+
+    let script = resuming_candidate_script("99.0.0");
+    install.publish("99.0.0", Some(&tar_gz(&script)), true);
+    let executable = install.executable.clone();
+    let installed = script.clone();
+    let handing_over = std::thread::spawn(move || {
+        let deadline = Instant::now() + UPDATE_TIMEOUT;
+        while fs::read(&executable).ok().as_deref() != Some(installed.as_slice()) {
+            assert!(Instant::now() < deadline, "the release was never installed");
+            std::thread::sleep(WAIT_SLICE);
+        }
+        // Still holding the replaced generation after the rename: the update
+        // must not pin until it is released.
+        std::thread::sleep(Duration::from_millis(1500));
+        let released = Instant::now();
+        drop(session);
+        released
+    });
+    let mut command = install.command();
+    command
+        .env(QUIESCE_TIMEOUT_ENV, "60")
+        .args(["update", "--version", "99.0.0", "--json"]);
+    let output = output_of(&mut command).expect("run orbit update");
+    let finished = Instant::now();
+    let released = handing_over.join().expect("session thread");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        finished >= released,
+        "the update finished before the handover"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated", "{report}");
+    let handover = report["handover"].as_array().expect("handover list");
+    assert_eq!(handover.len(), 1, "{report}");
+    assert_eq!(handover[0]["pid"], std::process::id(), "{report}");
+    assert_eq!(handover[0]["role"], "mcp_serve", "{report}");
+    assert_eq!(handover[0]["resume"], RESUME_MCP_STDIO, "{report}");
+    assert_eq!(fs::read(&install.executable).expect("installed"), script);
+    assert_eq!(
+        fs::read_to_string(&install.generation).expect("generation record"),
+        format!(
+            "1:{}\n",
+            executable_generation(&install.executable).expect("installed digest")
+        ),
+        "the release is pinned once the session handed over"
+    );
+}
+
+/// A release script reporting this build's admission contract, including the
+/// resume capabilities a live session hands over with.
+fn resuming_candidate_script(version: &str) -> Vec<u8> {
+    let contract = Command::new(env!("CARGO_BIN_EXE_orbit"))
+        .args(["update", "--contract", "--json"])
+        .output()
+        .expect("contract of this build");
+    assert!(contract.status.success(), "{contract:?}");
+    let contract = String::from_utf8(contract.stdout).expect("contract JSON");
+    format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
+         if [ \"$1\" = update ] && [ \"$2\" = --contract ]; then \
+         echo '{}'; exit 0; fi\n\
+         exit 0\n",
+        contract.trim()
+    )
+    .into_bytes()
+}
+
+/// A candidate whose `--version` never returns is killed at the probe
+/// timeout. The staged candidate is probed before admission, so a hung probe
+/// never holds an authority: commands run meanwhile, and nothing is held
+/// afterwards.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
+    let install = Install::new(None);
+    let probing = install._root.path().join("probe-started");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = --version ]; then : > '{}'; exec sleep 600; fi\n\
+         exit 0\n",
+        probing.display()
+    );
+    install.publish("99.0.0", Some(&tar_gz(script.as_bytes())), true);
+
+    let stderr_path = install._root.path().join("hung.stderr");
+    let child = install
+        .std_command()
+        .env(PROBE_TIMEOUT_ENV, "8")
+        .arg("update")
+        .stdout(File::create(install._root.path().join("hung.stdout")).expect("stdout"))
+        .stderr(File::create(&stderr_path).expect("stderr"))
+        .spawn()
+        .expect("spawn update");
+    let mut child = ReapedChild { child: Some(child) };
+    let deadline = Instant::now() + STALE_SLICE_DEADLINE;
+    while !probing.exists() {
+        assert_waiting(
+            child.child.as_mut().expect("child"),
+            deadline,
+            "probe the candidate",
+        );
+        std::thread::sleep(WAIT_SLICE);
+    }
+
+    let during = install.run(&["update", "--preflight", "--json"]);
+    assert!(
+        during.status.success(),
+        "a hung candidate probe held an authority: {}",
+        String::from_utf8_lossy(&during.stderr)
+    );
+
+    let status = wait_exit(
+        child.child.as_mut().expect("child"),
+        Instant::now() + UPDATE_TIMEOUT,
+    );
+    child.child = None;
+    let stderr = fs::read_to_string(&stderr_path).expect("update stderr");
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("did not finish within 8s"), "{stderr}");
+    assert!(stderr.contains("nothing was replaced"), "{stderr}");
+    install.assert_untouched("hung candidate");
+    install.assert_no_backup("hung candidate");
+
+    let after = install.run(&["task", "list"]);
+    let after_stderr = String::from_utf8_lossy(&after.stderr);
+    assert!(
+        !after_stderr.contains("upgrade admission refused"),
+        "the timed-out update kept an authority: {after_stderr}"
+    );
+    let preflight = install.run(&["update", "--preflight", "--json"]);
+    assert!(
+        preflight.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preflight.stderr)
+    );
+}
+
+pub(super) struct ReapedChild {
+    pub(super) child: Option<Child>,
 }
 
 impl Drop for ReapedChild {
@@ -498,7 +794,7 @@ impl Drop for ReapedChild {
 /// Rendezvous with the mirror reader without a blocking opener thread or
 /// Linux's non-portable read/write FIFO open. ENXIO means no reader yet.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
+pub(super) fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
     loop {
         assert_waiting(child, deadline, "open the mirror");
         match OpenOptions::new()
@@ -519,22 +815,22 @@ fn open_fifo_writer(path: &Path, child: &mut Child, deadline: Instant) -> File {
 fn assert_waiting(child: &mut Child, deadline: Instant, what: &str) {
     if Instant::now() >= deadline {
         let _ = child.kill();
-        panic!("timed out waiting for the stale update to {what}");
+        panic!("timed out waiting for the update to {what}");
     }
-    if let Some(status) = child.try_wait().expect("poll stale update") {
-        panic!("stale update exited before it could {what}: {status}");
+    if let Some(status) = child.try_wait().expect("poll update") {
+        panic!("update exited before it could {what}: {status}");
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
+pub(super) fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
     loop {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let status = child.wait().expect("reap timed-out update");
-            panic!("stale update did not finish before the deadline: {status}");
+            panic!("update did not finish before the deadline: {status}");
         }
-        if let Some(status) = child.try_wait().expect("poll stale update") {
+        if let Some(status) = child.try_wait().expect("poll update") {
             return status;
         }
         std::thread::sleep(WAIT_SLICE);
@@ -542,7 +838,7 @@ fn wait_exit(child: &mut Child, deadline: Instant) -> std::process::ExitStatus {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn mkfifo(path: &Path) {
+pub(super) fn mkfifo(path: &Path) {
     let name = CString::new(path.as_os_str().as_bytes()).expect("fifo path");
     let rc = unsafe { libc::mkfifo(name.as_ptr(), 0o644) };
     assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
@@ -672,7 +968,7 @@ fn tar_gz_named(members: &[(&str, &[u8])]) -> Vec<u8> {
     encoder.finish().expect("finish gzip")
 }
 
-fn staging_remains(directory: &Path) -> bool {
+pub(super) fn staging_remains(directory: &Path) -> bool {
     fs::read_dir(directory)
         .expect("read install dir")
         .filter_map(Result::ok)
@@ -683,7 +979,7 @@ fn staging_remains(directory: &Path) -> bool {
         })
 }
 
-fn backup_path(executable: &Path) -> PathBuf {
+pub(super) fn backup_path(executable: &Path) -> PathBuf {
     let mut name = executable.as_os_str().to_os_string();
     name.push(".previous");
     PathBuf::from(name)

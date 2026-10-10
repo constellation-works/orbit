@@ -12,11 +12,11 @@ use super::support::{plugin_record, show_build_plan};
 pub struct PluginUpgradeArgs {
     /// Installed plugin namespace
     pub name: String,
-    /// Replacement source; defaults to the source recorded at install time
+    /// Explicit replacement source (required); recorded sources are not trusted
     pub source: Option<String>,
     /// `sha256:<hex>` the archive at an `https://` source must hash to.
-    /// Required for such a source, including one recorded at install time:
-    /// the replacement archive is a new download and needs its own pin.
+    /// Required for such a source: the replacement archive is a new download
+    /// and needs its own pin.
     #[arg(long)]
     pub digest: Option<String>,
     /// Complete permission grant set authorizing and enabling the new manifest

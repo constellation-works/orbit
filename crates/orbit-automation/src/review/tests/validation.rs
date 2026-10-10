@@ -1,6 +1,6 @@
 //! What a reviewer's validation records establish [ORB-11528].
 
-use crate::review::{ValidationDefect, validation_evidence};
+use crate::review::{ValidationContext, ValidationDefect, validation_evidence};
 use orbit_types::workflow::{ReviewValidation, ValidationOutcome, ValidationRole};
 
 fn record(
@@ -10,11 +10,17 @@ fn record(
     note: Option<&str>,
 ) -> ReviewValidation {
     ReviewValidation {
+        id: None,
         command: command.into(),
         outcome,
         role,
         note: note.map(Into::into),
         check: None,
+        control: None,
+        sources: Vec::new(),
+        mutation_target: Vec::new(),
+        deferred: Vec::new(),
+        baseline: None,
     }
 }
 
@@ -42,36 +48,37 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         }
     };
 
-    // Corrected command with no shared identity: missing relationship.
+    // A changed argument, not a leading environment assignment: a leading
+    // `NAME=value` is the same command [ORB-14302].
     let missing_identity = vec![
         superseded(None),
         required(
-            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            "cargo test --package orbit-core --locked",
             ValidationOutcome::Passed,
         ),
     ];
     assert_eq!(
-        validation_evidence(&missing_identity),
+        validation_evidence(&missing_identity, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
         "a different command is not a replacement without a shared check identity"
     );
 
-    // Identity on only one side does not bind to the other record's command.
+    // This explicit identity differs from the other record's normalized command.
     let one_sided = vec![
         superseded(Some("orbit-core-tests")),
         required(
-            "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+            "cargo test --package orbit-core --locked",
             ValidationOutcome::Passed,
         ),
     ];
     assert_eq!(
-        validation_evidence(&one_sided),
+        validation_evidence(&one_sided, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
-        "a one-sided check identity is not an unambiguous replacement"
+        "different effective identities do not identify a replacement"
     );
 
     // Empty and whitespace identities relate nothing; only a shared command
@@ -93,7 +100,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
             ),
         ];
         assert_eq!(
-            validation_evidence(&invalid_identity),
+            validation_evidence(&invalid_identity, &ValidationContext::default()),
             Err(ValidationDefect::SupersededWithoutReplacement {
                 command: "cargo test".into(),
             }),
@@ -114,14 +121,14 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
         with_check(
             required(
-                "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
+                "cargo test --package orbit-core --locked",
                 ValidationOutcome::Failed,
             ),
             "orbit-core-tests",
         ),
     ];
     assert_eq!(
-        validation_evidence(&related_failed),
+        validation_evidence(&related_failed, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test --package orbit-core".into(),
         }),
@@ -145,7 +152,7 @@ fn missing_ambiguous_invalid_or_non_passing_replacement_relationships_fail_close
         ),
     ];
     assert_eq!(
-        validation_evidence(&mismatched),
+        validation_evidence(&mismatched, &ValidationContext::default()),
         Err(ValidationDefect::SupersededWithoutReplacement {
             command: "cargo test".into(),
         }),

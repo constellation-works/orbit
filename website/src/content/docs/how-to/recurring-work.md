@@ -1,11 +1,11 @@
 ---
 title: Schedule Recurring Work
-description: "Run Orbit unattended: the sweep clock, routines that fire jobs on a schedule, and auto-task definitions that mint tasks."
+description: "Run Orbit unattended: the host scheduler clock, routines that fire jobs on a schedule, and auto-task definitions that mint tasks."
 sidebar:
   order: 4
 ---
 
-A per-machine **sweep clock** drives all scheduled work. On each tick, due
+A per-machine **host scheduler clock** drives all scheduled work. On each tick, due
 **routines** start job runs and due **auto-tasks** file tasks. Every routine
 and auto-task Orbit seeds starts disabled. [Routines and Auto-Tasks](../../concepts/scheduling/) explains
 the model; this page is the procedure.
@@ -54,9 +54,9 @@ orbit --workspace <name> clock tick      # only that workspace's schedules
 
 ## 2. Turn on routines
 
-`orbit workspace init` seeds five routines into `.orbit/routines/`, all
-disabled: task pilot, ship sweep, worktree GC, and the CI-failure and
-dependency-alert sweeps. `orbit workspace sync` refreshes them after an
+`orbit workspace init` seeds six routines into `.orbit/routines/`, all
+disabled: task pilot, ship sweep, worktree GC, store GC (daily audit and
+run-state retention), and the CI-failure and dependency-alert sweeps. `orbit workspace sync` refreshes them after an
 upgrade and keeps your edits.
 
 Turn one on with its switch in **Automation → Routines**, or set
@@ -76,10 +76,11 @@ orbit routine show <name>
 ```yaml
 schemaVersion: 1
 name: ship_sweep_myrepo
-description: Ship this workspace's ready backlog through the gated pipeline.
+description: Ship this workspace's ready backlog
+  through the gated pipeline.
 enabled: true
 trigger:
-  cron: "*/20 * * * *"  # 5-field cron, host-local time
+  cron: "*/30 * * * *"  # 5-field cron, host-local time
   missed_run: skip      # or catch_up_once
 target: job:workspace_ship_pipeline
 policy:
@@ -117,9 +118,9 @@ orbit auto-task add \
   --name weekly-dep-audit \
   --cron "0 9 * * 1" \
   --title "Audit outdated dependencies" \
-  --body "Check the lockfile for outdated or vulnerable dependencies and file follow-up work." \
-  --criterion "Every outdated direct dependency is listed with its current and latest version." \
-  --criterion "Anything with a known advisory has a filed follow-up task." \
+  --body "Audit the lockfile and file follow-up tasks." \
+  --criterion "List outdated packages and their latest versions." \
+  --criterion "File follow-up tasks for known advisories." \
   --tag maintenance
 ```
 
@@ -154,8 +155,10 @@ leave it running.
 ```bash
 orbit auto-task list --enabled
 orbit auto-task show weekly-dep-audit
-orbit auto-task update weekly-dep-audit --cron "0 9 * * 2"   # only the fields you pass
-orbit auto-task toggle weekly-dep-audit off                  # keeps the definition and its history
+# Change only the fields you pass.
+orbit auto-task update weekly-dep-audit --cron "0 9 * * 2"
+# Keep the definition and its history when toggling it off.
+orbit auto-task toggle weekly-dep-audit off
 orbit auto-task delete weekly-dep-audit --reason "moved to Renovate"
 ```
 
@@ -174,10 +177,16 @@ A `--deliveries-landed` definition keeps a ledger of the deliveries it still
 owes a review. `recover` and `reset` only preview until you pass `--reason`:
 
 ```bash
-orbit auto-task recover <name> --adopt-settings --reason "<why>"   # resume after a settings change; keeps the debt
-orbit auto-task recover <name> --replay-history --reason "<why>"   # reconcile a rebased branch; keeps the debt
-orbit auto-task reset <name> --reason "<why>"                      # forget the debt; re-baseline at the branch head
-orbit auto-task update <name> --waive-batch <batch-id> --waiver-reason "<why>"  # waive one settled failed batch
+# Resume after a settings change; this keeps the debt.
+orbit auto-task recover <name> --adopt-settings --reason "<why>"
+# Reconcile a rebased branch; this keeps the debt.
+orbit auto-task recover <name> --replay-history --reason "<why>"
+# Forget the debt and re-baseline at the branch head.
+orbit auto-task reset <name> --reason "<why>"
+# Waive one settled failed batch.
+orbit auto-task update <name> \
+  --waive-batch <batch-id> \
+  --waiver-reason "<why>"
 ```
 
 `recover --reissue-action` re-files a settled action that closed without
@@ -204,7 +213,7 @@ Approve anything filed as `proposed`, then let a
 ## Ship unattended
 
 To ship on a schedule, turn on the seeded ship-sweep routine. As seeded, it
-runs every 20 minutes and ships this workspace's ready backlog through the
+runs every 30 minutes and ships this workspace's ready backlog through the
 gated pipeline. It never grants `--complete`, so shipped work waits in
 `review` for you. Turn on worktree GC first.
 

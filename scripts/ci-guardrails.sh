@@ -22,6 +22,12 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
+# The guardrails below import `tomllib` (Python >= 3.11); stop before any gate
+# runs rather than die in a traceback partway through.
+"$repo_root/scripts/require-python.sh"
+
+# --fast runs formatting and script guardrails, never the Rust test suite.
+# `make ci-test-affected` supplies the separate pre-handoff test gate.
 cargo fmt --all -- --check
 if [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
@@ -53,14 +59,24 @@ if [[ "$fast" == false ]]; then
 fi
 
 "$repo_root/scripts/generate-doc-indexes.sh" --check
+"$repo_root/scripts/check-doc-links.py"
 "$repo_root/scripts/check-installer-pubkey.sh"
 "$repo_root/scripts/test-installer-security.sh"
 "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
+"$repo_root/scripts/test-check-unused-dependencies.py"
+"$repo_root/scripts/check-unused-dependencies.py"
 "$repo_root/scripts/check-workflow-yaml.py"
+"$repo_root/scripts/test-release-workflow.py"
+"$repo_root/scripts/test-pr-state-workflows.py"
 "$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
+"$repo_root/scripts/check-test-shell-waits.py"
+"$repo_root/scripts/test-unit-test-inventory.py"
+"$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
+"$repo_root/scripts/test-ci-test-affected.py"
 "$repo_root/scripts/test-codeql-extension-schema.py"
+"$repo_root/scripts/test-codeql-rust-local.py"
 "$repo_root/scripts/check-codeql-extension-schema.py"
 "$repo_root/scripts/check-cli-imports.sh"
 "$repo_root/scripts/check-terminal-state-guard.sh"
@@ -79,6 +95,7 @@ fi
 "$repo_root/scripts/check-desktop-ui.sh"
 "$repo_root/scripts/check-dashboard-vendor.py"
 "$repo_root/scripts/test-qa-full-sweep.py" --check
+"$repo_root/scripts/test-doc-duty-rotation.py"
 "$repo_root/scripts/sync-plugin-skills.sh" --check
 "$repo_root/scripts/test-validate-codex-plugin.sh"
 "$repo_root/scripts/test-validate-agent-plugin.sh"

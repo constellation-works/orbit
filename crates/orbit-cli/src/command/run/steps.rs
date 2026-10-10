@@ -173,6 +173,22 @@ impl RunStepRecord {
         }
     }
 
+    /// The output this step recorded in the run's checkpoint state.
+    ///
+    /// Read by step id. The audit-derived `step_index` counts steps in
+    /// first-started order, while checkpoints are keyed by YAML position, and
+    /// a `when:`-skipped or resume-skipped step (which never starts) shifts
+    /// the two apart; indexing `step_outputs` with it returns another step's
+    /// output. Only the job-level summary step of a run that wrote no
+    /// per-step checkpoint is read by index: it is recorded at step 0.
+    pub(crate) fn output<'a>(&self, state: &'a PipelineState) -> Option<&'a Value> {
+        state.pipeline_step_output(&self.target_id).or_else(|| {
+            (self.target_type == JobTargetType::Job.to_string())
+                .then(|| state.step_output(self.step_index))
+                .flatten()
+        })
+    }
+
     fn from_audit_step(step: RunAuditStep) -> Self {
         let duration_ms = match (step.started_at, step.finished_at) {
             (Some(started), Some(finished)) => Some(
@@ -266,6 +282,14 @@ pub(crate) fn run_header_text_with_lock_holders(
     if let Some(line) = format_admissions_stop_line(state) {
         lines.push(line);
     }
+    // [ORB-14777] Variables `execution.env.pass` names that the submitting
+    // process did not hold, so agents of this run never received them.
+    if let Some(unset) = state
+        .map(|state| &state.env_pass_unset)
+        .filter(|names| !names.is_empty())
+    {
+        lines.push(format!("{} {}", bold("Unset env:"), unset.join(", ")));
+    }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")
 }
@@ -326,6 +350,7 @@ pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
 /// header reports `step_outputs=N` and whose `orbit run events` lists every
 /// step. `orbit run show` used to answer "no steps recorded" for those; it now
 /// reconstructs them from the same trail and names the source [ORB-12113].
+/// The same holds for a run whose record carries only a run-level step.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepSource {
     /// The job-run record carried its own steps.
@@ -352,10 +377,19 @@ pub(crate) struct RunDisplaySteps {
 /// Choose the steps a run view renders: the record's own when it has them,
 /// and the ones reconstructed from its audit trail otherwise.
 ///
+/// A record holding only run-level steps (target type `job`, as the
+/// interruption reconciler writes) says how the run ended, not what it did, so
+/// the audit trail answers there too. The run-level step's error stays in the
+/// record's own `run.steps` and in the root-cause line.
+///
 /// `audit_steps` come from the caller's existing audit scan, so recovering
 /// them costs no extra read.
 pub(crate) fn run_display_steps(run: &JobRun, audit_steps: Vec<RunAuditStep>) -> RunDisplaySteps {
-    if !run.steps.is_empty() {
+    let run_level_only = run
+        .steps
+        .iter()
+        .all(|step| step.target_type == JobTargetType::Job);
+    if !run.steps.is_empty() && (!run_level_only || audit_steps.is_empty()) {
         return RunDisplaySteps {
             records: run.steps.iter().map(RunStepRecord::from_job_step).collect(),
             source: StepSource::Record,
@@ -378,7 +412,7 @@ pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::tabl
         Column::new("#").number(),
         Column::new("TARGET"),
         Column::new("STATE").fixed(),
-        Column::new("DURATION (ms)").number(),
+        Column::new("DURATION").number(),
         Column::new("ERROR CODE").fixed(),
         Column::new("ERROR MESSAGE"),
     ])
@@ -386,14 +420,12 @@ pub(crate) fn step_summary_table(steps: &[RunStepRecord]) -> crate::output::tabl
     for step in steps {
         use comfy_table::Cell;
         table.add_row(vec![
-            Cell::new(step.step_index),
+            // One-based, as the dashboard numbers them; `step_index` stays
+            // zero-based in `--json`.
+            Cell::new(step.step_index + 1),
             Cell::new(&step.target_id),
             crate::output::color::cell(&step.state, Domain::JobState),
-            Cell::new(
-                step.duration_ms
-                    .map(|ms| ms.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-            ),
+            Cell::new(format_duration(step.duration_ms)),
             Cell::new(step.error_code.as_deref().unwrap_or("-")),
             Cell::new(summarize_error_message(step.error_message.as_deref())),
         ]);

@@ -1,4 +1,5 @@
 pub(in crate::types) mod envelope;
+mod limit;
 pub(in crate::types) mod protocol_schema;
 mod tool_calls;
 mod trace;
@@ -12,6 +13,7 @@ use serde_json::Value;
 #[cfg(test)]
 pub use envelope::parse_and_validate_response;
 pub use envelope::{DeclaredResponseFailure, ParsedStdout};
+pub use limit::{provider_usage_limit, provider_usage_limit_details};
 pub use protocol_schema::response_envelope_json_schema_arg;
 pub use wrapper::provider_invocation_diagnostic;
 
@@ -48,6 +50,51 @@ const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
 pub fn provider_authentication_failure(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
     PROVIDER_AUTH_FAILURE_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+/// Phrases a provider CLI prints in its own failure diagnostics when the
+/// selected model has no capacity to serve the turn. Lowercase, matched
+/// case-insensitively. Codex: `Selected model is at capacity. Please try a
+/// different model.` [ORB-14149]
+const PROVIDER_CAPACITY_PHRASES: &[&str] = &["model is at capacity"];
+
+/// Whether a provider's own failure text says the selected model is at
+/// capacity, so retrying the same model immediately cannot succeed.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`].
+#[must_use]
+pub fn provider_capacity_exhausted(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_CAPACITY_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+/// Phrases a provider CLI prints in its own failure diagnostics when its
+/// content policy refused the turn. Lowercase, matched case-insensitively.
+/// Codex: `This content was flagged for possible cybersecurity risk.`; Claude
+/// Code: `… appears to violate our Usage Policy …` [ORB-14266]
+const PROVIDER_REFUSAL_PHRASES: &[&str] = &[
+    "content was flagged",
+    "prompt was flagged",
+    "flagged for possible",
+    "flagged as potentially violating",
+    "violate our usage policy",
+    "violates our usage policy",
+];
+
+/// Whether a provider's own failure text says its content policy refused
+/// the turn, so the same provider would refuse a retry of the same task.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`].
+#[must_use]
+pub fn provider_content_refusal(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_REFUSAL_PHRASES
         .iter()
         .any(|phrase| text.contains(phrase))
 }

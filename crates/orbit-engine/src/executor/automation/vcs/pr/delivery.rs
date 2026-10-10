@@ -35,6 +35,7 @@ pub(in crate::executor::automation::vcs) struct DeliveryPin {
     head: Option<String>,
     base: Option<String>,
     candidate_sha: Option<String>,
+    previous_candidate_sha: Option<String>,
 }
 
 /// What a merged pull request proved, recorded on the activity output and in
@@ -62,6 +63,7 @@ impl DeliveryPin {
             head: Some(head.to_string()),
             base: Some(base.strip_prefix("origin/").unwrap_or(base).to_string()),
             candidate_sha: Some(candidate_sha.to_string()),
+            previous_candidate_sha: None,
         }
     }
 
@@ -74,12 +76,23 @@ impl DeliveryPin {
                     .to_string()
             }),
             candidate_sha: input_string_field(input, "published_head_sha"),
+            previous_candidate_sha: input_string_field(input, "previous_published_head_sha"),
         }
     }
 
     /// The head commit this run is authorized to deliver, after any in-run repair.
     pub(in crate::executor::automation::vcs) fn candidate_sha(&self) -> Option<&str> {
         self.candidate_sha.as_deref()
+    }
+
+    /// The task branch this run published, if recorded.
+    pub(super) fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
+    /// The exact head replaced by this run's verified push, if recorded.
+    pub(super) fn previous_candidate_sha(&self) -> Option<&str> {
+        self.previous_candidate_sha.as_deref()
     }
 
     /// Adopt the rewritten candidate an authorized in-run repair produced.
@@ -92,6 +105,7 @@ impl DeliveryPin {
         candidate_sha: Option<&str>,
     ) {
         if let Some(candidate_sha) = candidate_sha.map(str::trim).filter(|sha| !sha.is_empty()) {
+            self.previous_candidate_sha = self.candidate_sha.take();
             self.candidate_sha = Some(candidate_sha.to_string());
         }
     }

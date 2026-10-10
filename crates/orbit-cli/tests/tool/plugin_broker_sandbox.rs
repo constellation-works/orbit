@@ -13,8 +13,6 @@ use crate::{fixture_crew, git_repo};
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
-use std::io::Write;
-#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
@@ -42,10 +40,9 @@ const CHILD: &str = "ORBIT_SANDBOX_BROKER_FIXTURE";
 fn cli_and_mcp_reach_host_backends_with_authoritative_identity() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
-        let _ = writeln!(
-            std::io::stderr(),
-            "skipped broker sandbox integration: {}",
-            probe.detail
+        orbit_exec::report_bwrap_deferral(
+            "cli_and_mcp_reach_host_backends_with_authoritative_identity",
+            &probe.detail,
         );
         return;
     }
@@ -336,7 +333,9 @@ mod authority {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::process::{Child, ChildStdin, Output, Stdio};
+    use std::process::{ChildStdin, Output, Stdio};
+
+    use crate::child_guard::ChildGuard;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -847,6 +846,9 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
     /// the real backend sandbox.
     #[test]
     fn each_plugin_backend_sees_only_its_own_state() {
+        if !orbit_exec::macos_sandbox_test_guard("each_plugin_backend_sees_only_its_own_state") {
+            return;
+        }
         let host = Host::new();
         for (namespace, other) in [("alpha", "beta"), ("beta", "alpha")] {
             let plugin = Plugin {
@@ -1000,7 +1002,7 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
 
     /// `orbit mcp serve` for one test, killed and reaped on drop.
     struct McpServer {
-        child: Child,
+        _child: ChildGuard,
         stdin: ChildStdin,
         lines: mpsc::Receiver<String>,
         next_id: u64,
@@ -1024,6 +1026,7 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
+                .map(ChildGuard::new)
                 .expect("start the MCP server");
             let stdin = child.stdin.take().expect("server stdin");
             let stdout = child.stdout.take().expect("server stdout");
@@ -1036,7 +1039,7 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
                 }
             });
             let mut server = Self {
-                child,
+                _child: child,
                 stdin,
                 lines,
                 next_id: 0,
@@ -1082,13 +1085,6 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
 
         fn call(&mut self, tool: &str) -> Value {
             self.request("tools/call", json!({ "name": tool, "arguments": {} }))
-        }
-    }
-
-    impl Drop for McpServer {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
         }
     }
 }

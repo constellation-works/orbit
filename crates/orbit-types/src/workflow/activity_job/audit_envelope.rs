@@ -100,6 +100,16 @@ pub enum V2AuditEventKind {
         /// Bounded and redacted independently of the original step error.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+        /// Bounded, redacted output reported by the recovery dispatch.
+        /// Absent on historical events or when dispatch never returned.
+        /// Advisory diagnostics only: nothing reads it to admit a retry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<serde_json::Value>,
+        /// [ORB-14152] The host's reading of the decision file the activity
+        /// wrote. Absent on historical events, unsuccessful dispatches, and
+        /// recoveries that ran without a decision slot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<StepRecoveryDecisionRecord>,
     },
     /// The failed step's single re-attempt after recovery completed.
     StepPostRecoveryAttempt {
@@ -108,6 +118,9 @@ pub enum V2AuditEventKind {
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
+        /// Bounded, redacted output of the re-attempted step, if it returned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<serde_json::Value>,
     },
     /// [ORB-13907] The job-level final recovery hook ran, or was skipped, for
     /// a failed top-level step.
@@ -305,6 +318,37 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         latest_message_truncated: bool,
     },
+    /// A descendant of the provider child stayed stopped (state `T`) past the
+    /// supervisor's threshold, so the supervisor sent it `SIGKILL` and the
+    /// child's wait on it returns instead of holding the step until its wall
+    /// clock ends. Never the child itself.
+    ///
+    /// Pairs with `cli.invocation.process` the same way
+    /// `cli.invocation.finished` does. `ended` is false when the signal could
+    /// not be delivered; `error` then says why. `command` is bounded and
+    /// redacted, and `stopped_ms` counts from the first sample that saw the
+    /// descendant stopped.
+    CliInvocationStoppedDescendant {
+        provider: String,
+        pid: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pid_start_time: Option<String>,
+        command: String,
+        stopped_ms: u64,
+        ended: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Admission waits observed for a provider invocation. Cumulative within
+    /// the invocation; overlapping intervals earn deadline credit only once.
+    CliInvocationBuildBudget {
+        provider: String,
+        count: u64,
+        total_ms: u64,
+        longest_ms: u64,
+        queued_wall_ms: u64,
+        deadline_extension_ms: u64,
+    },
     /// §7.6 — CLI backend subprocess finished (either naturally or by
     /// wall-clock timeout). `timed_out == true` iff the subprocess was killed
     /// because it exceeded `wall_clock_timeout_ms`.
@@ -365,10 +409,30 @@ impl V2AuditEventKind {
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
             V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",
+            V2AuditEventKind::CliInvocationStoppedDescendant { .. } => {
+                "cli.invocation.stopped_descendant"
+            }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
+            V2AuditEventKind::CliInvocationBuildBudget { .. } => "cli.invocation.build_budget",
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
     }
+}
+
+/// How the executor read a recovery invocation's durable decision file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StepRecoveryDecisionRecord {
+    /// `verified`, `absent` (nothing written), `invalid` (present but not a
+    /// decision for this invocation) or `unavailable` (could not be read).
+    pub status: String,
+    /// `retry` or `not_recovered`; present only when `verified`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// Whether the executor admitted its single post-recovery attempt.
+    pub retry_admitted: bool,
+    /// The decision's bounded, redacted reason, or why it was refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

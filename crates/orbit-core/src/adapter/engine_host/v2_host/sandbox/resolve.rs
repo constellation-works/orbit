@@ -11,13 +11,11 @@ use crate::OrbitRuntime;
 #[cfg(target_os = "linux")]
 use super::provider_state::append_linux_provider_state_roots;
 #[cfg(target_os = "linux")]
-use super::runtime_grants::append_linux_runtime_write_roots;
-#[cfg(target_os = "linux")]
-use super::worktree::active_worktree_subpath;
-#[cfg(target_os = "macos")]
-use super::worktree::append_active_worktree_root;
+use super::runtime_grants::{
+    append_linux_codex_side_write_roots, append_linux_runtime_write_roots,
+};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use super::worktree::recovery_checkout_root;
+use super::worktree::{active_worktree_root, recovery_checkout_root};
 
 pub(crate) fn resolve_executor_sandbox(
     runtime: &OrbitRuntime,
@@ -91,28 +89,42 @@ pub(super) fn resolve_executor_sandbox_on(
                 // Read-only reviewer activities may run from an invocation-owned
                 // inspection checkout, so their read grants must follow that
                 // checkout. Recovery also needs its own checkout-relative
-                // grants and denies. Other implementer profiles stay anchored
-                // at the registered workspace, with the active worktree
-                // re-allowed separately below.
+                // grants and denies. Other profiles stay anchored at the
+                // registered workspace, whose read denies also cover the
+                // managed worktrees beneath it.
                 let profile_root = if fs_profile == Some("reviewer") || recovery_checkout.is_some()
                 {
                     subprocess_cwd
                 } else {
                     None
                 };
-                let mut resolved = resolve_fs_profile_absolute(runtime, fs_profile, profile_root)
-                    .map_err(|err| {
-                    DispatchError::CliInvocationFailed(format!(
-                        "resolve fsProfile for sandbox: {err}"
-                    ))
-                })?;
+                let resolve_profile = |root: Option<&Path>| {
+                    resolve_fs_profile_absolute(runtime, fs_profile, root).map_err(|err| {
+                        DispatchError::CliInvocationFailed(format!(
+                            "resolve fsProfile for sandbox: {err}"
+                        ))
+                    })
+                };
+                let mut resolved = resolve_profile(profile_root)?;
+                // A writer from the active managed worktree takes its `modify`
+                // rules from that worktree, as on Linux: the profile's grants
+                // and every policy deny, `**/.env` included, then apply inside
+                // the worktree rather than the registered checkout. Re-allowing
+                // the bare worktree after the policy denies would instead
+                // override them all under SBPL last-match-wins.
+                if profile_root.is_none()
+                    && let Some(worktree) =
+                        subprocess_cwd.and_then(|cwd| active_worktree_root(runtime, cwd))
+                {
+                    resolved.modify = resolve_profile(Some(&worktree))?.modify;
+                }
                 // Same boundary as linux-bwrap: an activity profile with an
                 // empty modify surface stays a non-writer of the source tree
                 // and the primary workspace. Every positive entry below compiles
-                // to an SBPL write allow, so Codex side roots, workspace
-                // `.orbit` stores, and the active managed worktree are gated on
-                // the profile itself. Provider state directories come from the
-                // SBPL compiler and global Orbit runtime stores stay available.
+                // to an SBPL write allow, so Codex side roots and workspace
+                // `.orbit` stores are gated on the profile itself. Provider
+                // state directories come from the SBPL compiler and global
+                // Orbit runtime stores stay available.
                 let grants_workspace_modify =
                     resolved.modify.iter().any(|rule| !rule.starts_with('!'));
                 if grants_workspace_modify {
@@ -123,11 +135,24 @@ pub(super) fn resolve_executor_sandbox_on(
                     grants_workspace_modify,
                     &mut resolved,
                 );
-                if grants_workspace_modify {
-                    append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
-                }
-                deny_registered_auto_task_definition_writes(runtime, &mut resolved);
+                // A profile anchored at the registered checkout names its live
+                // host-clock stores in the policy carve-outs. Deny them after
+                // the Codex side roots and runtime grants from every cwd; a
+                // worktree anchor keeps the carve-outs on its own `.orbit`.
+                deny_registered_checkout_host_stores(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
+                // Host Git state is never a provider convenience grant. Append
+                // these last so even a side root inside metadata stays denied.
+                crate::runtime::git_sandbox::append_git_denies(
+                    &runtime.paths().repo_root,
+                    &mut resolved,
+                )
+                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+                if let Some(cwd) = subprocess_cwd {
+                    crate::runtime::git_sandbox::append_git_denies(cwd, &mut resolved).map_err(
+                        |error| DispatchError::CliInvocationPermanent(error.to_string()),
+                    )?;
+                }
                 deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
                 Ok(Some(ResolvedSandbox {
                     kind,
@@ -163,10 +188,15 @@ pub(super) fn resolve_executor_sandbox_on(
                 // available below; neither overlaps workspace-relative denies.
                 let grants_workspace_modify =
                     resolved.modify.iter().any(|rule| !rule.starts_with('!'));
-                if grants_workspace_modify {
-                    append_codex_side_write_roots(runtime, provider, &mut resolved)?;
-                }
                 let mut runtime_write_authority = Vec::new();
+                if grants_workspace_modify {
+                    append_linux_codex_side_write_roots(
+                        runtime,
+                        provider,
+                        &mut resolved,
+                        &mut runtime_write_authority,
+                    )?;
+                }
                 append_linux_runtime_write_roots(
                     runtime,
                     subprocess_cwd,
@@ -175,19 +205,26 @@ pub(super) fn resolve_executor_sandbox_on(
                     &mut runtime_write_authority,
                 )?;
                 append_linux_provider_state_roots(provider, &mut resolved)?;
+                // A worktree cwd absolutizes the versioned exceptions under
+                // that worktree. The registered checkout does not: the same
+                // carve-outs would grant its live host-clock stores. No grant
+                // above reaches those stores from a worktree cwd: Codex side
+                // roots and runtime grants are path-shaped stores only.
+                if anchored_at_registered_checkout(runtime, subprocess_cwd) {
+                    deny_registered_checkout_host_stores(runtime, &mut resolved);
+                }
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 // Host Git state is never a provider convenience grant. Append
                 // these last so even a side root inside metadata stays denied.
-                crate::runtime::git_sandbox::append_linux_git_denies(
+                crate::runtime::git_sandbox::append_git_denies(
                     &runtime.paths().repo_root,
                     &mut resolved,
                 )
                 .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
                 if let Some(cwd) = subprocess_cwd {
-                    crate::runtime::git_sandbox::append_linux_git_denies(cwd, &mut resolved)
-                        .map_err(|error| {
-                            DispatchError::CliInvocationPermanent(error.to_string())
-                        })?;
+                    crate::runtime::git_sandbox::append_git_denies(cwd, &mut resolved).map_err(
+                        |error| DispatchError::CliInvocationPermanent(error.to_string()),
+                    )?;
                 }
                 deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
                 // Recovery is host-prepared too. Its policy includes future
@@ -195,7 +232,7 @@ pub(super) fn resolve_executor_sandbox_on(
                 // worktree, even after the .orbit mount anchor exists.
                 let managed_worktree = recovery_checkout.is_some()
                     || subprocess_cwd
-                        .and_then(|cwd| active_worktree_subpath(runtime, cwd))
+                        .and_then(|cwd| active_worktree_root(runtime, cwd))
                         .is_some();
                 Ok(Some(ResolvedSandbox {
                     kind,
@@ -322,11 +359,13 @@ pub(super) fn resolve_fs_profile_absolute(
     })
 }
 
-fn append_codex_side_write_roots(
+/// Codex's `--add-dir` side roots from the runtime provider config, as
+/// absolute paths. Each OS grants them only as runtime stores, through
+/// [`side_root_store`].
+pub(super) fn codex_side_write_roots(
     runtime: &OrbitRuntime,
     provider: &str,
-    resolved: &mut ResolvedFsProfile,
-) -> Result<(), DispatchError> {
+) -> Result<Vec<PathBuf>, DispatchError> {
     // Codex is the only `backend: cli` provider that ships its own writable
     // root surface (`--add-dir` fed from `writable_dirs_json`). Claude and
     // Gemini have no analogous CLI flag — their startup-time writes are
@@ -335,21 +374,18 @@ fn append_codex_side_write_roots(
     // provider gains a side-root surface, add a sibling appender. See
     // T20260428-14.
     if provider != "codex" {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let config = RuntimeHost::agent_provider_config(runtime);
     let Some(raw_dirs) = config.get("writable_dirs_json") else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let writable_dirs: Vec<String> = serde_json::from_str(raw_dirs).map_err(|err| {
         DispatchError::CliInvocationFailed(format!(
             "parse codex writable_dirs_json for sandbox: {err}"
         ))
     })?;
-    if writable_dirs.is_empty() {
-        return Ok(());
-    }
 
     let workspace_root = runtime
         .paths()
@@ -357,14 +393,64 @@ fn append_codex_side_write_roots(
         .canonicalize()
         .unwrap_or_else(|_| runtime.paths().repo_root.clone());
     let workspace_str = workspace_root.display().to_string();
-    for dir in writable_dirs {
-        let Some(root) = absolutize_side_write_root(&workspace_str, &dir) else {
+    Ok(writable_dirs
+        .iter()
+        .filter_map(|dir| absolutize_side_write_root(&workspace_str, dir))
+        .map(PathBuf::from)
+        .collect())
+}
+
+/// The runtime root holding side root `dir` as one of its stores, and the
+/// store's path below that root.
+///
+/// A bare directory rule grants its whole subtree under both the Bubblewrap
+/// mount compiler and the SBPL `subpath` compiler, so a runtime root itself,
+/// or anything outside the runtime roots, is never a store: granting it would
+/// open host config, the `orbit` binary, the host clock's stores and other
+/// runs' worktrees. [ORB-14538]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn side_root_store<'a>(roots: &[&'a Path], dir: &Path) -> Option<(&'a Path, String)> {
+    let store = roots
+        .iter()
+        .filter_map(|root| {
+            let relative = dir.strip_prefix(root).ok()?;
+            let named = relative.components().next().is_some()
+                && relative
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)));
+            named.then_some((*root, relative.to_str()?.to_string()))
+        })
+        .max_by_key(|(root, _)| root.as_os_str().len());
+    if store.is_none() {
+        tracing::warn!(
+            side_root = %dir.display(),
+            "skipping a Codex side-write root that is not an Orbit runtime store"
+        );
+    }
+    store
+}
+
+/// macOS grant for Codex's side roots: each one as a contained runtime store.
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+pub(super) fn append_codex_side_write_roots(
+    runtime: &OrbitRuntime,
+    provider: &str,
+    resolved: &mut ResolvedFsProfile,
+) -> Result<(), DispatchError> {
+    let global_root = canonical_or_lexical(&runtime.paths().global_dir);
+    let workspace_orbit = canonical_or_lexical(&runtime.paths().orbit_dir);
+    for dir in codex_side_write_roots(runtime, provider)? {
+        let Some((root, relative)) = side_root_store(&[&global_root, &workspace_orbit], &dir)
+        else {
+            continue;
+        };
+        let Some(store) = contained_runtime_store(root, &relative) else {
             continue;
         };
         // Append even when the root already appears earlier: SBPL is
         // last-match-wins, and these host-owned roots must land after
         // policy-derived denies such as `.orbit/**`.
-        resolved.modify.push(root);
+        resolved.modify.push(format!("{}/**", store.display()));
     }
     Ok(())
 }
@@ -443,6 +529,15 @@ fn append_contained_runtime_modify_root(
     suffix: &str,
     resolved: &mut ResolvedFsProfile,
 ) {
+    if let Some(physical) = contained_runtime_store(root, relative) {
+        append_unique_modify_root(resolved, format!("{}{suffix}", physical.display()));
+    }
+}
+
+/// The physical path of runtime store `relative`, or `None` when its
+/// containment in `root` cannot be established.
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+fn contained_runtime_store(root: &Path, relative: &str) -> Option<PathBuf> {
     let physical = orbit_exec::physical_with_missing_tail(&root.join(relative));
     let mut ancestor = physical.as_path();
     let contained = physical.starts_with(root)
@@ -464,16 +559,24 @@ fn append_contained_runtime_modify_root(
             store = relative,
             "skipping sandbox grant for a runtime store whose physical containment cannot be established"
         );
-        return;
+        return None;
     }
-    append_unique_modify_root(resolved, format!("{}{suffix}", physical.display()));
+    Some(physical)
 }
 
-/// Keep registered scheduler definitions behind the host-brokered auto-task
-/// tools. The default policy exception is for host-side writes; nested provider
-/// children must not inherit it as direct filesystem authority.
-#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
-pub(super) fn deny_registered_auto_task_definition_writes(
+/// Registered-checkout stores the host clock and operator config own.
+///
+/// The default policy re-allows these under whichever directory the profile is
+/// anchored to. On Linux, a managed-worktree anchor makes those exceptions
+/// refer to that worktree's `.orbit`; a registered-checkout anchor would grant
+/// the live auto-task definitions, routines, crew and sandbox config, and
+/// resources. Drop those grants and append a terminal deny so later
+/// convenience roots cannot reopen the registered stores. macOS appends the
+/// denies from every cwd: a writer from a managed worktree takes its `modify`
+/// rules from that worktree, so its own `.orbit` exceptions stay writable.
+/// `.orbit/tmp/**` stays the worker scratch exception.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn deny_registered_checkout_host_stores(
     runtime: &OrbitRuntime,
     resolved: &mut ResolvedFsProfile,
 ) {
@@ -482,16 +585,66 @@ pub(super) fn deny_registered_auto_task_definition_writes(
         .orbit_dir
         .canonicalize()
         .unwrap_or_else(|_| runtime.paths().orbit_dir.clone());
-    let auto_tasks = workspace_orbit.join("auto_tasks").display().to_string();
-    let auto_tasks_descendants = format!("{auto_tasks}/");
+    // `(relative, subtree)`: directories are denied as `<path>/**`, the config
+    // file as that exact path.
+    let stores = [
+        ("auto_tasks", true),
+        ("routines", true),
+        ("config.toml", false),
+        ("resources", true),
+    ];
+    let anchored: Vec<(String, bool)> = stores
+        .into_iter()
+        .map(|(relative, subtree)| {
+            (
+                format!("{}/{}", workspace_orbit.display(), relative),
+                subtree,
+            )
+        })
+        .collect();
 
     resolved.modify.retain(|rule| {
         if rule.starts_with('!') {
             return true;
         }
-        rule != &auto_tasks && !rule.starts_with(&auto_tasks_descendants)
+        !anchored
+            .iter()
+            .any(|(store, _)| rule_names_registered_store(rule, store))
     });
-    resolved.modify.push(format!("!{auto_tasks}/**"));
+    for (store, subtree) in &anchored {
+        let deny = if *subtree {
+            format!("!{store}/**")
+        } else {
+            format!("!{store}")
+        };
+        resolved.modify.push(deny);
+    }
+}
+
+/// True when `rule` is a positive grant of `store` or of a path inside it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rule_names_registered_store(rule: &str, store: &str) -> bool {
+    let body = rule.strip_suffix("/**").unwrap_or(rule);
+    body == store || rule.starts_with(&format!("{store}/"))
+}
+
+/// The activity profile is absolutized against the registered checkout.
+///
+/// A missing cwd uses that checkout. A managed worktree, an inspection
+/// checkout, or any other directory does not, so their versioned `.orbit`
+/// exceptions stay local to that directory.
+#[cfg(target_os = "linux")]
+fn anchored_at_registered_checkout(runtime: &OrbitRuntime, subprocess_cwd: Option<&Path>) -> bool {
+    let repo = canonical_or_lexical(&runtime.paths().repo_root);
+    match subprocess_cwd {
+        None => true,
+        Some(cwd) => canonical_or_lexical(cwd) == repo,
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn canonical_or_lexical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Deny the host-only recovery authority store, after every convenience grant.

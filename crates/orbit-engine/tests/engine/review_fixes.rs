@@ -21,12 +21,41 @@ use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, execute_job_with_resume,
-    resolve_job_catalog_refs_for_execution,
+    FinalRecoveryApplied, JobOutcome, RuntimeHost, V2AuditWriter, V2SqliteSink,
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_types::workflow::FinalRecoveryDecision;
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
 use serde_json::{Value, json};
+
+#[test]
+fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication() {
+    let host = ScriptedHost::new(Settlement::Timeout, Revalidation::Passes);
+    let result = run_shipped_pipeline(&host);
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    assert_eq!(host.inputs("agent_review_repair").len(), 1);
+    assert!(host.inputs("review_gate_settle").is_empty());
+    assert!(host.inputs("pr_open").is_empty());
+    let handoff = host.inputs("pr_failure_handoff");
+    assert_eq!(handoff.len(), 1);
+    assert!(
+        handoff[0]["error_message"]
+            .as_str()
+            .unwrap()
+            .contains("review_timeout_incomplete:")
+    );
+    assert_eq!(handoff[0]["pipeline"]["review"]["timed_out"], true);
+    assert!(matches!(
+        host.reviewer_events.lock().unwrap().as_slice(),
+        [
+            orbit_types::workflow::ReviewerInvocationEvent::Started,
+            orbit_types::workflow::ReviewerInvocationEvent::TimedOut { .. },
+        ]
+    ));
+}
 
 /// No findings: the reviewed head is the implementation head, nothing is
 /// revalidated, and the PR opens with no "Review fixes" section.
@@ -56,16 +85,81 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "git_push",
             "pr_open",
             "pr_promote",
+            "review_gate_admit",
+            "review_gate_settle",
             "pr_complete",
             "review_gate_admit",
             "review_gate_settle",
+            "review_gate_admit",
+            "review_gate_settle",
         ],
-        "one review, no revalidation, then delivery"
+        "one review, no revalidation, then delivery; the before-landing gate and both \
+         completion re-review rounds only admit and settle as not applicable"
     );
     let pr_open = &host.inputs("pr_open")[0];
     assert_eq!(pr_open["reviewed_head_sha"], "candidate");
     assert_eq!(pr_open["review_fixes"], "");
     assert!(host.inputs("pr_failure_handoff").is_empty());
+}
+
+/// [ORB-14616] A report settlement would refuse only for its shape goes back
+/// to the reviewer once, with the typed defect, in the same attempt: the
+/// reviewer step dispatches a second time carrying `report_correction`, the
+/// engine never asks again, and one admission and one settlement follow.
+#[test]
+fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
+    const DEFECT: &str = "validation_contradicted: negative control `make test-guard` names \
+                          `crates/orbit-cmd/src/update/converge.rs`, outside the candidate's scope";
+    let host = ScriptedHost::new(Settlement::Accept, Revalidation::Passes)
+        .with_report_defects([DEFECT, DEFECT]);
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "{result:?}"
+    );
+    let reviews = host.inputs("agent_review_repair");
+    assert_eq!(reviews.len(), 2, "one correction, never a third reviewer");
+    assert_eq!(reviews[0].get("report_correction"), None);
+    assert_eq!(reviews[1]["report_correction"], DEFECT);
+    assert_eq!(
+        reviews[1]["attempt_id"], reviews[0]["attempt_id"],
+        "the correction belongs to the same attempt"
+    );
+    let asked = host.report_checks.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "the corrected report goes to settlement");
+    assert_eq!(asked[0].attempt_id, "rvw-1");
+    assert_eq!(asked[0].lineage_key, "lineage-1");
+    assert_eq!(asked[0].task_ids, ["T-1"]);
+    assert_eq!(asked[0].workspace_path, PathBuf::from(WORKSPACE));
+    assert_eq!(
+        host.inputs("review_gate_admit")
+            .iter()
+            .filter(|input| input["preflight"] != true
+                && input.get("re_review_after").is_none()
+                && input["before_landing"] != true)
+            .count(),
+        1,
+        "no second reviewer start"
+    );
+    let settle = host
+        .inputs("review_gate_settle")
+        .into_iter()
+        .filter(|input| input.pointer("/admission/applies") == Some(&json!(true)))
+        .count();
+    assert_eq!(settle, 1);
+    assert!(
+        matches!(
+            host.reviewer_events.lock().unwrap().as_slice(),
+            [
+                orbit_types::workflow::ReviewerInvocationEvent::Started,
+                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Started,
+                orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
+            ]
+        ),
+        "both invocations are charged to the attempt"
+    );
 }
 
 /// Fixable findings: the reviewer commit becomes the reviewed head. Owner
@@ -165,7 +259,13 @@ fn reject_blocks_the_task_after_final_recovery() {
         !matches!(&result, Ok(outcome) if outcome.success),
         "a rejected candidate must not deliver: {result:?}"
     );
-    for step in ["candidate_validate", "git_push", "pr_open", "pr_complete"] {
+    for step in [
+        "candidate_validate",
+        "git_push",
+        "pr_open",
+        "pr_promote",
+        "pr_complete",
+    ] {
         let after_review = host
             .actions()
             .iter()
@@ -181,7 +281,24 @@ fn reject_blocks_the_task_after_final_recovery() {
     let admissions = host.final_recovery_admissions();
     assert_eq!(admissions.len(), 1, "final recovery is eligible");
     assert_eq!(admissions[0].failed_step_id, "review_gate_settle");
-    assert_eq!(host.inputs("final_recovery").len(), 1);
+    let recovery_inputs = host.inputs("final_recovery");
+    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
+    assert_eq!(recovery_inputs[0]["task_id"], "T-1");
+    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
+    assert_eq!(recovery_inputs[0]["failed_step_id"], "review_gate_settle");
+    assert_eq!(recovery_inputs[0]["activity_name"], "review_gate_settle");
+    assert_eq!(recovery_inputs[0]["workspace_path"], WORKSPACE);
+    assert_eq!(recovery_inputs[0]["log_tail"], "");
+    assert_eq!(recovery_inputs[0]["step_recovery_attempts"], json!([]));
+    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
+
+    let actions = host.actions();
+    let review_settled = position(&actions, "review_gate_settle");
+    assert_eq!(
+        &actions[review_settled + 1..review_settled + 3],
+        ["final_recovery", "pr_failure_handoff"],
+        "recovery escalates before failure handoff: {actions:?}"
+    );
 
     let handoff = host.inputs("pr_failure_handoff");
     assert_eq!(handoff.len(), 1);
@@ -191,6 +308,26 @@ fn reject_blocks_the_task_after_final_recovery() {
         message.contains("review_gate_blocked"),
         "the handoff carries the gate's refusal: {message}"
     );
+}
+
+#[test]
+fn reject_supplies_fixture_log_tail_to_final_recovery() {
+    let host = ScriptedHost::new(Settlement::Reject, Revalidation::Passes)
+        .with_log_tail("fixture-owned recovery evidence");
+    let result = run_shipped_pipeline(&host);
+
+    assert!(
+        !matches!(&result, Ok(outcome) if outcome.success),
+        "a rejected candidate must not deliver: {result:?}"
+    );
+    let recovery_inputs = host.inputs("final_recovery");
+    assert_eq!(recovery_inputs.len(), 1, "final recovery dispatches once");
+    assert_eq!(recovery_inputs[0]["run_id"], RUN_ID);
+    assert_eq!(
+        recovery_inputs[0]["log_tail"],
+        "fixture-owned recovery evidence"
+    );
+    assert_eq!(host.log_tail_run_ids(), [RUN_ID]);
 }
 
 const STUB_PREFIX: &str = "test_stub_";
@@ -218,6 +355,9 @@ const ACTIVITIES: &[&str] = &[
     "pr_complete",
     "pr_failure_handoff",
     "final_recovery",
+    "claim_validate",
+    "claim_handoff",
+    "claim_candidate_carry",
 ];
 
 pub(super) fn position(actions: &[String], action: &str) -> usize {
@@ -228,34 +368,51 @@ pub(super) fn position(actions: &[String], action: &str) -> usize {
 }
 
 pub(super) fn run_shipped_pipeline(host: &ScriptedHost) -> Result<JobOutcome, DispatchError> {
-    let audit_root = tempfile::tempdir().expect("audit tempdir");
-    let sink = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
-    let writer = Arc::new(V2AuditWriter::new(RUN_ID, "review-fixes-agent", sink));
-    execute_job_with_resume(
-        &shipped_pipeline(),
+    run_shipped_job(
+        host,
+        "task_pr_pipeline",
         json!({
             "task_ids": ["T-1"],
             "base_branch": "main",
             "base_sync": "remote",
             "completion": "done",
         }),
-        RUN_ID,
-        writer,
-        host,
-        None,
     )
 }
 
-/// The shipped `task_pr_pipeline`, every activity resolved to a scripted
+/// Run the shipped job `name` over `input`, every activity scripted.
+pub(super) fn run_shipped_job(
+    host: &ScriptedHost,
+    name: &str,
+    input: Value,
+) -> Result<JobOutcome, DispatchError> {
+    let audit_root = tempfile::tempdir().expect("audit tempdir");
+    let inner = Arc::new(InMemorySink::new(audit_root.path().join("blobs")));
+    let store = Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink"));
+    let envelope = Arc::new(V2SqliteSink::for_audit_root(
+        store,
+        "ws_review_fixes",
+        RUN_ID,
+        "review-fixes-agent",
+        None,
+        audit_root.path(),
+    ));
+    let writer = Arc::new(
+        V2AuditWriter::new(RUN_ID, "review-fixes-agent", inner).with_envelope_sink(envelope),
+    );
+    execute_job_with_resume(&shipped_job(name), input, RUN_ID, writer, host, None)
+}
+
+/// The shipped job `name`, every activity resolved to a scripted
 /// deterministic action named after it. The prefix keeps the engine's own
 /// built-in actions of the same names out of the way.
-fn shipped_pipeline() -> orbit_types::workflow::JobV2 {
+fn shipped_job(name: &str) -> orbit_types::workflow::JobV2 {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml");
-    let shipped = std::fs::read_to_string(root).expect("read the shipped PR pipeline");
+        .join(format!("crates/orbit-core/assets/jobs/{name}.yaml"));
+    let shipped = std::fs::read_to_string(root).expect("read the shipped job");
     let mut job = load_job_asset(&shipped)
-        .expect("the shipped PR pipeline loads")
+        .expect("the shipped job loads")
         .spec;
     let mut catalog = V2ActivityCatalog::new();
     for &name in ACTIVITIES {
@@ -286,6 +443,7 @@ pub(super) enum Settlement {
     AcceptWithFixes,
     /// An open finding: the gate refuses.
     Reject,
+    Timeout,
 }
 
 /// Whether owner revalidation of a reviewer commit passes.
@@ -304,7 +462,14 @@ pub(super) struct ScriptedHost {
     resume: Value,
     head: Mutex<String>,
     calls: Mutex<Vec<(String, Value)>>,
+    reviewer_events: Mutex<Vec<orbit_types::workflow::ReviewerInvocationEvent>>,
     admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
+    log_tail: Option<String>,
+    log_tail_run_ids: Mutex<Vec<String>>,
+    /// What the host answers, in turn, when the engine asks about a
+    /// returned reviewer's report; nothing once exhausted.
+    report_defects: Mutex<Vec<String>>,
+    report_checks: Mutex<Vec<orbit_engine::ReviewReportCorrectionRequest>>,
 }
 
 impl ScriptedHost {
@@ -321,8 +486,28 @@ impl ScriptedHost {
             }),
             head: Mutex::new("candidate".to_string()),
             calls: Mutex::default(),
+            reviewer_events: Mutex::default(),
             admissions: Mutex::default(),
+            log_tail: None,
+            log_tail_run_ids: Mutex::default(),
+            report_defects: Mutex::default(),
+            report_checks: Mutex::default(),
         }
+    }
+
+    /// The host finds `defects`, in turn, in the returned reviewer's report.
+    pub(super) fn with_report_defects<const N: usize>(self, defects: [&str; N]) -> Self {
+        *self.report_defects.lock().expect("report defects") = defects
+            .iter()
+            .rev()
+            .map(|defect| defect.to_string())
+            .collect();
+        self
+    }
+
+    pub(super) fn with_log_tail(mut self, log_tail: impl Into<String>) -> Self {
+        self.log_tail = Some(log_tail.into());
+        self
     }
 
     /// `candidate_resume` answers `resume` instead.
@@ -349,6 +534,13 @@ impl ScriptedHost {
         self.admissions.lock().expect("admissions").clone()
     }
 
+    fn log_tail_run_ids(&self) -> Vec<String> {
+        self.log_tail_run_ids
+            .lock()
+            .expect("log tail lookups")
+            .clone()
+    }
+
     fn settle(&self, input: &Value) -> Result<Value, DispatchError> {
         if input.pointer("/admission/applies") != Some(&json!(true)) {
             return Ok(json!({
@@ -357,6 +549,7 @@ impl ScriptedHost {
                 "reviewed_base_sha": "",
                 "reviewer_fixed": false,
                 "review_fixes": "",
+                "handoff_evidence": null,
             }));
         }
         let attempt = input["admission"]["attempt_id"].clone();
@@ -372,6 +565,7 @@ impl ScriptedHost {
                 "implementation_head_sha": implementation,
                 "reviewer_fixed": false,
                 "review_fixes": "",
+                "handoff_evidence": null,
             })),
             Settlement::AcceptWithFixes => {
                 *head = "reviewer-fixes".to_string();
@@ -384,17 +578,36 @@ impl ScriptedHost {
                     "implementation_head_sha": implementation,
                     "reviewer_fixed": true,
                     "review_fixes": REVIEW_FIXES,
+                    "handoff_evidence": null,
                 }))
             }
-            Settlement::Reject => Err(DispatchError::DeterministicActionRefused {
-                action: "review_gate_settle".to_string(),
-                message: format!("review_gate_blocked: attempt {attempt} settled reject"),
-            }),
+            Settlement::Reject | Settlement::Timeout => {
+                Err(DispatchError::DeterministicActionRefused {
+                    action: "review_gate_settle".to_string(),
+                    message: format!("review_gate_blocked: attempt {attempt} settled reject"),
+                })
+            }
         }
     }
 }
 
 impl RuntimeHost for ScriptedHost {
+    fn record_reviewer_invocation(
+        &self,
+        request: &orbit_engine::ReviewerInvocationRequest,
+    ) -> Result<Option<u64>, OrbitError> {
+        self.reviewer_events.lock().unwrap().push(request.event);
+        Ok(None)
+    }
+
+    fn review_report_correction(
+        &self,
+        request: &orbit_engine::ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        self.report_checks.lock().unwrap().push(request.clone());
+        Ok(self.report_defects.lock().unwrap().pop())
+    }
+
     fn run_deterministic(
         &self,
         action: &str,
@@ -415,6 +628,7 @@ impl RuntimeHost for ScriptedHost {
                 "base_ref": "origin/main",
                 "base_sha": "base-sha",
                 "prior_job_run_id": null,
+                "prior_foreign_run": null,
             }),
             "candidate_resume" => self.resume.clone(),
             "agent_implement" => json!({ "summary": "implemented" }),
@@ -445,8 +659,13 @@ impl RuntimeHost for ScriptedHost {
             "review_gate_admit" if input.get("re_review_after").is_some() => {
                 json!({ "applies": false, "reason": "re_review_not_required" })
             }
+            // A before-PR run: the gate after `pr_open` does not apply.
+            "review_gate_admit" if input["before_landing"] == true => {
+                json!({ "applies": false, "reason": "reviewed_before_pr" })
+            }
             "review_gate_admit" => json!({
                 "applies": true,
+                "decision": "admitted",
                 "first_task_id": "T-1",
                 "attempt_id": "rvw-1",
                 "lineage_key": "lineage-1",
@@ -454,9 +673,11 @@ impl RuntimeHost for ScriptedHost {
                 "report_artifact": "review-report.json",
                 "reviewer": { "crew": "reviewers" },
             }),
-            "agent_review_repair" => json!({ "summary": "reviewed", "verdict": "accept" }),
+            "agent_review_repair" => {
+                json!({ "summary": "partial review", "verdict": "accept", "timed_out": matches!(self.settlement, Settlement::Timeout) })
+            }
             "review_gate_settle" => return self.settle(input),
-            "git_push" => json!({ "local_sha": head }),
+            "git_push" => json!({ "local_sha": head, "remote_sha_before": null }),
             "pr_open" => json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" }),
             "pr_promote" => json!({ "promoted": true }),
             "pr_complete" => json!({
@@ -471,6 +692,15 @@ impl RuntimeHost for ScriptedHost {
                 "human_action": "decide the finding",
             }),
             "pr_failure_handoff" => json!({ "decision": "blocked_review_gate" }),
+            "claim_validate" => json!({
+                "decision": "passed",
+                "tested_head": head,
+                "candidate": { "commit": head },
+                "validation": [],
+                "no_diff_evidence": null,
+            }),
+            "claim_handoff" => json!({ "decision": "handed_off" }),
+            "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),
@@ -491,6 +721,14 @@ impl RuntimeHost for ScriptedHost {
             .expect("admissions")
             .push(request.clone());
         Ok(FinalRecoveryAdmission::Admitted)
+    }
+
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.log_tail_run_ids
+            .lock()
+            .expect("log tail lookups")
+            .push(run_id.to_string());
+        Ok((run_id == RUN_ID).then(|| self.log_tail.clone()).flatten())
     }
 
     fn apply_final_recovery(

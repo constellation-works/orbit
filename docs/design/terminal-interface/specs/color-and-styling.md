@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Spec: Color and Styling"
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 ---
 
 # Spec: Color and Styling
@@ -37,8 +37,11 @@ Resolved once, at the sink:
 1. A non-terminal sink → off.
 2. `TERM=dumb` → off.
 3. `NO_COLOR` set to any non-empty value → off.
-4. `CLICOLOR_FORCE` set to any non-empty value → on.
-5. Otherwise: on for a terminal.
+4. Otherwise: on for a terminal.
+
+`CLICOLOR_FORCE` does not override these off conditions or enable color on a
+non-terminal. When color is otherwise allowed, the terminal is already on by
+default.
 
 There are no command-line color override flags; the sink owns this environment-based policy.
 

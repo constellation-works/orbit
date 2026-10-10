@@ -59,15 +59,7 @@ impl FromArgMatches for FrictionInvocation {
 
 impl Execute for FrictionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let FrictionInvocation {
-            spec,
-            mut input,
-            json,
-        } = self.command;
-        // `--json` no longer picks a branch here: it resolves the sink's mode
-        // in `main`, and the renderer projects whichever payload this builds.
-        // The flag stays declared and accepted [ADR-0306].
-        let _ = json;
+        let FrictionInvocation { spec, mut input } = self.command;
         if spec.verb == FrictionVerb::List
             && let Some(object) = input.as_object_mut()
         {

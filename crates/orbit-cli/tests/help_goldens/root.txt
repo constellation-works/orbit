@@ -1,0 +1,64 @@
+orbit <VERSION>
+
+Usage: orbit [OPTIONS] <COMMAND>
+
+Environment:
+  init        Initialize the global Orbit root (~/.orbit)
+  workspace   Manage workspaces
+  config      Show or update Orbit configuration
+  host        Register and inspect the remote Orbit hosts this machine reaches over SSH
+  plugin      Install and manage Orbit plugins
+  migrate     Apply or inspect pending .orbit layout/schema migrations
+  update      Install a published Orbit release and converge to it
+
+Knowledge:
+  task        Create, update, and manage tasks
+  friction    Report, list, and triage friction records
+  search      Search tasks and frictions
+
+Operate:
+  run         Run workflows, drain the backlog, and inspect runs
+  job         View job definitions
+  tool        View tool registry
+  gc          Inspect and explicitly reap Orbit-managed garbage
+
+Observe:
+  audit       Query the audit event log
+  log         Tail the unified Orbit log feed
+  doctor      Diagnose workspace health, provider CLIs, and filesystem access
+
+Scheduler:
+  clock       Inspect, control, and manually tick the machine scheduler
+  sweep       Compatibility alias for `orbit clock tick`
+  routine     Inspect and control scheduled routines on this machine
+  auto-task   Define recurring auto-task templates (the scheduler primitive)
+
+Services:
+  mcp         Register MCP client integrations and run the MCP server
+  web         Run the Orbit dashboard
+
+Options:
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

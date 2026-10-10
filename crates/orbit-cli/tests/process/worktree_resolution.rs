@@ -205,6 +205,60 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
+/// Restores a path's permissions when dropped, so an assertion that panics
+/// while the path is read-only cannot leave a directory the tempdir cannot
+/// delete (the leftover would sit inside an agent worktree's `.orbit/tmp`).
+#[cfg(unix)]
+struct RestorePermissions {
+    path: PathBuf,
+    original: fs::Permissions,
+}
+
+#[cfg(unix)]
+impl RestorePermissions {
+    fn set_mode(path: &Path, mode: u32) -> Self {
+        let original = fs::metadata(path).expect("path to restrict").permissions();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("restrict path");
+        Self {
+            path: path.to_path_buf(),
+            original,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestorePermissions {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.path, self.original.clone());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restore_permissions_guard_restores_the_mode_when_the_test_panics() {
+    let temp = tempdir().expect("fixture");
+    let dir = temp.path().join("locked");
+    fs::create_dir_all(&dir).expect("dir");
+    fs::write(dir.join("file"), "x").expect("file");
+    let before = fs::metadata(&dir).expect("metadata").permissions().mode();
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _restore = RestorePermissions::set_mode(&dir, 0o555);
+        assert_eq!(
+            fs::metadata(&dir).expect("metadata").permissions().mode() & 0o777,
+            0o555
+        );
+        panic!("assertion failed between chmod and restore");
+    }));
+
+    assert!(unwound.is_err(), "the fixture must have panicked");
+    assert_eq!(
+        fs::metadata(&dir).expect("metadata").permissions().mode(),
+        before,
+        "the guard must restore the directory permissions on unwind"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation() {
@@ -234,9 +288,7 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
 
     // The first invocation prepared Orbit's enumerated global SQLite state.
     // A second list must work with the surrounding global directory read-only.
-    let original_permissions = fs::metadata(&global).expect("global root").permissions();
-    fs::set_permissions(&global, fs::Permissions::from_mode(0o555))
-        .expect("make global root read-only");
+    let _restore_global = RestorePermissions::set_mode(&global, 0o555);
     let listed_read_only = run_orbit_json(
         &repo,
         &home,
@@ -249,7 +301,10 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
     let moved_repo = temp.path().join("moved-repo");
     fs::rename(&repo, &moved_repo).expect("make registered checkout missing");
     let unrelated = temp.path().join("unrelated");
-    fs::create_dir(&unrelated).expect("unrelated cwd");
+    // Not the registered checkout. Its own lookup boundary keeps a TMPDIR
+    // nested in a checkout from loading that checkout's config before the
+    // registry validation this test expects to fail closed.
+    crate::git_repo::seal_lookup_boundary(&unrelated);
     let before = fs::read(global.join("workspaces.json")).expect("registry before failure");
     let mut command = cargo_bin_cmd!("orbit");
     command
@@ -274,7 +329,6 @@ fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validati
         !lock.exists(),
         "failed validation must not leave a lock file"
     );
-    fs::set_permissions(&global, original_permissions).expect("restore global permissions");
 }
 
 #[test]
@@ -764,8 +818,18 @@ fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
     );
     pin_default_crew_for_isolated_root(&custom_root);
 
-    let registry_path = custom_root.join("tasks/registry.db");
-    let registry_writer = rusqlite::Connection::open(&registry_path).expect("open registry writer");
+    // Match the task store's task_registry_path and the checkout-binding fixtures.
+    let registry_path = custom_root.join("tasks").join("index.sqlite");
+    assert!(
+        registry_path.is_file(),
+        "workspace init must create the task registry before contention: {}",
+        registry_path.display()
+    );
+    let registry_writer = rusqlite::Connection::open_with_flags(
+        &registry_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )
+    .expect("open existing task registry writer without creating it");
     registry_writer
         .execute_batch("BEGIN IMMEDIATE")
         .expect("hold registry WAL writer");
@@ -794,7 +858,6 @@ spec:
 
     let custom_root_arg = custom_root.to_string_lossy().into_owned();
     let job_path_arg = job_path.to_string_lossy().into_owned();
-    let submitted_at = Instant::now();
     let submitted = run_orbit_json(
         &repo,
         &home,
@@ -808,20 +871,15 @@ spec:
         ],
         None,
     );
-    assert!(
-        submitted_at.elapsed() < Duration::from_secs(4),
-        "current-schema parent/worker bootstrap waited for the registry writer"
-    );
     let run_id = submitted["run_id"]
         .as_str()
         .unwrap_or_else(|| panic!("expected run_id in {submitted}"))
         .to_string();
     assert_eq!(submitted["state"].as_str(), Some("submitted"));
-    registry_writer
-        .execute_batch("ROLLBACK")
-        .expect("release registry writer");
-
-    let shown = wait_for_run_terminal_state(&repo, &home, &custom_root, &run_id);
+    // Readiness, not total CLI startup time, proves independence from the
+    // registry writer (ORB-14396). Keep the writer held through the real
+    // worker's claim AND completion; a busy timeout must still fail the run.
+    let shown = wait_for_run_terminal_state(&custom_root, &run_id);
     let state = shown["run"]["state"].as_str().unwrap_or("missing");
     assert_eq!(
         state,
@@ -833,6 +891,9 @@ spec:
         shown["run"]["pid"].as_u64().is_some(),
         "the real worker must claim its persisted run: {shown}"
     );
+    registry_writer
+        .execute_batch("ROLLBACK")
+        .expect("release registry writer");
 }
 
 #[test]
@@ -906,8 +967,30 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
 /// partition and a populated one whose checkout is confirmed absent. The
 /// partitions of a live checkout, of a checkout that fails to stat for any
 /// reason other than absence, and with no binding at all keep their bundles.
+/// [ORB-14516] Empty and removed mount points are ambiguous absence and must
+/// keep their partitions too; a dangling parent symlink forces read_dir to fail.
 #[test]
 fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
+    const TEST: &str = "worktree_resolution::doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts";
+    const CHILD: &str = "ORBIT_TEST_ORPHAN_TASK_STORE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let home = tempdir().expect("isolated child home");
+        let mut command = StdCommand::new(std::env::current_exe().expect("test binary"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path())
+            .output()
+            .expect("isolated task-store repair fixture");
+        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     write_machine_identity(&home);
@@ -919,13 +1002,26 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     let partitions = home.join(".orbit/tasks/workspaces");
     let deleted_volume = temp.path().join("deleted-volume");
     let file_volume = temp.path().join("file-volume");
+    let empty_mount = temp.path().join("empty-mount");
+    let removed_mount = temp.path().join("removed-mount");
+    #[cfg(unix)]
+    let dangling_parent = temp.path().join("dangling-parent");
 
     let mut partition_of = std::collections::BTreeMap::new();
-    for (name, repo) in [
+    let checkouts = vec![
         ("live", temp.path().join("live")),
         ("gone", deleted_volume.join("gone")),
         ("unreachable", file_volume.join("unreachable")),
-    ] {
+        ("empty-mount", empty_mount.join("proj")),
+        ("removed-mount", removed_mount.join("proj")),
+    ];
+    #[cfg(unix)]
+    let checkouts = {
+        let mut checkouts = checkouts;
+        checkouts.push(("dangling-parent", dangling_parent.join("proj")));
+        checkouts
+    };
+    for (name, repo) in checkouts {
         fs::create_dir_all(&repo).expect("create checkout");
         init_git_repo(&repo);
         let before = task_store_partitions(&partitions);
@@ -957,14 +1053,63 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
     fs::create_dir_all(partitions.join("ws_residue")).expect("create empty partition");
     fs::create_dir_all(partitions.join("ws_unowned/ORB-00077")).expect("create unowned bundle");
 
-    // Confirmed absent: the readable parent answers that the checkout is gone.
-    fs::remove_dir_all(&deleted_volume).expect("delete checkout");
+    // Confirmed absent: the immediate parent is readable and still populated.
+    fs::remove_dir_all(deleted_volume.join("gone")).expect("delete checkout");
+    fs::write(deleted_volume.join("sibling"), b"still mounted").expect("populate parent");
     // Not absence: resolving the checkout fails with ENOTDIR.
     fs::remove_dir_all(&file_volume).expect("remove volume");
     fs::write(&file_volume, b"not a directory").expect("replace volume with a file");
+    // Unmounting exposes either an empty mount point or no mount point at all.
+    fs::remove_dir_all(empty_mount.join("proj")).expect("empty mount point");
+    fs::remove_dir_all(&removed_mount).expect("remove mount point");
+    #[cfg(unix)]
+    {
+        fs::remove_dir_all(&dangling_parent).expect("remove symlink parent checkout");
+        std::os::unix::fs::symlink(temp.path().join("offline-volume"), &dangling_parent)
+            .expect("create dangling parent symlink");
+        assert!(fs::symlink_metadata(&dangling_parent).is_ok());
+        assert_eq!(
+            fs::metadata(dangling_parent.join("proj"))
+                .expect_err("checkout stat must enter confirm_absence")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(
+            fs::read_dir(&dangling_parent).is_err(),
+            "ORB-14516: existing parent symlink must exercise the read_dir failure arm"
+        );
+    }
+
+    let global_root = home.join(".orbit");
+    let classified = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
+        .expect("inspect partition classifications")
+        .expect("partitions exist");
+    assert_eq!(
+        classified
+            .stale
+            .iter()
+            .map(|p| p.path.clone())
+            .collect::<Vec<_>>(),
+        vec![partitions.join(&partition_of["gone"])],
+        "ORB-14516: only absence beneath a populated immediate parent is stale"
+    );
+    let unreachable_names = partition_of
+        .keys()
+        .copied()
+        .filter(|name| !matches!(*name, "live" | "gone"))
+        .collect::<Vec<_>>();
+    for name in &unreachable_names {
+        assert!(
+            classified
+                .unreachable
+                .iter()
+                .any(|p| p.partition.path == partitions.join(&partition_of[name])),
+            "ORB-14516: {name} must be unreachable: {classified:?}"
+        );
+    }
 
     let before = task_store_partitions(&partitions);
-    for name in ["live", "gone", "unreachable"] {
+    for name in partition_of.keys() {
         assert_eq!(
             before[&partition_of[name]].len(),
             1,
@@ -1011,11 +1156,33 @@ fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
         expected,
         "only the empty partition and the confirmed-absent checkout's partition may go"
     );
+    for name in unreachable_names {
+        assert!(
+            orbit_cmd::task_store::partition_is_bound(&global_root, &partition_of[name])
+                .expect("check retained binding"),
+            "ORB-14516: the repair must retain {name}'s binding for remount recovery"
+        );
+    }
+    for mount in [&empty_mount, &removed_mount] {
+        fs::create_dir_all(mount.join("proj")).expect("restore checkout after remount");
+    }
+    let restored = orbit_cmd::task_store::inspect_task_store_partitions(&global_root)
+        .expect("inspect restored checkouts")
+        .expect("partitions exist");
+    for name in ["empty-mount", "removed-mount"] {
+        assert!(
+            restored
+                .unreachable
+                .iter()
+                .all(|p| p.partition.path != partitions.join(&partition_of[name])),
+            "ORB-14516: remounted {name} must become a live claim"
+        );
+    }
 }
 
-/// `--fix-stale-locks` removes a lock whose recorded holder is dead. It keeps
-/// a lock whose recorded holder is alive, and one a live process holds through
-/// the OS lock even though the recorded holder is dead.
+/// `--fix-stale-locks` clears a dead holder record while preserving its file.
+/// It keeps a live holder record, and a dead record in a file a live process
+/// holds through the OS lock.
 #[cfg(unix)]
 #[test]
 fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
@@ -1056,11 +1223,20 @@ fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
             .any(|row| row["check"] == "fix-stale-locks" && row["status"] == "ok"),
         "the repair reports its outcome: {rows}"
     );
-    assert!(!dead_lock.exists(), "a dead holder's lock is removed");
-    assert!(live_lock.exists(), "a live holder's lock must remain");
+    assert_eq!(
+        fs::read(&dead_lock).expect("dead holder's lock file remains"),
+        b"",
+        "a dead holder's record is cleared"
+    );
     assert!(
-        held_lock.exists(),
-        "a lock a live process holds must remain whatever its metadata says"
+        orbit_common::fs::file_lock::read_file_lock_holder(&live_lock)
+            .is_some_and(|holder| holder.pid == std::process::id()),
+        "a live holder's record must remain"
+    );
+    assert!(
+        orbit_common::fs::file_lock::read_file_lock_holder(&held_lock)
+            .is_some_and(|holder| holder.pid == dead_pid),
+        "a held lock's record must remain whatever its metadata says"
     );
 }
 
@@ -1285,10 +1461,8 @@ fn root_resolution_precedence() {
     );
 }
 
-/// ORB-10668: the operator path the tool surface could not serve — an ADR
-/// authored inside a job worktree, carried proposed -> accepted with `orbit adr`
-/// alone from that worktree, while the same command run from the hub still
-/// fails closed on the federation guard.
+/// Verify config reports the shared store and checkout-local roots without
+/// the retired root aliases.
 fn assert_root_fields(value: &Value, shared_root: &Path, local_root: &Path) {
     let shared = shared_root.to_string_lossy();
     let local = local_root.to_string_lossy();
@@ -1308,23 +1482,31 @@ fn assert_root_fields(value: &Value, shared_root: &Path, local_root: &Path) {
     );
 }
 
-fn wait_for_run_terminal_state(cwd: &Path, home: &Path, custom_root: &Path, run_id: &str) -> Value {
-    let custom_root_arg = custom_root.to_string_lossy();
-    let deadline = Instant::now() + Duration::from_secs(15);
+fn wait_for_run_terminal_state(custom_root: &Path, run_id: &str) -> Value {
+    // Observe the worker's persisted state without starting another Orbit
+    // participant during bootstrap. Repeated `run show` clients can lose the
+    // 2s generation-admission race under suite load, independently of the
+    // registry writer this test holds (ORB-14396).
+    let observer = rusqlite::Connection::open_with_flags(
+        custom_root.join("orbit.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("open run observer");
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let last = run_orbit_json(
-            cwd,
-            home,
-            &[
-                "--root",
-                custom_root_arg.as_ref(),
-                "run",
-                "show",
-                run_id,
-                "--json",
-            ],
-            None,
-        );
+        let last = observer
+            .query_row(
+                "SELECT state, pid, started_at FROM job_runs WHERE run_id = ?1",
+                [run_id],
+                |row| {
+                    Ok(serde_json::json!({"run": {
+                        "state": row.get::<_, String>(0)?,
+                        "pid": row.get::<_, Option<u32>>(1)?,
+                        "started_at": row.get::<_, Option<String>>(2)?,
+                    }}))
+                },
+            )
+            .expect("observe the submitted run");
         if last["run"]["state"]
             .as_str()
             .is_some_and(|state| state != "pending" && state != "running")
@@ -1553,7 +1735,7 @@ fn stub_first_path(bin: &Path) -> std::ffi::OsString {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

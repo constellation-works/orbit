@@ -7,6 +7,12 @@
 # workspace's ship mode and configured base branch, then invokes and waits for
 # `task_auto_pipeline` without explicit task IDs. The child pipeline remains
 # the only owner of backlog discovery, readiness, locks, bundles, and gates.
+#
+# The cron is every 30 minutes. That job drains for 20 minutes
+# (`for_seconds: 1200`) while this routine's `overlap: forbid` holds the
+# slot, so the extra 10 minutes is the slack that lets an in-flight drain
+# finish before the next fire. A cadence that does not outlast the drain
+# skips that fire (`missed_run: skip`).
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
@@ -15,7 +21,7 @@ description: >
   opt this workspace into scheduled shipment.
 enabled: false
 trigger:
-  cron: "*/20 * * * *"
+  cron: "*/30 * * * *"
   missed_run: skip
 target: job:workspace_ship_pipeline
 policy:

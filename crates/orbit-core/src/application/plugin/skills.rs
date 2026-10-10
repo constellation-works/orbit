@@ -8,8 +8,11 @@
 //! beside itself rather than mutating the invoking user's home. The namespace
 //! keeps plugin links disjoint from shipped skills, and linking refuses to
 //! replace a same-named link owned outside the plugin's install family.
+//! Linking also removes links into older versions of that family, including
+//! skills the new manifest dropped or renamed, while keeping current links.
 //! Disable removes exactly the links that resolve inside that plugin's root,
-//! and `orbit plugin doctor` reports a link whose target is gone. A target is
+//! and `orbit plugin doctor` reports a link into any version whose target is
+//! gone. A target is
 //! owned only after existing ancestors, `..`, and symlinks are resolved; a
 //! missing tail that can still escape through `..` is not owned.
 
@@ -66,6 +69,22 @@ pub fn link_plugin_skills_into(
 ) -> (Vec<PluginSkillLink>, Vec<String>) {
     let mut linked = Vec::new();
     let mut warnings = Vec::new();
+    if let Some(install_family) = plugin.root.parent() {
+        for root in roots {
+            for (link, target) in links_under(root) {
+                if link_target_is_within(&target, install_family)
+                    && !link_target_is_within(&target, &plugin.root)
+                    && let Err(error) = fs::remove_file(&link)
+                {
+                    warnings.push(format!(
+                        "could not remove old skill link '{}' from plugin '{}': {error}",
+                        link.display(),
+                        plugin.namespace()
+                    ));
+                }
+            }
+        }
+    }
     for skill_dir in &plugin.skills {
         let Some(skill_id) = plugin_skill_link_id(plugin.namespace(), skill_dir) else {
             continue;
@@ -111,7 +130,8 @@ fn ensure_plugin_skill_link(
             root.display()
         )));
     }
-    fs::create_dir_all(root).map_err(|error| OrbitError::Io(error.to_string()))?;
+    orbit_common::fs::io::create_private_dir_all(root)
+        .map_err(|error| OrbitError::Io(error.to_string()))?;
 
     let link = root.join(skill_id);
     let Ok(metadata) = fs::symlink_metadata(&link) else {

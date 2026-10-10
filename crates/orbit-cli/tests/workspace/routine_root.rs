@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
+use std::time::{Duration, SystemTime};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -83,6 +83,122 @@ impl Fixture {
 }
 
 #[test]
+fn routine_list_preserves_unchanged_registry_modification_time() {
+    let fixture = Fixture::initialized();
+    let root_arg = fixture.root.to_string_lossy().into_owned();
+    let registry_path = fixture.root.join("workspaces.json");
+    let contents = fs::read(&registry_path).expect("read initialized registry");
+    // A rewrite must get a different timestamp, even on coarse-resolution filesystems.
+    fs::File::options()
+        .write(true)
+        .open(&registry_path)
+        .expect("open registry to set modification time")
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000))
+        .expect("set registry modification time");
+    let modified = fs::metadata(&registry_path)
+        .expect("registry metadata before listing")
+        .modified()
+        .expect("registry modification time before listing");
+
+    let list = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &["--root", &root_arg, "routine", "list", "--format", "json"],
+        None,
+    );
+
+    assert!(
+        list["routines"]
+            .as_array()
+            .is_some_and(|routines| !routines.is_empty()),
+        "routine status discovery must visit the registered workspace: {list}"
+    );
+    assert_eq!(
+        fs::metadata(&registry_path)
+            .expect("registry metadata after listing")
+            .modified()
+            .expect("registry modification time after listing"),
+        modified,
+        "read-only routine discovery must preserve the registry runtime cache stamp"
+    );
+    assert_eq!(
+        fs::read(&registry_path).expect("read registry after listing"),
+        contents,
+        "read-only routine discovery must preserve the registry contents"
+    );
+    assert_home_empty(&fixture.home);
+}
+
+/// NEXT DUE is computed in the host zone while a fire is recorded in UTC; the
+/// table reads both in the host zone [ORB-14709].
+#[test]
+fn routine_list_prints_next_due_and_last_fire_in_one_zone() {
+    let fixture = Fixture::initialized();
+    let root_arg = fixture.root.to_string_lossy().into_owned();
+    let args = ["--root", root_arg.as_str(), "routine", "list"];
+    let list = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &[args.as_slice(), &["--format", "json"]].concat(),
+        None,
+    );
+    let scheduled = list["routines"]
+        .as_array()
+        .and_then(|routines| {
+            routines
+                .iter()
+                .find(|routine| routine["next_due"].is_string())
+        })
+        .unwrap_or_else(|| panic!("a cron-scheduled seeded routine: {list}"))["name"]
+        .as_str()
+        .expect("routine name")
+        .to_string();
+    let database =
+        rusqlite::Connection::open(fixture.root.join("orbit.db")).expect("host database");
+    database
+        .execute(
+            "INSERT INTO routine_fires (routine_name, slot, attempt, state, run_id, source_workspace, created_at, updated_at) \
+             VALUES (?1, '2026-01-15T08:00:00+00:00', 1, 'succeeded', 'jrun-zone-fixture', 'routine-root', \
+                     '2026-01-15T08:00:01+00:00', '2026-01-15T08:01:00+00:00')",
+            [&scheduled],
+        )
+        .expect("record a UTC fire");
+    drop(database);
+
+    // A zone without daylight saving, so one offset names the whole row.
+    let text = run_text_with_env(
+        &fixture.repo,
+        &fixture.home,
+        &args,
+        None,
+        &[("TZ", "Asia/Kolkata")],
+    );
+    let row = text
+        .lines()
+        .find(|line| line.contains(&scheduled))
+        .unwrap_or_else(|| panic!("a row for {scheduled}:\n{text}"));
+    let instants = regex::Regex::new(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d")
+        .expect("instant pattern")
+        .find_iter(row)
+        .map(|found| found.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        instants.len(),
+        2,
+        "NEXT DUE and LAST FIRE are both set:\n{row}"
+    );
+    assert!(
+        instants.iter().all(|instant| instant.ends_with("+05:30")),
+        "both instants read in the host zone:\n{row}"
+    );
+    assert!(
+        row.contains("succeeded @ 2026-01-15T13:30:00+05:30"),
+        "the UTC fire reads as the same instant in the host zone:\n{row}"
+    );
+    assert_home_empty(&fixture.home);
+}
+
+#[test]
 fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
     let fixture = Fixture::initialized();
     let root_arg = fixture.root.to_string_lossy().into_owned();
@@ -97,33 +213,12 @@ fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
 
     assert_eq!(list["machine_name"], "routine-root-host");
     let routines = list["routines"].as_array().expect("routine list array");
-    let expected_prefixes = [
-        "ci-failure-sweep-",
-        "dependabot-alert-sweep-",
-        "ship-sweep-",
-        "task-pilot-",
-        "worktree-gc-",
-    ];
-    assert_eq!(
-        routines.len(),
-        expected_prefixes.len(),
-        "expected exactly the active seeded routines from the custom root: {list}"
+    assert!(
+        routines
+            .iter()
+            .any(|routine| routine["name"] == fixture.routine_name),
+        "custom-root routine list omitted its fixture-captured seeded routine: {list}"
     );
-    for prefix in expected_prefixes {
-        assert!(
-            routines.iter().any(|routine| {
-                routine["name"]
-                    .as_str()
-                    .is_some_and(|name| name.starts_with(prefix))
-            }),
-            "custom-root routine list omitted {prefix}: {list}"
-        );
-    }
-    assert!(!routines.iter().any(|routine| {
-        routine["name"]
-            .as_str()
-            .is_some_and(|name| name.starts_with("task-triage-"))
-    }));
     assert_home_empty(&fixture.home);
 }
 
@@ -415,6 +510,16 @@ fn run_json(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -
 }
 
 fn run_text(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -> String {
+    run_text_with_env(cwd, home, args, orbit_root, &[])
+}
+
+fn run_text_with_env(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    orbit_root: Option<&Path>,
+    envs: &[(&str, &str)],
+) -> String {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -422,7 +527,8 @@ fn run_text(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -
     command
         .current_dir(cwd)
         .env("HOME", home)
-        .env("USERPROFILE", home);
+        .env("USERPROFILE", home)
+        .envs(envs.iter().copied());
     if let Some(root) = orbit_root {
         command.env("ORBIT_ROOT", root);
     }
@@ -458,7 +564,7 @@ fn assert_home_empty(home: &Path) {
 }
 
 fn init_git_repo(repo: &Path) {
-    run_git(repo, &["init", "--quiet"]);
+    crate::git_repo::init(repo);
     run_git(repo, &["config", "user.name", "Orbit Test"]);
     run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -468,7 +574,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

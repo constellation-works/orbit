@@ -11,12 +11,12 @@ use super::*;
 /// sandboxed process to interpret an EROFS.
 ///
 /// A write-capable profile also binds Cargo's shared download caches writable
-/// before any policy mount — see [`append_cargo_download_cache_mounts`] for why
+/// before any policy mount — see `append_cargo_download_cache_mounts` for why
 /// the read-only bind of `/` cannot stand for them.
 ///
 /// Every plan also hides the host account's well-known credential locations
 /// (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish tokens) behind an empty
-/// stand-in, after every other mount — see [`super::credentials`].
+/// stand-in, after every other mount — see `super::credentials`.
 ///
 /// The profile's globs are compiled once and every non-subtree rule is
 /// expanded up front from one walk per search root; the mount loops and the
@@ -86,6 +86,13 @@ pub(super) fn compile_plan_with_credentials(
         "--tmpfs".to_string(),
         "/tmp".to_string(),
     ]);
+    let mut mount_sources = Vec::new();
+    let cwd = cwd
+        .map(|cwd| canonical_existing(cwd, "sandbox cwd"))
+        .transpose()?;
+    if let Some(cwd) = &cwd {
+        append_git_metadata_mounts(&mut out, cwd, &mut mount_sources)?;
+    }
     let writable_roots = positive_mount_roots(profile, &expanded)?;
     let mut anchors = BTreeSet::new();
     let mut scratch_anchors = BTreeSet::new();
@@ -182,9 +189,6 @@ pub(super) fn compile_plan_with_credentials(
         }
     }
 
-    let cwd = cwd
-        .map(|cwd| canonical_existing(cwd, "sandbox cwd"))
-        .transpose()?;
     if let Some(cwd) = &cwd
         && managed_worktree
         && cwd_is_writable_root(cwd, &writable_roots)
@@ -217,10 +221,10 @@ pub(super) fn compile_plan_with_credentials(
     };
 
     Ok(LinuxBwrapPlan {
-        wrapper: TRUSTED_BWRAP_PATH.to_string(),
+        wrapper: bwrap_program_for_audit().to_string(),
         args: out,
         dropped_grants,
-        mount_sources: Vec::new(),
+        mount_sources,
         mount_evidence: Vec::new(),
         post_run_guard,
     })

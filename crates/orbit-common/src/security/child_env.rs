@@ -59,8 +59,24 @@ pub const ACTIVITY_TOOL_POLICY_ENV: &str = "ORBIT_ACTIVITY_TOOL_POLICY";
 pub const ACTIVITY_TOOLS_DENY_ENV: &str = "ORBIT_ACTIVITY_TOOLS_DENY";
 /// The deny-mode activity's name, used to name it in a denial.
 pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
+/// The managed activity's wall-clock deadline, in milliseconds since the Unix
+/// epoch. The CLI runner stamps it from the provider's own supervision bound,
+/// so a nested `proc.spawn` can run as long as the activity has left, under the
+/// configured ceiling, instead of the 60 s unscoped ceiling.
+pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
+/// Original activity budget, bounding build-admission deadline credit.
+pub const ACTIVITY_TIMEOUT_ENV: &str = "ORBIT_ACTIVITY_TIMEOUT_MS";
 
-/// Exact managed binding, identity, and activity policy names Codex must forward.
+/// Where a sandboxed agent's run plugin broker listens. A nested
+/// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
+/// bridge among them) only through it, so Codex must forward it. The value
+/// locates a socket and grants nothing: the broker authenticates every
+/// connection by the kernel's peer identity against the run it was started
+/// for, so a forwarded or forged path cannot borrow another run's authority.
+pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
+
+/// Exact managed binding, identity, activity policy and broker locator names
+/// Codex must forward.
 pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     MCP_MANAGED_CONTEXT_ENV,
     MCP_MANAGED_RUN_ID_ENV,
@@ -74,10 +90,14 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_TOOL_POLICY_ENV,
     ACTIVITY_TOOLS_DENY_ENV,
     ACTIVITY_NAME_ENV,
+    ACTIVITY_DEADLINE_ENV,
+    ACTIVITY_TIMEOUT_ENV,
+    crate::process::build_budget::WAIT_DIRECTORY_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_PROC_PROGRAM_POLICY",
     "ORBIT_PROC_DISALLOWED_PROGRAMS",
+    PLUGIN_BROKER_ENV,
 ];
 
 /// Exact envelope names a managed run exports or forwards into a child.
@@ -111,7 +131,7 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
 
 /// Envelope families admitted by prefix because the engine treats them as
 /// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_TOOL_POLICY` / `_TOOLS_DENY` /
-/// `_NAME` / `_FS_PROFILE`).
+/// `_NAME` / `_DEADLINE_UNIX_MS` / `_FS_PROFILE`).
 const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_"];
 
 fn is_orbit_envelope_name(name: &str) -> bool {
@@ -175,6 +195,26 @@ pub fn allowlisted_child_env_from(
         .collect();
     backfill_login_identity(&mut env);
     env.into_iter().collect()
+}
+
+/// The `pass` names that would reach no child because the parent environment
+/// holds no non-empty value for them, in first-listed order.
+///
+/// Only names [`allowlisted_child_env_from`] could admit are reported: a
+/// privilege-bearing `ORBIT_` name is never admitted whatever the parent
+/// holds, so reporting it as missing would mislead. Names are returned,
+/// never values.
+pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Vec<String> {
+    let mut unset: Vec<String> = Vec::new();
+    for name in pass {
+        let held = parent
+            .iter()
+            .any(|(key, value)| key == name && !value.is_empty());
+        if !held && !is_privilege_bearing_orbit_name(name) && !unset.contains(name) {
+            unset.push(name.clone());
+        }
+    }
+    unset
 }
 
 /// Full inheritance of the parent environment.

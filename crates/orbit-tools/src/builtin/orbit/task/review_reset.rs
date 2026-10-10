@@ -21,7 +21,7 @@ impl Tool for OrbitTaskReviewResetTool {
             description: "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.".into(),
             builtin: true,
             parameters: vec![
-                param("workspace", "string", true, "Explicit workspace selector from discovery"),
+                param("workspace", "string", false, "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"),
                 param("id", "string", true, "Task in the selected lineage"),
                 param("lineage_key", "string", true, "Exact lineage key from the admission refusal or review manifest"),
                 param("reason", "string", true, "Required explanation retained in the decision history"),

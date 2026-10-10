@@ -47,6 +47,7 @@ impl std::fmt::Debug for Payload {
         f.debug_struct("Payload")
             .field("doc", &self.doc)
             .field("view", &self.view)
+            .field("records", &self.records)
             .finish()
     }
 }
@@ -66,6 +67,7 @@ impl std::fmt::Debug for Block {
         match self {
             Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
             Self::Table(_) => f.write_str("Table"),
+            Self::DoctorFindings(rows) => f.debug_tuple("DoctorFindings").field(rows).finish(),
         }
     }
 }
@@ -84,6 +86,15 @@ impl CommandOutput {
             Self::Payload(payload) => payload.exit_code(),
         }
     }
+
+    /// The message to record on the audit row of a nonzero exit, if the
+    /// command supplied one.
+    pub(crate) fn audit_message(&self) -> Option<&str> {
+        match self {
+            Self::Silent => None,
+            Self::Payload(payload) => payload.audit_message(),
+        }
+    }
 }
 
 /// A document and its human rendering.
@@ -93,8 +104,14 @@ pub struct Payload {
     doc: Value,
     /// How `table` and plain mode render the same records.
     view: View,
+    /// The `ndjson` records of a list whose document is an object rather
+    /// than the bare array; `None` derives them from `doc`.
+    records: Option<Vec<Value>>,
     /// The process exit code to use after the payload has been rendered.
     exit_code: i32,
+    /// Why a nonzero exit is recorded as it is in the audit row; `None` leaves
+    /// the row without a message.
+    audit_message: Option<String>,
 }
 
 /// One piece of a human view. A detail command is usually prose with a grid
@@ -107,6 +124,8 @@ pub enum Block {
     /// A grid the renderer lays out: width, color, header suppression, and the
     /// plain form are applied here, not by the command.
     Table(Box<Table>),
+    /// Full doctor findings, shown only after the terminal table.
+    DoctorFindings(Vec<orbit_cmd::WorkspaceDoctorResult>),
 }
 
 impl Block {
@@ -153,7 +172,22 @@ impl Payload {
         Self {
             doc: Value::Array(records),
             view: View::Blocks(vec![Block::table(table)]),
+            records: None,
             exit_code: 0,
+            audit_message: None,
+        }
+    }
+
+    /// A list whose document is an object carrying `records` beside
+    /// list-level fields (`orbit host list`). `json` renders the object;
+    /// `ndjson` writes one record per line and `table` tabulates them.
+    pub fn enveloped_list(doc: Value, records: Vec<Value>, table: Table) -> Self {
+        Self {
+            doc,
+            view: View::Blocks(vec![Block::table(table)]),
+            records: Some(records),
+            exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -174,7 +208,9 @@ impl Payload {
         Self {
             doc,
             view: View::Blocks(blocks),
+            records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -185,13 +221,23 @@ impl Payload {
         self
     }
 
+    /// Name the findings behind a nonzero exit so the audit row carries a
+    /// message instead of a bare exit code.
+    #[must_use]
+    pub fn with_audit_message(mut self, message: impl Into<String>) -> Self {
+        self.audit_message = Some(message.into());
+        self
+    }
+
     /// A payload with no human form of its own: rendered as its document in
     /// every mode.
     pub fn document(doc: Value) -> Self {
         Self {
             doc,
             view: View::Document,
+            records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
@@ -203,16 +249,29 @@ impl Payload {
         Self {
             doc,
             view: View::Stream(stream),
+            records: None,
             exit_code: 0,
+            audit_message: None,
         }
     }
 
-    /// The human rendering, consumed by the renderer.
+    /// The document and human rendering, for tests that inspect a payload.
+    #[cfg(test)]
     pub(crate) fn into_view(self) -> (Value, View) {
         (self.doc, self.view)
     }
 
+    /// The document, the `ndjson` records when they are not the document's
+    /// own, and the human rendering, consumed by the renderer.
+    pub(crate) fn into_parts(self) -> (Value, Option<Vec<Value>>, View) {
+        (self.doc, self.records, self.view)
+    }
+
     pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
+    }
+
+    pub(crate) fn audit_message(&self) -> Option<&str> {
+        self.audit_message.as_deref()
     }
 }

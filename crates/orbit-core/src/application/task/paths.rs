@@ -3,7 +3,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, exists_in_workspace,
 };
-use orbit_types::task::{TaskHistoryEntry, TaskType};
+use orbit_types::task::{
+    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, Task, TaskHistoryEntry, TaskType,
+};
 use orbit_types::workspace::WorkspacePaths;
 use std::path::{Path, PathBuf};
 
@@ -94,7 +96,101 @@ pub(crate) fn normalize_context_files_for_write(
         .collect()
 }
 
+/// What an operator surface's selector screening established for one task
+/// write, carried into the write so it commits with the scope it describes.
+///
+/// Only the screening methods below construct a non-default value, and the
+/// write re-checks it against the task under the task lock, so neither a
+/// transport field nor a copied value can mint creation intent.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ContextCreationAuthorization {
+    /// Canonical selectors of this write that `allow_missing_context` accepted
+    /// without an existing target; recorded as durable creation grants.
+    pub(crate) authorize: Vec<String>,
+    /// Set when a strict write accepted a missing selector because the task
+    /// already holds a grant for it: the identity of that grant, which must
+    /// still be the task's grant when the write commits.
+    pub(crate) relied_on: Option<String>,
+}
+
+impl ContextCreationAuthorization {
+    /// Canonical selectors this write authorizes for creation.
+    pub fn authorized(&self) -> &[String] {
+        &self.authorize
+    }
+}
+
 impl OrbitRuntime {
+    /// The creation grant `task`'s history holds for its current scope.
+    pub(crate) fn context_creation_state(
+        &self,
+        task: &Task,
+    ) -> Result<ContextCreationState, OrbitError> {
+        let history = self.get_task_history(&task.id)?;
+        Ok(ContextCreationState::resolve(
+            &task.id,
+            &task.context_files,
+            task.updated_at,
+            history
+                .iter()
+                .map(|entry| (entry.event.as_str(), entry.note.as_deref())),
+        ))
+    }
+
+    /// Screen the `context_files` of an operator-surface write that passed
+    /// `allow_missing_context`.
+    ///
+    /// Syntax, workspace containment, supported kinds and the file/directory
+    /// kind of an existing target are enforced exactly as on a strict write;
+    /// only a missing anchor is accepted, and every such selector is returned
+    /// as an exact canonical creation grant. Grants are bounded per task.
+    pub fn authorize_missing_context(
+        &self,
+        selectors: &[String],
+    ) -> Result<ContextCreationAuthorization, OrbitError> {
+        if selectors.is_empty() {
+            return Ok(ContextCreationAuthorization::default());
+        }
+        let roots = self.context_selector_roots()?;
+        let mut authorize = Vec::new();
+        for selector in selectors {
+            match ensure_selector_resolves(selector, &roots) {
+                Ok(()) => {}
+                Err(SelectorRejection::Missing { canonical, .. }) => {
+                    if !authorize.contains(&canonical) {
+                        authorize.push(canonical);
+                    }
+                }
+                Err(rejection) => return Err(rejection.into_error()),
+            }
+        }
+        if authorize.len() > MAX_CONTEXT_CREATION_SELECTORS {
+            return Err(OrbitError::InvalidInput(format!(
+                "allow_missing_context accepts at most {MAX_CONTEXT_CREATION_SELECTORS} \
+                 not-yet-created selectors per task; this write names {}",
+                authorize.len()
+            )));
+        }
+        Ok(ContextCreationAuthorization {
+            authorize,
+            relied_on: None,
+        })
+    }
+
+    /// The strict operator-surface check for a write replacing `task_id`'s
+    /// `context_files`: [`Self::ensure_context_selectors_exist`], except that
+    /// a missing selector the task already holds a creation grant for is
+    /// kept. Re-sending a declared creation target therefore needs no new
+    /// opt-out, and the returned authorization pins the grant relied on.
+    pub fn ensure_context_selectors_exist_for_update(
+        &self,
+        task_id: &str,
+        selectors: &[String],
+    ) -> Result<ContextCreationAuthorization, OrbitError> {
+        self.ensure_context_selectors_exist_for_task_write(task_id, None, selectors)
+            .map(|(_, authorization)| authorization)
+    }
+
     /// Reject context selectors whose filesystem anchor does not exist in the
     /// workspace the task write will use.
     ///
@@ -133,14 +229,20 @@ impl OrbitRuntime {
     /// response can report it as unverified. Malformed, unsupported,
     /// out-of-workspace, and wrong-kind selectors are still rejected, and a
     /// task the run does not own gets the strict check with its escape hint.
+    ///
+    /// A missing selector the task holds a durable creation grant for is
+    /// accepted for any caller (see
+    /// [`Self::ensure_context_selectors_exist_for_update`]); the returned
+    /// authorization pins that grant.
     pub(crate) fn ensure_context_selectors_exist_for_task_write(
         &self,
         task_id: &str,
         owner_run_id: Option<&str>,
         selectors: &[String],
-    ) -> Result<Vec<String>, OrbitError> {
+    ) -> Result<(Vec<String>, ContextCreationAuthorization), OrbitError> {
+        let mut authorization = ContextCreationAuthorization::default();
         if selectors.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), authorization));
         }
 
         let roots = self.context_selector_roots()?;
@@ -149,18 +251,37 @@ impl OrbitRuntime {
                 Some(run_id) => self.run_owns_task(run_id, task_id)?,
                 None => false,
             };
+        let grant = match self.get_task(task_id) {
+            Ok(task) => self.context_creation_state(&task)?,
+            Err(OrbitError::NotFound { .. }) => ContextCreationState::Absent,
+            Err(error) => return Err(error),
+        };
 
         let mut unverified = Vec::new();
         for selector in selectors {
             match ensure_selector_resolves(selector, &roots) {
                 Ok(()) => {}
+                Err(SelectorRejection::Missing { canonical, .. })
+                    if grant.selectors().contains(&canonical) =>
+                {
+                    authorization.relied_on = grant.identity();
+                }
                 Err(SelectorRejection::Missing { canonical, .. }) if relax_missing => {
                     unverified.push(canonical);
+                }
+                Err(SelectorRejection::Missing { canonical, error })
+                    if matches!(grant, ContextCreationState::Void) =>
+                {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{error} The task's earlier creation authorization no longer applies \
+                         because its context_files changed without it, so `{canonical}` must be \
+                         re-declared explicitly."
+                    )));
                 }
                 Err(rejection) => return Err(rejection.into_error()),
             }
         }
-        Ok(unverified)
+        Ok((unverified, authorization))
     }
 
     /// Whether the managed run `run_id` admitted `task_id`: the task carries
@@ -443,21 +564,79 @@ fn is_over_inclusion_selector(entry: &str) -> bool {
     false
 }
 
-pub(super) fn extract_task_path_mentions(text: &str) -> Vec<String> {
+pub(super) fn extract_task_path_mentions(text: &str, workspace_root: &Path) -> Vec<String> {
     let mut paths = std::collections::BTreeSet::new();
+    let is_wrapper = |ch: char| {
+        matches!(
+            ch,
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ':' | ';'
+        )
+    };
     for raw in text.split_whitespace() {
-        let trimmed = raw.trim_matches(|ch: char| {
-            matches!(
-                ch,
-                '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ':' | ';'
-            )
-        });
-        let trimmed = trimmed.trim_end_matches(&['.', '!', '?'][..]);
+        // Sentence punctuation and closing wrappers interleave at the end of a
+        // token (`(see crates/a.rs).`), so strip them together, not in turn.
+        let trimmed = raw
+            .trim_start_matches(is_wrapper)
+            .trim_end_matches(|ch: char| is_wrapper(ch) || matches!(ch, '.' | '!' | '?'));
         if let Some(path) = normalize_path_token(trimmed) {
+            if path.starts_with('/') && !is_path_under_workspace(Path::new(&path), workspace_root) {
+                continue;
+            }
             paths.insert(path);
         }
     }
     paths.into_iter().collect()
+}
+
+/// Whether a token names a pattern, a placeholder, or a host location rather
+/// than a path inside the checkout: globs (`.orbit/**`), `<repo>/README.md`
+/// placeholders, and `~/` home-relative host paths (`~/.orbit/config.toml`).
+/// A description names these legitimately, and they are never in the checkout,
+/// so reading them as missing repository files misleads. Absolute host paths
+/// (such as `/tmp/u.json`) are filtered by workspace root rather than token
+/// shape so that absolute paths inside the checkout are still checked.
+fn is_non_repository_token(token: &str) -> bool {
+    token.contains(['*', '?', '[', ']', '<', '>']) || token.starts_with('~')
+}
+
+pub(super) fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    while let Some(parent) = ancestor.parent() {
+        if parent == ancestor {
+            break;
+        }
+        if let Some(name) = ancestor.file_name() {
+            missing.push(name.to_os_string());
+        }
+        if let Ok(canonical) = parent.canonicalize() {
+            let mut resolved = canonical;
+            for name in missing.iter().rev() {
+                resolved.push(name);
+            }
+            return resolved;
+        }
+        ancestor = parent;
+    }
+    path.to_path_buf()
+}
+
+pub(super) fn is_path_under_workspace(path: &Path, workspace_root: &Path) -> bool {
+    if path.starts_with(workspace_root) {
+        return true;
+    }
+    let canonical_root = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| canonicalize_existing_prefix(workspace_root));
+    if path.starts_with(&canonical_root) {
+        return true;
+    }
+    let canonical_path = canonicalize_existing_prefix(path);
+    canonical_path.starts_with(&canonical_root)
 }
 
 pub(super) fn normalize_path_token(token: &str) -> Option<String> {
@@ -466,7 +645,7 @@ pub(super) fn normalize_path_token(token: &str) -> Option<String> {
     }
 
     let token = token.trim_matches('`').trim_end_matches('/');
-    if token.is_empty() {
+    if token.is_empty() || is_non_repository_token(token) {
         return None;
     }
     let anchored = anchor_path(token)

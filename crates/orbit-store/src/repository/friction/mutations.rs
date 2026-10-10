@@ -1,5 +1,6 @@
 //! Friction add, update, re-home and resolve mutations.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -146,6 +147,55 @@ impl FrictionStore {
             })
     }
 
+    /// Refuse, without writing, every re-home refusal that does not depend on
+    /// the write lock: a malformed id, a target that is this workspace, an
+    /// unreadable target taxonomy, and a tag set the target taxonomy rejects.
+    ///
+    /// `edits` are the changes the caller will land before the move; the tag
+    /// check runs against the tags the record will carry after them, so a
+    /// refusal [`Self::rehome`] would raise cannot follow committed edits.
+    /// A missing or already-resolved record is left to the caller and to
+    /// `rehome`, which read it under the lock.
+    pub fn preflight_rehome(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+        edits: &FrictionUpdateParams,
+    ) -> Result<(), OrbitError> {
+        let target_taxonomy = self.rehome_target_taxonomy(id, params)?;
+        let Some(current) = self.show(id)? else {
+            return Ok(());
+        };
+        let tags = match edits.tags.clone() {
+            Some(tags) => normalize_and_validate_tags(tags, &load_tag_taxonomy(&self.files_root)?)?,
+            None => current.record.tags,
+        };
+        let (kept, _) = partition_tags_by_taxonomy(tags, &target_taxonomy);
+        normalize_and_validate_tags(kept, &target_taxonomy)?;
+        Ok(())
+    }
+
+    /// The id and target checks shared by [`Self::preflight_rehome`] and
+    /// [`Self::rehome`]; returns the target workspace's tag taxonomy.
+    fn rehome_target_taxonomy(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        validate_friction_id(id)?;
+        validate_workspace_id(&params.target_workspace_id)?;
+        if params.target_workspace_id == self.workspace_id {
+            return Err(OrbitError::InvalidInput(format!(
+                "friction {id} already belongs to workspace '{}'; re-home needs another workspace",
+                params.target_label
+            )));
+        }
+        split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+        // Taxonomy load is file I/O; keep it outside the write transaction.
+        load_tag_taxonomy(&params.target_files_root)
+    }
+
     /// Move `id` into the workspace that owns it.
     ///
     /// One transaction: the owning workspace gains a copy under an ID it
@@ -159,18 +209,9 @@ impl FrictionStore {
         id: &str,
         params: FrictionRehomeParams,
     ) -> Result<FrictionRehomeOutcome, OrbitError> {
-        validate_friction_id(id)?;
-        validate_workspace_id(&params.target_workspace_id)?;
-        if params.target_workspace_id == self.workspace_id {
-            return Err(OrbitError::InvalidInput(format!(
-                "friction {id} already belongs to workspace '{}'; re-home needs another workspace",
-                params.target_label
-            )));
-        }
+        let target_taxonomy = self.rehome_target_taxonomy(id, &params)?;
         let (month, seq) = split_friction_id(id)
             .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
-        // Taxonomy load is file I/O; keep it outside the write transaction.
-        let target_taxonomy = load_tag_taxonomy(&params.target_files_root)?;
         let at = params.rehomed_at;
         let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -185,12 +226,8 @@ impl FrictionStore {
                     )));
                 }
 
-                let (kept, dropped_tags): (Vec<String>, Vec<String>) = source
-                    .record
-                    .tags
-                    .iter()
-                    .cloned()
-                    .partition(|tag| target_taxonomy.contains(tag));
+                let (kept, dropped_tags) =
+                    partition_tags_by_taxonomy(source.record.tags.clone(), &target_taxonomy);
                 let tags = normalize_and_validate_tags(kept, &target_taxonomy)?;
                 let target_month = source.record.created_at.format("%Y-%m").to_string();
                 let target_seq =
@@ -304,6 +341,7 @@ impl FrictionStore {
 struct PreparedAdd {
     model: String,
     tags: Vec<String>,
+    status: FrictionStatus,
     month: String,
     title: Option<String>,
     body: String,
@@ -328,6 +366,7 @@ fn prepare_add(files_root: &Path, params: FrictionAddParams) -> Result<PreparedA
     Ok(PreparedAdd {
         model,
         tags,
+        status: params.status,
         month,
         title,
         body: params.body,
@@ -347,9 +386,9 @@ fn allocate_record(
         title: prepared.title.clone(),
         model: prepared.model.clone(),
         created_at: prepared.created_at,
-        status: FrictionStatus::Open,
+        status: prepared.status,
         tags: prepared.tags.clone(),
-        resolved_at: None,
+        resolved_at: (prepared.status == FrictionStatus::Resolved).then_some(prepared.created_at),
         during_task: prepared.during_task.clone(),
         resolved_by_task: None,
         rehome_to: None,
@@ -357,6 +396,14 @@ fn allocate_record(
     };
     queries::upsert_record(conn, workspace_id, &record, &prepared.month, seq, None)?;
     Ok(StoredFrictionRecord { record, path: None })
+}
+
+/// Split `tags` into those `taxonomy` defines and those it lacks.
+fn partition_tags_by_taxonomy(
+    tags: Vec<String>,
+    taxonomy: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    tags.into_iter().partition(|tag| taxonomy.contains(tag))
 }
 
 fn split_friction_id(id: &str) -> Option<(String, u32)> {

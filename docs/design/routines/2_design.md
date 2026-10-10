@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-09-19
-last_validated: 2026-09-21
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: routines
 doc_role: design
@@ -56,6 +56,21 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
+Automation polling fetches only the selected subtab: routines and clock share
+`GET /api/routines`, auto-tasks uses `GET /api/auto-tasks`, and jobs uses routines
+plus recent job runs for its catalogue. Both definition lists project compact
+automation diagnostics: member pending/fresh/ready/withheld/exhausted counts,
+the active batch, and up to 20 withheld or failed samples. Fresh assessments
+are those without a pending member or with a matching resulting fingerprint.
+Delivery inventories likewise carry totals and bounded unresolved/excluded samples.
+The diagnostic disclosure's **Full persisted state** loads
+`GET /api/automation/:kind/:name/state?workspace=<id>` on demand (`kind` is
+`routine` or `auto-task`). It reads the selected workspace's stored state,
+requires a concrete active workspace, and returns 404 for missing state. The
+browser caches that full state across ticks; **Reload full state** refreshes it,
+and switching workspace clears it. Counts reflect inspection; the full view
+is explicitly the persisted snapshot. Neither surface authorizes execution.
+
 `GET /api/routines` still returns those definition rows when native clock
 inspection fails (for example a systemd user bus that cannot be reached): the
 clock object is `health: unknown` with the bounded diagnostic in `error` /
@@ -96,15 +111,15 @@ A routine is one YAML file under `.orbit/routines/` in a registered workspace,
 PR-reviewed and versioned like any other shared definition.
 
 ```yaml
-# .orbit/routines/almanac-auto-commit.yaml
+# .orbit/routines/vault-auto-commit.yaml
 schemaVersion: 1
-name: almanac-auto-commit
-description: Commit & push almanac changes nightly
+name: vault-auto-commit
+description: Commit & push vault changes nightly
 enabled: true                  # global kill-switch, versioned
 trigger:
   cron: "0 22 * * *"           # standard 5-field cron, evaluated in host-local time
   missed_run: catch_up_once    # catch_up_once | skip (default: skip)
-target: job:almanac_commit_pipeline   # job:<name>, resolved via the catalog
+target: job:vault_commit_pipeline    # job:<name>, resolved via the catalog
 policy:
   timeout_minutes: 10
   retries: { max: 2, backoff_minutes: 2 }
@@ -147,7 +162,7 @@ as absent; it never degrades into "fire with defaults".
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `ship_sweep.yaml`, and `worktree_gc.yaml`
+`task_pilot.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `store_gc.yaml`
 with a workspace-unique name and `enabled: false`. The cron defaults resolve nothing else at
 seed time, so two hosts initializing the same workspace name write byte-identical cron
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
@@ -161,8 +176,7 @@ are evaluated by the tick directly; there is no seeded auto-task scheduler routi
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
 
-`task_triage.yaml` is a retired prior default. Existing definitions are reconciled through
-the retired-routine path and are not seeded into new workspaces.
+The files under `crates/orbit-core/assets/routines/retired/` are provenance shapes of retired defaults, not seeds: `orbit workspace sync` compares a workspace definition with them to tell an Orbit-seeded copy from an operator's.
 
 Seeded files become workspace-authored immediately. Plain re-init is create-if-missing:
 it adds a newly shipped default or recreates a deleted default, but byte-for-byte preserves
@@ -230,8 +244,12 @@ Reconciliation is confined to the catalog. The `routines/` directory, its
 manifest, each definition, and the `.retired-managed/routines/` route must be a
 real directory or regular file, or absent, judged without following links. Every
 creation, refresh (including a lifecycle-variant refresh), retirement, and
-preserved-copy move checks this first, and on Unix the definition write also
-refuses a final-component link. A symbolic link at any of those paths, dangling
+preserved-copy move checks this first. Definition writes stage the complete content
+in an exclusively created sibling file (`O_NOFOLLOW` on Unix), sync that file,
+rename it over the definition, and sync the catalog directory. Readers see a complete
+old or new definition; a failed or interrupted staging write leaves the previous
+definition intact. A final-component link installed after inspection is replaced by
+the rename rather than written through. A symbolic link found during inspection, dangling
 or not, is reported as preserved with its path and left untouched. Its manifest
 provenance is kept, so a later sync finishes the work once the operator replaces
 the link. A linked catalog or manifest refuses the whole routine catalog,
@@ -256,12 +274,30 @@ while a PR or merge-queue checkout must match an observed landing tip.
 Unmerged `orbit/<task>` branch failures are recorded as idempotent evidence artifacts
 on the owning task, with no remediation task or pilot candidate. Missing task owners
 remain retryable, and other non-landing failures are explicitly excluded.
-The existing freshness selection still precedes routing. The pipeline
+The existing freshness selection still precedes routing; it also sets aside runs on
+branches whose pull request closed at the branch's current head with no open pull request,
+jobs a workflow concurrency group cancelled, and a run-scoped retryable error repeated on
+three distinct consecutive workflow sweeps is reported as persistent instead of failing every
+sweep. A retry of the same workflow run counts once. The pipeline
 dedupes against still-open owners by failure key, and pilots each candidate through the
 existing task-pilot job. The all-join lets independently valid pilots apply even when a
 sibling is stale or fails. Within a returned partition, deterministic apply also commits
 valid tasks independently, then sends only invalid assessments through one targeted repair
-attempt at the original pinned revision; stale tasks require fresh preparation. A following
+attempt at the original pinned revision; material edits require fresh preparation.
+Tasks admitted to a workflow, held by a follower execution claim, or made terminal while
+the pilot runs settle as `superseded` without pilot writes. A durable task edit by a human
+or another writer also refuses the stale write and settles as `superseded`, including
+context edits and an implementer's new plan. Prepare reads each task's history boundary no
+later than the snapshot apply compares against, so an admission racing preparation is never
+hidden behind it; an automatically selected task moved out of selection before its hydration
+settles `superseded` in prepare itself. A task whose selector material the branch
+head changed after its routine claim froze the source settles `superseded_by_source`; its
+member is claimed afresh at the head rather than retried or retired
+([automation triggers §6](../automation-triggers/2_design.md#6-pilot-eligibility-and-freshness)).
+A false agent snapshot without a durable
+edit, dependency meaning drift, and invalid assessment envelopes remain failures.
+Superseded outcomes survive a sibling's targeted repair and count as resolved, so the
+pilot succeeds and the sweep's child success guard accepts it. A following
 `pipeline_success_guard` fails the parent while any task remains unresolved. The guard is
 skipped only for a filer-reported zero-candidate
 result, so empty clean/deduped sweeps remain no-ops without hiding failed work.
@@ -271,9 +307,17 @@ integration head: freshness is scoped to workflow and ref for both landing branc
 pilot proves the repair already landed on integration, admission leaves the deduped task in
 proposed quarantine and reports `release_promotion_or_hotfix_needed` with the red release
 SHA/run and the pilot's covering repair evidence. The sweep performs neither release
-promotion nor hotfix dispatch. A no-diff assessment without concrete covering proof is
-reported as `covering_proof_missing` and remains proposed for a later bounded pilot instead
-of being treated as already landed. The routine is a scheduling surface only: an
+promotion nor hotfix dispatch. A `verified_no_diff` assessment is never promoted: admission
+reports it as `pilot_verified_no_diff` with the pilot's evidence and the commits it cites.
+After the pilot write the task is archived, with a system comment naming the covering
+commits and the assessment, only when every cited commit exists and at least one is an
+ancestor of the base branch that relates to the finding. The commits the finding itself
+names (any commit in its description, and the landed commit of a `regression_from` target)
+never count, since they are on the base branch by construction. When one is known, a
+covering commit must descend from all of them, and when the task declared path selectors
+it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
+Without that proof (no commit cited, an unknown SHA, none on the base branch, or only
+commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
 Publication shares that release boundary. A job can fail because the repository already
@@ -314,11 +358,20 @@ not need to wait for a separate GC fire.
 This boundary delegates to the same `collect_worktrees` classifier used by the
 `worktree_gc_pipeline` job. It therefore requires a terminal run, a settled task
 (`done`, `rejected`, or `archived`), a registered real worktree, and a clean Git
-status before removing the directory and branch. `review`, failed/non-terminal
-runs, unresolved tasks, and dirty trees remain on disk as evidence. The removal
-report is written into the run pipeline state under `worktree_cleanup`, with the
+status before removing the directory and branch. Unsettled tasks (including
+`review`), non-terminal runs, unresolved tasks, and dirty trees remain on disk as
+evidence. The removal report is written into the run pipeline state under
+`worktree_cleanup`, with the
 same path, task id, action, and `bytes_reclaimed` fields as scheduled GC; it is
 visible from `orbit run show` even after the run is terminal.
+
+Delivery cleanup indexes every recorded run before applying its run filter,
+just as the scheduled sweep does. A stable worktree token or task fallback
+shared with a non-terminal run stays `skipped:ambiguous_run_path`, preserving
+both the checkout and its branch. Once all mapped runs are terminal, the path
+can be collected only if every mapped run passes the task and Git safety gates
+(and the worker-liveness gate for build-output collection). Each shared path is
+removed at most once in a sweep.
 
 The earlier unexplained removals were the setup recovery path, not delivery GC:
 `ensure_worktree` removes an owned incomplete checkout during path reuse, and
@@ -337,6 +390,11 @@ The embedded GC job keeps the hourly routine as a backstop, with
 one-hour threshold bounds the exceptional lifetime after a cleanup/reporting
 failure without making scheduled GC the delivery path.
 
+The same job prunes the owning checkout's `.orbit/tmp` by age through the
+`scratch_older_than_hours` input (default 24). That scratch is not tied to a
+run's lifetime, so an age window rather than a delivery hook decides when an
+entry is disposable.
+
 ---
 
 ## 2. Discovery and Registration
@@ -347,15 +405,48 @@ cross-workspace dispatch.
 
 Registering an **owner** checkout is the whole opt-in — there is no config key
 ([Registration is the automation opt-in](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role)). On each pass, sweep loads the registry and loads
-`.orbit/routines/*.yaml` from every registered, active owner checkout whose `.orbit/`
-directory exists. Replica checkouts are skipped: they cannot write the owner's coordination
-store. Two properties fall out:
+`.orbit/routines/*.yaml` from every registered, active checkout whose `.orbit/`
+directory exists. Replica checkouts cannot write the owner's coordination store, so they
+contribute one kind of routine only (§2.1). Two properties fall out:
 
-- **Registration is what already exists.** Registering the workspace with Orbit (which
-  polaris needs anyway) is the entire setup; nothing versioned has to agree per host.
+- **Registration is what already exists.** Registering the workspace with Orbit is the
+  entire setup; nothing versioned has to agree per host.
 - **Centralization is convention, not mechanism.** The constellation keeps all routines in
-  polaris; the mechanism tolerates additional sources, and `orbit routine list` names each
-  routine's source workspace so provenance is never ambiguous.
+  a central workspace; the mechanism tolerates additional sources, and `orbit routine list`
+  names each routine's source workspace so provenance is never ambiguous.
+
+### 2.1 Replica checkouts: host-local worktree GC only
+
+A replica checkout schedules exactly one kind of routine for itself: a cron
+definition targeting `job:worktree_gc_pipeline` [ORB-14173]. That job reclaims this
+host's own run worktrees. It reads historical tasks carrying this machine's prefix
+locally and asks the owner over its tool surface only for the owner's prefix;
+it writes nothing to the owner's task store. The owner prefix comes from existing
+claim admissions, or a single foreign prefix in this workspace's stored task ids
+before any pull. Other prefixes, including ambiguous foreign mirrors without
+admissions, are retained as `skipped:task_prefix_unroutable` without an owner call.
+Owner and replica definitions
+load together, so a name claimed in both still fails closed.
+
+Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
+any delivery- or state-triggered routine, including one targeting the GC job — is owner
+work. The sweep reports it as `skipped` with an `owner_only_in_replica:` reason naming
+the owner machine and never dispatches it. `orbit routine list` and `show`, the
+dashboard's `owner_only` rows and the MCP `orbit.routine.control` list all project the
+same rule from one Core predicate, so a toggle is offered exactly where it succeeds. A
+toggle or pause of an owner-only routine is refused with the owner named and writes
+nothing. Auto-task evaluation and blocked-task recovery never run in a replica.
+Core refuses auto-task definition add, update, toggle, delete, and restore, as
+well as manual mint, across the CLI, dashboard, and MCP surfaces. Read-only
+definition views and delivery recovery/reset previews remain available; apply
+operations stay owner-only. Refusals name the owner machine.
+
+Worktree cleanup therefore has two paths. On the owner, a delivery run removes its own
+worktree once it lands (§1, *Delivered worktree cleanup*), with the owner's hourly GC
+routine as the backstop. On a replica, a claimed leaf's worktree is reclaimed only by
+the replica's own scheduled GC, once its claim handoff was accepted and settled
+with the owner or every task's authoritative store reports it settled. A missing
+task or an unreachable owner leaves the worktree in place.
 
 A `config.toml` written before [ORB-12236] may still carry `[routines] role = "source"`;
 it loads with a warning for one release and selects nothing.
@@ -547,9 +638,8 @@ copy the manifest never recorded is deprecated too, but its remediation is
 `orbit workspace sync`: the repair flag deletes only bytes a recorded digest proves
 Orbit wrote, and retiring an untracked file keeps a copy instead [DANI-10502].
 
-Until that sync runs, a definition targeting the retired `auto_task_scheduler_pipeline`
-job is *skipped*, not failed: the loader recognises the retired target
-(`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
+Until that sync runs, a definition targeting a retired job is *skipped*, not failed: the
+loader recognises the retired target (`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
 step that clears it, the dashboard carries it under `retired`, and a clock tick emits
 one non-noteworthy `retired` row instead of a load error on every pass [DANI-10392]. A
 job the workspace still defines itself resolves through the catalog first, and any other
@@ -581,7 +671,7 @@ an additional owner therefore creates an independent schedule on that host.
 - **Scheduled execution is a real capability escalation.** A routine source workspace is
   scheduled code execution on every host that trusts it. Targets are catalog-resolved (no
   inline commands) and run under existing activity/job policy, but note the sandbox caveat
-  recorded in [External Executor Protocol for dynamic out-of-process executor registration (retired)](../executors/4_decisions.md#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired): enforcement depends on which runtime path the target takes.
+  recorded in the External Executor Protocol retirement decision (ORB-10395): enforcement depends on which runtime path the target takes.
   Review of this checkout's definitions is part of the security boundary.
 - **Minute granularity, host-local time.** Cron is evaluated in host-local time; DST folds
   can skip or double a slot exactly as classic cron does. The idempotency key (name + slot)

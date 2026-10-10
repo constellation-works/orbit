@@ -4,16 +4,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunIdRole};
+use orbit_types::workflow::{
+    JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
+    RunIdRole,
+};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::queries::{
     get_job_run_for_workspace_conn, next_run_id_conn, upsert_job_run_for_workspace_conn,
 };
+use super::state::read_state_json_conn;
 use crate::Store;
 use crate::contracts::{
-    AdmissionRequest, ClaimMutation, DrainLeafOccupancy, LocalPullAdmission, LocalPullMutation,
-    LocalPullPhase, PullDestination,
+    AdmissionRequest, ClaimMutation, ClaimRepair, DrainLeafOccupancy, LocalPullAdmission,
+    LocalPullMutation, LocalPullPhase, PullDestination,
 };
 use crate::driver::sqlite::migration::FeatureMigration;
 
@@ -310,34 +314,26 @@ pub(super) fn claims_admitted_by(
     })
 }
 
-/// How far the wrapper lineage walk follows dispatch records. A loop guard for
+/// How far the dispatch lineage walk follows records. A loop guard for
 /// a malformed or cyclic dispatch chain, not a tuning knob.
-const MAX_WRAPPER_LINEAGE_DEPTH: usize = 64;
+const MAX_DISPATCH_LINEAGE_DEPTH: usize = 64;
 
-/// Every run a live legacy wrapper dispatched, transitively.
-fn wrapper_lineage(
+/// Every run a wrapper or coordinator dispatched, transitively. Terminal
+/// dispatch records still identify live descendants.
+fn dispatch_lineage(
     conn: &Connection,
     workspace: &str,
     root_state: Option<&String>,
 ) -> Result<BTreeSet<String>, OrbitError> {
     let mut frontier = vec![root_state.cloned()];
     let mut seen = BTreeSet::new();
-    for _ in 0..MAX_WRAPPER_LINEAGE_DEPTH {
+    for _ in 0..MAX_DISPATCH_LINEAGE_DEPTH {
         let mut next = Vec::new();
         for raw in frontier.into_iter().flatten() {
             let state: PipelineState = serde_json::from_str(&raw).map_err(db_error)?;
             for child in state.child_dispatches {
                 if seen.insert(child.child_run_id.clone()) {
-                    let raw: Option<String> = conn
-                        .query_row(
-                            "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
-                            params![workspace, child.child_run_id],
-                            |r| r.get(0),
-                        )
-                        .optional()
-                        .map_err(db_error)?
-                        .flatten();
-                    next.push(raw);
+                    next.push(read_state_json_conn(conn, workspace, &child.child_run_id)?);
                 }
             }
         }
@@ -357,8 +353,18 @@ fn wrapper_lineage(
 /// not settled yet. An admission with no live run of its own — never created,
 /// or created and since terminal — holds its own slot instead, so a slot is
 /// released exactly when the claim settles and not before.
-fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, OrbitError> {
-    let mut stmt = conn.prepare("SELECT run_id,job_id,pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND state IN ('pending','running','retrying')").map_err(db_error)?;
+fn occupancy(
+    conn: &Connection,
+    workspace: &str,
+    coordinator: Option<&str>,
+) -> Result<DrainLeafOccupancy, OrbitError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.run_id, r.job_id, s.pipeline_state_json FROM job_runs r \
+             LEFT JOIN job_run_states s ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+             WHERE r.workspace_id=?1 AND r.state IN ('pending','running','retrying')",
+        )
+        .map_err(db_error)?;
     let active = stmt
         .query_map([workspace], |r| {
             Ok((
@@ -394,13 +400,23 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
         if is_leaf_pipeline(job) {
             *pipelines.entry(job.clone()).or_insert(0) += 1;
         } else if job == LEGACY_WRAPPER_PIPELINE {
-            let seen = wrapper_lineage(conn, workspace, state.as_ref())?;
+            let seen = dispatch_lineage(conn, workspace, state.as_ref())?;
             if seen.is_disjoint(&leaves) && seen.is_disjoint(&admitted_runs) {
                 slots.insert(id.clone());
             }
         }
     }
 
+    // Dispatch history remains authoritative even after a wrapper or an old
+    // coordinator finishes. Walking it avoids counting a wrapper and its
+    // delivery twice, or attributing our detached delivery to another drain.
+    let mut owned = if let Some(run_id) = coordinator {
+        let raw = read_state_json_conn(conn, workspace, run_id)?;
+        dispatch_lineage(conn, workspace, raw.as_ref())?
+    } else {
+        BTreeSet::new()
+    };
+    let mut owned_unrepresented = 0;
     let mut occupied = slots.len();
     for record in pending {
         if record
@@ -409,6 +425,14 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
             .is_none_or(|id| !slots.contains(id))
         {
             occupied += 1;
+            if coordinator == Some(record.request.run_context.run_id.as_str()) {
+                owned_unrepresented += 1;
+            }
+        }
+        if coordinator == Some(record.request.run_context.run_id.as_str())
+            && let Some(id) = record.leaf_run_id.as_ref()
+        {
+            owned.insert(id.clone());
         }
         if record
             .leaf_run_id
@@ -423,6 +447,9 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
     Ok(DrainLeafOccupancy {
         occupied,
         per_pipeline: pipelines,
+        inherited: coordinator.map(|_| {
+            occupied.saturating_sub(slots.intersection(&owned).count() + owned_unrepresented)
+        }),
     })
 }
 
@@ -433,8 +460,9 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
 pub(super) fn drain_occupancy(
     store: &Store,
     workspace: &str,
+    coordinator: Option<&str>,
 ) -> Result<DrainLeafOccupancy, OrbitError> {
-    store.with_read_connection(|conn| occupancy(conn, workspace))
+    store.with_read_connection(|conn| occupancy(conn, workspace, coordinator))
 }
 /// The leaf definitions a claim may select. They are the handoff-only claimed
 /// variants, never the merge-capable legacy pipelines: a pulled claim settles
@@ -446,6 +474,55 @@ fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
         "local" => Ok(CLAIMED_LOCAL_PIPELINE),
         _ => Err(invalid("unsupported pulled leaf mode")),
     }
+}
+
+/// The review admission a claimed leaf runs under: the owner's captured
+/// contract and timing, when the ship contract carries one [ORB-13908]
+/// [ORB-14849].
+fn claim_review_admission(
+    request: &AdmissionRequest,
+    now: chrono::DateTime<Utc>,
+) -> Option<ReviewAdmission> {
+    let review = request.ship.review.as_ref()?;
+    Some(ReviewAdmission {
+        contract_version: review.contract_version,
+        // The claim's contract is resolved by the owner and carries no
+        // operation policy version of its own.
+        policy_version: 0,
+        timing: if request.ship.before_landing {
+            ReviewTiming::BeforeLanding
+        } else {
+            ReviewTiming::BeforePr
+        },
+        timing_source: CLAIM_SOURCE.into(),
+        crew: review.crew.clone(),
+        crew_source: CLAIM_SOURCE.into(),
+        budget: review.budget,
+        required_validation_commands: review.required_validation_commands.clone(),
+        baseline_commands: review.baseline_commands.clone(),
+        host_evidence: review.host_evidence.clone(),
+        captured_at: now,
+    })
+}
+
+/// Provenance label of a review admission seeded from a claim.
+const CLAIM_SOURCE: &str = "claim";
+
+/// The claimed leaf input naming the candidate a repair claim restores.
+const CLAIM_REPAIR_KEY: &str = "claim_repair";
+
+/// What a repair claim's leaf needs to restore its preserved candidate: the
+/// published branch and head, the base it was validated on, and why its
+/// landing stopped.
+fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
+    serde_json::json!({
+        "repairs_claim_id": repair.repairs_claim_id,
+        "handoff_id": repair.handoff_id,
+        "branch": repair.candidate.source_branch,
+        "head_sha": repair.candidate.candidate.commit,
+        "base_sha": repair.candidate.base.commit,
+        "stop_evidence": repair.stop_evidence,
+    })
 }
 
 pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
@@ -492,8 +569,13 @@ pub(super) fn allocate(
     {
         return Err(invalid("followers cannot execute owner-local leaves"));
     }
-    if request.ship.review_policy != "none" || request.caller_review_policy != "none" {
-        return Err(invalid("pulled leaves require review policy none"));
+    if (request.ship.before_pr || request.ship.before_landing)
+        && !(request.review_gate && request.ship.mode == "pr")
+    {
+        return Err(invalid(
+            "an owner with review.before_pr or review.before_landing on admits only a PR leaf \
+             that runs the review gate",
+        ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
@@ -508,13 +590,7 @@ pub(super) fn allocate(
         if parent.state.is_terminal() {
             return Ok(None);
         }
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
-                params![workspace, parent.run_id],
-                |r| r.get(0),
-            )
-            .map_err(db_error)?;
+        let raw = read_state_json_conn(conn, workspace, &parent.run_id)?;
         let state: PipelineState =
             serde_json::from_str(&raw.ok_or_else(|| invalid("pull drain state missing"))?)
                 .map_err(db_error)?;
@@ -526,7 +602,7 @@ pub(super) fn allocate(
             as usize;
         // The drain's worker limit is the only ceiling: the leaf definitions
         // declare no active-run limit of their own [ORB-13893].
-        if occupancy(conn, workspace)?.occupied >= ceiling {
+        if occupancy(conn, workspace, None)?.occupied >= ceiling {
             return Ok(None);
         }
         let record = LocalPullAdmission {
@@ -590,7 +666,23 @@ pub(super) fn mutate(
                 // in place of a local task lookup, so the leaf runs on the
                 // owner task's crew rather than this host's `default_crew`.
                 let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
-                let input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                // The leaf's review admission is the claim's captured contract,
+                // never this host's settings [ORB-13908].
+                if let (Some(review), Some(object)) = (claim_review_admission(&record.request, now), input.as_object_mut()) {
+                    object.insert(REVIEW_ADMISSION_KEY.into(), serde_json::to_value(review).map_err(db_error)?);
+                }
+                // [ORB-14257] The candidate an earlier claim preserved, for the
+                // leaf's `resume_candidate` step to carry onto this base; a
+                // claimed-local leaf continues one too [ORB-14338].
+                if let (Some(candidate), Some(object)) = (&task.resume_candidate, input.as_object_mut()) {
+                    object.insert("resume_candidate".into(), serde_json::to_value(candidate).map_err(db_error)?);
+                }
+                // A repair claim's leaf restores the candidate its stopped
+                // landing preserved rather than implementing afresh [ORB-14261].
+                if let (Some(repair), Some(object)) = (&claim.repair, input.as_object_mut()) {
+                    object.insert(CLAIM_REPAIR_KEY.into(), claim_repair_input(repair));
+                }
                 let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
                 let state = PipelineState::new(run_id.clone(), job.into(), input);
                 upsert_job_run_for_workspace_conn(conn, workspace, &run, Some(&state))?;

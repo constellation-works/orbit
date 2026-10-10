@@ -1,4 +1,4 @@
-use chrono::Utc;
+use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
@@ -16,7 +16,6 @@ use super::helpers::{
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
 
-const RELATION_RESOLVES: &str = "resolves";
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher
 /// now resolves.
@@ -116,6 +115,8 @@ impl OrbitRuntime {
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        let note = note.map(|value| redact_all(&value));
+        let comment = comment.map(|value| redact_all(&value));
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
@@ -196,19 +197,12 @@ impl OrbitRuntime {
         })?;
 
         if result.status == TaskStatus::Done {
-            self.record_resolves_side_effects(&result)?;
+            self.record_resolves_side_effects(TaskStatus::Review, &result);
             // Approval to done only ever leaves `review`.
             self.close_task_prs_after_transition(TaskStatus::Review, &result, note.as_deref());
         }
 
         Ok(result)
-    }
-
-    pub(crate) fn record_resolves_side_effects(&self, task: &Task) -> Result<(), OrbitError> {
-        for event in self.apply_resolves_side_effects(task) {
-            self.record_event(event)?;
-        }
-        Ok(())
     }
 
     /// Refuse a done transition whose unqualified `resolves` target lives in
@@ -225,56 +219,6 @@ impl OrbitRuntime {
         };
         let workspace_id = self.workspace_id()?;
         ensure_resolves_targets_are_workspace_local(frictions.as_ref(), &workspace_id, task)
-    }
-
-    pub(crate) fn apply_resolves_side_effects(&self, task: &Task) -> Vec<OrbitEvent> {
-        let mut events = Vec::new();
-        let frictions = match crate::runtime::friction::store_for(self) {
-            Ok(store) => store,
-            Err(error) => {
-                // Without a store there is no per-relation verdict to give, so
-                // report the failure once against each `resolves` target.
-                return task
-                    .relations
-                    .iter()
-                    .filter(|relation| relation.relation_type == TaskRelationType::Resolves)
-                    .filter(|relation| is_valid_friction_id(&relation.target))
-                    .map(|relation| OrbitEvent::TaskRelationSideEffectFailed {
-                        task_id: task.id.clone(),
-                        target: relation.target.clone(),
-                        relation: RELATION_RESOLVES.to_string(),
-                        reason: error.to_string(),
-                    })
-                    .collect();
-            }
-        };
-        for relation in &task.relations {
-            if relation.relation_type != TaskRelationType::Resolves {
-                continue;
-            }
-            let target = relation.target.as_str();
-            if !is_valid_friction_id(target) {
-                continue;
-            }
-            match frictions.auto_resolve_by_task(target, &task.id, Utc::now()) {
-                Ok(Some(_)) => events.push(OrbitEvent::FrictionAutoResolved {
-                    task_id: task.id.clone(),
-                    friction_id: target.to_string(),
-                }),
-                Ok(None) => events.push(OrbitEvent::TaskRelationDangling {
-                    task_id: task.id.clone(),
-                    target: target.to_string(),
-                    relation: RELATION_RESOLVES.to_string(),
-                }),
-                Err(error) => events.push(OrbitEvent::TaskRelationSideEffectFailed {
-                    task_id: task.id.clone(),
-                    target: target.to_string(),
-                    relation: RELATION_RESOLVES.to_string(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
-        events
     }
 
     pub fn start_task(
@@ -356,6 +300,8 @@ impl OrbitRuntime {
             field_edits,
             artifact_owner,
         } = options;
+        let note = note.map(|value| redact_all(&value));
+        let comment = comment.map(|value| redact_all(&value));
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
@@ -398,8 +344,10 @@ impl OrbitRuntime {
                 start_body_field_edits(field_edits.clone(), plan.clone()),
             )?;
             let crew_assignment = validated.crew_assignment;
+            let crew_source = validated.crew_source;
+            let crew_redraw_history = validated.crew_redraw_history;
             let start_edits = validated.params;
-            let resolved_crew_override = if field_edits.crew.is_some() {
+            let resolved_crew_override = if start_edits.crew.is_some() {
                 start_edits.crew.clone().flatten()
             } else {
                 self.canonical_crew_name(crew_override.as_deref())?
@@ -489,10 +437,12 @@ impl OrbitRuntime {
                             .then(|| note.clone())
                             .flatten(),
                         append_comments: append_comments.clone(),
+                        crew_source: crew_source.clone(),
                         append_history: crew_assignment
                             .as_ref()
                             .map(crew_assigned_history)
                             .into_iter()
+                            .chain(crew_redraw_history.clone())
                             .collect(),
                         artifact_owner_run_id: artifact_owner.clone(),
                         expected_status: Some(vec![if approved_from_proposed {
@@ -551,6 +501,32 @@ impl OrbitRuntime {
         workflow: &str,
     ) -> Result<Task, OrbitError> {
         let task = self.get_task(id)?;
+        if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress) {
+            match self.pilot_admission_hold(id)? {
+                Some(super::PilotAdmissionHold::HostOperational(hold)) => {
+                    if task.status == TaskStatus::Backlog {
+                        self.record_host_operational_hold(id, &hold)?;
+                    }
+                    return Err(OrbitError::InvalidInput(hold.detail()));
+                }
+                Some(super::PilotAdmissionHold::OperatorValidation(hold)) => {
+                    if task.status == TaskStatus::Backlog {
+                        self.record_operator_validation_hold(id, &hold)?;
+                    }
+                    return Err(OrbitError::InvalidInput(hold.detail()));
+                }
+                // Only a backlog task is judged against this host: a claimed
+                // `in-progress` one was admitted to its executor's OS.
+                Some(super::PilotAdmissionHold::NativeOs(hold))
+                    if task.status == TaskStatus::Backlog =>
+                {
+                    if let Some(wait) = hold.wait_on(&task, self.host_os()) {
+                        return Err(OrbitError::InvalidInput(wait));
+                    }
+                }
+                _ => {}
+            }
+        }
         if Self::workflow_admissible_statuses().contains(&task.status) {
             return Ok(task);
         }
@@ -573,7 +549,7 @@ impl OrbitRuntime {
 
     /// The single spelling of the admissible set, shared by the read-only gate
     /// and the compare-and-set the mutating admission writes with.
-    fn workflow_admissible_statuses() -> [TaskStatus; 2] {
+    pub(crate) fn workflow_admissible_statuses() -> [TaskStatus; 2] {
         [TaskStatus::Backlog, TaskStatus::InProgress]
     }
 
@@ -592,6 +568,16 @@ impl OrbitRuntime {
         } else {
             workflow
         };
+        let mut admitted = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            admitted = Some(self.admit_task_for_workflow_locked(id, workflow)?);
+            Ok(())
+        })?;
+        admitted
+            .ok_or_else(|| OrbitError::Execution("workflow admission lock body did not run".into()))
+    }
+
+    fn admit_task_for_workflow_locked(&self, id: &str, workflow: &str) -> Result<Task, OrbitError> {
         let task = self.ensure_task_can_enter_workflow_as_system(id, workflow)?;
 
         if task.status == TaskStatus::InProgress {
@@ -730,7 +716,8 @@ impl OrbitRuntime {
                 "rejection note must not be empty".to_string(),
             ));
         }
-        let reason = reason.to_string();
+        let reason = redact_all(reason);
+        let comment = comment.map(|value| redact_all(&value));
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
 
         let mut result = None;

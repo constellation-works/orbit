@@ -283,7 +283,7 @@
   },
   {
     "name": "orbit_command_exec",
-    "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status. Requires operator capability and the workspace claim; withheld from managed runs.",
+    "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status, within a deadline. Requires operator capability and the workspace claim; withheld from managed runs.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -304,6 +304,10 @@
         "working_directory": {
           "type": "string",
           "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Deadline in milliseconds (default 120000, at most 600000; larger values are clamped). When it passes, the command and its whole process group are killed and the result reports `timed_out: true`."
         },
         "claim_token": {
           "type": "string",
@@ -649,7 +653,7 @@
       "properties": {
         "query": {
           "type": "string",
-          "description": "Free-text lexical query. Multiple words need not be adjacent. Optional with `kind: friction`, where omitting it lists frictions.",
+          "description": "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions.",
           "minLength": 1
         },
         "kind": {
@@ -678,7 +682,7 @@
         },
         "all": {
           "type": "boolean",
-          "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved."
+          "description": "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved."
         },
         "status": {
           "anyOf": [
@@ -692,7 +696,7 @@
               "type": "string"
             }
           ],
-          "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind."
+          "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind."
         },
         "workspaces": {
           "anyOf": [
@@ -836,7 +840,7 @@
         },
         "allow_missing_context": {
           "type": "boolean",
-          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default."
+          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default."
         },
         "priority": {
           "type": "string",
@@ -889,7 +893,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, orchestrator, created_at, updated_at, comments, history, artifacts."
+          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts."
         },
         "field": {
           "type": "string",
@@ -1015,7 +1019,7 @@
   },
   {
     "name": "orbit_task_artifact_put",
-    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match.",
+    "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context. A file that does not parse as the evidence schema is refused here with the parse error, so fix and re-put it; stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage. A review-report.json is validated against the before-PR review report contract and refused, naming the field, when it does not match; a counterfactual control's `mutation_target` lists the files it temporarily changed, apart from the `sources` naming the checks that rejected the change.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1043,7 +1047,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
         }
       },
       "required": [
@@ -1232,6 +1236,58 @@
     }
   },
   {
+    "name": "orbit_task_reconcile_review",
+    "description": "Reconcile the already-merged head of a recovered follower delivery whose pull request merged at a head other than the handed-off candidate: run required validation and an independent read-only review of exactly that head and record owner-held evidence the desktop review can complete from. `inspect` shows eligibility, `submit` admits a run (resubmitting the same request_key replays it), `status` reports outcomes and next steps, `accept_baseline` records an operator disposition of a failure the base already had. Requires trusted operator authority; unavailable to managed runs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"
+        },
+        "action": {
+          "type": "string",
+          "description": "inspect, submit, status, or accept_baseline"
+        },
+        "id": {
+          "type": "string",
+          "description": "Task in review whose foreign delivery merged"
+        },
+        "request_key": {
+          "type": "string",
+          "description": "submit: operator-chosen key; resubmitting it replays the same reconciliation"
+        },
+        "reconciliation_id": {
+          "type": "string",
+          "description": "status, accept_baseline: the reconciliation to act on"
+        },
+        "command": {
+          "type": "string",
+          "description": "accept_baseline: the required command whose failure reproduced at the base"
+        },
+        "remediation_commit": {
+          "type": "string",
+          "description": "accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure"
+        },
+        "reason": {
+          "type": "string",
+          "description": "accept_baseline: why the baseline failure is accepted"
+        }
+      },
+      "required": [
+        "action",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
     "name": "orbit_task_review_reset",
     "description": "Record an operator decision closing the open review attempt and renewing one explicitly selected lineage budget while preserving every attempt. Requires trusted operator authority; unavailable to managed runs. Inspect the returned ledger after a lost reply before retrying.",
     "inputSchema": {
@@ -1239,7 +1295,7 @@
       "properties": {
         "workspace": {
           "type": "string",
-          "description": "Explicit workspace selector from discovery"
+          "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry"
         },
         "id": {
           "type": "string",
@@ -1259,7 +1315,6 @@
         }
       },
       "required": [
-        "workspace",
         "id",
         "lineage_key",
         "reason"
@@ -1313,7 +1368,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields."
+          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields."
         },
         "field": {
           "type": "string",
@@ -1422,6 +1477,10 @@
           ],
           "description": "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected"
         },
+        "allow_drop_system_tags": {
+          "type": "boolean",
+          "description": "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop."
+        },
         "plan": {
           "type": "string",
           "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required."
@@ -1520,7 +1579,7 @@
         },
         "allow_missing_context": {
           "type": "boolean",
-          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Missing selectors are rejected by default."
+          "description": "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor; re-sending a declared selector needs no flag, and a replacement list that omits it revokes it. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default."
         },
         "context": {
           "type": "string",
@@ -1538,7 +1597,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, orchestrator, created_at, updated_at, comments, history, artifacts."
+          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, readiness, orchestrator, created_at, updated_at, comments, history, artifacts."
         },
         "field": {
           "type": "string",
@@ -1633,7 +1692,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace. An id whose prefix belongs to another registered host is refused with `task_prefix_remote`, naming that host; this server does not relay. Never inferred from the server process cwd."
         }
       },
       "required": [
@@ -1880,7 +1939,11 @@
         },
         "complete": {
           "type": "boolean",
-          "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review"
+          "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks"
+        },
+        "approve_proposed": {
+          "type": "boolean",
+          "description": "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false"
         },
         "force": {
           "type": "boolean",

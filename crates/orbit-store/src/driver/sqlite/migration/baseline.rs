@@ -166,14 +166,8 @@ pub(super) fn apply_baseline_schema(conn: &Connection) -> Result<(), OrbitError>
 }
 
 fn ensure_adr_index_schema(conn: &Connection) -> Result<(), OrbitError> {
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE adrs ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE adrs ADD COLUMN paths TEXT NOT NULL DEFAULT '[]'",
-    )
+    add_column_if_missing(conn, "adrs", "tags", "TEXT NOT NULL DEFAULT '[]'")?;
+    add_column_if_missing(conn, "adrs", "paths", "TEXT NOT NULL DEFAULT '[]'")
 }
 
 fn ensure_agent_sessions_schema(conn: &Connection) -> Result<(), OrbitError> {
@@ -216,22 +210,10 @@ fn ensure_agent_sessions_schema(conn: &Connection) -> Result<(), OrbitError> {
         .map_err(|e| OrbitError::Store(e.to_string()))?;
     }
 
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE agent_sessions ADD COLUMN identity_id TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE agent_sessions ADD COLUMN identity_name TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE agent_sessions ADD COLUMN identity_role TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE agent_sessions ADD COLUMN identity_block TEXT",
-    )?;
+    add_column_if_missing(conn, "agent_sessions", "identity_id", "TEXT")?;
+    add_column_if_missing(conn, "agent_sessions", "identity_name", "TEXT")?;
+    add_column_if_missing(conn, "agent_sessions", "identity_role", "TEXT")?;
+    add_column_if_missing(conn, "agent_sessions", "identity_block", "TEXT")?;
 
     Ok(())
 }

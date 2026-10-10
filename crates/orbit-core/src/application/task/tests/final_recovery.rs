@@ -3,6 +3,7 @@
 //! bound, or a human.
 
 use std::path::Path;
+use std::process::Command;
 
 use orbit_common::fs::git::run_git;
 use orbit_engine::activity_job::load_activity_asset;
@@ -48,6 +49,92 @@ fn repository(path: &Path) -> (String, String) {
     let off_main = commit("never merged");
     git(&["checkout", "-q", "main"]);
     (on_main, off_main)
+}
+
+/// A local checkout with a bare origin whose tracking ref can be left stale
+/// while the remote advances.
+fn bare_remote_repository(path: &Path) -> (std::path::PathBuf, String, String) {
+    let remote = path.join("origin.git");
+    let repo = path.join("checkout");
+    std::fs::create_dir_all(path).expect("create fixture root");
+    std::fs::create_dir_all(&repo).expect("create checkout");
+    let git = |cwd: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run fixture git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    git(path, &["init", "-q", "--bare", "origin.git"]);
+    git(&repo, &["init", "-q", "-b", "agent-main"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@orbit.invalid",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "initial remote commit",
+        ],
+    );
+    let remote_path = remote.to_string_lossy().into_owned();
+    git(&repo, &["remote", "add", "origin", &remote_path]);
+    git(&repo, &["push", "--quiet", "origin", "agent-main"]);
+    git(
+        &repo,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "+refs/heads/agent-main:refs/remotes/origin/agent-main",
+        ],
+    );
+    let fetched = git(&repo, &["rev-parse", "refs/remotes/origin/agent-main"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@orbit.invalid",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "landed after the last fetch",
+        ],
+    );
+    let evidence = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["push", "--quiet", "origin", "agent-main"]);
+    git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/agent-main", &fetched],
+    );
+    (repo, fetched, evidence)
+}
+
+fn fixture_git(path: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .expect("run fixture git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 /// An in-progress task, as a failed run leaves it.
@@ -181,6 +268,76 @@ fn complete_no_diff_completes_only_on_a_commit_reachable_from_base() {
             "{title}: never completed on an unverified commit"
         );
     }
+}
+
+#[test]
+fn complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing() {
+    if !enter_isolated_child(
+        module_path!(),
+        "complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing",
+    ) {
+        return;
+    }
+    let (root, runtime) = test_runtime();
+    let (repo, fetched, evidence) = bare_remote_repository(&root.path().join("remote-case"));
+    assert_eq!(
+        fixture_git(&repo, &["rev-parse", "refs/remotes/origin/agent-main"]),
+        fetched,
+        "the local tracking ref must retain the pre-push snapshot"
+    );
+
+    let task = failed_task(&runtime, "Refresh the stale remote tracking ref");
+    let mut decision_request = request(&task, &repo, FinalRecoveryCompletion::Done);
+    decision_request.base_ref = "origin/agent-main".to_string();
+    let outcome = apply(
+        &runtime,
+        &decision_request,
+        json!({"decision": "complete_no_diff", "evidence_commit": &evidence[..12], "rationale": "landed remotely"}),
+    );
+    assert_eq!(
+        outcome,
+        FinalRecoveryOutcome::Completed {
+            status: TaskStatus::Done,
+            evidence_commit: evidence.clone(),
+        }
+    );
+    assert_eq!(
+        fixture_git(&repo, &["rev-parse", "refs/remotes/origin/agent-main"]),
+        evidence,
+        "the refresh fetch updates the exact remote-tracking ref"
+    );
+
+    fixture_git(
+        &repo,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@orbit.invalid",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "not pushed to the remote",
+        ],
+    );
+    let off_remote = fixture_git(&repo, &["rev-parse", "HEAD"]);
+    let task = failed_task(&runtime, "Refuse a commit absent from the remote");
+    let mut decision_request = request(&task, &repo, FinalRecoveryCompletion::Done);
+    decision_request.base_ref = "origin/agent-main".to_string();
+    let outcome = apply(
+        &runtime,
+        &decision_request,
+        json!({"decision": "complete_no_diff", "evidence_commit": off_remote, "rationale": "not on the remote"}),
+    );
+    let FinalRecoveryOutcome::Escalated {
+        reason: Some(reason),
+    } = outcome
+    else {
+        panic!("an unpushed commit must still escalate, got {outcome:?}");
+    };
+    assert!(reason.contains("was refreshed by one fetch"), "{reason}");
+    assert_eq!(status(&runtime, &task.id), TaskStatus::Blocked);
 }
 
 #[test]
@@ -433,9 +590,19 @@ fn shipped_final_recovery_activity_offers_exactly_the_typed_decisions() {
     assert!(spec.require_response_envelope, "the decision is consumed");
     let denied = spec.tool_disallow_list.unwrap_or_default();
     for tool in [
-        "orbit.task.update",
         "orbit.workflow.run.resume",
+        "orbit.workflow.run.show",
+        "orbit.workflow.run.list",
+        "orbit.workflow.ship",
+        "orbit.task.add",
+        "orbit.task.update",
+        "orbit.task.artifact.put",
+        "orbit.agent.invoke",
         "orbit.pipeline.invoke",
+        "orbit.command.exec",
+        "orbit.auto_task.add",
+        "orbit.auto_task.mint",
+        "orbit.auto_task.update",
     ] {
         assert!(
             denied.iter().any(|entry| entry == tool),

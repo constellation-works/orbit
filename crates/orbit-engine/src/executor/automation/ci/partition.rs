@@ -3,7 +3,8 @@
 
 use serde_json::{Value, json};
 
-use super::refs::{RefKind, ScannedRef};
+use super::refs::{CandidateProbeResults, RefKind, ScannedRef};
+use super::run_event::is_branch_event;
 use super::unsuccessful_conclusion;
 
 /// Where each run lands once it has been classified.
@@ -20,6 +21,15 @@ pub(super) struct RunPartition {
     /// favour of exactly such a successor, so once expansion shows the
     /// cancellation has no failed step it is superseded rather than evidence.
     pub(super) cancelled_successors: std::collections::BTreeMap<u64, Value>,
+    /// Current runs keyed by run id, mapped to every newer branch-event run of
+    /// the same workflow on the same branch that is still queued or in progress
+    /// at a different commit, newest first. Whether one of them is at a
+    /// descendant commit needs Git, so collection decides the deferral.
+    pub(super) in_flight_successors: std::collections::BTreeMap<u64, Vec<Value>>,
+    /// For each run in `in_flight_successors`, the next older completed run
+    /// of the same workflow on the same branch: the run a held failure has
+    /// to have reproduced on to be filed without waiting.
+    pub(super) previous_completed: std::collections::BTreeMap<u64, Value>,
 }
 
 /// Classify repository-wide runs by relevant workflow/ref identity.
@@ -34,14 +44,19 @@ pub(super) struct RunPartition {
 /// non-unsuccessful run of the same workflow on the same ref. Non-landing
 /// failures may also be suppressed by a landing-branch success of that
 /// workflow, so an abandoned Dependabot run does not revive after the
-/// integration head has gone green.
+/// integration head has gone green. Red runs on a branch origin no longer has,
+/// or whose pull request was closed at the branch's current head, are stale.
 pub(super) fn partition_runs(
     refs: &[ScannedRef],
     runs: &[Value],
-    retired: &std::collections::BTreeSet<String>,
-    unverified: &std::collections::BTreeMap<String, (String, String)>,
+    probes: &CandidateProbeResults,
     out: &mut RunPartition,
 ) {
+    let CandidateProbeResults {
+        retired,
+        closed,
+        unverified,
+    } = probes;
     let landing_branches = landing_branch_names(refs);
     let mut workflows = std::collections::BTreeMap::<String, Vec<&Value>>::new();
     for run in runs {
@@ -101,6 +116,8 @@ pub(super) fn partition_runs(
                     out.in_flight.push(run_summary(ref_for_run(refs, run), run));
                     if !seen_in_flight
                         && !unverified.contains_key(run_branch(run))
+                        && !retired.contains(run_branch(run))
+                        && !closed.contains_key(run_branch(run))
                         && suppressor.is_none_or(|success| run_order(run) > run_order(success))
                     {
                         out.mixed_candidates
@@ -114,6 +131,11 @@ pub(super) fn partition_runs(
                 }
                 if retired.contains(run_branch(run)) {
                     out.stale.push(retired_ref_entry(refs, run));
+                    continue;
+                }
+                if let Some(pull_request) = closed.get(run_branch(run)) {
+                    out.stale
+                        .push(closed_pull_request_entry(refs, run, pull_request));
                     continue;
                 }
                 if let Some(success) =
@@ -148,6 +170,20 @@ pub(super) fn partition_runs(
                     continue;
                 }
                 out.current.push(run_summary(ref_for_run(refs, run), run));
+                let successors = in_flight_branch_successors(ref_runs, run);
+                if let (Some(run_id), false) = (
+                    run.get("run_id").and_then(Value::as_u64),
+                    successors.is_empty(),
+                ) {
+                    out.in_flight_successors.insert(run_id, successors);
+                    if let Some(previous) = ref_runs
+                        .iter()
+                        .copied()
+                        .find(|older| run_is_completed(older) && run_order(older) < run_order(run))
+                    {
+                        out.previous_completed.insert(run_id, previous.clone());
+                    }
+                }
                 // A cancelled run is still inspected, but job expansion has to
                 // decide whether it is actionable. Claiming the current slot
                 // here would hide an older real failure behind a zero-step
@@ -168,6 +204,30 @@ pub(super) fn partition_runs(
     }
 }
 
+/// Newer branch-event runs (push, schedule or dispatch) of `run`'s workflow
+/// and branch that have not completed and carry a different event commit,
+/// newest first. `ref_runs` is already sorted newest first.
+fn in_flight_branch_successors(ref_runs: &[&Value], run: &Value) -> Vec<Value> {
+    let commit = run.get("reported_head_sha").and_then(Value::as_str);
+    ref_runs
+        .iter()
+        .copied()
+        .filter(|newer| {
+            !run_is_completed(newer)
+                && newer
+                    .get("event")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_branch_event)
+                && run_order(newer) > run_order(run)
+                && newer
+                    .get("reported_head_sha")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sha| Some(sha) != commit)
+        })
+        .cloned()
+        .collect()
+}
+
 fn landing_branch_names(refs: &[ScannedRef]) -> std::collections::BTreeSet<&str> {
     refs.iter()
         .filter(|scanned| matches!(scanned.kind, RefKind::Integration | RefKind::Release))
@@ -175,10 +235,11 @@ fn landing_branch_names(refs: &[ScannedRef]) -> std::collections::BTreeSet<&str>
         .collect()
 }
 
-/// Positive landing evidence: a push checks out its event commit on a landing
-/// ref, or an observed checkout equals a landing tip (including PR/merge queue).
-/// Missing checkout evidence keeps push candidates here for ordinary deferral;
-/// it never makes an unmerged PR a landing failure.
+/// Positive landing evidence: a branch-event run (push, schedule or dispatch)
+/// checks out its event commit on a landing ref, or an observed checkout equals
+/// a landing tip (including PR/merge queue). Missing checkout evidence keeps
+/// branch-event candidates here for ordinary deferral; it never makes an
+/// unmerged PR a landing failure.
 pub(super) fn is_landing_failure(refs: &[ScannedRef], failure: &Value) -> bool {
     let checkout = failure["actual_checkout_shas"]
         .as_array()
@@ -189,7 +250,7 @@ pub(super) fn is_landing_failure(refs: &[ScannedRef], failure: &Value) -> bool {
         .any(|scanned| {
             checkout.is_some_and(|sha| scanned.head_sha.as_deref() == Some(sha))
                 || (run_branch(failure) == scanned.branch
-                    && failure["event"] == "push"
+                    && failure["event"].as_str().is_some_and(is_branch_event)
                     && checkout
                         .is_none_or(|sha| failure["event_reported_head_sha"].as_str() == Some(sha)))
         })
@@ -212,21 +273,34 @@ pub(super) fn run_is_cancelled(run: &Value) -> bool {
 }
 
 /// A cancelled job with no failed step is not a repair target: GitHub often
-/// reports `steps: []` and 404s the job log. Cancellation is still not a pass.
-pub(super) fn job_is_cancelled_without_failed_steps(job: &Value) -> bool {
+/// reports `steps: []` and 404s the job log. Neither is a job a workflow
+/// concurrency group cancelled for a newer run: its interrupted step reads as
+/// failed and its log is often incomplete, but nothing in it failed. Either
+/// way cancellation is still not a pass.
+pub(super) fn job_is_inconclusive_cancellation(job: &Value) -> bool {
     job.get("conclusion").and_then(Value::as_str) == Some("cancelled")
-        && job
+        && (job
             .get("failed_steps")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
+            || job_concurrency_cancellation(job).is_some())
 }
+
+/// The concurrency-cancellation annotation collection attached to this job.
+pub(super) fn job_concurrency_cancellation(job: &Value) -> Option<&str> {
+    job.get(CONCURRENCY_CANCELLATION_FIELD)
+        .and_then(Value::as_str)
+}
+
+/// Where collection records a job's concurrency-cancellation annotation.
+pub(super) const CONCURRENCY_CANCELLATION_FIELD: &str = "concurrency_cancellation";
 
 pub(super) fn is_inconclusive_cancellation(failure: &Value) -> bool {
     if failure.get("evidence_state").and_then(Value::as_str) == Some("inconclusive") {
         return true;
     }
     match failure.get("failed_jobs").and_then(Value::as_array) {
-        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_cancelled_without_failed_steps),
+        Some(jobs) if !jobs.is_empty() => jobs.iter().all(job_is_inconclusive_cancellation),
         Some(_) | None => {
             // An unexpanded cancelled run might still hide failed steps.
             run_is_cancelled(failure)
@@ -249,7 +323,7 @@ fn has_observed_failed_step(failure: &Value) -> bool {
         .and_then(Value::as_array)
         .is_some_and(|jobs| {
             jobs.iter()
-                .any(|job| !job_is_cancelled_without_failed_steps(job))
+                .any(|job| !job_is_inconclusive_cancellation(job))
         })
 }
 
@@ -270,6 +344,31 @@ fn retired_ref_entry(refs: &[ScannedRef], run: &Value) -> Value {
          deleted, so this run describes code that is either already landed — where the landing \
          branch's own runs are the current evidence — or abandoned",
         run_branch(run)
+    ));
+    entry
+}
+
+/// A red run on a branch whose pull request was closed or merged while the
+/// branch still points at that pull request's head. Nobody is going to land
+/// this code from this branch, so the failure has no ref left to repair.
+fn closed_pull_request_entry(refs: &[ScannedRef], run: &Value, pull_request: &Value) -> Value {
+    let mut entry = run_summary(ref_for_run(refs, run), run);
+    entry["reason"] = json!("pull_request_closed");
+    entry["pr_number"] = pull_request.get("number").cloned().unwrap_or(Value::Null);
+    entry["pr_url"] = pull_request.get("url").cloned().unwrap_or(Value::Null);
+    entry["pr_state"] = pull_request.get("state").cloned().unwrap_or(Value::Null);
+    entry["evidence"] = json!(format!(
+        "pull request #{} for branch '{}' is {} and the branch head is still the pull \
+         request's head, so this run describes code that is not going to land from this branch",
+        pull_request
+            .get("number")
+            .and_then(Value::as_u64)
+            .map_or_else(|| "unknown".to_string(), |number| number.to_string()),
+        run_branch(run),
+        pull_request
+            .get("state")
+            .and_then(Value::as_str)
+            .map_or_else(|| "closed".to_string(), str::to_lowercase),
     ));
     entry
 }
@@ -434,6 +533,7 @@ fn run_summary(scanned: Option<&ScannedRef>, run: &Value) -> Value {
         "event": run.get("event"),
         "url": run.get("url"),
         "created_at": run.get("created_at"),
+        "updated_at": run.get("updated_at"),
         "head_branch": run.get("head_branch"),
         "ref_kind": scanned.map(|scanned| scanned.kind.as_str()).unwrap_or("other"),
         "pr_number": scanned.and_then(|scanned| scanned.pr_number.clone()),

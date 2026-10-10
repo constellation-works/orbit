@@ -44,11 +44,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// a cap a remote that keeps streaming would hold the probe indefinitely.
 const PROBE_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
-/// How long to wait, when first probing for an already-running remote
-/// dashboard through a bare port forward, before concluding nothing is
-/// listening and falling back to spawning one ourselves. Short: it only needs
-/// to cover `ssh` handshake plus a couple of probe round trips, not a remote
-/// process boot (that is what [`READINESS_TIMEOUT`] is for).
+/// How long to wait, once the local forward is accepting connections, for an
+/// already-running remote dashboard to answer `/healthz` before concluding
+/// nothing is listening and spawning one. Authentication is not included:
+/// OpenSSH binds `-L` only after the passphrase, password, or 2FA prompt
+/// finishes, and that time must not consume this budget (a remote process
+/// boot is what [`READINESS_TIMEOUT`] is for).
 const ATTACH_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Arguments for `orbit web connect`.
@@ -75,8 +76,9 @@ pub struct ConnectArgs {
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 
-    /// Serve every workspace registered on the remote host, not just its
-    /// default one — passes `--global` through to the remote `orbit web serve`.
+    /// Deprecated, no-op: remote dashboards always serve every registered
+    /// workspace. Forwarded when spawning a dashboard for compatibility with
+    /// older remote binaries.
     #[arg(long)]
     pub global: bool,
 
@@ -167,6 +169,8 @@ fn tunnel_spec(cfg: &ConnectArgs, local_port: u16) -> TunnelSpec {
         readiness_target: format!("the remote dashboard at http://localhost:{local_port}/healthz"),
         attach_timeout: ATTACH_PROBE_TIMEOUT,
         ready_timeout: READINESS_TIMEOUT,
+        ssh_program: "ssh".to_string(),
+        unattended: None,
     }
 }
 
@@ -260,7 +264,7 @@ fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
 /// Best-effort `GET /healthz` over the forwarded local port. Returns `true`
 /// only on a `200` status line. Any connect/IO error (including `ssh` refusing
 /// the forwarded connection because the remote server is not up yet) is `false`.
-fn healthz_ok(local_port: u16) -> bool {
+pub(crate) fn healthz_ok(local_port: u16) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) else {
         return false;

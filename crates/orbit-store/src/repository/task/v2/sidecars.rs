@@ -45,7 +45,7 @@ impl TaskV2Store {
 }
 
 /// Project a bundle's event rows as the task history read surface.
-pub(super) fn task_history_from_events(events: Vec<TaskEventRowV2>) -> Vec<TaskHistoryEntry> {
+pub(crate) fn task_history_from_events(events: Vec<TaskEventRowV2>) -> Vec<TaskHistoryEntry> {
     events
         .into_iter()
         .map(|event| TaskHistoryEntry {

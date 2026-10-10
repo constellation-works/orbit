@@ -18,6 +18,7 @@ use orbit_common::OrbitError;
 use orbit_types::policy::{CompiledFsRules, FsOperation, GlobReach, ResolvedFsProfile};
 
 use super::LandlockPathGrant;
+use super::grants::LandlockGrant;
 
 /// The workspace half of a compiled ruleset, and the exclusions it leaves to
 /// another layer.
@@ -358,6 +359,171 @@ fn carve_out_boundary_in(
         grants.extend(carve_out_boundary_in(&child, unlistable, listable, walked)?);
     }
     Ok(grants)
+}
+
+/// Narrow grants compiled without the boundary's restrictions — the host
+/// runtime and tool state set — so none of them reaches a path in
+/// `unlistable` or `listable`.
+///
+/// Landlock grants are a union, so a host grant on a tree above a read deny
+/// would hand back what [`carve_out_boundary`] withheld from the boundary's
+/// own roots: `$GH_CONFIG_DIR` or `$ORBIT_ROOT` granted whole beside a deny on
+/// that tree. A grant at or inside a restriction is dropped and a read tree
+/// above one is carved like a boundary root. A list-only grant above an
+/// `unlistable` path is dropped as well, because listing reaches the whole
+/// hierarchy beneath it; its allowed children already carry their own grants.
+pub(super) fn carve_out_grants(
+    grants: Vec<LandlockPathGrant>,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    let mut carved = Vec::new();
+    for grant in grants {
+        if !overlaps_read_restriction(&grant.path, unlistable, listable) {
+            carved.push(grant);
+        } else if contained_in_read_restriction(&grant.path, unlistable, listable) {
+            continue;
+        } else if grant.grant == LandlockGrant::ReadTree {
+            carved.extend(carve_out_boundary(&grant.path, unlistable, listable)?);
+        } else if grant.grant == LandlockGrant::ListOnly
+            && !covers_restriction(&grant.path, unlistable)
+        {
+            carved.push(grant);
+        }
+    }
+    Ok(carved)
+}
+
+/// Grant `root` writable without a readable ancestor over any path in
+/// `unlistable` or `listable`.
+///
+/// A read-write directory grant includes read rights and applies to
+/// everything beneath the directory, so a write root at or above a read deny
+/// would undo the read carve. That directory is granted write rights only.
+/// Each child that does not meet a restriction is granted read-write in its
+/// own right. A
+/// restriction that does not exist yet still removes read from its
+/// ancestors, so a name created there after spawn is not readable either.
+/// Write rights cannot be taken back from a descendant once an ancestor has
+/// them: the excluded subtree stays writable.
+pub(super) fn carve_out_write(
+    root: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    // A write root nested inside a broader deny, with no restriction beneath
+    // it, does not expose the rest of that deny. The plugin's own state
+    // directory is that case: `state/plugins` is unreadable, and
+    // `state/plugins/<ns>` stays read-write.
+    if nested_write_island(root, unlistable, listable) {
+        return Ok(vec![whole_write_grant(root)]);
+    }
+    carve_out_write_in(root, unlistable, listable, &mut BTreeSet::new())
+}
+
+/// Whether compiling `path` has to withhold read because a restriction is at
+/// or beneath it. A write root merely nested inside a broader deny does not.
+pub(super) fn write_read_is_carved(
+    path: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> bool {
+    overlaps_read_restriction(path, unlistable, listable)
+        && !nested_write_island(path, unlistable, listable)
+}
+
+/// `path` is strictly inside some restriction and is not itself at or above one.
+fn nested_write_island(
+    path: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> bool {
+    let inside = strictly_inside(path, unlistable) || strictly_inside(path, listable);
+    let covers = covers_restriction(path, unlistable) || covers_restriction(path, listable);
+    inside && !covers
+}
+
+fn strictly_inside(path: &Path, restrictions: &BTreeSet<PathBuf>) -> bool {
+    restrictions
+        .iter()
+        .any(|restriction| path != restriction && path.starts_with(restriction))
+}
+
+fn covers_restriction(path: &Path, restrictions: &BTreeSet<PathBuf>) -> bool {
+    restrictions
+        .iter()
+        .any(|restriction| restriction == path || restriction.starts_with(path))
+}
+
+fn carve_out_write_in(
+    root: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    if !overlaps_read_restriction(root, unlistable, listable) {
+        return Ok(vec![whole_write_grant(root)]);
+    }
+    // Inside a restriction, or a file that cannot hold a descendant: one
+    // write-only rule. Walking further would only risk a read-write grant
+    // on something the restriction already covers.
+    if contained_in_read_restriction(root, unlistable, listable) || !root.is_dir() {
+        return Ok(vec![write_only_grant(root)]);
+    }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
+    let mut grants = vec![LandlockPathGrant::write_only_tree(root.to_path_buf())];
+    for child in children_under(root, root)? {
+        grants.extend(carve_out_write_in(&child, unlistable, listable, walked)?);
+    }
+    Ok(grants)
+}
+
+/// Whether granting read on `path` would expose a restriction, or `path` is
+/// itself inside one.
+pub(super) fn overlaps_read_restriction(
+    path: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> bool {
+    restriction_meets(path, unlistable) || restriction_meets(path, listable)
+}
+
+fn contained_in_read_restriction(
+    path: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> bool {
+    restriction_contains(path, unlistable) || restriction_contains(path, listable)
+}
+
+fn restriction_meets(path: &Path, restrictions: &BTreeSet<PathBuf>) -> bool {
+    restrictions
+        .iter()
+        .any(|restriction| path.starts_with(restriction) || restriction.starts_with(path))
+}
+
+fn restriction_contains(path: &Path, restrictions: &BTreeSet<PathBuf>) -> bool {
+    restrictions
+        .iter()
+        .any(|restriction| path == restriction || path.starts_with(restriction))
+}
+
+fn whole_write_grant(path: &Path) -> LandlockPathGrant {
+    if path.is_dir() {
+        LandlockPathGrant::write_tree(path.to_path_buf())
+    } else {
+        LandlockPathGrant::write_file(path.to_path_buf())
+    }
+}
+
+fn write_only_grant(path: &Path) -> LandlockPathGrant {
+    if path.is_dir() {
+        LandlockPathGrant::write_only_tree(path.to_path_buf())
+    } else {
+        LandlockPathGrant::write_only_file(path.to_path_buf())
+    }
 }
 
 /// Grant `root` while leaving both the denied paths beneath it and the paths

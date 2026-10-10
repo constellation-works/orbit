@@ -1,5 +1,13 @@
 use super::*;
 
+/// Reason prefix of a step skipped because its `when:` guard was false.
+const WHEN_FALSE_SKIP_PREFIX: &str = "when:";
+
+/// Audit reason for a step whose `when:` guard evaluated false.
+pub(super) fn when_false_skip_reason(expr: &str) -> String {
+    format!("{WHEN_FALSE_SKIP_PREFIX}{expr} => false")
+}
+
 /// Dual-write entry point for job-lifecycle audit events.
 ///
 /// Emits a `tracing::*!` event with a stable, target-keyed projection of
@@ -74,7 +82,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             step_id, outcome, ..
         } => {
             let success = outcome == "success";
-            if success {
+            if success || outcome == "held" {
                 tracing::info!(
                     target: "orbit.job.step_finished",
                     job_run_id = job_run_id,
@@ -97,14 +105,27 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             }
         }
         V2AuditEventKind::StepSkipped { step_id, reason } => {
-            tracing::warn!(
-                target: "orbit.job.step_skipped",
-                job_run_id = job_run_id,
-                task_id = task_id,
-                step_id = step_id.as_str(),
-                reason = reason.as_str(),
-                "step skipped",
-            );
+            // A false `when:` guard is ordinary control flow; other skips
+            // (such as a resume) stay visible at WARN.
+            if reason.starts_with(WHEN_FALSE_SKIP_PREFIX) {
+                tracing::info!(
+                    target: "orbit.job.step_skipped",
+                    job_run_id = job_run_id,
+                    task_id = task_id,
+                    step_id = step_id.as_str(),
+                    reason = reason.as_str(),
+                    "step skipped",
+                );
+            } else {
+                tracing::warn!(
+                    target: "orbit.job.step_skipped",
+                    job_run_id = job_run_id,
+                    task_id = task_id,
+                    step_id = step_id.as_str(),
+                    reason = reason.as_str(),
+                    "step skipped",
+                );
+            }
         }
         V2AuditEventKind::StepRetry {
             step_id,
@@ -127,8 +148,24 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             recovery_succeeded,
             failure_phase,
             error_message,
+            decision,
+            ..
         } => {
-            if *recovery_succeeded {
+            // Activity completion, the verified decision and whether the
+            // executor re-attempts the step are separate fields; the
+            // re-attempt's own outcome is `step_post_recovery_attempt`.
+            let decision_status = decision.as_ref().map(|decision| decision.status.as_str());
+            let decision_verdict = decision
+                .as_ref()
+                .and_then(|decision| decision.verdict.as_deref());
+            let decision_detail = decision
+                .as_ref()
+                .and_then(|decision| decision.detail.as_deref());
+            let retry_admitted = *recovery_succeeded
+                && decision
+                    .as_ref()
+                    .is_none_or(|decision| decision.retry_admitted);
+            if retry_admitted {
                 tracing::info!(
                     target: "orbit.job.step_recovery_attempted",
                     job_run_id = job_run_id,
@@ -136,6 +173,10 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                     step_id = step_id.as_str(),
                     recovery_activity = recovery_activity.as_str(),
                     recovery_succeeded = *recovery_succeeded,
+                    decision_status,
+                    decision_verdict,
+                    decision_detail,
+                    retry_admitted,
                     failure_phase = failure_phase.as_deref(),
                     error_message = error_message.as_deref(),
                     "step recovery attempted",
@@ -148,6 +189,10 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                     step_id = step_id.as_str(),
                     recovery_activity = recovery_activity.as_str(),
                     recovery_succeeded = *recovery_succeeded,
+                    decision_status,
+                    decision_verdict,
+                    decision_detail,
+                    retry_admitted,
                     failure_phase = failure_phase.as_deref(),
                     error_message = error_message.as_deref(),
                     "step recovery attempted",
@@ -159,6 +204,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             recovery_activity,
             outcome,
             error_message,
+            ..
         } => {
             if outcome == "success" {
                 tracing::info!(

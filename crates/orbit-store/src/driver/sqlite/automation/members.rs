@@ -4,9 +4,12 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
-    members::{MemberAttempt, MemberBatchEvidence, MemberState},
+    members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState, StateTriggerKind},
 };
+use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
+
+use super::codec::{decode, encode};
 
 pub(super) fn validate(
     previous: &AutomationState,
@@ -26,27 +29,10 @@ pub(super) fn validate(
         || previous.pending != next.pending
         || previous.pending_commits != next.pending_commits
         || previous.waived != next.waived
-        || new.pending.len() + new.assessed.len() + new.withheld.len() > 1000
-        || new.failed.len() > 1000
+        || new.retained() > MEMBER_CAPACITY
+        || new.failed.len() > MEMBER_CAPACITY
     {
         return Err(invalid());
-    }
-
-    // A failed record is permanent, except the ones the active attempt just
-    // exhausted itself into for members it carried.
-    for (key, failed) in &old.failed {
-        if new.failed.get(key) != Some(failed)
-            && !old.active.as_ref().is_some_and(|active| {
-                active.member_for(key).is_some()
-                    && new.active.is_none()
-                    && new
-                        .failed
-                        .get(key)
-                        .is_some_and(|next| next.id == active.id && next.exhausted)
-            })
-        {
-            return Err(invalid());
-        }
     }
 
     // An in-flight attempt keeps its identity and may only advance by one retry;
@@ -82,7 +68,7 @@ pub(super) fn validate(
             {
                 return Err(invalid());
             }
-        } else if receipt.is_none() && !every_member_retired(active, new, &BTreeSet::new()) {
+        } else if receipt.is_none() && !every_member_settled(active, new, &BTreeSet::new()) {
             return Err(invalid());
         }
     }
@@ -106,6 +92,9 @@ pub(super) fn validate(
         return Err(invalid());
     }
 
+    // Members a receipt certifies; the attempt's other members are the only
+    // ones a new failed record may be written for.
+    let mut certified = BTreeSet::new();
     if let Some(receipt) = receipt {
         let active = old.active.as_ref().ok_or_else(invalid)?;
         let evidence: MemberBatchEvidence =
@@ -153,9 +142,10 @@ pub(super) fn validate(
             expected_assessments.insert(applied_member.member_key.clone(), assessment.clone());
         }
 
-        if expected_assessments != new.assessed || !every_member_retired(active, new, &applied) {
+        if expected_assessments != new.assessed || !every_member_settled(active, new, &applied) {
             return Err(invalid());
         }
+        certified = applied;
     } else if new
         .assessed
         .iter()
@@ -166,13 +156,60 @@ pub(super) fn validate(
         return Err(invalid());
     }
 
+    let retiring = old.active.as_ref().filter(|_| new.active.is_none());
+    if !failed_records_valid(old, new, retiring, &certified) {
+        return Err(invalid());
+    }
+
     Ok(())
 }
 
-/// Whether every member of `active` outside `except` now holds the exhausted
-/// failed record of this very attempt: the only way an attempt clears the
-/// slot without certifying a member.
-fn every_member_retired(
+/// Failed records are append-only evidence [ORB-14177]. One may be written
+/// only as the exact [`MemberAttempt::failure_record`] of the attempt this
+/// checkpoint retires, for a member it carried and did not certify; a stored
+/// record otherwise stays, is compacted to its own member's failure record,
+/// or leaves once it suppresses nothing: its member is neither in flight nor
+/// pending at the fingerprint it failed at.
+fn failed_records_valid(
+    old: &MemberState,
+    new: &MemberState,
+    retiring: Option<&MemberAttempt>,
+    certified: &BTreeSet<String>,
+) -> bool {
+    let retired_record = |key: &str| {
+        retiring
+            .filter(|_| !certified.contains(key))
+            .and_then(|active| active.failure_record(key))
+    };
+
+    let kept = old.failed.iter().all(|(key, failed)| {
+        let Some(next) = new.failed.get(key) else {
+            return new
+                .active
+                .as_ref()
+                .is_none_or(|active| active.member_for(key).is_none())
+                && !failed.member_for(key).is_some_and(|retired| {
+                    new.pending
+                        .get(key)
+                        .is_some_and(|pending| pending.fingerprint == retired.fingerprint)
+                });
+        };
+        next == failed
+            || (failed.exhausted && failed.failure_record(key).as_ref() == Some(next))
+            || retired_record(key).as_ref() == Some(next)
+    });
+
+    kept && new.failed.iter().all(|(key, next)| {
+        old.failed.contains_key(key) || retired_record(key).as_ref() == Some(next)
+    })
+}
+
+/// Whether every member of `active` outside `except` now holds this very
+/// attempt's failure record, or was released for a fresh claim: the only ways
+/// an attempt clears the slot without certifying a member. A released member
+/// is no longer pending at the source the attempt froze [ORB-14476], so no
+/// later claim can replay that source, and it needs no failure record.
+fn every_member_settled(
     active: &MemberAttempt,
     new: &MemberState,
     except: &BTreeSet<String>,
@@ -182,12 +219,85 @@ fn every_member_retired(
         .iter()
         .filter(|member| !except.contains(&member.key))
         .all(|member| {
-            new.failed.get(&member.key).is_some_and(|retired| {
-                retired.exhausted
-                    && retired.id == active.id
-                    && retired.members() == active.members()
-                    && retired.attempt == active.attempt
-                    && retired.deadline == active.deadline
+            new.failed.get(&member.key) == active.failure_record(&member.key).as_ref()
+                || new
+                    .pending
+                    .get(&member.key)
+                    .is_none_or(|pending| pending.source != member.source)
+        })
+}
+
+/// One-time repair [ORB-14476]. Before a source move could supersede an
+/// attempt, a task-pilot claim whose branch moved under its material failed,
+/// retried against the same frozen source, failed again and was retired at
+/// the task's fingerprint, so the task was never piloted again until someone
+/// edited it. Persisted state does not record why an attempt failed, so this
+/// releases every member shelved at a source the branch has since left: its
+/// exhausted failure record is at the fingerprint it is still pending at, and
+/// it is pending at another source. A member that failed for another reason
+/// costs at most one more pilot attempt. Each repaired consumer advances its
+/// generation, so a writer holding the old snapshot is refused.
+pub(super) fn release_stale_source_failures(conn: &Connection) -> Result<(), OrbitError> {
+    let rows = {
+        let mut statement = conn
+            .prepare("SELECT consumer, generation, state_json FROM automation_consumers")
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+    };
+
+    for (consumer, generation, raw) in rows {
+        // A record this binary cannot read is left for its own reader.
+        let Ok(mut state) = decode::<AutomationState>(&raw) else {
+            continue;
+        };
+        let Some(members) = state.members.as_mut() else {
+            continue;
+        };
+        let released = members
+            .failed
+            .iter()
+            .filter(|(key, failed)| shelved_by_source(members, key, failed))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        if released.is_empty() {
+            continue;
+        }
+        for key in &released {
+            members.failed.remove(key);
+            members.withheld.remove(key);
+        }
+        state.generation = state
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| OrbitError::Store("automation generation overflow".into()))?;
+        conn.execute(
+            "UPDATE automation_consumers SET generation=?1, state_json=?2 WHERE consumer=?3 AND generation=?4",
+            params![state.generation, encode(&state)?, consumer, generation],
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn shelved_by_source(members: &MemberState, key: &str, failed: &MemberAttempt) -> bool {
+    failed.kind == StateTriggerKind::PreparationEligible
+        && failed.exhausted
+        && members
+            .active
+            .as_ref()
+            .is_none_or(|active| active.member_for(key).is_none())
+        && failed.member_for(key).is_some_and(|retired| {
+            members.pending.get(key).is_some_and(|pending| {
+                pending.fingerprint == retired.fingerprint && pending.source != retired.source
             })
         })
 }

@@ -140,6 +140,101 @@ fn owner_delivery_jobs_validate_the_candidate_before_it_leaves_the_worktree() {
     }
 }
 
+/// [ORB-14258] A claimed PR leaf used to validate after `pr_open`, so a
+/// failing candidate left a published PR behind. Its required validation must
+/// run before `push`; a verified NoDiff path [ORB-14259] instead validates
+/// before its handoff without publishing. Pinning the PR's passed results
+/// may follow `pr_open` without running the commands again.
+#[test]
+fn the_claimed_pr_leaf_validates_before_it_publishes() {
+    let (_, yaml) = DEFAULT_JOB_FILES
+        .iter()
+        .find(|(name, _)| *name == "task_claimed_pr_pipeline")
+        .expect("task_claimed_pr_pipeline is seeded");
+    let steps = load_job_asset(yaml)
+        .expect("parse task_claimed_pr_pipeline")
+        .spec
+        .steps;
+    let position = |id: &str| {
+        steps
+            .iter()
+            .position(|step| step.id == id)
+            .unwrap_or_else(|| panic!("the claimed PR leaf has a {id} step"))
+    };
+    for (validation, handoff) in [
+        ("validate", "handoff"),
+        ("validate_no_diff", "handoff_no_diff"),
+    ] {
+        let validate = &steps[position(validation)];
+        assert!(
+            matches!(&validate.body, JobV2StepBody::TargetRef(target)
+                if target.target == "activity:claim_validate"
+                    && target.default_input.as_ref()
+                        .is_none_or(|input| input.get("prevalidated").is_none())),
+            "{validation} must run required commands before its delivery"
+        );
+        assert_eq!(
+            validate.when,
+            steps[position(handoff)].when,
+            "{handoff} must take the same path as its required validation"
+        );
+        assert!(
+            position(validation) < position(handoff),
+            "{validation} must precede {handoff}"
+        );
+    }
+    for publication in ["push", "pr_open"] {
+        assert_eq!(
+            steps[position("validate")].when,
+            steps[position(publication)].when,
+            "{publication} must take the path that validates the PR candidate"
+        );
+    }
+    // The before-landing review step carries the pre-publication result
+    // forward, rerunning the commands only on a reviewer fix, and before that
+    // fix is pushed.
+    let carry = &steps[position("landing_review_validate")];
+    assert!(
+        matches!(&carry.body, JobV2StepBody::TargetRef(target)
+            if target.target == "activity:claim_validate"
+                && target.default_input.as_ref().is_some_and(|input|
+                    input.get("carry") == Some(&json!("{{ steps.validate.output }}")))),
+        "the before-landing step must carry the commands that passed before publication"
+    );
+    assert_eq!(
+        carry.when,
+        steps[position("validate")].when,
+        "the carried validation must take the PR candidate's path"
+    );
+    assert!(
+        position("landing_review_validate") < position("landing_push"),
+        "a reviewer fix is validated before it is pushed"
+    );
+    let pin = &steps[position("pin_validation")];
+    assert!(
+        matches!(&pin.body, JobV2StepBody::TargetRef(target)
+            if target.target == "activity:claim_validate"
+                && target.default_input.as_ref().is_some_and(|input|
+                    input.get("prevalidated")
+                        == Some(&json!("{{ steps.landing_review_validate.output }}")))),
+        "pin_validation must reuse the commands that passed for the head it pins"
+    );
+    assert_eq!(
+        pin.when,
+        steps[position("validate")].when,
+        "the published PR's pin must take its validation path"
+    );
+    assert!(
+        position("sync_base") < position("validate") && position("validate") < position("push"),
+        "the commands run on the synchronized candidate before anything is pushed"
+    );
+    assert!(
+        position("pr_open") < position("pin_validation")
+            && position("pin_validation") < position("handoff"),
+        "the pin names the published PR the handoff carries"
+    );
+}
+
 /// The tool context `step_failure_recovery` runs with: activity-scoped, its
 /// own program allowlist, and workspace-wide filesystem access.
 fn recovery_tool_context(workspace_root: &Path, programs: Vec<String>) -> ToolContext {

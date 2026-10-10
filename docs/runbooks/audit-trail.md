@@ -5,7 +5,7 @@ tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
-last_validated: 2026-09-16
+last_validated: 2026-10-06
 ---
 
 # Inspect the Audit Trail
@@ -59,11 +59,68 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 `machine_id` and display `machine_name`, `transport`, the complete `effective_capabilities` set,
 `origin_session_id`, `mcp_call_id`, and `lease_id`.
 
+JSON list, show and export include `self_reported_actor` (an unverified caller
+claim), `plugin` (name, version, manifest digest and grants), `plugin_secrets`
+(delivered secret names), `plugin_secret_updates` (secret names mapped to
+`applied` or `refused`), `brokered`, and `peer_pid` (the authenticated broker
+peer's host PID). Secret metadata contains names and update outcomes only;
+secret values are never exported. Rows without this metadata use `null` for
+optional fields, empty arrays/maps for collections, and `false` for `brokered`.
+
+CSV export appends the same six columns after the existing columns. `plugin`,
+`plugin_secrets` and `plugin_secret_updates` are compact JSON within CSV cells;
+the CSV writer escapes their quotes and commas. An absent plugin is `null`,
+empty secret collections are `[]` and `{}`, `brokered` is `true` or `false`,
+and an absent `peer_pid` or `self_reported_actor` is an empty cell. The
+`self_reported_actor` column is unverified attribution, separate from `role`.
+
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
 the executing process, not the caller; `session_id` is unchanged; and `job_run_id` remains the
 canonical run correlation. `origin_session_id` groups MCP calls while `mcp_call_id` identifies
-one call. Standalone MCP rows have role `unverified`, local transport, and exactly the `agent`
-capability. Trusted managed-envelope identity may replace `unverified`; client JSON may not.
+one call. Ordinary standalone agent MCP rows have role `unverified` and local transport. By
+default, the session has only the `agent` capability; a server started with `--operator` also
+grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
+not.
+
+## Scoreboard and incident reads
+
+`GET /api/scoreboard` builds a read-only summary and joins incident and metrics
+counts. It does not create or replace `state/scoreboard/summary.json`; explicit
+runtime summary generation still persists that document. Each dashboard server
+shares one computation per live workspace runtime and canonical window for 15
+seconds, including concurrent requests. Omitted `window` and `window=all` share
+an entry. A rebuilt workspace runtime starts a fresh cache namespace.
+
+Cross-run incident grouping tokenizes messages once and incrementally refreshes
+only citations affected by a fold. It preserves the existing fold order,
+same-class/earlier-root checks, 60-second cascade window, and ambiguous run-ID
+handling. Both scoreboard joins and `/api/audit/incidents` use this grouping.
+Tool-call aggregates use the command/subcommand/timestamp index added by the
+store migration, while retaining their existing host-global scope.
+
+Scoreboard agent cards, column headers and metric cells open Audit Events with
+`agent_family=<name>`. This applies the same family normalization as the
+scoreboard, including rows whose recorded role is a model label. The existing
+`role=<label>` Events filter still matches the exact stored role. The
+failure-incidents cell adds `status=non_success`, which includes both `failure`
+and `denied`; Events shows these filters as removable scope chips. The rows are
+raw evidence, so several rows can belong to one counted incident.
+
+Family and combined-status filters compose with the other Events filters and
+apply before `offset`/`limit`. Like execution, profile and free-text filtering,
+they scan at most 10,000 source rows per request; a sparse match can return a
+short page at that bound. Exact incident-ID drilldowns retain their separate
+evidence lookup and do not apply these broader filters.
+
+Run the capped-population timing benchmark explicitly in release mode:
+
+```sh
+scripts/build-budget.py -- cargo test -p orbit-store --release --test incident_performance -- --ignored --nocapture
+```
+
+It groups 10,000 events with 1,200 cross-run citations and asserts a 500 ms
+bound. It is excluded from ordinary test runs so debug compilation and competing
+CI tests do not turn a wall-clock measurement into a flaky correctness check.
 
 ## Find recent failures and causes
 
@@ -77,6 +134,30 @@ unexpected execution errors. Tools with only denials still appear, with zero
 comparable calls and a zero rate. Inactive agent-surface calls are policy
 denials, including attempts to enable or disable an already-set inactive tool.
 
+Audit Events places status immediately after time. Actor is the recorded role;
+the column tooltip explains `unverified`, `unknown`, agent names,
+`admin`, and `hook`. Tool calls use one tool/command column, with the invocation
+command on hover, and leave the target blank when it repeats the tool.
+
+Audit Summary tables fit their card width. Compact cards omit secondary total
+and unexpected counts in the tool-failures table, and other/internal counts
+in Role split; hover the row label to read all values. Wider cards show those
+columns. Top duration ranks named tools only, excluding the synthetic
+`unknown` bucket and empty names before choosing the top eight.
+
+Audit > Policy shows the canonical policy-decision count (`denials` in
+`/api/audit/summary`), split into invocation and envelope decisions, alongside
+its retained evidence row count. Repeated invocation evidence and session,
+coordination, or protocol refusals can make the evidence count larger than the
+canonical count. On an unfiltered, uncapped view the page also gives the
+number of additional evidence rows.
+Evidence filters do not change the canonical count. An independent Audit window
+is identified when it differs from the dashboard window. Recent Denials shows
+at most twelve rows; evidence scans are capped at 1,000 rows per source, while
+the canonical count covers the full window. The API exposes these as
+`policy_decisions` (`total`, `sql`, `v2`) and `evidence_scan_limit` alongside
+the existing evidence `total` and `recent_denials`.
+
 To reconcile with **Audit Events**, use the same workspace routing and cutoff
 (`since` in the summary response), select the tool, and count only its `tool`
 `run`/`run-mcp` rows. Count successes plus failures for total, failures for
@@ -86,6 +167,12 @@ read host-global audit history: workspace routing selects the runtime, while
 the Events API's explicit `workspace_id` equality filter further narrows rows
 and is not a filter supported by the summary. Diagnostic lifecycle surfaces
 and unnamed tools are excluded from callable-tool rates.
+
+`orbit doctor` exits 1 when a check fails, so its audit row is a `failure`.
+A run that completed its checks records `doctor reported findings: <n> failure(s)
+(<check names>), <m> warning(s)` as the row's `error_message`, and Incidents
+classes it as expected rather than unexpected; a doctor that errors before
+finishing records the error itself and stays unexpected.
 
 ```sh
 orbit audit export --output /tmp/audit.json

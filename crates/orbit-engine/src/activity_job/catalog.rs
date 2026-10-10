@@ -4,9 +4,9 @@
 //! trees of v2 YAML assets. [`resolve_job_target_refs`] walks a [`JobV2`]
 //! DAG and rewrites every [`JobV2StepBody::TargetRef`] into
 //! [`JobV2StepBody::Target`] by looking up the named activity in the
-//! catalog. Resolution runs after [`super::backend::resolve_job_backends`]
+//! catalog. Resolution runs after `resolve_job_backends`
 //! (so the `Auto` → concrete rewrite also applies to the newly-inlined
-//! specs) and before [`super::backend::validate_job_loop_session_backends`].
+//! specs) and before `validate_job_loop_session_backends`.
 //!
 //! Scope resolution (§9 `MergeByKey`) remains caller policy: orbit-core
 //! adapters supply precedence-ordered directory lists and choose whether a

@@ -27,16 +27,24 @@ this folder.
   - **Ship.** First a preflight checks that the task is in backlog, its
     dependencies are done, no other ship is running, and its files are
     free of other tasks' locks (`orbit run readiness`). Then
-    `orbit run ship` runs and the view tracks the run through the 12 steps
-    of `task_pr_pipeline`. On desktop and VS Code the trajectory is drawn
-    as an SVG.
+    `orbit run ship` launches a coordinator. The view follows its recorded
+    child dispatches to the task's `task_pr_pipeline` run for the 12-step
+    track, retrying while delivery is waiting to start. The coordinator's
+    terminal state decides whether the ship landed, failed, was held awaiting
+    review evidence, or was skipped; each ends tracking. On desktop
+    and VS Code the trajectory is drawn as an SVG.
 - **Task cards.** A prompt that mentions a known task id, such as
   `ORB-123`, carries that task's card (status, priority, criteria) as
   context.
 - **Commit trailer.** While the session works a task (after **Work here**,
   **Rescue here**, or an `orbit_task_update` to in-progress), a Bash
-  `git commit` gains `--trailer 'Task: <id>'`. A commit that already has
-  a trailer, or uses `--amend`, is left alone.
+  `git commit` gains `--trailer 'Task: <id>'`. Only a command that starts
+  with `git commit` counts (after `;`, `&&`, `|`, `(` or a newline, including
+  a backslash continuation after a separator). Conditions such as `if`,
+  `elif`, `while` and `until`, and negation with `!`, also allow a commit.
+  Heredoc bodies, `git commit-tree` and quoted text such as
+  `--grep="git commit"` are left alone, as is a commit that already has a
+  trailer or uses `--amend`.
 
 Approve runs as soon as you press it. Accept, reject and ship ask for
 confirmation first. **Work here** and **Rescue here** submit a prompt to
@@ -56,7 +64,7 @@ Set these in the plugin's settings (`/plugin`, then Orbit, then configure).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `ownerHost` | empty | SSH host that owns this workspace, for a checkout that is a replica or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. Empty falls back to the destinations Orbit's federated MCP uses (`~/.orbit/mcp-destinations.toml`); with several, the first that answers for the workspace. |
+| `ownerHost` | empty | SSH host that owns this workspace, for a checkout that is a replica or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. Empty falls back to the hosts Orbit's federated MCP uses (registered with `orbit host add` in `~/.orbit/hosts.toml`, or the legacy `~/.orbit/mcp-destinations.toml`); with several, the first that answers for the workspace. |
 | `refreshMinutes` | 3 | How often the band refreshes. It also refreshes after a turn that ends at least 30 s after the last read. |
 | `band` | `on` | `on`, `compact` (always one line), or `off` |
 | `commitTrailer` | true | Add the `Task:` trailer to commits made while working a task |

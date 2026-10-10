@@ -9,9 +9,9 @@ use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
     InvocationStoreBackend, JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend,
-    ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
-    V2AuditStoreBackend,
+    ProviderLimitStoreBackend, ReviewStoreBackend, TaskArtifactStoreBackend,
+    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
+    TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
 };
 use orbit_tools::ToolRegistry;
 use orbit_types::identity::{Crew, require_canonical_agent_family};
@@ -72,11 +72,13 @@ impl ActorIdentity {
     ///
     /// The environment is not an authentication boundary. Agent values are
     /// therefore reduced to the same canonical family used by tool dispatch.
+    /// An agent envelope without a canonical identity records `unknown` with
+    /// a warning, before considering any human identity signals.
     /// Absent an agent envelope, an explicit `ORBIT_ACTOR` or operator
     /// override is recorded as a named human actor rather than `unknown` —
     /// those overrides are themselves a deliberate, audited act. Bare CLI
-    /// otherwise records the OS user (`human:<username>`). Only a caller with
-    /// no remaining signal is recorded as `unknown`, and then only with a
+    /// otherwise records the OS user (`human:<username>`). A caller with
+    /// no remaining signal is also recorded as `unknown`, and then only with a
     /// warning: write paths must not construct that literal themselves.
     pub fn from_env() -> Self {
         let agent = std::env::var(ORBIT_AGENT_NAME)
@@ -86,12 +88,27 @@ impl ActorIdentity {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
-        if let Some(actor) = require_canonical_agent_family(agent.as_deref(), model.as_deref())
-            .ok()
-            .flatten()
-            .map(Self::agent)
-        {
-            return actor;
+        match require_canonical_agent_family(agent.as_deref(), model.as_deref()) {
+            Ok(Some(family)) => return Self::agent(family),
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.core.actor",
+                    actor = UNKNOWN_ACTOR_LABEL,
+                    %error,
+                    "agent identity did not canonicalize; recording unknown"
+                );
+                return Self::unknown();
+            }
+            Ok(None) => {}
+        }
+
+        if orbit_common::governance::authorization::agent_context_declared() {
+            tracing::warn!(
+                target: "orbit.core.actor",
+                actor = UNKNOWN_ACTOR_LABEL,
+                "agent envelope has no canonical identity; recording unknown"
+            );
+            return Self::unknown();
         }
 
         if let Some(label) = std::env::var(ORBIT_ACTOR)
@@ -209,6 +226,7 @@ pub(crate) struct OrbitHostStore {
     pub(crate) review: Arc<dyn ReviewStoreBackend>,
     pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
     pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
+    pub(crate) provider_limit: Arc<dyn ProviderLimitStoreBackend>,
 }
 
 #[derive(Clone)]
@@ -342,6 +360,7 @@ pub(crate) struct OrbitPolicyContext {
     policy: PolicyEngine,
     execution_env_policy: ExecutionEnvPolicy,
     codex_execution_policy: CodexExecutionPolicy,
+    proc_spawn_max_timeout_ms: u64,
 }
 
 impl OrbitPolicyContext {
@@ -349,11 +368,13 @@ impl OrbitPolicyContext {
         policy: PolicyEngine,
         execution_env_policy: ExecutionEnvPolicy,
         codex_execution_policy: CodexExecutionPolicy,
+        proc_spawn_max_timeout_ms: u64,
     ) -> Self {
         Self {
             policy,
             execution_env_policy,
             codex_execution_policy,
+            proc_spawn_max_timeout_ms,
         }
     }
 }
@@ -380,6 +401,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
     workflow_required_validation_commands: Vec<String>,
+    /// Commands review settlement may rerun to confirm a red-base claim
+    /// (`[review] baseline_commands`, default empty) [ORB-14434].
+    review_baseline_commands: Vec<String>,
     /// `[workflow.validation_env]`: how required validation and `local_shell`
     /// resolve PATH and toolchain locators [ORB-13987].
     validation_env: orbit_exec::ValidationEnvPolicy,
@@ -394,6 +418,9 @@ pub(crate) struct OrbitRuntimeSettings {
     complexity_crews: orbit_config::ComplexityCrewPools,
     /// Admitted `workflow.final_recovery_crews`; empty disables final recovery.
     final_recovery_crews: Vec<String>,
+    /// Admitted `workflow.provider_limit_*`: how close to a usage limit a
+    /// provider's crews stay admissible.
+    provider_limit: orbit_config::ProviderLimitPolicy,
     system_crew: String,
     /// Crew the synthesized `system` entry mirrors, so a disabled-crew
     /// refusal can name the table that actually disables it.
@@ -402,6 +429,10 @@ pub(crate) struct OrbitRuntimeSettings {
     operation: orbit_config::OperationPolicy,
     /// Global `machine.worker_*` limits for detached workers [ORB-12903].
     worker_containment: orbit_config::WorkerContainmentSettings,
+    /// Existing machine identity's task namespace; ORB for legacy runtimes.
+    machine_task_prefix: String,
+    worktree_reclaim: Vec<String>,
+    worktree_reclaim_below_free_mib: Option<u64>,
 }
 
 impl OrbitRuntimeSettings {
@@ -417,6 +448,7 @@ impl OrbitRuntimeSettings {
         workflow_auto_ship: bool,
         resource_throttle: orbit_config::ResourceThrottleSettings,
         workflow_required_validation_commands: Vec<String>,
+        review_baseline_commands: Vec<String>,
         validation_env: orbit_exec::ValidationEnvPolicy,
         workflow_distributed_completion: String,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
@@ -424,10 +456,14 @@ impl OrbitRuntimeSettings {
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
         final_recovery_crews: Vec<String>,
+        provider_limit: orbit_config::ProviderLimitPolicy,
         system_crew: String,
         system_crew_alias: Option<String>,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
+        machine_task_prefix: String,
+        worktree_reclaim: Vec<String>,
+        worktree_reclaim_below_free_mib: Option<u64>,
     ) -> Self {
         Self {
             persistence,
@@ -440,6 +476,7 @@ impl OrbitRuntimeSettings {
             workflow_auto_ship,
             resource_throttle,
             workflow_required_validation_commands,
+            review_baseline_commands,
             validation_env,
             workflow_distributed_completion,
             task_pilot_freshness,
@@ -447,11 +484,23 @@ impl OrbitRuntimeSettings {
             default_crew,
             complexity_crews,
             final_recovery_crews,
+            provider_limit,
             system_crew,
             system_crew_alias,
             operation,
             worker_containment,
+            machine_task_prefix,
+            worktree_reclaim,
+            worktree_reclaim_below_free_mib,
         }
+    }
+
+    pub(crate) fn worktree_reclaim(&self) -> &[String] {
+        &self.worktree_reclaim
+    }
+
+    pub(crate) fn worktree_reclaim_below_free_mib(&self) -> Option<u64> {
+        self.worktree_reclaim_below_free_mib
     }
 
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {
@@ -460,6 +509,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn worker_containment(&self) -> &orbit_config::WorkerContainmentSettings {
         &self.worker_containment
+    }
+
+    pub(crate) fn machine_task_prefix(&self) -> &str {
+        &self.machine_task_prefix
     }
 
     pub(crate) fn automation_stall_window_minutes(&self) -> u32 {
@@ -490,6 +543,10 @@ impl OrbitRuntimeSettings {
         &self.workflow_required_validation_commands
     }
 
+    pub(crate) fn review_baseline_commands(&self) -> &[String] {
+        &self.review_baseline_commands
+    }
+
     pub(crate) fn validation_env(&self) -> &orbit_exec::ValidationEnvPolicy {
         &self.validation_env
     }
@@ -514,6 +571,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn final_recovery_crews(&self) -> &[String] {
         &self.final_recovery_crews
+    }
+
+    pub(crate) fn provider_limit(&self) -> &orbit_config::ProviderLimitPolicy {
+        &self.provider_limit
     }
 
     pub(crate) fn default_crew(&self) -> Option<&str> {
@@ -600,8 +661,20 @@ impl OrbitContext {
         &self.policy.execution_env_policy
     }
 
+    pub(crate) fn apply_child_env_defaults(&mut self, defaults: &[(String, String)]) {
+        self.policy.execution_env_policy = self
+            .policy
+            .execution_env_policy
+            .clone()
+            .with_defaults(defaults);
+    }
+
     pub(crate) fn codex_execution_policy(&self) -> &CodexExecutionPolicy {
         &self.policy.codex_execution_policy
+    }
+
+    pub(crate) fn proc_spawn_max_timeout_ms(&self) -> u64 {
+        self.policy.proc_spawn_max_timeout_ms
     }
 
     pub(crate) fn persistence(&self) -> &PersistenceConfig {

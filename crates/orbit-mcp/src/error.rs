@@ -1,4 +1,4 @@
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::{LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 
@@ -81,7 +81,6 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::Job
             | NotFoundKind::JobRun
             | NotFoundKind::Activity
-            | NotFoundKind::Adr
             | NotFoundKind::DesignFeature
             | NotFoundKind::AgentSession
             | NotFoundKind::Workspace => "not_found",
@@ -96,18 +95,22 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::CapabilityRefused(_) => "capability_refused",
+        OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
         OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => "invalid_input",
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
-        OrbitError::TaskStatusTransition(_)
-        | OrbitError::JobRunStateTransition(_)
-        | OrbitError::AdrInvalidTransition(_) => "invalid_transition",
+        OrbitError::TaskStatusTransition(_) | OrbitError::JobRunStateTransition(_) => {
+            "invalid_transition"
+        }
         // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
         // incumbent owner is an expected race, and the caller yields rather
         // than treating its own request as malformed.
@@ -117,6 +120,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
         OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
+        OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
@@ -128,13 +132,18 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::OwnerNegotiation(_) => "owner_negotiation",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::Execution(_) => "execution_failed",
+        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
+        // [ORB-15088] Retryable, unlike `internal_error`: a pull follower
+        // retries an owner read that lost only to a lock-wait deadline and
+        // never mistakes it for a failure of its candidate.
+        OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::Migration(_) => "migration_failed",
+        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
         // OrbitError is non-exhaustive so newly added errors can cross this
         // crate boundary without forcing an MCP release. Unknown variants are
         // intentionally classified conservatively until given a stable code.

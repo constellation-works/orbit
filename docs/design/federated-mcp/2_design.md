@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-09-24
-last_validated: 2026-09-24
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -11,7 +11,7 @@ summary: Federated MCP mux, selector, capability split, list schema, and fail-cl
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access, mcp-session-context]
-related_artifacts: [ORB-11184, ORB-11044, ORB-11023, ORB-11016, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11012, ORB-11011, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-14449, ORB-14448, ORB-11184, ORB-11044, ORB-11023, ORB-11016, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11012, ORB-11011, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Design
@@ -22,7 +22,7 @@ The prescriptive invariants live in [specs/federated-workspace-mcp.md](./specs/f
 
 ## 1. Operator-configured remotes, implicit local destination
 
-The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator configured in `~/.orbit/mcp-destinations.toml`. Local workspaces need no destination row; a missing or empty file is a useful local-only federated server. An explicit SSH row that names this machine's `machine_id` is collapsed to the single in-process local route. The mux does not:
+The shipped gateway is a mux in front of the accepting machine plus the SSH stdio remotes the operator registered with `orbit host add` in `~/.orbit/hosts.toml` ([host-registry host-commands](../host-registry/specs/host-commands.md), [ORB-14448]). For one release a lone legacy `~/.orbit/mcp-destinations.toml` is still read; both files at once fail closed with `host_file_conflict`. Local workspaces need no entry; a missing or empty file is a useful local-only federated server. A legacy row that names this machine's `machine_id` is collapsed to the single in-process local route; the host file refuses such an entry outright. The mux does not:
 
 - grow host-registry into a fleet inventory;
 - auto-discover the owner checkout of a repository;
@@ -39,7 +39,7 @@ The stable key is `machine_id` (`hm_…`), not renameable `host_id`. Example for
 
 A token that is not uniquely host-qualified (a bare `ws_*`, including a v1 session-defaulted form) is `unknown_selector` before the mux opens a destination session. Duplicate `machine_id` across configured destinations is config-load `ambiguous_destination`, not a per-call routing outcome.
 
-Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector; the v1 id-only default does not apply in this namespace. `orbit mcp serve --mode federated` does not take `--workspace ws_*`. v1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the v1 `tools/list` snapshot stay unchanged.
+Federated `tools/list` advertises that callers copy `selector` from federated `orbit.workspace.list`. It does not present cwd, a registered name, or a bare `ws_*` as valid. The v1 id-only default for `orbit.task.show` does not apply in this namespace. Instead, an id-only call to an id-routed task tool routes by task-id prefix to the host that holds it ([host-registry host-routing](../host-registry/specs/host-routing.md), [ORB-14449]). A call that carries a selector is routed by that selector. `orbit mcp serve --mode federated` does not take `--workspace ws_*`. v1 bound sessions (`orbit mcp serve --workspace ws_orbit`) and the v1 `tools/list` snapshot stay unchanged.
 
 ## 3. Capabilities mapped onto owner and replica
 
@@ -123,6 +123,8 @@ The precedence above covers everything decidable **before** the destination sees
 
 **Each budget covers the write as well as the answer.** A destination that stops draining stdin, or a stalled transport, would otherwise hold a large request's write forever, with the deadline consulted only afterwards. A write still blocked at its deadline kills the session so the write ends; it is `unreachable_destination` when the request line provably never fully left, and otherwise — for a routed `tools/call` — `outcome_unknown`. The deadline is also checked before each queued message is read, so a destination streaming unrelated messages cannot keep a read alive past it.
 
+**Peer requests are handled before response correlation.** Each peer chooses its own request IDs, so a destination's `ping` can use the same ID as the mux's outstanding call. The mux answers `ping` with an empty result, preserving string, numeric, and null IDs, and rejects unsupported methods with JSON-RPC `-32601` because it advertises no optional client capabilities. Notifications and unrelated replies do not complete a call; a matching response must carry JSON-RPC `2.0` and exactly one of `result` or `error`. Reading peer traffic and writing peer replies share the original absolute deadline. A failure to answer a peer after tool dispatch retains `outcome_unknown`.
+
 ## 7. Operator-configured control-plane uniqueness
 
 A single control-plane per repository is an operator configuration responsibility, not a mux invariant. The mux does not check it. The would-be signal is matching `git_remote` across destinations with differing `owner_machine_id`. Independently inited checkouts have different `ws_*`, so the mux cannot observe the collision without fleet discovery. A violation surfaces as two independent control planes, not an error.
@@ -139,7 +141,7 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - Task reads remain owner-only because the coordination store is owner-authoritative. Use the owner selector for `orbit.task.list` and `orbit.task.show`; a replica selector receives `capability_refused`.
 - Including unreachable hosts makes the list honest and larger; clients must read reachability rather than treating presence as liveness.
 - Capability advertisement can lag destination Core. The destination refuse is the correctness boundary; the gateway is not a second authorization layer.
-- Session authority (`agent` / `operator`) is resolved from argv at server start, for a remote-originated session exactly as for a local one [ORB-12564]. A federated or remote-proxy client started with `--operator` emits `orbit mcp serve --operator --remote-caller-machine-id <id>` for every destination it opens, and the destination serves that authority: Orbit is a single-user tool, and an SSH login to a destination is ownership of it, so a second authorization statement on the far side would sit in a file the caller can rewrite. This is a different axis from the capability classes above; a call must clear both, and those classes stay destination-derived because they describe the *checkout*. The caller-side guard is the one that matters: a client that declares itself an agent (managed run, agent envelope) never propagates `--operator`, and `child_env` strips `ORBIT_OPERATOR` from agent children. `--remote-caller-machine-id` remains an audit label: it marks the transport as `ssh-mcp` and names the calling machine in the destination's `authorization` rows, and authorizes nothing. A destination carrying a leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` ignores it with one startup warning and an `orbit doctor` row. See [the decision](./4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it). The removed caller-authorization spec is in git history.
+- Session authority (`agent` / `operator`) is resolved from argv at server start, for a remote-originated session exactly as for a local one [ORB-12564]. A federated or remote-proxy client started with `--operator` emits `orbit mcp serve --operator --remote-caller-machine-id <id>` for every destination it opens, and the destination serves that authority: Orbit is a single-user tool, and an SSH login to a destination is ownership of it, so a second authorization statement on the far side would sit in a file the caller can rewrite. This is a different axis from the capability classes above; a call must clear both, and those classes stay destination-derived because they describe the *checkout*. The caller-side guard is the one that matters: a client that declares itself an agent (managed run, agent envelope) never propagates `--operator`, and `child_env` strips `ORBIT_OPERATOR` from agent children. `--remote-caller-machine-id` is a caller-chosen label: its presence marks the transport as `ssh-mcp`, it names the machine in audit rows, and it selects the remote drain receipt namespace and claim bind/settle machine fence. The journal compares it with the admitted execution machine, bound run and phase; an initialize worker binding must name the same execution machine. It grants no capability and authenticates no machine. Local account access and SSH login are already owner access in this single-user model, so the fence prevents mixed attempts among cooperating executors; a caller able to start the server can choose another label, including locally from a managed agent context. A destination carrying a leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` ignores it with one startup warning and an `orbit doctor` row. See [the decision](./4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it). The removed caller-authorization spec is in git history.
 - Transport authentication, selector expiry, health freshness, and cloud coordination-store details are deliberately unresolved. See [3_vision.md](./3_vision.md). Probe cadence stays a vision open question; it does not change live-delivery error precedence.
 - Mixed Orbit versions across destinations can advertise different surfaces; `tool_not_on_this_host` and `capability_refused` must remain distinguishable from "the mux is confused."
 - Two destinations that each declare Owner for the same `git_remote` are a configuration mistake the mux will serve as two control planes.
@@ -157,5 +159,7 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-11016] — registered the federated serve path and aligned current docs
 - [ORB-11017] — federated workspace param is the host-qualified selector
 - [ORB-11044] — implicit local membership: local workspaces listed and routed without SSH
+- [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (host-registry)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

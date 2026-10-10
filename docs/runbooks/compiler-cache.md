@@ -26,8 +26,8 @@ a host that can create Linux mount namespaces.
 - Do not point workers at one shared mutable Cargo target directory. That
   serializes `cargo` on `target/.cargo-lock`.
 - Do not install system packages unless the host has no other way to obtain
-  `sccache`. `scripts/compiler-cache.sh setup --install` downloads a pinned
-  user-level binary into `$HOME/.orbit/cache/bin`.
+  `sccache`. `scripts/compiler-cache.sh setup --install` verifies the pinned
+  SHA-256 digest before extracting a user-level binary into `$HOME/.orbit/cache/bin`.
 - Do not delete `$HOME/.orbit/cache/compiler` while workers are compiling.
 - Do not change live worker processes; new cargo invocations pick up the
   committed wrapper after the branch is present in their worktree.
@@ -47,9 +47,12 @@ a host that can create Linux mount namespaces.
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |
 
 Linux implementer sandboxes grant `$HOME/.orbit/cache` as a narrow extra write
-root. Managed worktrees also bind the checkout at `/tmp/orbit-workspace` and
-`<worktree>/target` at `/tmp/orbit-build` inside the private mount namespace so
-sccache keys do not include the `jrun-*` path. Workspace `.orbit/**`
+root. Managed worktrees whose activity cwd lies within a writable policy root
+also bind that cwd at `/tmp/orbit-workspace` and
+`<cwd>/target` at `/tmp/orbit-build` inside the private mount namespace so
+sccache keys do not include the `jrun-*` path. A profile granting only a
+subdirectory below the cwd receives neither alias, preserving read-only
+access to ungranted source and build paths. Workspace `.orbit/**`
 protected-path denies are unchanged. Reviewer and other read-only profiles do
 not receive the cache grant. macOS already allows `$HOME/Library/Caches` and
 also grants `$HOME/.orbit/cache/**` to write-capable profiles so the same
@@ -122,8 +125,12 @@ the live `~/.orbit/cache` from a task):
 scripts/compiler-cache.sh setup --install
 ```
 
-This creates `$HOME/.orbit/cache/compiler` and, with `--install`, fetches pinned
-sccache `v0.17.0` into `$HOME/.orbit/cache/bin`. No apt packages. The committed
+This creates `$HOME/.orbit/cache/compiler` and, with `--install`, fetches sccache
+`v0.17.0`, verifies the archive against its SHA-256 digest pinned in the script
+(using `sha256sum` or macOS `shasum`), and extracts only the expected binary
+into `$HOME/.orbit/cache/bin`. A mismatch fails without installing or replacing
+the binary. The temporary download directory is removed on success or failure.
+No apt packages. The committed
 wrapper looks there before `PATH`. The binary lives beside the cache data, not
 inside `SCCACHE_DIR`.
 

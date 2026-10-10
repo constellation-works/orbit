@@ -5,17 +5,17 @@ tags: [operations, sqlite, corruption, recovery]
 paths: ["crates/orbit-store/**", "crates/orbit-cmd/src/doctor/mod.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-10473]
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 ---
 
 # Recover a Corrupted Database
 
-Use this runbook when `orbit doctor` reports a failed SQLite integrity check or Orbit cannot
+Use this runbook when `orbit doctor --deep` reports a failed SQLite integrity check or Orbit cannot
 open one of its databases.
 
 ## Recognize the failure
 
-`orbit doctor` runs `PRAGMA quick_check` on the store DB (`~/.orbit/orbit.db`). Both common
+`orbit doctor --deep` runs `PRAGMA quick_check` on the store DB (`~/.orbit/orbit.db`). Both common
 failure shapes exit 1:
 
 ```text
@@ -38,7 +38,7 @@ Do not overwrite the last known-good backup.
 
 Prefer a consistent backup for `~/.orbit/orbit.db` because audit and run history are
 authoritative and cannot be regenerated. Follow
-[Inventory and protect Orbit state](./state-and-backup.md), then run `orbit doctor`.
+[Inventory and protect Orbit state](./state-and-backup.md), then run `orbit doctor --deep`.
 
 ### 2. Salvage with `sqlite3`
 
@@ -52,7 +52,7 @@ sqlite3 ~/.orbit/orbit.recovered.db "PRAGMA integrity_check;"   # expect: ok
 # The next commands replace the active store. Keep the damaged backup made above.
 mv ~/.orbit/orbit.recovered.db ~/.orbit/orbit.db
 rm -f ~/.orbit/orbit.db-wal ~/.orbit/orbit.db-shm
-orbit doctor
+orbit doctor --deep
 ```
 
 Do not install the recovered database unless `PRAGMA integrity_check` returns `ok`.
@@ -73,7 +73,7 @@ workspace-contained file anchors alone, with symbol/kind text treated as opaque 
 
 ## Verification
 
-Run `orbit doctor` and require the `database` check to report `ok`. Then inspect a known task
+Run `orbit doctor --deep` and require the `database` check to report `ok`. Then inspect a known task
 and recent run or audit record to determine which authoritative history survived.
 
 Related: [Check Orbit health](./health-checks.md) ·

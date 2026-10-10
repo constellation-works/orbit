@@ -3,6 +3,8 @@
 //! The log is JSON Lines at `<workspace>/.orbit/session-log.jsonl`. Every read
 //! and mutation is serialized through one stable advisory-lock sidecar so ID
 //! allocation, append, and resolution observe one ordered record stream.
+//! Listing leaves the log unchanged, ignoring a torn final row in memory.
+//! Mutations repair that tail under the lock. A symlinked log is refused.
 
 mod persistence;
 
@@ -34,7 +36,8 @@ impl SessionLogStore {
         persistence::append(&self.orbit_dir, params)
     }
 
-    /// List records from one consistent, lock-protected snapshot.
+    /// List records from one consistent, lock-protected snapshot without
+    /// modifying the log, tolerating a malformed unterminated final row.
     pub fn list(&self, filter: SessionLogFilter) -> Result<Vec<SessionLogEntry>, OrbitError> {
         persistence::list(&self.orbit_dir, &filter)
     }

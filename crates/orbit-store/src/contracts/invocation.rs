@@ -7,6 +7,11 @@ use orbit_types::telemetry::InvocationTrace;
 pub struct InvocationQuery {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
+    /// Workspace the invocations were recorded under. Run ids are minted per
+    /// workspace, so a `job_run_id` filter only names one run together with
+    /// this. Rows recorded before invocations carried a workspace, and whose
+    /// run could not be attributed to exactly one workspace, never match.
+    pub workspace_id: Option<String>,
     pub job_run_id: Option<String>,
     pub activity_id: Option<String>,
     pub task_id: Option<String>,
@@ -21,6 +26,11 @@ pub struct InvocationInsertParams {
     pub job_run_id: String,
     pub activity_id: String,
     pub agent: String,
+    /// The canonical provider the invocation ran on, which `agent` does not
+    /// name for every lane: an Antigravity run is attributed to the model's
+    /// family. `None` for a caller that does not know it [ORB-14699].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub model: Option<String>,
     pub task_ids: Vec<String>,
     pub trace: InvocationTrace,
@@ -64,12 +74,17 @@ pub struct InvocationRecord {
     pub derived_cost_usd: Option<f64>,
 }
 
-/// Date window for reconciliation-safe invocation accounting reads.
+/// Workspace and date window for reconciliation-safe invocation accounting reads.
 ///
 /// `until` is always exclusive. Callers capture it before loading so rows
 /// arriving during aggregation cannot make one read internally inconsistent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationAccountingQuery {
+    /// Restricts facts to the workspace they were recorded under. `None`
+    /// retains host-wide reads; legacy rows without an attributed workspace
+    /// never match a workspace-scoped read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     pub since: Option<DateTime<Utc>>,
     pub until: DateTime<Utc>,
 }
@@ -88,6 +103,17 @@ pub struct InvocationAccountingFact {
     pub task_ids: Vec<String>,
     pub provider_cost_usd: Option<f64>,
     pub derived_cost_usd: Option<f64>,
+}
+
+/// One invocation's spend as a provider budget reads it from the host ledger
+/// [ORB-14699].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderLedgerEntry {
+    pub ts: DateTime<Utc>,
+    /// Input plus output tokens, as the ledger totals an invocation.
+    pub tokens: u64,
+    /// The provider-reported cost; `None` when the invocation recorded none.
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

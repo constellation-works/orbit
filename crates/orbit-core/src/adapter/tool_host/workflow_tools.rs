@@ -104,7 +104,7 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     // live progress, and the output reference a failed step never checkpoints.
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,
-        state.as_ref().map(|state| &state.step_outputs),
+        state.as_ref(),
         progress.provider_processes.last(),
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
@@ -294,6 +294,8 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
     value["steps"] = serde_json::to_value(&run.steps)
         .map_err(serialize_error("serialize workflow run steps"))?;
     value["steps_source"] = json!("record");
+    let task_ids = crate::application::job::job_run_task_ids(run);
+    value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     Ok(value)
 }
 
@@ -330,14 +332,16 @@ fn run_json_enriched(
     value["drain_last_pass"] =
         serde_json::to_value(state.and_then(|state| state.drain_last_pass.as_ref()))
             .map_err(serialize_error("serialize drain last pass"))?;
+    // [ORB-14117] What an `--approve-proposed` drain approved and held.
+    value["drain_approvals"] =
+        serde_json::to_value(state.and_then(|state| state.drain_approvals.as_ref()))
+            .map_err(serialize_error("serialize drain approvals"))?;
     // [ORB-11354] An operator tracking an agent invocation reads it here, from
     // the same show/list surface as any other run: its distinguishable outcome,
     // a bounded preview of the answer, and the durable reference to the full
     // captured output.
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
-        run,
-        state.map(|state| &state.step_outputs),
-        None,
+        run, state, None,
     ))
     .map_err(serialize_error("serialize agent invocation result"))?;
     // Recovery evidence remains separate from the run and step errors above:
@@ -360,6 +364,12 @@ fn run_json_enriched(
                 "failure_phase": attempt.failure_phase,
                 "diagnostic": attempt.diagnostic,
                 "diagnostic_truncated": attempt.diagnostic_truncated,
+                "decision": attempt.decision.as_ref().map(|decision| json!({
+                    "status": decision.status,
+                    "verdict": decision.verdict,
+                    "detail": decision.detail,
+                })),
+                "retry_admitted": attempt.retry_admitted,
             })).collect::<Vec<_>>(),
         }),
         None => json!({

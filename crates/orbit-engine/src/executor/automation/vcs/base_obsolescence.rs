@@ -21,11 +21,13 @@
 //!    leftover, not a target.
 //! 2. **Already landed.** A `landing_branch` was declared, differs from the
 //!    base, and the base carries nothing the landing branch does not already
-//!    have: either the base tip is an ancestor of the landing branch (merge /
-//!    fast-forward), or every commit unique to the base is already delivered on
-//!    the landing branch under its task marker (squash / rebase — the shape
-//!    Orbit's own `merge_batch_pr` produces, where the sha is rewritten and only
-//!    the marker survives).
+//!    have: either the base tip is a strict ancestor of the landing branch
+//!    (merge / fast-forward), or every commit unique to the base is already
+//!    delivered on the landing branch under its task marker (squash / rebase —
+//!    the shape Orbit's own `merge_batch_pr` produces, where the sha is rewritten
+//!    and only the marker survives).
+//!    Distinct branches at the same tip stay live: a fresh stacked base has
+//!    no work of its own to have landed yet and must accept its first delivery.
 //!
 //! Test 2 deliberately reuses `delivery_marker`, the same reasoning
 //! `worktree::dependency_delivery` uses for "is this actually merged into
@@ -166,6 +168,9 @@ fn classify_base(
 
     let landing_ref = resolve_worktree_start_point(repo_root, &landing, sync_mode)?;
     let landing_sha = commit_sha(repo_root, &landing_ref)?;
+    if base_sha == landing_sha {
+        return Ok(BaseStatus::Live);
+    }
     if git_command_success(
         repo_root,
         &["merge-base", "--is-ancestor", base_sha, &landing_sha],

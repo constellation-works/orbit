@@ -5,6 +5,7 @@
 //! `workspaces.json`.
 
 use std::path::Path;
+use std::time::Instant;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -55,25 +56,46 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
     fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
         discover_registered_workspaces(global_root, self.workspace_filter.as_deref())
     }
+
+    fn discover_workspaces_until(
+        &self,
+        global_root: &Path,
+        deadline: Instant,
+    ) -> Result<DiscoveredWorkspaces, OrbitError> {
+        discover_registered_workspaces_until(
+            global_root,
+            self.workspace_filter.as_deref(),
+            Some(deadline),
+        )
+    }
 }
 
 /// Discover the checkouts this machine evaluates schedules for, optionally
-/// restricted to one registered workspace id: every active **owner** checkout
-/// with a `.orbit/` directory. Registration is the whole opt-in [ORB-12236];
-/// a replica fires no schedule because it cannot write the owner's
-/// coordination store, and is opened apart only so the sweep can deliver the
-/// pull settlements its follower drains recorded [ORB-13892]. The provider
-/// delegates here so this production path can be exercised with an explicit
-/// global root.
+/// restricted to one registered workspace id: every active checkout with a
+/// `.orbit/` directory. Registration is the whole opt-in [ORB-12236]. A
+/// replica cannot write the owner's coordination store, so it is opened apart:
+/// the sweep delivers the pull settlements its follower drains recorded
+/// [ORB-13892] and fires only its host-local worktree GC routine, never task
+/// minting, shipping or recovery [ORB-14173]. The provider delegates here so
+/// this production path can be exercised with an explicit global root.
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
+    discover_registered_workspaces_until(global_root, workspace_filter, None)
+}
+
+fn discover_registered_workspaces_until(
+    global_root: &Path,
+    workspace_filter: Option<&str>,
+    deadline: Option<Instant>,
+) -> Result<DiscoveredWorkspaces, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
     let registry = workspace_registry::with_registry_lock(&registry_path, || {
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        workspace_registry::validate_workspaces(&mut registry);
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        if workspace_registry::validate_workspaces(&mut registry) {
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+        }
         Ok(registry)
     })?;
 
@@ -85,9 +107,13 @@ pub(crate) fn discover_registered_workspaces(
         if workspace_filter.is_some_and(|selected| selected != workspace.id) {
             continue;
         }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            discovered.skipped_workspaces.push(workspace.name.clone());
+            continue;
+        }
         if checkout.role == Some(WorkspaceCheckoutRole::Replica) {
-            // Delivery is best-effort: a replica that cannot be opened is not
-            // a schedule source, so it never reads as a broken workspace.
+            // A replica that cannot be opened only defers its settlement
+            // delivery and local GC, so it never reads as a broken workspace.
             match RegisteredRuntimeFactory::open_registered_checkout(
                 global_root,
                 workspace,

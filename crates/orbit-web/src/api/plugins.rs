@@ -33,7 +33,7 @@ use super::routines::{
     action_capability, authorization_denied, authorized_caller, record_operation_audit,
 };
 use super::workspaces::abbreviate_home;
-use super::{blocking, not_found, validate_id};
+use super::{blocking, not_found, validate_id, workspace_label};
 use crate::state::{DashboardState, Ws};
 
 /// Maximum serialized tool output retained or returned for one panel.
@@ -92,9 +92,7 @@ async fn mutate_plugin(
         &DASHBOARD_PLUGIN_DISABLE
     };
     let started = Instant::now();
-    let workspace = runtime
-        .workspace_id()
-        .unwrap_or_else(|_| runtime.shared_root().display().to_string());
+    let workspace = workspace_label(&runtime).await;
     let caller = match authorized_caller(operation, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
@@ -327,6 +325,7 @@ pub(super) fn plugin_to_json(summary: &PluginSummary, home: Option<&FsPath>) -> 
         "unsandboxed": summary.unsandboxed,
         "granted": summary.granted,
         "certified_orbit_version": summary.certified_orbit_version,
+        "host_orbit_version": env!("CARGO_PKG_VERSION"),
         "diagnostic": summary.diagnostic,
         "permissions": summary
             .permissions

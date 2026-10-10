@@ -3,17 +3,18 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
 use super::filing::{
-    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
-    MAX_LISTED_RUNS,
+    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, CI_FAILURE_TAG,
+    DESCRIPTION_LOG_BYTES, MAX_LISTED_RUNS,
 };
 use super::grouping::{failure_test_names, legacy_source_matches, tested_commit};
 use super::log_signature::{
-    FailedStepExcerpt, compiler_cause, relevant_log_query_errors, render_failed_step_excerpt,
-    specific_command_from_log, specific_error_anchors,
+    FailedStepExcerpt, compiler_cause, compiler_diagnostic_set, relevant_log_query_errors,
+    render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
 };
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
@@ -22,6 +23,16 @@ use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
     digest, display, truncate_chars,
 };
+
+/// Description line naming a compiler-cause identity. Completed repairs are
+/// matched on it, so the rendering and the reader share the prefix.
+pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";
+/// Complete location-free set, retained independently of the bounded excerpt.
+const OPEN_COMPILER_SET_LINE: &str = "- Open compiler diagnostic set identity: `";
+/// Description line naming a concrete normalized error signature (never the
+/// step-name fallback, which is no diagnostic).
+pub(super) const SIGNATURE_LINE: &str =
+    "- Normalized error signature (the dedupe identity, not a quote): `";
 
 /// One root cause, with every current run that exhibited it.
 pub(super) struct FailureCluster {
@@ -63,6 +74,33 @@ impl FailureCluster {
         if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
             return Ok(Some(found));
         }
+        if let Some(identity) = self.open_compiler_identity() {
+            let tasks = lookup.list_tasks()?;
+            if let Some(owner) = tasks
+                .iter()
+                .filter(|task| {
+                    matches!(
+                        task.status,
+                        TaskStatus::Proposed
+                            | TaskStatus::Backlog
+                            | TaskStatus::InProgress
+                            | TaskStatus::Review
+                            | TaskStatus::Blocked
+                    ) && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                        && task_open_compiler_identity(task).as_ref() == Some(&identity)
+                })
+                .min_by(|left, right| left.id.cmp(&right.id))
+            {
+                return Ok(Some(DuplicateTaskMatch {
+                    task_id: owner.id.clone(),
+                    match_kind: "open_compiler_diagnostics",
+                    evidence: json!({
+                        "fingerprint": "ci_open_compiler_diagnostics",
+                        "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
+                    }),
+                }));
+            }
+        }
         // Shipped per-job keys (including the old first-marker signature) are
         // durable references. Keep their exact/rejected-owner continuity, but
         // never use their weak command or source-only fingerprints as proof.
@@ -76,6 +114,9 @@ impl FailureCluster {
                 )],
             );
             if let Some(found) = find_covering_task(lookup, &candidate)? {
+                if self.compiler_cause.is_none() {
+                    return Ok(Some(found));
+                }
                 let source_id = found.evidence["matched_fields"]
                     .as_array()
                     .and_then(|fields| {
@@ -120,6 +161,18 @@ impl FailureCluster {
             return DuplicateCandidate::new(exact_tag, fingerprints)
                 .with_completed_fingerprints(self.completed_provenance_fingerprints());
         }
+        if !self.signature.chars().any(char::is_alphanumeric) {
+            // Symbols cannot form a coverage anchor. Keep exact-key continuity
+            // without adding provenance fingerprints that repeat the invalid
+            // signature and would abort the entire filing pass.
+            return DuplicateCandidate::new(
+                exact_tag.clone(),
+                vec![CoverageFingerprint::new(
+                    "ci_failure_unmatchable_fallback",
+                    vec![CoverageAnchor::new("exact_failure_key", exact_tag)],
+                )],
+            );
+        }
         let mut fingerprints = if self.signature_is_step_fallback {
             // A step-name fallback contains no diagnostic. It is sufficient
             // for exact-key idempotency but too weak for broader free-text
@@ -159,6 +212,11 @@ impl FailureCluster {
         fingerprints.extend(self.provenance_fingerprints());
         DuplicateCandidate::new(exact_tag, fingerprints)
             .with_completed_fingerprints(self.completed_provenance_fingerprints())
+    }
+
+    pub(super) fn open_compiler_identity(&self) -> Option<String> {
+        self.compiler_cause.as_ref()?;
+        compiler_diagnostic_set(&self.log_excerpt).map(|set| digest(&[&set]))
     }
 
     fn provenance_fingerprints(&self) -> Vec<CoverageFingerprint> {
@@ -233,6 +291,17 @@ impl FailureCluster {
             }
         }
         fingerprints
+    }
+
+    /// The root-cause identity a completed repair's description must repeat:
+    /// the compiler cause, else a concrete signature. A step-name fallback has
+    /// none, so only its exact failure key can match.
+    pub(super) fn signature_line(&self) -> Option<String> {
+        match &self.compiler_cause {
+            Some(cause) => Some(format!("{COMPILER_CAUSE_LINE}{}`", digest(&[cause]))),
+            None if self.signature_is_step_fallback => None,
+            None => Some(format!("{SIGNATURE_LINE}{}`", display(&self.signature))),
+        }
     }
 
     pub(super) fn run_urls(&self) -> Vec<String> {
@@ -323,6 +392,12 @@ impl FailureCluster {
         ]
     }
 
+    /// Extract `file:` context selectors for compiler or test-panic locations
+    /// named in the log excerpt.
+    pub(super) fn context_files(&self) -> Vec<String> {
+        super::log_signature::extract_context_files_from_log(&self.log_excerpt)
+    }
+
     /// Each run's runner OS evidence, in run order (see
     /// [`super::runner_os::failure_runner_os`]).
     pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<Value> {
@@ -369,10 +444,10 @@ impl FailureCluster {
         ));
         out.push_str(&runner_os_line(runners));
         if let Some(cause) = &self.compiler_cause {
-            out.push_str(&format!(
-                "- Compiler cause identity: `{}`\n",
-                digest(&[cause])
-            ));
+            out.push_str(&format!("{COMPILER_CAUSE_LINE}{}`\n", digest(&[cause])));
+            if let Some(identity) = self.open_compiler_identity() {
+                out.push_str(&format!("{OPEN_COMPILER_SET_LINE}{identity}`\n"));
+            }
         }
         if self.signature_is_step_fallback {
             out.push_str(&format!(
@@ -386,10 +461,7 @@ impl FailureCluster {
                 display(&self.signature)
             ));
         } else {
-            out.push_str(&format!(
-                "- Normalized error signature (the dedupe identity, not a quote): `{}`\n",
-                display(&self.signature)
-            ));
+            out.push_str(&format!("{SIGNATURE_LINE}{}`\n", display(&self.signature)));
         }
         if let Some(repository) = evidence.get("repository").and_then(Value::as_object) {
             if let Some(full_name) = repository.get("full_name").and_then(Value::as_str) {
@@ -567,8 +639,25 @@ impl FailureCluster {
     }
 }
 
-/// The job whose own log supplied this failure's excerpt, if the run-scoped
-/// read produced nothing and collection fell back per job.
+/// Old descriptions carry only the exact-cause digest. Verify that their
+/// retained excerpt contains that entire cause before deriving a weaker set;
+/// a truncated subset must never claim coverage of another diagnostic set.
+pub(super) fn task_open_compiler_identity(task: &Task) -> Option<String> {
+    let identity_line = |prefix| {
+        task.description
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix)?.strip_suffix('`'))
+    };
+    if let Some(identity) = identity_line(OPEN_COMPILER_SET_LINE) {
+        return Some(identity.to_string());
+    }
+    let cause = compiler_cause(&task.description)?;
+    if identity_line(COMPILER_CAUSE_LINE) != Some(digest(&[&cause]).as_str()) {
+        return None;
+    }
+    compiler_diagnostic_set(&task.description).map(|set| digest(&[&set]))
+}
+
 /// The `Runner OS` line: what each distinct runner was, where that came
 /// from, and the `os:` tags it gives the task.
 fn runner_os_line(runners: &[Value]) -> String {
@@ -610,6 +699,8 @@ fn runner_os_line(runners: &[Value]) -> String {
     format!("- Runner OS: {observed}; {routing}\n")
 }
 
+/// The job whose own log supplied this failure's excerpt, if the run-scoped
+/// read produced nothing and collection fell back per job.
 pub(super) fn job_log_source(failure: &Value) -> Option<String> {
     if value_string(failure, "log_source") != "job_api_log" {
         return None;
@@ -620,6 +711,17 @@ pub(super) fn job_log_source(failure: &Value) -> Option<String> {
         display(&value_string(job, "name")),
         display(&value_string(job, "job_id")),
     ))
+}
+
+/// The newer in-flight run a held failure waited on.
+fn pending_run(pending_on: &Value) -> String {
+    format!(
+        "newer run `{}` ({}) at `{}`, still `{}`",
+        display(&value_string(pending_on, "run_id")),
+        display(&value_string(pending_on, "url")),
+        display(&value_string(pending_on, "reported_head_sha")),
+        display(&value_string(pending_on, "status")),
+    )
 }
 
 fn render_run(run: &Value) -> String {
@@ -656,6 +758,35 @@ fn render_run(run: &Value) -> String {
     ));
     if let Some(pr) = run.get("pr_number").and_then(Value::as_u64) {
         out.push_str(&format!("  - pull request: #{pr}\n"));
+    }
+    // Collection files a red run despite a newer run in flight at a descendant
+    // commit only for one of these reasons; name the run either way.
+    if let Some(previous) = run.get("reproduced_on").filter(|value| value.is_object()) {
+        out.push_str(&format!(
+            "  - reproduced on the previous completed run `{}` ({}) at `{}`, which failed job \
+             `{}` with the same normalized error signature `{}`; filed without waiting for {}\n",
+            display(&value_string(previous, "run_id")),
+            display(&value_string(previous, "url")),
+            display(&value_string(previous, "event_reported_head_sha")),
+            display(&value_string(&previous["shared_cause"], "job")),
+            display(&value_string(
+                &previous["shared_cause"],
+                "normalized_error_signature"
+            )),
+            pending_run(&previous["pending_on"]),
+        ));
+    }
+    if let Some(held) = run
+        .get("held_past_window")
+        .filter(|value| value.is_object())
+    {
+        out.push_str(&format!(
+            "  - held in `pending_supersession` since {} waiting on {}; filed after the \
+             {}-minute window\n",
+            display(&value_string(held, "pending_since")),
+            pending_run(&held["pending_on"]),
+            display(&value_string(held, "window_minutes")),
+        ));
     }
     for line in run
         .get("checkout_evidence")

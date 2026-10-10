@@ -6,27 +6,35 @@ use orbit_registry::{
     MachineIdentityOutcome, MachineIdentityState, NewMachineIdentity, ensure_machine_identity,
     inspect_machine_identity, os_hostname,
 };
-use orbit_types::identity::validate_new_task_prefix;
+use orbit_types::identity::{validate_machine_name, validate_new_task_prefix};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use super::collect_config_seed_for_init;
 use super::prompt_stdin;
+use super::registered_workspaces::{WorkspaceSeed, seed_registered_workspaces};
 use serde_json::json;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
 #[derive(Args)]
-#[command(about = "Initialize the global Orbit root (~/.orbit)")]
+#[command(
+    about = "Initialize the global Orbit root (~/.orbit)",
+    after_help = "On Linux, sandbox preparation failures warn and initialization continues.\n\
+                  linux-bwrap dispatch stays blocked until orbit doctor providers reports\n\
+                  the sandbox ready. Fix the host using docs/runbooks/linux-sandbox.md,\n\
+                  then retry with orbit init --host-prerequisites-only. JSON output includes\n\
+                  linux_sandbox.status (ready, skipped, or not_ready) and its reason."
+)]
 pub struct InitCommand {
     /// Reset the global Orbit root (~/.orbit/) to shipped defaults before
-    /// initialization, including executor sandbox settings
+    /// initialization, including executor sandbox settings and the machine
+    /// identity. Non-interactive resets require --machine-name and --task-prefix
     #[arg(long)]
     pub force: bool,
 
-    /// Internal installer entry point: prepare the Linux host without creating
-    /// a machine identity or writing Orbit state.
-    #[arg(long, hide = true)]
+    /// Prepare the Linux host without creating a machine identity or writing Orbit state.
+    #[arg(long)]
     pub host_prerequisites_only: bool,
 
     /// On Linux, leave Bubblewrap packages and AppArmor profiles to the host's
@@ -47,14 +55,14 @@ pub struct InitCommand {
     pub non_interactive: bool,
 
     /// Operator-chosen display name for this machine. Used only when no
-    /// identity exists yet (first init). Required with --non-interactive on a
-    /// fresh machine; interactively, the OS hostname is the default.
+    /// identity exists yet or --force resets it. Required with --non-interactive
+    /// on a fresh machine or reset; interactively, the OS hostname is the default.
     #[arg(long)]
     pub machine_name: Option<String>,
 
     /// Immutable task-id namespace for this machine (2-5 uppercase ASCII
-    /// letters). Required on first init; reserved artifact namespaces cannot
-    /// be chosen.
+    /// letters). Required on first init or with --force; reserved artifact
+    /// namespaces cannot be chosen.
     #[arg(long, value_name = "PREFIX")]
     pub task_prefix: Option<String>,
 }
@@ -68,14 +76,17 @@ impl Execute for InitCommand {
 impl InitCommand {
     /// Prepare the Linux sandbox prerequisites unless the operator opted out.
     #[cfg(target_os = "linux")]
-    fn prepare_linux_host(&self) -> Result<(), OrbitError> {
-        let readiness = if self.skip_host_prerequisites {
-            "host preparation skipped; `orbit doctor providers` reports readiness".to_string()
+    fn prepare_linux_host(&self) -> Result<LinuxSandboxReadiness, OrbitError> {
+        if self.skip_host_prerequisites {
+            Ok(LinuxSandboxReadiness::skipped(
+                "host preparation skipped; `orbit doctor providers` reports readiness",
+            ))
         } else {
-            super::linux_host::prepare(self.non_interactive)?
-        };
-        eprintln!("Linux sandbox: {readiness}");
-        Ok(())
+            super::linux_host::prepare(self.non_interactive).map(|reason| LinuxSandboxReadiness {
+                status: LinuxSandboxStatus::Ready,
+                reason,
+            })
+        }
     }
 
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
@@ -95,7 +106,7 @@ impl InitCommand {
                 ));
             }
             #[cfg(target_os = "linux")]
-            self.prepare_linux_host()?;
+            eprintln!("Linux sandbox: {}", self.prepare_linux_host()?.reason);
             return Ok(CommandOutput::Silent);
         }
         // Reject a malformed or (non-interactively) missing --machine-name/
@@ -105,6 +116,7 @@ impl InitCommand {
         // [ORB-12112].
         reject_invalid_fresh_identity_inputs(
             root_override,
+            self.force,
             self.non_interactive,
             self.machine_name.as_deref(),
             self.task_prefix.as_deref(),
@@ -113,16 +125,17 @@ impl InitCommand {
         // changes to the machine's package/security policy. Normal init and
         // the shell installer share this preparation path.
         #[cfg(target_os = "linux")]
-        if root_override.is_none() {
-            self.prepare_linux_host().map_err(|error| match error {
-                OrbitError::Execution(message) => OrbitError::Execution(format!(
-                    "{message}; to initialize Orbit without changing this host, rerun with \
-                     --skip-host-prerequisites (dispatch stays fail-closed until the sandbox \
-                     is ready)"
-                )),
-                other => other,
-            })?;
-        }
+        let linux_sandbox = if root_override.is_some() {
+            LinuxSandboxReadiness::skipped("host preparation skipped for a custom Orbit root")
+        } else {
+            self.prepare_linux_host()
+                .unwrap_or_else(|error| LinuxSandboxReadiness {
+                    status: LinuxSandboxStatus::NotReady,
+                    reason: error.to_string(),
+                })
+        };
+        #[cfg(target_os = "linux")]
+        linux_sandbox.report();
         let config_seed =
             collect_config_seed_for_init(root_override, self.force, self.non_interactive)?;
         let result = init_global(
@@ -144,6 +157,12 @@ impl InitCommand {
             self.machine_name,
             self.task_prefix,
         )?;
+        // A release that ships a workspace routine or auto-task must reach
+        // every registered workspace here, not only at the next `workspace sync`.
+        let registered =
+            seed_registered_workspaces(&resolve_global_root(root_override)?, &identity.id);
+        let mut managed_asset_warnings = result.managed_asset_warnings;
+        managed_asset_warnings.extend(registered.warnings);
         let paths = reported_init_paths(root_override);
         Ok(init_payload(
             &identity,
@@ -157,9 +176,12 @@ impl InitCommand {
                 retired_default_activities: result.retired_default_activities,
                 refreshed_default_jobs: result.refreshed_default_jobs,
                 retired_default_jobs: result.retired_default_jobs,
-                managed_asset_warnings: result.managed_asset_warnings,
+                managed_asset_warnings,
                 refreshed_default_executors: result.refreshed_default_executors,
                 refreshed_default_policies: result.refreshed_default_policies,
+                workspace_seeds: registered.seeds,
+                #[cfg(target_os = "linux")]
+                linux_sandbox,
             },
         ))
     }
@@ -177,8 +199,7 @@ fn resolve_global_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
 /// a rejected or, under `--non-interactive`, missing value leaves no partial
 /// root [ORB-12112]) and again inside the identity-creation closure, which
 /// stays self-sufficient against a racing concurrent create. A present
-/// identity never reaches this function — both callers only consult it when
-/// the identity is confirmed absent.
+/// identity only reaches this function before a forced reset, which discards it.
 fn validate_fresh_identity_flags(
     non_interactive: bool,
     machine_name: Option<&str>,
@@ -190,9 +211,11 @@ fn validate_fresh_identity_flags(
                 "machine name must not be empty".to_string(),
             ));
         }
+        // Checked as `ensure_machine_identity` stores it: trimmed.
+        Some(name) => validate_machine_name(name.trim())?,
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
-                "machine identity is absent; pass --machine-name and --task-prefix \
+                "a fresh machine identity requires --machine-name and --task-prefix \
                  to initialize a fresh machine non-interactively"
                     .to_string(),
             ));
@@ -205,7 +228,7 @@ fn validate_fresh_identity_flags(
         }
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
-                "machine identity is absent; pass --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
+                "a fresh machine identity requires --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
                  to initialize a fresh machine non-interactively"
                     .to_string(),
             ));
@@ -217,23 +240,27 @@ fn validate_fresh_identity_flags(
 
 /// Reject a malformed, or under `--non-interactive` missing, `--machine-name`/
 /// `--task-prefix` before `orbit init` writes anything. These flags are only
-/// consulted when the machine identity is absent (a fresh create) — a present
-/// identity ignores them entirely, so this check is skipped on the idempotent
-/// re-init path, matching [`ensure_machine_identity_for_init`]'s own condition.
+/// consulted when the machine identity is absent or `--force` will discard it.
+/// An ordinary re-init preserves a present identity and ignores these flags.
 fn reject_invalid_fresh_identity_inputs(
     root_override: Option<&Path>,
+    force: bool,
     non_interactive: bool,
     machine_name: Option<&str>,
     task_prefix: Option<&str>,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root(root_override)?;
-    if !matches!(
-        inspect_machine_identity(&global_root)?,
-        MachineIdentityState::Absent
-    ) {
+    let identity = inspect_machine_identity(&global_root)?;
+    if !force && !matches!(identity, MachineIdentityState::Absent) {
         return Ok(());
     }
     validate_fresh_identity_flags(non_interactive, machine_name, task_prefix)?;
+    if force {
+        // The reset deletes the task registry that holds the minted ids, so
+        // they cannot contradict the replacement prefix; the identity-creation
+        // closure re-checks against the reseeded root.
+        return Ok(());
+    }
     reject_prefix_contradicting_minted_ids(&global_root, task_prefix)
 }
 
@@ -364,18 +391,49 @@ fn prompt_machine_name() -> Result<String, OrbitError> {
         Some(name) => format!("Machine name [{name}]: "),
         None => "Machine name: ".to_string(),
     };
-    let answer = read_line(&prompt)?;
-    if answer.is_empty() {
-        default.ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "no machine name entered and the OS hostname is unavailable; \
-                 re-run with --machine-name"
-                    .to_string(),
-            )
-        })
-    } else {
-        Ok(answer)
+    let stderr = io::stderr();
+    let mut output = stderr.lock();
+    collect_machine_name(&prompt, default, &mut output, |prompt, output| {
+        prompt_stdin::read_trimmed_line(prompt, output).map_err(prompt_io_to_orbit)
+    })
+}
+
+const MAX_MACHINE_NAME_ATTEMPTS: usize = 4;
+
+fn collect_machine_name<W, F>(
+    prompt: &str,
+    default: Option<String>,
+    output: &mut W,
+    mut read_answer: F,
+) -> Result<String, OrbitError>
+where
+    W: Write,
+    F: FnMut(&str, &mut W) -> Result<String, OrbitError>,
+{
+    for _ in 0..MAX_MACHINE_NAME_ATTEMPTS {
+        let answer = read_answer(prompt, output)?;
+        let name = if answer.is_empty() {
+            default.clone().ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "no machine name entered and the OS hostname is unavailable; \
+                     re-run with --machine-name"
+                        .to_string(),
+                )
+            })?
+        } else {
+            answer
+        };
+        match validate_machine_name(&name) {
+            Ok(()) => return Ok(name),
+            Err(error) => {
+                writeln!(output, "{error}").map_err(|error| OrbitError::Io(error.to_string()))?;
+            }
+        }
     }
+
+    Err(OrbitError::InvalidInput(format!(
+        "machine name remained invalid after {MAX_MACHINE_NAME_ATTEMPTS} attempts; pass --machine-name or --non-interactive"
+    )))
 }
 
 const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
@@ -408,12 +466,6 @@ where
     )))
 }
 
-fn read_line(prompt: &str) -> Result<String, OrbitError> {
-    let stderr = io::stderr();
-    let mut output = stderr.lock();
-    prompt_stdin::read_trimmed_line(prompt, &mut output).map_err(prompt_io_to_orbit)
-}
-
 fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
     match error.kind() {
         ErrorKind::UnexpectedEof | ErrorKind::TimedOut => {
@@ -424,7 +476,7 @@ fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
 }
 
 fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput {
-    let text = format!(
+    let mut text = format!(
         "machine identity ({}): name=\"{}\", id={}, task_prefix={}\n\
          skills: root={}, refreshed={}, symlink_created={}; config: path={}, created={}; default_activities_refreshed={}, retired={}; default_jobs_refreshed={}, retired={}; default_executors_refreshed={}; default_policies_refreshed={}",
         identity.outcome,
@@ -443,6 +495,16 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
         output.refreshed_default_executors,
         output.refreshed_default_policies,
     );
+    for seed in &output.workspace_seeds {
+        text.push_str(&format!(
+            "\nworkspace {}: created={}",
+            seed.workspace,
+            seed.created.len()
+        ));
+        for path in &seed.created {
+            text.push_str(&format!("\n  created {}", path.display()));
+        }
+    }
     for warning in &output.managed_asset_warnings {
         eprintln!("warning: {warning}");
     }
@@ -470,8 +532,19 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
             "executors_refreshed": output.refreshed_default_executors,
             "policies_refreshed": output.refreshed_default_policies,
         },
+        "workspaces": output.workspace_seeds.iter().map(|seed| json!({
+            "workspace": seed.workspace,
+            "orbit_root": seed.orbit_root,
+            "created": seed.created,
+        })).collect::<Vec<_>>(),
         "warnings": output.managed_asset_warnings,
     });
+    #[cfg(target_os = "linux")]
+    let doc = {
+        let mut doc = doc;
+        doc["linux_sandbox"] = json!(output.linux_sandbox);
+        doc
+    };
     Payload::detail(doc, text).into()
 }
 
@@ -489,6 +562,49 @@ struct InitOutput {
     managed_asset_warnings: Vec<String>,
     refreshed_default_executors: usize,
     refreshed_default_policies: usize,
+    workspace_seeds: Vec<WorkspaceSeed>,
+    #[cfg(target_os = "linux")]
+    linux_sandbox: LinuxSandboxReadiness,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LinuxSandboxStatus {
+    Ready,
+    Skipped,
+    NotReady,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct LinuxSandboxReadiness {
+    status: LinuxSandboxStatus,
+    reason: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxSandboxReadiness {
+    fn skipped(reason: &str) -> Self {
+        Self {
+            status: LinuxSandboxStatus::Skipped,
+            reason: reason.to_string(),
+        }
+    }
+
+    fn report(&self) {
+        if self.status == LinuxSandboxStatus::NotReady {
+            eprintln!(
+                "warning: Linux sandbox is not ready: {}; initialization continues. \
+                 Fix the host using docs/runbooks/linux-sandbox.md, then retry \
+                 `orbit init --host-prerequisites-only`. linux-bwrap dispatch stays blocked \
+                 until `orbit doctor providers` reports the sandbox ready.",
+                self.reason
+            );
+        } else {
+            eprintln!("Linux sandbox: {}", self.reason);
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

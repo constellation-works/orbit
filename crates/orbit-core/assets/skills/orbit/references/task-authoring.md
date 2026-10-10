@@ -96,6 +96,9 @@ discovery and `orbit run ship` start the task only on a host of a named OS, and
 an owner hands a pull-drain claim only to a follower of one. Elsewhere the
 task stays in `backlog` with the wait named (`waits for a macos host
 (os:macos)`) in readiness, `orbit run show` and the dashboard Drain card.
+When task-pilot finds a criterion that needs native evidence from an OS the
+tags do not name, a host of another OS likewise leaves the task waiting as
+`native_os_required`, naming the tag to add.
 
 To route a task an auto-task or a sweep already minted, retag it with
 `orbit.task.update`, sending the full tag list (it replaces the stored one):
@@ -115,13 +118,37 @@ precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
 For a known new target, use the supported `allow_missing_context` option and
-explain creation intent; a rejected selector's message names that option. A
-worker updating its own task through `orbit.task.update` from its run's linked
-worktree gets that relaxation automatically for that task, and the response
-lists the stored-but-unresolved selectors as `context_files_unverified`.
+explain creation intent; a rejected selector's message names that option. The
+option records each missing selector as durable creation intent for that exact
+canonical selector (at most 32 per task), committed with the scope change.
+Later writes may re-send a declared selector without the option, and
+task-pilot keeps it as a target to create. Maintained task writes carry intent
+forward for kept selectors and revoke selectors removed from the replacement
+list. The grant is bound to the task revision: an older writer that changes the
+stored task without maintaining the grant invalidates it, even if it later
+restores the same selector list. Reauthorize through `orbit.task.update` with
+the full `context_files` list plus `allow_missing_context: true`. Syntax,
+containment and file/directory kind are still checked, and comments, plans or
+agent proposals never grant intent. When task-pilot reports a missing selector
+that carries no such record, re-declare it through that update path.
+
+A worker updating its own task through `orbit.task.update` from its run's
+linked worktree gets the existence relaxation automatically for that task,
+without recording creation intent, and the response lists the
+stored-but-unresolved selectors as `context_files_unverified`.
 Missing-file selectors remain valid declarations; do not prune them because a
-checkout cannot yet resolve them. Do not invent paths to satisfy admission. Unknown targets can be prepared by task-pilot before
-execution; empty context does not guarantee eligibility for every admission path.
+checkout cannot yet resolve them. `context_files` are optional for local auto,
+ship and owner pull admission; empty context holds no context lock. Do not
+invent paths to satisfy admission. Task-pilot can prepare unknown targets,
+and a live preparation checkpoint still holds its tasks until that run settles.
+
+A `proposed` or `backlog` task reports its `readiness`: `{ready, gaps}`,
+each gap with `code`, `severity`, `message` and `fix`. The `orbit.task.add`
+and `orbit.task.update` responses carry it, `orbit task show` prints a
+`Readiness:` line and the dashboard shows a chip. `missing_context_files`
+blocks drain approval of a proposed task and is advisory in the backlog;
+`unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
+Read the gaps after filing and fix what blocks, or leave it to task-pilot.
 
 Put read-only designs, conventions and examples in prose links. A design document
 belongs in the footprint only if this task will change it. Cross-workspace edits

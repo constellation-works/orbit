@@ -12,7 +12,7 @@
 //! single owner of what a `gh` invocation looks like and of how its output is
 //! made safe to carry; callers here own the policy question of when to run it.
 //!
-//! Every request builder returns an [`ExecRequest`] with `current_dir: None`.
+//! Every request builder returns an [`ExecRequest`](orbit_exec::ExecRequest) with `current_dir: None`.
 //! Set it to the repository the query is about before executing — `gh`
 //! otherwise resolves the repository from the caller's working directory.
 
@@ -33,15 +33,22 @@ pub use crate::builtin::github::logs::{
     SOURCE_RUN_LOG, read_run_log,
 };
 pub use crate::builtin::github::pr_list::{
-    build_exec_request as pr_list_request, project_pull_request,
+    build_closed_head_list_request as closed_pr_head_request,
+    build_exec_request as pr_list_request, build_open_head_list_request as open_pr_head_request,
+    project_pull_request,
 };
 pub use crate::builtin::github::repo::{
     build_exec_request as repo_view_request, project_repo_view,
 };
+pub use crate::builtin::github::run::annotations::{
+    build_exec_request as job_annotations_request, concurrency_cancellation,
+};
 pub use crate::builtin::github::run::jobs::{
     build_exec_request as run_jobs_request, project_job_labels,
 };
-pub use crate::builtin::github::run::list::{build_exec_request as run_list_request, project_run};
+pub use crate::builtin::github::run::list::{
+    MAX_LIMIT as RUN_LIST_MAX_LIMIT, build_exec_request as run_list_request, project_run,
+};
 pub use crate::builtin::github::run::view::{
     build_exec_request as run_view_request, project_run_view,
 };

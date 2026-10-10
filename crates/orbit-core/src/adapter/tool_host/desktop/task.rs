@@ -52,7 +52,7 @@ pub(in crate::adapter::tool_host) fn write(
                 "snapshot": snapshot,
             }))
         }
-        Err(error @ (OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
+        Err(error @ (OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } | OrbitError::ClaimRefused { .. }
             | OrbitError::CapabilityDenied(_) | OrbitError::TaskStatusTransition(_))) => {
             // Core maps post-commit refresh failures to DesktopWriteAccepted. These
             // variants therefore prove validation refused before a mutation.

@@ -2,7 +2,7 @@
 title: Routines — Decisions
 owner: claude
 last_updated: 2026-09-20
-last_validated: 2026-09-20
+last_validated: 2026-10-08
 status: Accepted
 feature: routines
 doc_role: decisions
@@ -79,7 +79,7 @@ Sweep must find routine definitions without a resident daemon and without bootst
 
 ### Decision
 
-Sweep enumerates `~/.orbit/workspaces.json` and collects `.orbit/routines/*.yaml` from every registered, active workspace whose versioned `.orbit/config.toml` declares `[routines] role = "source"`. Centralizing all routines in polaris is constellation convention, not Orbit mechanism. `~/.orbit/host.toml` survives only to carry `host_id`.
+Sweep enumerates `~/.orbit/workspaces.json` and collects `.orbit/routines/*.yaml` from every registered, active workspace whose versioned `.orbit/config.toml` declares `[routines] role = "source"`. Centralizing all routines in the constellation's primary workspace is a constellation convention, not Orbit mechanism. `~/.orbit/host.toml` survives only to carry `host_id`.
 
 ### Consequences
 
@@ -134,7 +134,7 @@ Each routine carries a `hosts:` list matched against the host-local `host_id`; t
 
 ### Context
 
-Routines run on two hosts (dk-mac, dk-server-1) with different availability profiles. Definitions must converge across hosts; scheduler runtime state (last fires, pauses, locks) could either be synced between hosts or kept local. Syncing state would let either machine answer "did the nightly fire on the other box?" but requires a scheduler network protocol between hosts that only expose 22/443 to each other.
+Routines run on two hosts (a laptop and an always-on server) with different availability profiles. Definitions must converge across hosts; scheduler runtime state (last fires, pauses, locks) could either be synced between hosts or kept local. Syncing state would let either machine answer "did the nightly fire on the other box?" but requires a scheduler network protocol between hosts that only expose 22/443 to each other.
 
 ### Decision
 
@@ -243,7 +243,7 @@ The clock is host infrastructure shared by both evaluators, so its CLI moves to 
 
 ### Decision
 
-Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. Replica checkouts never evaluate schedules (they cannot write the coordination store). N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
+Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. A replica checkout cannot write the coordination store, so it evaluates no owner work. The narrow exception added by [ORB-14173](2_design.md#21-replica-checkouts-host-local-worktree-gc-only) is its own cron `worktree_gc_pipeline` routine, which reclaims only that host's worktrees after checking task settlement with the owner. N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
 
 The standing rule this settles: **scheduled automation acts only on the host-local store.** A definition whose effect lands on the shared remote rather than the local store (a repo-global chore: "bump dependencies weekly") will run once per owner; such a definition must dedupe against the remote itself or must not ship as an embedded default. An `owner:` field on the definition is the additive answer if that case ever bites; it is deliberately not designed now.
 

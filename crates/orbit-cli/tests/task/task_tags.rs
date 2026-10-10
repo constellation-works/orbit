@@ -59,6 +59,105 @@ fn task_cli_roundtrips_filters_and_replaces_tags() {
     assert_eq!(updated["tags"], json!(["docs"]));
 }
 
+#[test]
+fn search_status_modes_include_blocked_and_deferred_tasks() {
+    let workspace = TestWorkspace::new();
+    let routing = workspace.run(
+        &["workspace", "show", "--format", "json"],
+        None,
+        "verify fixture routing",
+    );
+    let routing: Value = serde_json::from_slice(&routing.stdout).expect("workspace JSON");
+    assert_eq!(routing["registered"], true);
+    assert_eq!(
+        routing["checkout"]["repo_root"],
+        fs::canonicalize(&workspace.work)
+            .expect("canonical fixture checkout")
+            .to_string_lossy()
+            .to_string()
+    );
+
+    workspace.add_task("Proposed task", &[]);
+    let blocked = workspace.add_task("Blocked task", &[]);
+    let blocked_id = blocked["id"].as_str().expect("blocked task id");
+    for status in ["backlog", "in-progress", "blocked"] {
+        workspace.run(
+            &[
+                "task",
+                "update",
+                blocked_id,
+                "--plan",
+                "Exercise search status visibility",
+                "--status",
+                status,
+            ],
+            None,
+            "prepare blocked task",
+        );
+    }
+    for (title, status) in [("Someday task", "someday"), ("Rejected task", "rejected")] {
+        let task = workspace.add_task(title, &[]);
+        workspace.run(
+            &[
+                "task",
+                "update",
+                task["id"].as_str().expect("task id"),
+                "--status",
+                status,
+            ],
+            None,
+            "prepare hidden task",
+        );
+    }
+
+    // Exercise both public entry points. Explicit statuses must keep their
+    // precedence over all, including the open alias and comma-separated sets.
+    for (all, status, expected) in [
+        (false, None, vec!["Proposed task", "Blocked task"]),
+        (
+            true,
+            None,
+            vec![
+                "Proposed task",
+                "Blocked task",
+                "Someday task",
+                "Rejected task",
+            ],
+        ),
+        (
+            true,
+            Some("task:open"),
+            vec!["Proposed task", "Blocked task"],
+        ),
+        (true, Some("task:someday"), vec!["Someday task"]),
+        (
+            true,
+            Some("task:blocked,task:someday"),
+            vec!["Blocked task", "Someday task"],
+        ),
+    ] {
+        let mut args = vec!["search", "tag-search", "--kind", "task", "--json"];
+        let mut input = json!({"query": "tag-search", "kind": "task", "all": all});
+        if all {
+            args.push("--all");
+        }
+        if let Some(status) = status {
+            args.extend(["--status", status]);
+            input["status"] = json!([status]);
+        }
+        let cli = workspace.run(&args, None, "CLI search status mode");
+        assert_orbit_search_titles(&cli, &expected);
+
+        let input = input.to_string();
+        let tool = workspace.run(
+            &["tool", "run", "orbit.search", "--input", &input],
+            None,
+            "tool search status mode",
+        );
+        assert_orbit_search_titles(&tool, &expected);
+    }
+}
+
 /// ORB-10310: `orbit task list` is status-neutral and bounded by `--limit`.
 #[test]
 fn task_list_is_status_neutral_and_bounded_by_limit() {
@@ -105,6 +204,145 @@ fn task_list_is_status_neutral_and_bounded_by_limit() {
         "error must mention the limit: {}",
         String::from_utf8_lossy(&rejected.stderr)
     );
+}
+
+#[test]
+fn task_update_refuses_dropping_system_identity_tag_without_override() {
+    let workspace = TestWorkspace::new();
+    let task = workspace.add_task(
+        "CI failure task",
+        &["ci-failure:8002487a4e972736", "ci-failure-sweep"],
+    );
+    let task_id = task["id"].as_str().expect("task id");
+
+    // 1. Refusal with --json: fails, stderr has structured error with code and tag
+    let rejected_json = workspace.run_raw(&[
+        "task",
+        "update",
+        task_id,
+        "--tag",
+        "ci-failure-sweep",
+        "--tag",
+        "github-actions",
+        "--json",
+    ]);
+    assert!(
+        !rejected_json.status.success(),
+        "dropping ci-failure tag without override must fail"
+    );
+    let err_val: Value = serde_json::from_slice(&rejected_json.stderr).expect("stderr JSON");
+    assert_eq!(err_val["code"], "system_identity_tag_dropped");
+    assert_eq!(err_val["tag"], "ci-failure:8002487a4e972736");
+    assert!(
+        err_val["error"]
+            .as_str()
+            .expect("error string")
+            .contains("ci-failure:8002487a4e972736")
+    );
+
+    // 2. Refusal without --json: fails, stderr names the tag and override flag
+    let rejected_plain = workspace.run_raw(&[
+        "task",
+        "update",
+        task_id,
+        "--tag",
+        "ci-failure-sweep",
+        "--tag",
+        "github-actions",
+    ]);
+    assert!(!rejected_plain.status.success());
+    let stderr = String::from_utf8_lossy(&rejected_plain.stderr);
+    assert!(
+        stderr.contains("ci-failure:8002487a4e972736"),
+        "stderr must name the tag: {stderr}"
+    );
+    assert!(
+        stderr.contains("allow-drop-system-tags"),
+        "stderr must mention override flag: {stderr}"
+    );
+
+    // 3. Success with --allow-drop-system-tags
+    let allowed = workspace.run(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--tag",
+            "ci-failure-sweep",
+            "--tag",
+            "github-actions",
+            "--allow-drop-system-tags",
+            "--json",
+        ],
+        None,
+        "update tags with override flag",
+    );
+    let updated: Value = serde_json::from_slice(&allowed.stdout).expect("update JSON");
+    assert_eq!(
+        updated["tags"],
+        json!(["ci-failure-sweep", "github-actions"])
+    );
+
+    // 4. Keeping the system identity tag does not require the flag
+    let kept = workspace.run(
+        &[
+            "task",
+            "update",
+            task_id,
+            "--tag",
+            "ci-failure:8002487a4e972736",
+            "--tag",
+            "other-tag",
+            "--json",
+        ],
+        None,
+        "update tags retaining system identity tag",
+    );
+    let kept_updated: Value = serde_json::from_slice(&kept.stdout).expect("update JSON");
+    assert_eq!(
+        kept_updated["tags"],
+        json!(["ci-failure:8002487a4e972736", "other-tag"])
+    );
+}
+
+#[test]
+fn task_update_tool_refuses_dropping_system_identity_tag_without_override() {
+    let workspace = TestWorkspace::new();
+    let task = workspace.add_task("Tool CI failure task", &["ci-failure:testkey123", "docs"]);
+    let task_id = task["id"].as_str().expect("task id");
+
+    // 1. Tool update dropping system tag without override fails
+    let tool_reject = json!({
+        "id": task_id,
+        "tags": ["docs", "perf"]
+    })
+    .to_string();
+    let rejected =
+        workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &tool_reject]);
+    assert!(
+        !rejected.status.success(),
+        "tool run dropping ci-failure tag without override must fail"
+    );
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("ci-failure:testkey123"),
+        "stderr must name the tag: {stderr}"
+    );
+
+    // 2. Tool update with allow_drop_system_tags: true succeeds
+    let tool_allow = json!({
+        "id": task_id,
+        "tags": ["docs", "perf"],
+        "allow_drop_system_tags": true
+    })
+    .to_string();
+    let allowed = workspace.run(
+        &["tool", "run", "orbit.task.update", "--input", &tool_allow],
+        None,
+        "tool run dropping ci-failure tag with override",
+    );
+    let updated: Value = serde_json::from_slice(&allowed.stdout).expect("tool output JSON");
+    assert_eq!(updated["tags"], json!(["docs", "perf"]));
 }
 
 fn assert_task_titles(output: &Output, expected: &[&str]) {
@@ -156,7 +394,7 @@ impl TestWorkspace {
         let home = temp.path().join("home");
         let work = home.join("work");
         fs::create_dir_all(&home).expect("create home");
-        fs::create_dir_all(work.join(".git")).expect("create work repo");
+        crate::git_repo::init(&work);
 
         let workspace = Self {
             _temp: temp,
@@ -200,6 +438,10 @@ impl TestWorkspace {
             String::from_utf8_lossy(&output.stderr)
         );
         output
+    }
+
+    fn run_raw(&self, args: &[&str]) -> Output {
+        run_orbit(&self.work, &self.home, args, None)
     }
 }
 

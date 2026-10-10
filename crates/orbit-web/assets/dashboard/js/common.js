@@ -23,6 +23,114 @@ export function getWorkspace() {
   return currentWorkspace;
 }
 
+// ORB-14680: the dashboard can show another registered host through the
+// serving host's `/api/on/<host>/…` forward. `currentHost` is that host's
+// registered name, or null for the serving host. It is seeded from `?host=`
+// (host-switch.js resolves a remembered choice and the serving host's own
+// name), and every API path below is rewritten for it except the host-file
+// routes, which always answer for the serving host.
+let currentHost = params.get("host") || null;
+let servingHost = null;
+let registeredHosts = [];
+let hostWrites = null;
+
+export function getHost() {
+  return currentHost;
+}
+
+/// `{name, machine_id}` of the host serving this page, once `/api/hosts` named it.
+export function getServingHost() {
+  return servingHost;
+}
+
+/// The serving host first, then its host file's remotes, as `/api/hosts` lists them.
+export function setRegisteredHosts(rows) {
+  const hosts = Array.isArray(rows) ? rows.filter((row) => row && row.name) : [];
+  const local = hosts.find((row) => row.local);
+  servingHost = local ? { name: local.name, machine_id: local.machine_id } : null;
+  registeredHosts = hosts;
+}
+
+export function getRegisteredHosts() {
+  return registeredHosts;
+}
+
+/// The registered row a name or `machine_id` names, as the server resolves
+/// `:host` (names case-insensitively), or null.
+export function findRegisteredHost(selector) {
+  if (!selector) return null;
+  const wanted = String(selector);
+  return registeredHosts.find((row) => row.machine_id === wanted || row.name.toLowerCase() === wanted.toLowerCase()) || null;
+}
+
+/// The name the dashboard shows for the selected host.
+export function hostLabel() {
+  if (currentHost) return currentHost;
+  return servingHost ? servingHost.name : "this host";
+}
+
+/// "dk-server-1 (serving host)" or "hostb": the selected host as every label states it.
+export function hostDisplayName() {
+  return currentHost ? currentHost : `${hostLabel()} (serving host)`;
+}
+
+let hostUnavailable = false;
+
+/// Set while the selected host cannot be shown, so pollers stop asking it
+/// until a refresh finds it reachable again.
+export function setHostUnavailable(value) {
+  hostUnavailable = !!value;
+}
+
+export function isHostUnavailable() {
+  return hostUnavailable;
+}
+
+/// The serving session's authority to forward writes, `{authorized, reason}`,
+/// as the selected host's connection state reported it. Null on the serving host.
+export function setHostWrites(capability) {
+  hostWrites = capability && typeof capability === "object" ? capability : null;
+}
+
+/// Why a write to the selected host cannot be sent, or "" when it can. The
+/// forward refuses an unsafe method without the operator session; write
+/// controls show this reason instead of failing on click.
+export function hostWriteRefusal() {
+  if (!currentHost || !hostWrites || hostWrites.authorized !== false) return "";
+  return `Read-only on ${currentHost}: ${hostWrites.reason || "this dashboard session cannot forward writes"}`;
+}
+
+/// Switch the host every API call goes to; the serving host's own name or id
+/// selects the serving host (null). A different host is a new scope: workspace
+/// listeners reset panels and caches, and in-flight visits go stale. An
+/// unregistered name is kept, so the forward's `unknown_host` is what shows.
+export function setHost(name) {
+  const named = findRegisteredHost(name);
+  const next = !name || (named && named.local) ? null : named ? named.name : String(name);
+  if (next === currentHost) return false;
+  currentHost = next;
+  hostWrites = null;
+  hostUnavailable = false;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
+  return true;
+}
+
+// The host-file routes, `/api/hosts` and `/api/hosts/<host>/connection`,
+// always describe the serving host's own host file, and the forward refuses
+// them. Paths already addressed to a host are left as they are.
+function hostPath(path, host) {
+  if (!host || typeof path !== "string" || !path.startsWith("/api/")) return path;
+  if (path.startsWith("/api/on/") || /^\/api\/hosts(?:[/?]|$)/.test(path)) return path;
+  return `/api/on/${encodeURIComponent(host)}/${path.slice("/api/".length)}`;
+}
+
+/// An API path addressed to the selected host, for calls with no workspace
+/// scope (host resources, the log stream).
+export function withHost(path) {
+  return hostPath(path, currentHost);
+}
+
 let workspaceRevision = 0;
 const workspaceListeners = new Set();
 
@@ -30,17 +138,19 @@ export function getWorkspaceRevision() {
   return workspaceRevision;
 }
 
-// Mutations keep the workspace they started in across asynchronous admission
-// reads, responses and refreshes. Returning to the same workspace is a new
-// visit: an earlier result must not update that visit's UI or start a write.
+// Mutations keep the host and workspace they started in across asynchronous
+// admission reads, responses and refreshes. Returning to the same workspace is
+// a new visit: an earlier result must not update that visit's UI or start a write.
 export function captureWorkspaceVisit() {
   const workspace = currentWorkspace;
+  const host = currentHost;
   const revision = workspaceRevision;
   return {
     workspace,
+    host,
     revision,
     isCurrent: () => revision === workspaceRevision,
-    path: (path) => workspacePath(path, workspace),
+    path: (path) => hostPath(workspacePath(path, workspace), host),
   };
 }
 
@@ -129,6 +239,8 @@ export function notifyScopeChange() {
 // Hash routes still own view/filter history; this keeps reload-safe scope.
 export function persistScopeToUrl() {
   const url = new URL(window.location.href);
+  if (currentHost) url.searchParams.set("host", currentHost);
+  else url.searchParams.delete("host");
   if (currentWorkspace) url.searchParams.set("workspace", currentWorkspace);
   else if (isAggregateView() || isAggregateLinked()) url.searchParams.set("workspace", ALL_WORKSPACES_TOKEN);
   else url.searchParams.delete("workspace");
@@ -217,6 +329,10 @@ export function setMultiWorkspace(value) {
   multiWorkspace = !!value;
 }
 
+export function isMultiWorkspace() {
+  return multiWorkspace;
+}
+
 export function isAggregateView() {
   return multiWorkspace && !currentWorkspace;
 }
@@ -261,7 +377,8 @@ function panelMessage(bodyId, state) {
     : quiet ? "panel-placeholder quiet" : "panel-placeholder";
   if (state.error) {
     const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
-    note.textContent = `${label}: ${state.error.message}. Use Refresh to retry.`;
+    const remedy = state.error.remedy || "Use Refresh to retry.";
+    note.textContent = `${label}: ${state.error.message}. ${remedy}`;
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
   } else {
@@ -336,9 +453,11 @@ export async function requestPanel(bodyId, scope, request, render, countId) {
 }
 
 // Append the selected workspace to an API path, unless one is already present
-// (aggregate endpoints like /api/tasks/all are called with no workspace set).
+// (aggregate endpoints like /api/tasks/all are called with no workspace set),
+// and address it to the selected host. Every request, link and stream scopes
+// itself here or through `withHost`.
 export function withWorkspace(path) {
-  return workspacePath(path, currentWorkspace);
+  return hostPath(workspacePath(path, currentWorkspace), currentHost);
 }
 
 function workspacePath(path, workspace) {
@@ -358,6 +477,11 @@ export function el(tag, opts = {}, children = []) {
   if (opts.text != null) node.textContent = opts.text;
   if (opts.title != null) node.title = opts.title;
   if (opts.style) Object.assign(node.style, opts.style);
+  for (const [name, value] of Object.entries(opts)) {
+    if (value != null && (name.startsWith("aria-") || name === "role" || name === "type")) {
+      node.setAttribute(name, String(value));
+    }
+  }
   // `append` inserts a string child as a text node, never as markup.
   for (const child of children) {
     if (child != null) node.append(child);
@@ -366,11 +490,13 @@ export function el(tag, opts = {}, children = []) {
 }
 
 // ORB-11658: expanding a row is the dashboard's primary interaction, so it has
-// to be operable without a mouse. The row itself carries the button semantics —
-// wrapping the cells in a real <button> would break the CSS grid every row type
-// lays out in — so this is the one place that grants the tab stop, the ARIA
-// role and state, and the Enter/Space binding, and it binds `click` from the
-// same handler so pointer and keyboard can never drift apart.
+// to be operable without a mouse. For a row that holds no controls of its own,
+// the row itself carries the button semantics — wrapping the cells in a real
+// <button> would break the CSS grid every row type lays out in — so this is the
+// one place that grants the tab stop, the ARIA role and state, and the
+// Enter/Space binding, and it binds `click` from the same handler so pointer
+// and keyboard can never drift apart. A row that holds selects or buttons uses
+// `makeRowDisclosure` instead: a button cannot contain other controls.
 //
 // `expanded` is omitted for rows that navigate instead of disclosing; those get
 // button semantics with no expansion state. `controls` names the detail node
@@ -393,6 +519,91 @@ export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
   return node;
 }
 
+// ORB-14495: a row that holds controls (copy-id, selects, actions) cannot itself
+// be a button — a screen reader announces one button whose children are
+// controls. One cell becomes the real <button> that discloses or opens the row;
+// the row stays a plain pointer target so a click anywhere outside its controls
+// still toggles. The button's own Enter/Space click bubbles to that same
+// listener, so pointer and keyboard share one handler. Nested controls stop
+// their clicks from reaching the row themselves.
+//
+// `expanded`, `controls` and `current` map to aria-expanded, aria-controls and
+// aria-current; each is omitted when null.
+export function makeDisclosure(host, button, { expanded, controls, current, onToggle } = {}) {
+  button.type = "button";
+  button.classList.add("disclosure");
+  if (expanded != null) button.setAttribute("aria-expanded", String(!!expanded));
+  if (controls) button.setAttribute("aria-controls", controls);
+  if (current) button.setAttribute("aria-current", "true");
+  host.addEventListener("click", onToggle);
+  return host;
+}
+
+/// `makeDisclosure` for a row in a list that `enableRovingRows` manages: the row
+/// and its button are marked so the list can move focus between rows.
+export function makeRowDisclosure(row, button, opts = {}) {
+  row.dataset.rovingRow = "";
+  button.dataset.rowFocus = "";
+  return makeDisclosure(row, button, opts);
+}
+
+// ORB-14495: a list of rows is one Tab stop. Only the current row's controls
+// (its disclosure button first among them, then its selects and actions) are
+// in the tab order; Up/Down/Home/End move between rows' disclosure buttons.
+// The current row is the one that last held focus, remembered by its keyed
+// identity so it survives the rebuild a refresh does, which is also what lets
+// `captureFocus` hand focus back to a rebuilt disclosure.
+const ROW_CONTROLS = "button, select, input, textarea, a[href]";
+const rovingLists = new WeakMap();
+
+function rowIdentity(row) {
+  for (let node = row; node; node = node.parentNode) {
+    if (node.dataset && node.dataset.key) return node.dataset.key;
+  }
+  return null;
+}
+
+function syncRovingRows(container) {
+  const state = rovingLists.get(container);
+  if (!state || typeof container.querySelectorAll !== "function") return;
+  const rows = Array.from(container.querySelectorAll("[data-roving-row]"));
+  const current = rows.find((row) => state.key !== null && rowIdentity(row) === state.key) || rows[0];
+  for (const row of rows) {
+    const tabIndex = row === current ? 0 : -1;
+    for (const control of row.querySelectorAll(ROW_CONTROLS)) control.tabIndex = tabIndex;
+  }
+}
+
+export function enableRovingRows(container) {
+  if (!container || rovingLists.has(container)) return;
+  rovingLists.set(container, { key: null });
+  container.addEventListener("focusin", (event) => {
+    const row = event.target && event.target.closest ? event.target.closest("[data-roving-row]") : null;
+    if (!row || !container.contains(row)) return;
+    const key = rowIdentity(row);
+    const state = rovingLists.get(container);
+    if (state.key === key) return;
+    state.key = key;
+    syncRovingRows(container);
+  });
+  container.addEventListener("keydown", (event) => {
+    const from = event.target;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (!from || !from.matches || !from.matches("[data-row-focus]")) return;
+    const buttons = Array.from(container.querySelectorAll("[data-row-focus]"))
+      .filter((button) => button.getClientRects().length > 0);
+    const at = buttons.indexOf(from);
+    let next;
+    if (event.key === "ArrowDown") next = buttons[at + 1];
+    else if (event.key === "ArrowUp") next = buttons[at - 1];
+    else if (event.key === "Home") next = buttons[0];
+    else if (event.key === "End") next = buttons[buttons.length - 1];
+    else return;
+    event.preventDefault();
+    if (next) next.focus();
+  });
+}
+
 // ORB-11655: a panel refresh rebuilds its nodes every 30 s, but disclosure is
 // operator state, not payload state — a <details> the operator opened has to
 // come back open. Keyed in one store so every rebuilt panel restores the same
@@ -409,10 +620,23 @@ export function detailsPanel(key, opts = {}) {
   return panel;
 }
 
+export function normalizeTaskStatus(status) {
+  return String(status || "unknown").replaceAll("_", "-");
+}
+
 export function statusPill(status) {
+  status = normalizeTaskStatus(status);
   const pill = el("span", { class: "pill", text: status });
   pill.dataset.status = status;
   return pill;
+}
+
+export function auditActorLabel(role) {
+  return role === "unverified" ? "Unconfirmed caller" : role || "-";
+}
+
+export function incidentClassLabel(key, label) {
+  return key === "expected" ? "Expected refusal" : label || key || "failure";
 }
 
 export function priorityCell(p) {
@@ -508,12 +732,15 @@ export async function fetchJson(path) {
     if (!res.ok) {
       const text = await res.text();
       let message = `${path}: HTTP ${res.status}`;
+      let code = null;
       try {
         const body = JSON.parse(text);
         if (body && body.error) message = body.error;
+        if (body && typeof body.code === "string") code = body.code;
       } catch (_) {}
       const error = new Error(message);
       error.status = res.status;
+      if (code) error.code = code;
       throw error;
     }
     return await res.json();
@@ -548,7 +775,14 @@ export function requestJson(path, method, body) {
     headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  return fetch(withWorkspace(path), opts).then(async (res) => {
+  const target = withWorkspace(path);
+  const refusal = target.startsWith("/api/on/") && method !== "GET" ? hostWriteRefusal() : "";
+  if (refusal) {
+    const error = new Error(refusal);
+    error.code = "authorization_denied";
+    return Promise.reject(error);
+  }
+  return fetch(target, opts).then(async (res) => {
     const text = await res.text();
     let body = {};
     if (text) {
@@ -716,6 +950,7 @@ export function syncNodes(container, newNodesArr) {
   }
 
   if (state) panelMessage(container.id, state);
+  syncRovingRows(container);
   restoreFocus();
 }
 
@@ -773,4 +1008,107 @@ export function describePullSettlements(entries) {
 export function isHttpUrl(url) {
   const scheme = String(url || "").trimStart().toLowerCase();
   return scheme.startsWith("http://") || scheme.startsWith("https://");
+}
+
+// ---------------------------------------------------------------------------
+// Durations use one compact format across dashboard views.
+
+export function fmtDuration(value) {
+  if (value == null || value === "") return "-";
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0) return "-";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+  return `${Math.floor(ms / 86400000)}d ${Math.floor((ms % 86400000) / 3600000)}h`;
+}
+
+// Running records without a final duration show elapsed time at each refresh.
+// Completed records and records with unreadable start times keep stored values.
+export function elapsedDurationInfo(record, durationMs = record?.duration_ms, now = Date.now()) {
+  if ((durationMs == null || durationMs <= 0) && record?.state === "running" && record.started_at) {
+    const started = new Date(record.started_at).getTime();
+    if (Number.isFinite(started)) return { durationMs: Math.max(0, now - started), isLive: true };
+  }
+  return { durationMs, isLive: false };
+}
+
+// Timestamps. The dashboard reads one clock: an absolute instant renders as
+// 24-hour local time with the zone abbreviation, a relative age carries that
+// absolute instant in its title, and UTC appears only for values defined in
+// UTC (cron schedules, the UTC-aligned Reliability window), always labelled.
+
+function toDate(value) {
+  if (value == null || value === "") return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function dateParts(date, utc) {
+  return utc
+    ? { y: date.getUTCFullYear(), mo: date.getUTCMonth() + 1, d: date.getUTCDate(), h: date.getUTCHours(), mi: date.getUTCMinutes(), s: date.getUTCSeconds() }
+    : { y: date.getFullYear(), mo: date.getMonth() + 1, d: date.getDate(), h: date.getHours(), mi: date.getMinutes(), s: date.getSeconds() };
+}
+
+function clockText(p, seconds) {
+  return `${pad2(p.h)}:${pad2(p.mi)}${seconds ? `:${pad2(p.s)}` : ""}`;
+}
+
+function dateTimeText(p, seconds) {
+  return `${p.y}-${pad2(p.mo)}-${pad2(p.d)} ${clockText(p, seconds)}`;
+}
+
+/// The browser's zone abbreviation at `value` ("PDT", "UTC", or "GMT+2"
+/// where the locale has no abbreviation), so daylight saving is reflected.
+export function zoneName(value = new Date()) {
+  const date = toDate(value) || new Date();
+  return new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+    .formatToParts(date)
+    .find((part) => part.type === "timeZoneName")?.value || "UTC";
+}
+
+/// "2026-10-06 23:31 PDT". Unparseable input is returned as given, empty as "-".
+export function formatDateTime(value, { seconds = false } = {}) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  return `${dateTimeText(dateParts(date, false), seconds)} ${zoneName(date)}`;
+}
+
+/// A local wall-clock time, "23:32:57 PDT"; `zone: false` drops the zone for
+/// dense columns whose title or header carries it.
+export function formatClock(value, { seconds = true, zone = true } = {}) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "" : String(value);
+  const text = clockText(dateParts(date, false), seconds);
+  return zone ? `${text} ${zoneName(date)}` : text;
+}
+
+/// "2026-10-07 06:33 UTC", for values whose meaning is defined in UTC.
+export function formatUtcDateTime(value, { seconds = false } = {}) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  return `${dateTimeText(dateParts(date, true), seconds)} UTC`;
+}
+
+/// "2026-10-06 06:33 → 2026-10-07 06:33 UTC"; "" when either end is unreadable.
+export function formatUtcRange(since, until) {
+  const start = toDate(since);
+  const end = toDate(until);
+  if (!start || !end) return "";
+  return `${dateTimeText(dateParts(start, true), false)} → ${dateTimeText(dateParts(end, true), false)} UTC`;
+}
+
+/// A compact age ("42s", "5m", "3h", "2d"); pair it with `formatDateTime` in
+/// the element's title.
+export function formatAge(value, now = Date.now()) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  const diff = Math.max(0, (now - date.getTime()) / 1000);
+  if (diff < 60) return `${Math.floor(diff)}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
 }

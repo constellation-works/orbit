@@ -5,7 +5,7 @@ use crate::output::color::{Domain, cell};
 use crate::output::table::{Column, Table};
 
 pub(super) fn audit_event_to_json(event: &AuditEvent) -> Value {
-    json!({
+    let mut value = json!({
         "id": event.id,
         "execution_id": event.execution_id,
         "timestamp": event.timestamp.to_rfc3339(),
@@ -45,7 +45,13 @@ pub(super) fn audit_event_to_json(event: &AuditEvent) -> Value {
         // ORB-10890: named `self_reported_*` rather than `actor` precisely so
         // a consumer cannot mistake it for the authenticated `role` above.
         "self_reported_actor": event.self_reported_actor,
-    })
+    });
+    value["plugin"] = json!(event.plugin);
+    value["plugin_secrets"] = json!(event.plugin_secrets);
+    value["plugin_secret_updates"] = json!(event.plugin_secret_updates);
+    value["brokered"] = json!(event.brokered);
+    value["peer_pid"] = json!(event.peer_pid);
+    value
 }
 
 /// Which columns the caller filtered on, so a column the filter made

@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Orbit's Model Context Protocol framing, tool surface, and transports.
 //!
 //! This crate owns protocol framing, advertised-name translation, structured
@@ -37,13 +32,13 @@ pub use adapter::OrbitToolServer;
 pub use internal_drain::{INTERNAL_DRAIN_PROTOCOL, internal_drain_name};
 pub use listener::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure, McpListener};
 pub use remote::{
-    FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, McpServerIdentity, McpSessionAuthority,
+    FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, HostFacts, McpServerIdentity, McpSessionAuthority,
     RemoteProxyArgs, WORKSPACE_LIST_INCLUDE_CREWS, canonical_mcp_tool_definitions,
     execute_discovery_tool, execute_federated_workspace_discovery,
     ignored_caller_authorization_paths, mcp_server_identity, safe_mcp_tool_names,
     serve_mcp_remote_proxy, warn_ignored_caller_authorization, workspace_list_includes_crews,
 };
-pub use stdio_session::{RESUME_ENV, StdioExit};
+pub use stdio_session::{RESUME_ENV, StdioExit, stdin_supports_handover};
 
 /// Back-end for the complete MCP tool surface.
 ///
@@ -117,7 +112,7 @@ pub trait McpHost: Send + Sync + 'static {
 ///
 /// Resumes a session handed over by a previous image of this process, and
 /// returns [`StdioExit::HandOver`] when this one should hand over in turn;
-/// see [`stdio_session`].
+/// see `stdio_session`.
 pub async fn serve_stdio_with_context(
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,

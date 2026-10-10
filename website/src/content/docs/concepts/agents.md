@@ -301,7 +301,7 @@ model = "opus"
 <div class="ose-panel" id="ose-panel-codex">
 <dl class="ose-facts">
 <dt>Binary on <code>PATH</code></dt><dd><code>codex</code></dd>
-<dt>Example model</dt><dd><code>gpt-6-sol</code></dd>
+<dt>Example model</dt><dd><code>gpt-6.1-sol</code></dd>
 <dt>Reasoning effort</dt><dd>Supported — the full crew vocabulary, rendered as <code>codex exec --config model_reasoning_effort="&lt;value&gt;"</code>.</dd>
 </dl>
 <fieldset class="ose-field">
@@ -322,7 +322,7 @@ default_crew = "sol"
 
 [crews.sol]
 provider = "codex"
-model = "gpt-6-sol"
+model = "gpt-6.1-sol"
 <span class="ose-eff" data-effort="low">effort = "low"
 </span><span class="ose-eff" data-effort="medium">effort = "medium"
 </span><span class="ose-eff" data-effort="high">effort = "high"
@@ -624,7 +624,7 @@ at dispatch: an explicit crew on the activity input first, then the task's
 ```toml
 [crews.sol]
 provider = "codex"
-model = "gpt-6-sol"
+model = "gpt-6.1-sol"
 effort = "high"
 ```
 
@@ -653,7 +653,8 @@ resolved filesystem profile. `orbit init` writes the right backend for your
 host into the shipped executors:
 
 - **macOS**: `sandbox-exec`, with the profile compiled to SBPL.
-- **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap`. It confines writes to
+- **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap` or, when that is
+  missing or too old, Orbit's root-owned bundled build. It confines writes to
   the resolved profile and hides well-known credential locations such as
   `~/.ssh` and `~/.aws`. Other host reads and network access stay open, so it
   is not a read-rule or network boundary. Dispatch **fails closed** if `bwrap`

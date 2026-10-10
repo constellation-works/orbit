@@ -444,10 +444,27 @@ pub(super) fn collect_unpublished_bundle_dirs(
     Ok(UnpublishedBundleScan { stubs, unresolved })
 }
 
-/// Delete one dead-holder lock only after acquiring its advisory lock. A
+/// Clear one dead-holder record only after acquiring its advisory lock. A
 /// fresh holder can win the race between the initial scan and this cleanup;
 /// in that case `try_lock_exclusive` reports contention and the file remains.
 pub(super) fn remove_stale_lock_file(path: &Path) -> Result<bool, OrbitError> {
+    remove_stale_lock_file_with_hook(path, || {})
+}
+
+/// Force a queued opener while cleanup owns the lock, so tests can verify
+/// that cleanup preserves mutual exclusion for its existing descriptor.
+#[cfg(all(test, unix))]
+pub(super) fn remove_stale_lock_file_after_acquire(
+    path: &Path,
+    after_acquire: impl FnOnce(),
+) -> Result<bool, OrbitError> {
+    remove_stale_lock_file_with_hook(path, after_acquire)
+}
+
+fn remove_stale_lock_file_with_hook(
+    path: &Path,
+    after_acquire: impl FnOnce(),
+) -> Result<bool, OrbitError> {
     let Some(holder) = orbit_store::read_lock_holder(path) else {
         return Ok(false);
     };
@@ -476,17 +493,21 @@ pub(super) fn remove_stale_lock_file(path: &Path) -> Result<bool, OrbitError> {
         }
     }
 
+    after_acquire();
+
     // Re-read after acquiring the advisory lock so a holder that appeared
-    // after the first liveness probe is never removed.
-    let should_remove = orbit_store::read_lock_holder(path)
+    // after the first liveness probe is never cleared.
+    let should_clear = orbit_store::read_lock_holder(path)
         .is_some_and(|current_holder| !process_is_alive(current_holder.pid));
-    if !should_remove {
+    if !should_clear {
         return Ok(false);
     }
 
-    std::fs::remove_file(path).map_err(|error| {
+    // Never unlink a lock file: queued openers already have descriptors to
+    // this inode, and new openers must continue to contend on the same one.
+    file.set_len(0).map_err(|error| {
         OrbitError::Io(format!(
-            "remove stale lock candidate {}: {error}",
+            "clear stale lock holder {}: {error}",
             path.display()
         ))
     })?;

@@ -1,0 +1,56 @@
+Cancel a pending or running job run
+
+Usage: orbit run cancel [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>
+          Job run ID to cancel
+
+Options:
+      --confirm
+          Confirm process termination and irreversible run terminalization
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --reason <REASON>
+          Optional reason recorded with the cancellation audit event
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --force
+          Do not wait for a drain's in-flight leaves: stop them too, returning a pull drain's claims to the owner's backlog
+
+      --block
+          Keep a cancelled task leaf blocked instead of returning it to the backlog
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Cancels a job run that has not reached a terminal state: signals the owner process of a running run (TERM then KILL), stops the agent processes the run still has open, releases the run's task reservations, and finalizes the run as `cancelled`. The primary remediation for a stuck `pending` run with no live worker (orphan reconciliation also clears those on workspace open). A run that already finished returns a stable `already_terminal` result without replacing its outcome.
+
+A running follower pull drain (`workspace_pull_pipeline`) is cancelled gracefully: it stops requesting work at once, returns the claims it had not launched to the owner's backlog, and keeps running — reported as `cancelling`, with the leaves it is waiting for — until every launched leaf has finished and its outcome reached the owner; then it ends `cancelled`. The command returns immediately; `orbit run show <run_id>` follows the wait. `--force` does not wait: it stops the drain and each of its running leaves, and returns every claim to the owner's backlog with a comment naming the drain and the reason. It touches only the leaves that drain carries. A leaf whose stop cannot be confirmed keeps its claim on the owner, is listed, and makes the command exit 1. A queued drain, or one whose worker is gone, is cancelled at once. Cancelling a drain that already ended delivers whatever it left behind, and `--force` also stops leaves it left running.
+
+`--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the task runs it started, which a plain cancel leaves running. A child whose stop cannot be confirmed is listed with its reason and makes the command exit 1. For any other run it changes nothing.
+
+Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow, including for the leaves and children a `--force` or cascading cancel stops; a pull drain's released claims always return to the owner's backlog.
+
+Examples:
+  orbit run cancel jrun-20260706-0120-2 --confirm
+  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason "needs review"
+  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason "host maintenance"
+  orbit run cancel jrun-20260706-0120-2 --confirm --json

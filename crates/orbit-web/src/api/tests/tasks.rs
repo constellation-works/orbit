@@ -473,3 +473,165 @@ async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
             .any(|entry| { entry["from_status"] == "review" && entry["to_status"] == "done" })
     );
 }
+
+/// Selectors the task's latest creation grant names, `None` when it has none.
+fn creation_grant(runtime: &OrbitRuntime, task_id: &str) -> Option<Value> {
+    let history = runtime.get_task_history(task_id).expect("task history");
+    let grant = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == "context_creation_authorized")?;
+    let note: Value =
+        serde_json::from_str(grant.note.as_deref().expect("grant note")).expect("grant JSON");
+    Some(note["selectors"].clone())
+}
+
+/// The dashboard's `allow_missing_context` records the same durable creation
+/// intent as the CLI and tool surfaces, and an ordinary dashboard edit
+/// re-sends a declared target without it while staying strict for any other
+/// missing selector.
+#[tokio::test]
+async fn dashboard_allow_missing_context_records_durable_creation_intent() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let repo_root = runtime.paths().repo_root.clone();
+    std::fs::write(repo_root.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
+
+    let created = router()
+        .with_state(crate::state::DashboardState::single(runtime.clone()))
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/tasks")
+                .header(header::ORIGIN, "http://localhost:7878")
+                .header(header::HOST, "localhost:7878")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "title": "Dashboard-declared module",
+                        "description": "Creates src/future.rs.",
+                        "complexity": "low",
+                        "context_files": ["file:existing.rs", "file:src/future.rs"],
+                        "allow_missing_context": true,
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(created.status(), StatusCode::OK);
+    let id = body_json(created).await["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+    assert_eq!(
+        creation_grant(&runtime, &id),
+        Some(json!(["file:src/future.rs"]))
+    );
+
+    let resent = patch_task(
+        runtime.clone(),
+        &id,
+        json!({"context_files": ["file:src/future.rs", "file:existing.rs"]}),
+    )
+    .await;
+    assert_eq!(resent.status(), StatusCode::OK);
+    assert_eq!(
+        creation_grant(&runtime, &id),
+        Some(json!(["file:src/future.rs"]))
+    );
+
+    let undeclared = patch_task(
+        runtime.clone(),
+        &id,
+        json!({"context_files": ["file:existing.rs", "file:src/other.rs"]}),
+    )
+    .await;
+    assert_eq!(undeclared.status(), StatusCode::BAD_REQUEST);
+
+    let declared = patch_task(
+        runtime.clone(),
+        &id,
+        json!({
+            "context_files": ["file:existing.rs", "file:src/other.rs"],
+            "allow_missing_context": true,
+        }),
+    )
+    .await;
+    assert_eq!(declared.status(), StatusCode::OK);
+    assert_eq!(
+        creation_grant(&runtime, &id),
+        Some(json!(["file:src/other.rs"])),
+        "replacing the scope revokes the dropped target's grant"
+    );
+}
+
+/// The list and detail projections carry `readiness: {ready, gaps, preparing}`
+/// for proposed and backlog tasks only, each gap as
+/// `{code, severity, message, fix}`.
+#[tokio::test]
+async fn task_list_and_detail_carry_readiness_for_proposed_and_backlog_only() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let proposed = seed_task_with_status(&runtime, "Unprepared proposal", TaskStatus::Proposed);
+    let backlog = runtime
+        .add_task(TaskAddParams {
+            title: "Assessed backlog task".to_string(),
+            description: "Fixture task without context selectors.".to_string(),
+            status: Some(TaskStatus::Backlog),
+            complexity: orbit_types::task::TaskComplexity::Low,
+            ..Default::default()
+        })
+        .expect("seed backlog task");
+    let review = seed_task_with_status(&runtime, "Under review", TaskStatus::Review);
+
+    let list =
+        body_json(request_shared(runtime.clone(), "/tasks?status=proposed,backlog,review").await)
+            .await;
+    let row = |id: &str| {
+        list["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|row| row["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} listed"))
+    };
+    let readiness = &row(&proposed.id)["readiness"];
+    assert_eq!(readiness["ready"], false);
+    assert_eq!(readiness["preparing"], false);
+    let gaps = readiness["gaps"].as_array().expect("gaps");
+    let codes: Vec<_> = gaps
+        .iter()
+        .map(|gap| {
+            let mut keys: Vec<_> = gap.as_object().expect("gap object").keys().collect();
+            keys.sort();
+            assert_eq!(keys, ["code", "fix", "message", "severity"]);
+            assert!(gap["message"].as_str().is_some_and(|text| !text.is_empty()));
+            assert!(gap["fix"].as_str().is_some_and(|text| !text.is_empty()));
+            (gap["code"].clone(), gap["severity"].clone())
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            (json!("missing_context_files"), json!("blocking")),
+            (json!("unassessed_complexity"), json!("blocking")),
+        ]
+    );
+
+    let readiness = &row(&backlog.id)["readiness"];
+    assert_eq!(
+        readiness["ready"], true,
+        "missing context is advisory in the backlog"
+    );
+    assert_eq!(readiness["gaps"][0]["code"], "missing_context_files");
+    assert_eq!(readiness["gaps"][0]["severity"], "advisory");
+
+    assert!(row(&review.id).get("readiness").is_none());
+
+    let detail =
+        body_json(request_shared(runtime.clone(), &format!("/tasks/{}", proposed.id)).await).await;
+    assert_eq!(detail["readiness"], row(&proposed.id)["readiness"]);
+    let detail = body_json(request_shared(runtime, &format!("/tasks/{}", review.id)).await).await;
+    assert!(detail.get("readiness").is_none());
+}

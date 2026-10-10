@@ -23,7 +23,9 @@ use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
 use serde_json::Value;
 
-pub(crate) use client::{forward_call, refuse_unbrokered_call, refuse_unbrokered_host_read};
+pub(crate) use client::{
+    ForwardCallError, forward_call_with_status, refuse_unbrokered_call, refuse_unbrokered_host_read,
+};
 pub(crate) use peer::PeerAnchor;
 pub(crate) use protocol::{BrokerRequest, EntryPoint};
 pub(crate) use socket::sweep_orphaned;
@@ -31,11 +33,12 @@ pub(crate) use socket::sweep_orphaned;
 use server::{AnchorSlot, BrokerServer};
 use socket::RunSocketDir;
 
-/// The built-in tools a broker runs besides plugin tools (design §3): the
-/// read-only `github.*` discovery surface. Each runs `gh` with the host
+/// One set of built-in tools a broker runs besides plugin tools (design §3):
+/// the read-only `github.*` discovery surface. The other is a claimed
+/// worker's owner calls, `orbit_types::tool::CLAIMED_OWNER_TOOLS`. Each runs `gh` with the host
 /// account's credentials, which every agent sandbox masks, so a confined
 /// agent can reach them only through the host. The list is closed: nothing
-/// that changes GitHub, and no other built-in, is ever brokered.
+/// that changes GitHub is ever brokered.
 const HOST_CREDENTIALED_READS: [&str; 5] = [
     "github.auth.status",
     "github.pr.list",

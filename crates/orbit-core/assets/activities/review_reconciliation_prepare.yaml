@@ -1,0 +1,43 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_reconciliation_prepare
+spec:
+  type: deterministic
+  description: >
+    Authenticates the run against its operator admission, binds it to the
+    reconciliation's current attempt, and re-observes the stopped claim, the
+    accepted handoff, the merged pull request and the task meaning. A change
+    since submission records a refusal. Returns the merged head and base the
+    later steps pin, and the independent review crew frozen in the
+    reconciliation's contract at submission.
+  input_schema_json:
+    type: object
+    required: [task_id, reconciliation_id]
+    properties:
+      task_id:
+        type: string
+        minLength: 1
+      reconciliation_id:
+        type: string
+        minLength: 1
+  output_schema_json:
+    type: object
+    required: [task_id, reconciliation_id, head, base, workspace_path, crew]
+    properties:
+      task_id:
+        type: string
+      reconciliation_id:
+        type: string
+      head:
+        type: string
+      base:
+        type: string
+      pull_request_url:
+        type: string
+      workspace_path:
+        type: string
+      crew:
+        type: string
+  action: review_reconciliation_prepare
+  config: {}

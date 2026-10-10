@@ -1,20 +1,22 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
-import { renderScoreboard } from './js/scoreboard.js';
+import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
+import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
-import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
+import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
+import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -62,7 +64,9 @@ const DEFAULT_INACTIVE_STATUSES = new Set(["someday", "done", "rejected", "archi
 // default (applyTasksHashQuery) read from, so they cannot drift apart.
 const DEFAULT_ACTIVE_STATUSES = STATUS_ORDER.filter((s) => !DEFAULT_INACTIVE_STATUSES.has(s));
 
-const JOB_RUN_LIMIT = positiveIntParam("runs", 25);
+const DEFAULT_JOB_RUN_LIMIT = 25;
+const JOB_RUN_STEP = 25;
+let jobRunLimit = positiveIntParam("runs", DEFAULT_JOB_RUN_LIMIT);
 const DIAG_LIMIT = positiveIntParam("diag", 50);
 const FRICTION_LIMIT = positiveIntParam("frictions", 100);
 
@@ -96,6 +100,7 @@ let activeDiagSubtab = "runs";
 let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
 let refreshSequence = 0;
+let lastCleanRefresh = null;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
@@ -153,6 +158,7 @@ function diagnosticsContext() {
   return {
     getLastDiagnostics: () => lastDiagnostics,
     getActiveDiagSubtab: () => activeDiagSubtab,
+    refreshDiagnostics: () => refreshDashboard(),
     fmtRelative,
     fmtDuration,
     // ORB-10871: incident expansion states exact first/last timestamps, not
@@ -203,6 +209,8 @@ function routerContext() {
     // refresh tick (and without the aggregate-view guard the other diagnostics
     // fetches need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
+    // ORB-14830: Doctor reads its report when the view opens, never per tick.
+    openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
     showDrainDock: () => setDockMode("drain"),
 
@@ -223,6 +231,16 @@ function routerContext() {
   };
 }
 
+function loadMoreRuns() {
+  const currentLimit = (lastRunsMeta && Number.isFinite(lastRunsMeta.limit))
+    ? lastRunsMeta.limit
+    : jobRunLimit;
+  jobRunLimit = currentLimit + JOB_RUN_STEP;
+  markRunsLoading();
+  renderRuns(lastRuns);
+  return fetchAndRenderRuns();
+}
+
 function runsContext() {
   return {
     navigateToRun: nTR,
@@ -233,10 +251,16 @@ function runsContext() {
     getLastRuns: () => lastRuns,
     getRunsMeta: () => lastRunsMeta,
     getRunsLoading: () => lastRunsLoading,
+    // The server clamps the requested limit; once it echoes less than was asked
+    // for, another Load more would refetch the same rows.
+    getRunsLimitCapped: () => Boolean(lastRunsMeta)
+      && Number.isFinite(lastRunsMeta.limit)
+      && jobRunLimit > lastRunsMeta.limit,
     markRunsLoading,
     getRunSourcesUnavailable: () => lastRunSourcesUnavailable,
     fmtTimestamp,
     fmtDuration,
+    loadMoreRuns,
   };
 }
 
@@ -263,7 +287,7 @@ function runDetailContext() {
     toggleExpandedStepIndex,
     // callbacks the run-detail renderers invoke (Gantt click handler etc.)
     setRunDetailSubtab,
-    // formatters (stay in app.js until common.js extraction)
+    // formatters (the shared clock lives in common.js)
     fmtTimestamp,
     fmtDuration,
     fmtRelative,
@@ -297,7 +321,7 @@ function renderBodyBlock(body, fallbackClass) {
     view.textContent = body;
   }
   return el("div", { class: "field-block" }, [
-    el("h4", { text: "body" }),
+    el("h4", { class: "section-title", text: "Body" }),
     view,
   ]);
 }
@@ -329,9 +353,10 @@ function renderLocksPanel(payload) {
   const nodes = byTask.map((task) => {
     const taskId = String(task.id || "");
     const files = Array.isArray(task.context_files) ? task.context_files : [];
-    const group = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-group" });
+    const group = el("div", { class: "lock-task-group" });
     group.dataset.key = `lock-task-${taskId}`;
     group.dataset.hash = JSON.stringify(task);
+    const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
 
     const idButton = el("button", {
       class: "lock-task-id mono",
@@ -346,7 +371,6 @@ function renderLocksPanel(payload) {
     });
 
     const header = el("summary", { class: "lock-task-header" }, [
-      idButton,
       statusPill(task.status || "unknown"),
       el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
     ]);
@@ -357,7 +381,7 @@ function renderLocksPanel(payload) {
         title: `job_run=${task.job_run_id}`,
       }));
     }
-    group.appendChild(header);
+    details.appendChild(header);
 
     const list = el("div", { class: "lock-file-list" });
     for (const path of files) {
@@ -367,7 +391,9 @@ function renderLocksPanel(payload) {
         title: String(path),
       }));
     }
-    group.appendChild(list);
+    details.appendChild(list);
+    group.appendChild(details);
+    group.appendChild(idButton);
     return group;
   });
   syncNodes(body, nodes);
@@ -379,33 +405,6 @@ function shortRunId(runId) {
   const text = String(runId || "");
   const match = /^jrun-\d{8}-(.+)$/.exec(text);
   return match ? `…${match[1]}` : text;
-}
-
-function fmtTimestamp(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const now = Date.now();
-  const diff = (now - d.getTime()) / 1000;
-  if (diff < 60) return `${Math.floor(diff)}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
-}
-
-function fmtAbsTime(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fmtDuration(ms) {
-  if (ms == null) return "-";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60000)}m${Math.floor((ms % 60000) / 1000)}s`;
 }
 
 function knowledgeStatusPill(status) {
@@ -432,7 +431,7 @@ function detailMetaRows(entries) {
 
 function detailGroup(title, content) {
   return el("div", { class: "knowledge-side-group" }, [
-    el("h4", { text: title }),
+    el("h4", { class: "section-title", text: title }),
     content || el("div", { class: "empty", text: "-" }),
   ]);
 }
@@ -481,6 +480,7 @@ function frictionAvailableCount(stats = {}) {
 function renderFrictions(payload) {
   const body = $("frictions-body");
   if (!body) return;
+  enableRovingRows(body);
   const items = Array.isArray(payload && payload.items) ? payload.items : [];
   const stats = (payload && payload.stats) || {};
   const accordion = frictionAccordionMedia.matches;
@@ -511,6 +511,10 @@ function renderFrictions(payload) {
     const title = friction.title || friction.id;
     const expanded = activeFrictionId === friction.id;
     const detailId = `friction-accordion-${friction.id}`;
+    // The title is the row's button. Beside the detail pane it selects the
+    // friction the pane shows; in the one-column accordion it discloses the
+    // detail beneath the row.
+    const openButton = el("button", { class: "title", text: title });
     const row = el("div", { class: "knowledge-row friction-row", title }, [
       el("div", { class: "top" }, [
         el("span", { class: "id", text: friction.id, title: friction.id }),
@@ -518,7 +522,7 @@ function renderFrictions(payload) {
         el("span", { class: "when", text: fmtTimestamp(friction.created_at), title: fmtAbsTime(friction.created_at) }),
         accordion ? el("span", { class: "friction-row-toggle", text: expanded ? "▾" : "▸" }) : null,
       ]),
-      el("div", { class: "title", text: title }),
+      openButton,
       el("div", { class: "summary", text: truncate(friction.body || title, 180) }),
       el("div", { class: "meta" }, [
         knowledgeStatusPill(friction.status || "open"),
@@ -531,24 +535,28 @@ function renderFrictions(payload) {
       ]),
     ]);
     row.dataset.key = `friction-${friction.id}`;
-    row.dataset.hash = `${friction.id}-${friction.status}-${(friction.tags || []).join(",")}-${friction.created_at}-${accordion}-${expanded}`;
+    // syncNodes keeps the mounted row when this hash is unchanged, so every
+    // field the row paints has to be present. `?? null` keeps absent values
+    // in the JSON (JSON.stringify drops undefined).
+    row.dataset.hash = JSON.stringify({
+      id: friction.id,
+      status: friction.status ?? null,
+      tags: friction.tags || [],
+      created_at: friction.created_at ?? null,
+      accordion,
+      expanded,
+      title: friction.title ?? null,
+      body: friction.body ?? null,
+      during_task: friction.during_task ?? null,
+    });
     if (expanded) row.classList.add("active");
     const toggle = () => {
       activeFrictionId = accordion && expanded ? null : friction.id;
       renderFrictions(lastFrictionPayload);
     };
-    row.addEventListener("click", toggle);
-    if (accordion) {
-      row.tabIndex = 0;
-      row.setAttribute("role", "button");
-      row.setAttribute("aria-expanded", String(expanded));
-      row.setAttribute("aria-controls", detailId);
-      row.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        toggle();
-      });
-    }
+    makeRowDisclosure(row, openButton, accordion
+      ? { expanded, controls: detailId, onToggle: toggle }
+      : { controls: "friction-detail", current: expanded, onToggle: toggle });
     frag.appendChild(row);
     if (accordion && expanded) {
       const inlineDetail = el("section", { class: "friction-accordion-detail" });
@@ -600,16 +608,16 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
       markdownPanel(friction.body || friction.title, "friction-detail-body"),
     ]),
     el("aside", { class: "knowledge-side" }, [
-      detailGroup("metadata", detailMetaRows([
+      detailGroup("Metadata", detailMetaRows([
         ["id", friction.id],
         ["status", friction.status || "open"],
         ["model", friction.model],
         ["reported", fmtAbsTime(friction.created_at)],
         ["resolved", friction.resolved_at ? fmtAbsTime(friction.resolved_at) : "—"],
       ])),
-      detailGroup("triage", controls),
-      detailGroup("tags", knowledgeTagWrap(frictionTagNodes(friction.tags))),
-      friction.during_task ? detailGroup("during task", buildKnowledgeValueList([friction.during_task], { taskLinks: true })) : null,
+      detailGroup("Triage", controls),
+      detailGroup("Tags", knowledgeTagWrap(frictionTagNodes(friction.tags))),
+      friction.during_task ? detailGroup("During task", buildKnowledgeValueList([friction.during_task], { taskLinks: true })) : null,
     ].filter(Boolean)),
   ]);
 
@@ -753,20 +761,19 @@ function buildKnowledgeValueList(values, opts = {}) {
   return wrap;
 }
 
+// Installed by wireTaskIdResolver. Friction "during task" links must use that
+// scoped lookup: widening activeStatuses and then routing to Tasks is undone
+// by applyTasksHashQuery, which restores the default filter and leaves
+// openVisibleTask able only to copy an off-filter or off-page id.
+let resolveTaskById = null;
+
 function openTaskFromKnowledge(taskId) {
-  activeStatuses = new Set(STATUS_ORDER);
-  searchQuery = "";
-  const taskSearch = $("task-search");
-  if (taskSearch) taskSearch.value = "";
-  sAT("tasks", { refresh: false });
-  const open = () => openVisibleTask(taskId, taskContext());
-  if (lastTasks.length > 0 && hasCrewOptions()) {
-    open();
+  const id = String(taskId || "").trim().toUpperCase();
+  if (!id || typeof resolveTaskById !== "function") {
+    copyTaskIdWithNotice(String(taskId || "").trim(), taskContext());
     return;
   }
-  fetchAndRenderTasks().then(() => {
-    open();
-  }).catch(() => copyTaskIdWithNotice(taskId, taskContext()));
+  resolveTaskById(id);
 }
 
 function wireFrictionSearch() {
@@ -848,7 +855,7 @@ function wireTaskIdResolver() {
   function taskDetailPath(id, workspaceId) {
     const base = `/api/tasks/${encodeURIComponent(id)}`;
     if (workspaceId) {
-      return `${base}?workspace=${encodeURIComponent(workspaceId)}`;
+      return withHost(`${base}?workspace=${encodeURIComponent(workspaceId)}`);
     }
     return withWorkspace(base);
   }
@@ -998,6 +1005,8 @@ function wireTaskIdResolver() {
     showLookupStatus("error", `${id} not found`);
   }
 
+  resolveTaskById = lookupTask;
+
   // Editing the query abandons any lookup still in flight.
   input.addEventListener("input", () => {
     lookupSeq += 1;
@@ -1032,14 +1041,14 @@ function truncate(text, max) {
 
 // ORB-00039: in aggregate mode the per-workspace fetches are skipped, so the
 // panels they feed (audit summary, locked files) show an inline placeholder and
-// the health strip is neutralized rather than left displaying one workspace's
-// stale counts.
+// the summary's rail counts are cleared rather than left displaying one
+// workspace's stale counts.
 function renderAggregatePlaceholders() {
   renderPanelPlaceholder("audit-summary-body");
   renderPanelPlaceholder("locks-body");
   const locksCount = $("locks-count");
   if (locksCount) locksCount.textContent = "—";
-  resetHealthStrip();
+  resetSummaryCounts();
 }
 
 // Most Diagnostics panels are fed exclusively by per-workspace endpoints and
@@ -1048,7 +1057,7 @@ function renderAggregatePlaceholders() {
 // by these placeholders.
 function renderDiagnosticsPlaceholders() {
   renderPanelPlaceholder("diag-body");
-  renderPanelPlaceholder("scoreboard-body");
+  placeholdScoreboardAggregate();
   renderPanelPlaceholder("diag-implement-one-body");
   const diagCount = $("diag-count");
   if (diagCount) diagCount.textContent = "—";
@@ -1066,22 +1075,13 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   if (count) count.textContent = "—";
 }
 
-// The health strip is fed by the same per-workspace /api/audit/summary endpoint,
-// so in aggregate mode reset its tiles to a neutral dash rather than showing the
-// last-selected workspace's numbers as if they were machine-wide.
-function resetHealthStrip() {
-  for (const id of [
-    "tile-events-value",
-    "tile-denials-value",
-    "tile-failed-value",
-    "tile-active-value",
-  ]) {
-    const node = $(id);
-    if (node) node.textContent = "—";
-  }
-  const denials = $("tile-denials");
-  if (denials) denials.classList.remove("tile-alert");
-  renderSparkline([]);
+// The Runs and Audit rail counts are fed by the per-workspace
+// /api/audit/summary endpoint, so in aggregate mode and on a workspace switch
+// they are cleared rather than showing the last-selected workspace's numbers as
+// if they were machine-wide.
+function resetSummaryCounts() {
+  setRailCount("rail-count-diag-runs", null);
+  setRailCount("rail-count-audit", null);
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1185,20 +1185,27 @@ function fetchAndRenderTasks() {
 
 // ORB-00030: discover servable workspaces and, in global mode, install a
 // header selector. Runs before the first refresh so the initial fetches target
-// the right workspace. Failures are non-fatal (single-workspace fallback).
+// the right workspace, and again for each host selected [ORB-14680]: a
+// workspace id the new host also lists stays selected, "All workspaces" stays
+// the aggregate of that host's workspaces, and anything else becomes that
+// host's default. Failures are non-fatal (single-workspace fallback) and
+// resolve false so the next refresh tries again.
 async function initWorkspaceSelector() {
+  const wasAggregate = isAggregateView() || isAggregateLinked();
   let entries;
   try {
     entries = await fetchJson("/api/workspaces");
   } catch (e) {
     console.error(e);
-    return;
+    return false;
   }
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
+    const railWorkspace = $("rail-workspace");
+    if (railWorkspace) railWorkspace.replaceChildren();
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
     if (only) {
       const linkedAll = isAggregateLinked();
@@ -1206,7 +1213,7 @@ async function initWorkspaceSelector() {
       // A link asking for "all" has nothing to aggregate here; repair the address.
       if (linkedAll) persistScopeToUrl();
     }
-    return; // single mode: selected implicitly, no selector needed
+    return true; // single mode: selected implicitly, no selector needed
   }
 
   // Default to the workspace flagged by the server (the cwd workspace, if the
@@ -1217,7 +1224,7 @@ async function initWorkspaceSelector() {
   // recover from the selector. Treat it like no workspace and repair the URL.
   // An explicit aggregate link (`workspace=all`) is a choice, not a missing one.
   const linked = getWorkspace();
-  const linkedIsServable = isAggregateLinked() || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  const linkedIsServable = (wasAggregate && !linked) || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
   if (!linkedIsServable) {
     const def = dashboardWorkspaces.find((w) => w.is_default);
     const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
@@ -1226,6 +1233,7 @@ async function initWorkspaceSelector() {
     if (linked) persistScopeToUrl();
   }
   buildWorkspaceSelector();
+  return true;
 }
 
 function buildWorkspaceSelector() {
@@ -1256,7 +1264,7 @@ function buildWorkspaceSelector() {
 
   const note = el("span", {
     class: "workspace-scope-note",
-    text: "Fleet-wide on Reliability",
+    text: "Workspace filter inactive",
   });
   note.id = "workspace-scope-note";
   note.hidden = true;
@@ -1288,21 +1296,32 @@ function activeRefreshJobs() {
 
   // The health strip is global; refresh on every tick alongside the active tab.
   // The per-workspace summary (/api/audit/summary) is replaced by a placeholder
-  // instead of fetched in aggregate mode.
-  const jobs = [fetchAndRenderHostResources()];
+  // instead of fetched in aggregate mode. Host chips start on this tick too,
+  // but a stalled /api/host/resources must not leave the status line on
+  // "fetching…" or postpone the next poll. The call has its own 30s abort.
+  void fetchAndRenderHostResources().catch(error => console.error(error));
+  // The Health rail's doctor count comes from the server's cached report;
+  // the poll never runs doctor itself (ORB-14830).
+  void peekDoctor().catch(error => console.error(error));
+  const jobs = [];
+  const add = (panel, request) => jobs.push({ panel, request });
+  const subpanel = (group, name) => {
+    const button = document.querySelector(`#${group} [data-subtab="${name}"]`);
+    return `${refreshLabel()} › ${button?.firstChild?.textContent.trim() || name}`;
+  };
   if (aggregate) {
     renderAggregatePlaceholders();
   } else {
-    jobs.push(fetchAndRenderSummary());
+    add("Health summary", fetchAndRenderSummary());
   }
   // Keep the chrome indicator current even when Tasks and its dock are hidden.
-  jobs.push(fetchAndRenderAutoDrainPane());
+  add("Drain", fetchAndRenderAutoDrainPane());
 
   if (activeTab === "tasks") {
-    jobs.push(fetchAndRenderTasks());
+    add("Tasks", fetchAndRenderTasks());
     // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
     // panel shows the placeholder rendered above).
-    if (!aggregate && !document.hidden) jobs.push(fetchAndRenderTaskLocks());
+    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     // The dock's Drain card; without a concrete workspace it renders its own
     // read-only note instead of fetching.
     return jobs;
@@ -1310,30 +1329,30 @@ function activeRefreshJobs() {
 
   if (activeTab === "audit") {
     if (getActiveAuditSubtab() === "policy") {
-      jobs.push(fetchAndRenderPolicy(auditContext()));
+      add("Audit › Policy", fetchAndRenderPolicy(auditContext()));
     } else {
-      jobs.push(fetchAndRenderAudit(auditContext()));
+      add("Audit › Events", fetchAndRenderAudit(auditContext()));
     }
     return jobs;
   }
 
   if (activeTab === "knowledge") {
-    jobs.push(fetchAndRenderFrictions());
+    add("Knowledge › Frictions", fetchAndRenderFrictions());
     return jobs;
   }
 
   if (activeTab === "operations") {
-    jobs.push(fetchAndRenderOperations());
+    add(subpanel("operations-subtabs", activeOperationsSubtab), fetchAndRenderOperations());
     return jobs;
   }
 
   if (activeTab === "plugins") {
-    jobs.push(fetchAndRenderPlugins());
+    add("Plugins", fetchAndRenderPlugins());
     return jobs;
   }
 
   if (activeTab === "config") {
-    jobs.push(fetchAndRenderConfig());
+    add(subpanel("config-subtabs", getConfigSubtab()), fetchAndRenderConfig());
     return jobs;
   }
 
@@ -1342,12 +1361,16 @@ function activeRefreshJobs() {
       renderRunDetailEmpty("No run selected.");
       return jobs;
     }
-    jobs.push(fetchAndRenderRunDetail());
+    if (aggregate) {
+      renderRunDetailEmpty("Select a workspace to view this run.");
+      return jobs;
+    }
+    add("Run detail", fetchAndRenderRunDetail());
     // Events power both the Events sub-tab and the Gantt's retry markers, so
     // they're fetched on every run-detail refresh regardless of which sub-tab
     // is active.
-    jobs.push(fetchAndRenderRunEvents());
-    jobs.push(fetchAndRenderRunLogs());
+    add("Run events", fetchAndRenderRunEvents());
+    add("Run logs", fetchAndRenderRunLogs());
     return jobs;
   }
 
@@ -1359,12 +1382,18 @@ function activeRefreshJobs() {
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
     // ahead of the guard below rather than being placeheld with the rest.
     if (activeDiagSubtab === "reliability") {
-      jobs.push(fetchAndRenderReliability());
+      add("Health › Reliability", fetchAndRenderReliability());
+      return jobs;
+    }
+    // Doctor runs on open and on its own Refresh button, never on this tick;
+    // the tick only repaints the report's age (or reads it the first time).
+    if (activeDiagSubtab === "doctor") {
+      add("Health › Doctor", openDoctor());
       return jobs;
     }
     if (aggregate && activeDiagSubtab === "runs") {
       renderDiagnosticsPlaceholders();
-      jobs.push(fetchAndRenderRuns());
+      add("Runs", fetchAndRenderRuns());
       return jobs;
     }
     if (aggregate) {
@@ -1375,37 +1404,29 @@ function activeRefreshJobs() {
       // ORB-10444: Scoreboard folded in from the retired top-level tab.
       // ORB-10872: every refresh honors the shared dashboard window so
       // delivery/operations and Managed Execution stay on the same cutoff.
-      // A payload that reports a different window is refused rather than
-      // painted under a mismatched selector (the 7d-selected / 24h-body bug).
-      const selectedWindow = getWindow();
-      jobs.push(
-        fetchJson(`/api/scoreboard?window=${encodeURIComponent(selectedWindow)}`).then((summary) => {
-          if (!payloadHonorsWindow(summary, selectedWindow)) {
-            console.error(
-              `scoreboard payload window ${summary && summary.window} rejected under ${selectedWindow} selection`,
-            );
-            return;
-          }
-          renderScoreboard(summary);
-        }),
-      );
+      // A mismatched window, a superseded request, or a stale workspace
+      // visit is not painted.
+      add("Health › Scoreboard", fetchAndRenderScoreboard());
       return jobs;
     }
     if (activeDiagSubtab === "runs") {
-      jobs.push(fetchAndRenderRuns());
+      add("Runs", fetchAndRenderRuns());
     } else {
       const subtab = activeDiagSubtab;
       const selectedWindow = getWindow();
+      const incidentClass = getIncidentClass();
+      const classQuery = incidentClass === "all" ? "" : `&class=${encodeURIComponent(incidentClass)}`;
       const path = subtab === "incidents"
-        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`
-        : `/api/diagnostics/${subtab}?limit=${DIAG_LIMIT}`;
-      jobs.push(requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
+        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}${classQuery}&limit=${DIAG_LIMIT}`
+        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`;
+      add(subpanel("diag-subtabs", subtab), requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
         lastDiagnostics[subtab] = payload;
-        if (activeDiagSubtab === subtab && getWindow() === selectedWindow) renderDiagnostics(diagnosticsContext());
+        if (activeDiagSubtab === subtab && getWindow() === selectedWindow
+          && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
       }, "diag-count"));
     }
 
-    jobs.push(
+    add("Health › Execution summary",
       requestPanel("diag-implement-one-body", "implement-one", () => Promise.all([
         fetchJson(`/api/diagnostics/implement_one`),
         fetchJson(`/api/tasks/completion-by-complexity`),
@@ -1424,12 +1445,12 @@ function fetchAndRenderRuns() {
   const requestedAggregate = isAggregateView();
   const runFilter = getRunFilter();
   return requestPanel("runs-body", runFilter, () => requestedAggregate
-    ? fetchJson(`/api/job-runs/all?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
+    ? fetchJson(`/api/job-runs/all?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
         runs: listItems(payload), frictionRows: [], meta: payload,
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
-        fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}&state=${encodeURIComponent(runFilter)}`),
+        fetchJson(`/api/job-runs?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
       ]).then(([payload, frictionRows]) => ({
         runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
@@ -1486,6 +1507,7 @@ function fetchAndRenderRunEvents() {
     if (error.status !== 404) setActiveRunEventsError(error.message);
     renderRunEvents();
     renderRunGantt();
+    if (error.status !== 404) throw error;
   });
 }
 
@@ -1502,6 +1524,7 @@ function fetchAndRenderRunLogs() {
     setActiveRunLogs([]);
     if (error.status !== 404) setActiveRunLogsError(error.message);
     renderRunSteps();
+    if (error.status !== 404) throw error;
   });
 }
 
@@ -1509,7 +1532,7 @@ function fetchAndRenderSummary() {
   const since = effectiveAuditWindow() || "24h";
   return requestPanel("audit-summary-body", "summary", () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
-    renderHealthStrip(data);
+    renderSummaryCounts(data);
     renderAuditSummary(data, auditContext());
   });
 }
@@ -1554,55 +1577,23 @@ function fetchAndRenderFrictions() {
 // blocked colour so a failure count is legible from any tab without opening
 // the tab it belongs to. Every value here comes from a fetch the dashboard
 // already makes — this adds no endpoint.
-function setRailCount(id, value, alert = false) {
+function setRailCount(id, value, alert = false, title = "") {
   const node = $(id);
   if (!node) return;
   const empty = value == null || value === 0;
   node.textContent = empty ? "" : formatBigInt(value);
   node.classList.toggle("alert", Boolean(alert) && !empty);
+  node.title = empty ? "" : title;
 }
 
-function renderHealthStrip(data) {
+// The windowed counts of /api/audit/summary ride on the rail: failed runs on
+// Runs, audited events on Audit. Their titles keep each count's definition.
+function renderSummaryCounts(data) {
   if (!data) return;
-  $("tile-events-value").textContent = formatBigInt(data.events);
-  $("tile-denials-value").textContent = formatBigInt(data.denials);
-  $("tile-failed-value").textContent = formatBigInt(data.failed_runs);
-  $("tile-active-value").textContent = formatBigInt(data.active_long_runs);
-  const tile = $("tile-denials");
-  const threshold = data.denial_threshold ?? 10;
-  if (data.denials > threshold) {
-    tile.classList.add("tile-alert");
-  } else {
-    tile.classList.remove("tile-alert");
-  }
   const windowLabel = data.window || getWindow();
-  const failed = $("tile-failed");
-  if (failed) {
-    failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
-    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Opens failed runs.`;
-  }
-  const windowTag = $("kpi-window");
-  if (windowTag) windowTag.textContent = windowLabel;
-
-  setRailCount("rail-count-audit", data.events);
-  setRailCount("rail-count-diag-runs", data.failed_runs, true);
-  renderSparkline(data.sparkline || []);
-}
-
-// Each health count opens the view that explains it.
-function wireHealthStrip() {
-  const go = (id, route, before) => {
-    const node = $(id);
-    if (!node) return;
-    node.addEventListener("click", () => {
-      if (before) before();
-      sAT(route);
-    });
-  };
-  go("tile-failed", "diagnostics/runs", () => setRunFilter("failed"));
-  go("tile-active", "diagnostics/runs", () => setRunFilter("active"));
-  go("tile-denials", "audit/policy");
-  go("tile-events", "audit/events");
+  setRailCount("rail-count-diag-runs", data.failed_runs, true,
+    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Runs' Failed filter lists the same outcomes with no time window.`);
+  setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
 }
 
 function formatBigInt(n) {
@@ -1611,56 +1602,112 @@ function formatBigInt(n) {
   return String(n);
 }
 
-function renderSparkline(buckets) {
-  const svg = $("tile-events-sparkline");
-  if (!svg) return;
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-  if (buckets.length === 0) return;
-  const counts = buckets.map((b) => b.count || 0);
-  const max = Math.max(1, ...counts);
-  const w = 100;
-  const h = 22;
-  const stepX = buckets.length > 1 ? w / (buckets.length - 1) : 0;
-  const points = counts.map((c, i) => {
-    const x = i * stepX;
-    const y = h - (c / max) * (h - 2) - 1;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  });
-  const baseline = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  baseline.setAttribute("x1", "0");
-  baseline.setAttribute("y1", String(h - 0.5));
-  baseline.setAttribute("x2", String(w));
-  baseline.setAttribute("y2", String(h - 0.5));
-  baseline.setAttribute("class", "baseline");
-  svg.appendChild(baseline);
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", `M${points.join(" L")}`);
-  svg.appendChild(path);
-}
-
 // The connection line names the destination the way the rail does, not by its
 // route: an operator on Runs should not read "diagnostics/runs".
 function refreshLabel() {
   return destinationLabel(activeTab, activeDiagSubtab);
 }
 
+// Chrome retains values when a panel fails. Mark the whole snapshot until a
+// clean refresh, preserving each control's own tooltip across repeated errors
+// and renderers that replace it while other panels are still failing.
+function markRefreshStale(stale) {
+  const suffix = lastCleanRefresh
+    ? `Stale · as of ${lastCleanRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`
+    : "Stale · no successful refresh yet";
+  for (const node of document.querySelectorAll(".rail-count, #global-drain-state")) {
+    const previous = node.dataset.refreshStaleSuffix;
+    if (previous && node.title.endsWith(previous)) {
+      node.title = node.title.slice(0, -previous.length).replace(/ · $/, "");
+    }
+    node.classList.toggle("refresh-stale", stale);
+    if (stale) {
+      node.title = node.title ? `${node.title} · ${suffix}` : suffix;
+      node.dataset.refreshStaleSuffix = suffix;
+    } else {
+      delete node.dataset.refreshStaleSuffix;
+    }
+  }
+}
 
+// ORB-14680: the selected host's workspaces are read once it is reachable, and
+// again after it has failed, so a host that comes back gets its own list.
+let workspacesWanted = false;
+let workspaceRebuild = null;
 
+/// True once the selected host can be shown and its workspaces are loaded. A
+/// remote host's connection state is read on every refresh while it stays
+/// selected; the serving host has none to read.
+async function ensureHostScope() {
+  if (getHost() && !(await checkHostConnection())) {
+    workspacesWanted = true;
+    return false;
+  }
+  if (workspacesWanted && !workspaceRebuild) {
+    workspacesWanted = false;
+    workspaceRebuild = initWorkspaceSelector()
+      .then((loaded) => { if (!loaded) workspacesWanted = true; })
+      .finally(() => { workspaceRebuild = null; });
+  }
+  if (workspaceRebuild) await workspaceRebuild;
+  return true;
+}
+
+function selectHost(name) {
+  if (!chooseHost(name)) {
+    refreshDashboard();
+    return;
+  }
+  persistScopeToUrl();
+  workspacesWanted = true;
+  refreshDashboard();
+}
+
+function showHostUnavailable(now) {
+  $("conn-status").className = "status-dot red";
+  $("meta-text").textContent = `host unavailable · ${formatClock(now)}`;
+  markRefreshStale(true);
+}
 
 async function refreshDashboard() {
   const sequence = ++refreshSequence;
-  const revision = getWorkspaceRevision();
+  const host = getHost();
   $("meta-text").textContent = "fetching…";
   $("conn-status").className = "status-dot orange";
+  if (host || workspacesWanted || workspaceRebuild) {
+    const ready = await ensureHostScope();
+    if (sequence !== refreshSequence || host !== getHost()) return null;
+    if (!ready) {
+      showHostUnavailable(new Date());
+      return false;
+    }
+  }
+  const revision = getWorkspaceRevision();
   // Refresh stays available so a slow request never locks navigation or retry.
-  const results = await Promise.allSettled(activeRefreshJobs());
+  const jobs = activeRefreshJobs();
+  const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
-  const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
-  const offline = errors.some(error => error.networkFailure);
-  for (const error of errors) console.error(error);
-  $("conn-status").className = `status-dot ${offline ? "red" : "green"}`;
-  const label = offline ? "offline" : errors.length ? "panel update failed" : `refreshed ${refreshLabel()}`;
-  $("meta-text").textContent = `${label} · ${new Date().toLocaleTimeString()}`;
+  const errors = results.flatMap((result, index) => result.status === "rejected"
+    ? [{ panel: jobs[index].panel, error: result.reason }] : []);
+  // A failure the forward reports for the host itself is one host-level
+  // state, not one failed panel per request.
+  const hostFailure = errors.map(({ error }) => hostLevelFailure(error)).find(Boolean);
+  if (hostFailure) {
+    for (const { error } of errors) console.error(error);
+    showHostFailure(hostFailure);
+    workspacesWanted = true;
+    showHostUnavailable(new Date());
+    return false;
+  }
+  const offline = errors.some(({ error }) => error.networkFailure);
+  for (const { error } of errors) console.error(error);
+  const now = new Date();
+  if (errors.length === 0) lastCleanRefresh = now;
+  markRefreshStale(errors.length > 0);
+  $("conn-status").className = `status-dot ${offline ? "red" : errors.length ? "orange" : "green"}`;
+  const panels = [...new Set(errors.map(({ panel }) => panel))].join(", ");
+  const label = offline ? `offline · ${panels}` : errors.length ? `panel update failed: ${panels}` : `refreshed ${refreshLabel()}`;
+  $("meta-text").textContent = `${label} · ${formatClock(now)}`;
   if (activeTab === "tasks") fitLogPanelToViewport();
   return errors.length === 0;
 }
@@ -1668,6 +1715,8 @@ async function refreshDashboard() {
 // Invalidate caches at the scope boundary, including programmatic selections.
 // Panel state is reset synchronously by common.js before another frame paints.
 onWorkspaceChange(() => {
+  lastCleanRefresh = null;
+  markRefreshStale(false);
   resetTaskPagination();
   taskFetchSequence += 1;
   lastTasks = [];
@@ -1681,7 +1730,7 @@ onWorkspaceChange(() => {
   for (const id of ["tasks-count", "diag-count", "task-filter-summary"]) {
     if ($(id)) $(id).textContent = "—";
   }
-  resetHealthStrip();
+  resetSummaryCounts();
 });
 resetPanel("tasks-body", "tasks-count");
 resetPanel("runs-body", "diag-count");
@@ -1698,8 +1747,8 @@ buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);
 initHostResources();
-wireHealthStrip();
 wireReliabilityWindowSelector();
+wireDoctorPanel();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();
@@ -1715,16 +1764,20 @@ setScopeChangeListener(() => {
   }
   refreshDashboard();
 });
-initOperations({ getWorkspaces: () => dashboardWorkspaces, formatAbsoluteTime: fmtAbsTime });
+initOperations({ getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 
 initRuns(runsContext());
 initRunDetail(runDetailContext());
 const rctx = routerContext();
 initRouter(rctx);
-// Resolve workspaces before the router fires its first refresh so the initial
-// fetches carry the right workspace (top-level await; app.js is an ES module).
-await initWorkspaceSelector();
+// Resolve the host, then its workspaces, before the router fires its first
+// refresh so the initial fetches carry the right scope (top-level await;
+// app.js is an ES module). An unavailable host defers its workspaces to the
+// refresh that finds it reachable.
+await initHostSwitcher({ select: selectHost });
+workspacesWanted = true;
+await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
 iT();

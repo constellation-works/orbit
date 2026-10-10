@@ -41,7 +41,7 @@ impl SkillCatalog {
 
     pub fn ensure_layout(&self) -> Result<(), OrbitError> {
         if self.global_root.is_none() {
-            fs::create_dir_all(&self.root).map_err(|e| OrbitError::Io(e.to_string()))?;
+            orbit_common::fs::io::create_private_dir_all(&self.root)?;
         }
 
         // Layered catalogs read shipped global skills that bootstrap owns. Do

@@ -67,6 +67,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         "worktree_gc",
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),
+    (
+        "store_gc",
+        include_str!("../../../assets/routines/store_gc.yaml"),
+    ),
 ];
 
 /// Default routines a prior release seeded that this Orbit no longer ships,
@@ -112,6 +116,10 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
     (
         "worktree_gc",
         include_str!("../../../assets/routines/superseded/worktree_gc.2026-07-12.yaml"),
+    ),
+    (
+        "ship_sweep",
+        include_str!("../../../assets/routines/superseded/ship_sweep.2026-07-15.yaml"),
     ),
 ];
 
@@ -216,7 +224,7 @@ impl RoutineSeedIdentity {
         format!("{}-{}", file_stem.replace('_', "-"), self.name_suffix)
     }
 
-    /// Every name this identity would seed, in [`DEFAULT_ROUTINE_FILES`] order.
+    /// Every name this identity would seed, in `DEFAULT_ROUTINE_FILES` order.
     pub fn seeded_routine_names(&self) -> Vec<String> {
         DEFAULT_ROUTINE_FILES
             .iter()

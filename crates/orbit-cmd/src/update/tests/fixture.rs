@@ -87,12 +87,12 @@ pub const CLOCK_REPAIR_REPORT: &str = "rewrote clock unit ~/Library/LaunchAgents
 pub enum FakeBinary {
     /// Reports its version and succeeds at every subcommand.
     Healthy,
-    /// Reports a version other than the one the release claims.
-    VersionMismatch,
     /// Inspection succeeds but the older candidate can only read the store.
     ReadOnlyStore,
     /// Candidate cannot coordinate with protected clients.
     NoAdmissionContract,
+    /// Post-replacement convergence step `migrate --confirm` fails until repaired.
+    FailsMigrationConfirm,
 }
 
 /// A fake installation plus the release mirror it updates from.
@@ -136,11 +136,7 @@ impl Fixture {
 
     /// Publish `version` to the mirror, and make it the mirror's latest.
     pub fn publish(&self, version: &str, behavior: FakeBinary) {
-        let reported = match behavior {
-            FakeBinary::VersionMismatch => "0.0.1",
-            _ => version,
-        };
-        let archive = tar_gz(&script(reported, &self.invocation_log, behavior));
+        let archive = tar_gz(&script(version, &self.invocation_log, behavior));
         self.publish_archive(version, &archive, true);
     }
 
@@ -170,6 +166,35 @@ impl Fixture {
             format!("v{version}\n"),
         )
         .expect("write latest");
+    }
+
+    /// Publish arbitrary assets under one manifest, signed correctly or not.
+    pub fn publish_assets(&self, version: &str, assets: &[(&str, &[u8])], sign_correctly: bool) {
+        let directory = self.mirror.join(format!("v{version}"));
+        std::fs::create_dir_all(&directory).expect("release directory");
+        let mut manifest = String::new();
+        for (name, bytes) in assets {
+            std::fs::write(directory.join(name), bytes).expect("write asset");
+            let digest = orbit_common::security::release::sha256_hex(bytes);
+            manifest.push_str(&format!("{digest}  {name}\n"));
+        }
+        std::fs::write(directory.join(RELEASE_CHECKSUMS_FILENAME), &manifest)
+            .expect("write manifest");
+        let signed = if sign_correctly {
+            manifest
+        } else {
+            format!("{manifest}# not what was published\n")
+        };
+        std::fs::write(
+            directory.join(RELEASE_CHECKSUMS_SIGNATURE_FILENAME),
+            sign(signed.as_bytes()),
+        )
+        .expect("write signature");
+    }
+
+    /// A source reading this fixture's release mirror.
+    pub fn source(&self) -> DirectoryReleaseSource {
+        DirectoryReleaseSource::new(self.mirror.clone())
     }
 
     /// Corrupt a published archive after its manifest was signed.
@@ -212,6 +237,7 @@ impl Fixture {
                 root: cwd.join(".orbit"),
                 cwd,
             }),
+            bundled_bwrap_installed: false,
         }
     }
 
@@ -242,6 +268,12 @@ impl Fixture {
         names.sort();
         names
     }
+
+    /// Allow subsequent `migrate --confirm` calls for `FakeBinary::FailsMigrationConfirm` to succeed.
+    pub fn repair_migration(&self) {
+        std::fs::write(format!("{}.repaired", self.invocation_log.display()), b"")
+            .expect("write repaired marker");
+    }
 }
 
 /// A default request: latest version, apply, no downgrade.
@@ -263,9 +295,19 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
         r#"{"schema_version":1,"contract":"executable-generation-v1"}"#
     };
     let inspection = if behavior == FakeBinary::ReadOnlyStore {
-        r#"{"up_to_date":false,"schema":{"current":21,"supported":20},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":true}}"#
+        // Keep every other compatibility check satisfied so only read_only
+        // can prevent this candidate from authorizing a downgrade.
+        r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":true}}"#
     } else {
         r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#
+    };
+    let migration_confirm = if behavior == FakeBinary::FailsMigrationConfirm {
+        format!(
+            "if [ \"$1\" = migrate ] && [ \"$2\" = --confirm ] && [ ! -f '{log}.repaired' ]; then exit 1; fi\n",
+            log = log.display()
+        )
+    } else {
+        String::new()
     };
     format!(
         "#!/bin/sh\n\
@@ -276,6 +318,7 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
          echo \"{version}: $all_args\" >> '{log}'\n\
          if [ \"$1\" = clock ]; then echo '{CLOCK_REPAIR_REPORT}'; fi\n\
          if [ \"$1\" = migrate ] && [ \"$2\" = --dry-run ]; then echo '{inspection}'; fi\n\
+         {migration_confirm}\
          exit 0\n",
         log = log.display()
     )

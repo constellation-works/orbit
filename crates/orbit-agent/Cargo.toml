@@ -14,16 +14,11 @@ workspace = true
 [dependencies]
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
-orbit-tools = { path = "../orbit-tools" }
 chrono = { workspace = true }
-regex = { workspace = true }
-reqwest = { workspace = true }
+chrono-tz.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-sha2 = { workspace = true }
 tracing.workspace = true
 
 [dev-dependencies]
-serde_yaml.workspace = true
 tempfile.workspace = true
-tiktoken-rs.workspace = true

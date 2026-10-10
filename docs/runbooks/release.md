@@ -4,7 +4,7 @@ summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub art
 tags: [operations, release, plugins, npm, signing]
 paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh", "scripts/cursor-marketplace-followup.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Release Orbit
@@ -31,17 +31,20 @@ workflow signs `orbit-checksums.txt` as `orbit-checksums.txt.sig`;
 `install.sh`, the npm postinstall, and `orbit update` authenticate
 that signature before trusting release-hosted SHA-256 values.
 
-The installers carry a small release-signing trust set:
-
-- `orbit-release-key-3` is the current signing path, valid through
-  `2029-12-31` and not revoked.
-- `orbit-release-key-4` is the pre-staged successor, valid through
-  `2030-12-31` and not revoked. Its PEM is a placeholder; replace it with a
-  real independently held keypair before rotation.
+All three shipped release-signing trust sets contain only `orbit-release-key-3`,
+valid through `2029-12-31` and not revoked: [`install.sh`](../../install.sh),
+[`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js), and
+[`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+(used by `orbit update` and bundled Bubblewrap verification). No successor is
+pre-staged. Ship successor trust in all three surfaces before signing releases
+with that key.
 
 Key IDs are generation labels, not dates. During verification the installers
 try each known public key, then reject a matching key when its `not_after`
-date has passed or its `revoked_at` field is set.
+date has passed or its `revoked_at` field is set. The shell and npm installers
+validate every record's non-empty `not_after` and `revoked_at` as exactly
+`YYYY-MM-DD` before accepting any signature. A malformed date aborts installation;
+an empty date remains optional.
 
 > **Operator custody requirement.** Keep the successor private key in custody
 > independent from the primary. Storing both private halves together defeats
@@ -105,14 +108,30 @@ date has passed or its `revoked_at` field is set.
    git push origin vX.Y.Z
    ```
 
+   The metadata step accepts only `vMAJOR.MINOR.PATCH`, optionally followed
+   by a prerelease suffix such as `-rc.1`; it rejects other tags before
+   writing release outputs. A prerelease tag creates a GitHub Release marked
+   as a prerelease and skips the Homebrew tap update; stable tags update the
+   tap. Homebrew formula inputs pass through environment
+   variables and are validated before becoming Ruby literals. The tap checkout
+   disables credential persistence, and only the push command receives the
+   token's authorization header. `make ci-fast` checks this job for expressions
+   inside shell scripts and runs offline release-workflow regression fixtures.
+
 8. **Watch [`.github/workflows/release.yml`](../../.github/workflows/release.yml).**
    Its jobs:
 
    - build four platform CLI tarballs;
    - generate and sign the combined checksum manifest, then create the GitHub
      Release;
+   - build the static bundled Bubblewrap that the release publishes for Linux
+     hosts whose own `bwrap` is missing or lacks `--bind-fd` (see
+     [linux-sandbox.md](linux-sandbox.md));
    - update the Homebrew tap;
-   - smoke the tagged shell installer and search help on macOS and Ubuntu.
+   - smoke the tagged shell installer and search help on macOS and Ubuntu;
+   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
+   - post the Cursor marketplace follow-up reminder, which never blocks the
+     release (see [Cursor marketplace listing](#cursor-marketplace-listing)).
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
@@ -298,17 +317,19 @@ script again.
 
 Normal rotation uses an overlap window:
 
-1. Generate the successor keypair offline. Add the public half to the trust
-   sets in `install.sh` and
+1. Generate the successor keypair offline, with independent private-key
+   custody. Add the public half to **every** trust set in `install.sh`,
    [`npm/scripts/install-binary.js`](../../npm/scripts/install-binary.js)
-   with a new key ID and `not_after` date.
-2. Publish a release and npm package that still sign with the old key while
-   both installers trust old and new keys.
+   and [`orbit-common::security::release::TRUSTED_RELEASE_KEYS`](../../crates/orbit-common/src/security/release.rs)
+   with the same new key ID and expiry (`not_after` / npm `notAfter`).
+2. Publish a release and npm package still signed by the old key that ship
+   both old and successor trust in the shell installer, npm installer, and
+   native binary. Verify all three trust sets before switching the signer.
 3. Update `ORBIT_RELEASE_SIGNING_KEY_PEM` and
    [`npm/release-signing.pub`](../../npm/release-signing.pub), then cut the
    first release signed by the successor.
-4. After the overlap window, remove the old key or mark its `revoked_at`
-   date.
+4. After the overlap window, remove the old key or mark its revocation date
+   (`revoked_at` / npm `revokedAt`) in all three trust sets.
 
 Emergency revocation only protects users who upgrade: already-published npm
 packages retain their embedded trust sets. Publish a patch signed by a

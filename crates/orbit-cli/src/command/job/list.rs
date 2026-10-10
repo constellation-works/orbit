@@ -21,9 +21,6 @@ pub struct JobListArgs {
     /// Filter to one v2 job kind.
     #[arg(long, value_enum)]
     pub kind: Option<JobKind>,
-    /// Output full job objects as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Output signal-tier JSON (job_id, target_id, state only)
     #[arg(long)]
     pub ops: bool,

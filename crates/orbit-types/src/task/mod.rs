@@ -1,44 +1,53 @@
 //! Domain contracts for this Orbit types module.
 
 mod artifacts;
+mod context_creation;
 mod context_widening;
 mod epic;
 mod error;
 mod model;
 mod os_requirement;
 mod plan;
+mod readiness;
 mod show_fields;
 pub use error::TaskError;
 
 #[cfg(test)]
 mod tests;
 
+pub use context_creation::{
+    CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,
+    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, context_files_sha256,
+};
 pub use context_widening::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 
 pub use artifacts::{
-    ArtifactManifestFileV2, ArtifactManifestV2, CYCLIC_RELATION_TYPES, ORB_TASK_ID_MAX,
-    ORB_TASK_ID_WIDTH, TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_FILES_DIR_NAME,
+    ArtifactManifestFileV2, ArtifactManifestV2, ArtifactWriter, CYCLIC_RELATION_TYPES,
+    ORB_TASK_ID_MAX, ORB_TASK_ID_WIDTH, TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_FILES_DIR_NAME,
     TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
     TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME, TASK_ENVELOPE_FILE_NAME,
     TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME,
     TaskArtifactMetadata, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskRelation,
-    TaskRelationEdge, TaskRelationType, format_orb_task_id, format_task_id, is_valid_orb_task_id,
-    is_valid_task_id_prefix, parse_task_number, serialize_task_artifacts, task_id_prefix,
-    validate_orb_task_id, validate_relative_artifact_path, validate_task_relations_for_source,
+    TaskRelationEdge, TaskRelationType, canonical_artifact_path, format_orb_task_id,
+    format_task_id, is_valid_orb_task_id, is_valid_task_id_prefix, parse_task_number,
+    serialize_task_artifacts, task_id_prefix, validate_orb_task_id,
+    validate_relative_artifact_path, validate_task_relations_for_source,
 };
 pub use model::{
-    ArtifactPresentation, CANDIDATE_DISCARDED_EVENT, DEFAULT_TASK_LIST_LIMIT,
-    DELIVERY_JOB_TAG_PREFIX, DependencyDeadEnd, ExecutionLocation, ExternalRef,
-    GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES, NO_DIFF_EXPECTED_TAG,
-    ResolvedTaskDependency, ResolvedTaskRelation, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task,
-    TaskArtifact, TaskComment, TaskComplexity, TaskCreateStatus, TaskHistoryEntry, TaskPriority,
-    TaskReferenceIndex, TaskStatus, TaskType, UNSET_BUCKET, UnsatisfiableTaskDependency,
-    archived_task_completed_before_archive, artifact_presentation, automatic_dispatch_cmp,
-    complexity_bucket, complexity_bucket_ord, delivery_job_selection, deserialize_required_tools,
-    image_bytes_match_media_type, inline_safe_artifact_media_type, is_inline_image_media_type,
+    ArtifactPresentation, CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT,
+    CI_FAILURE_KEY_TAG_PREFIX, DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DependencyDeadEnd,
+    ExecutionLocation, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES,
+    NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, ResolvedTaskDependency, ResolvedTaskRelation,
+    TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskArtifact, TaskComment, TaskComplexity,
+    TaskCreateStatus, TaskHistoryEntry, TaskPriority, TaskReferenceIndex, TaskStatus, TaskType,
+    UNSET_BUCKET, UnsatisfiableTaskDependency, archived_task_completed_before_archive,
+    artifact_presentation, automatic_dispatch_cmp, automatic_dispatch_cmp_for_host,
+    automatic_dispatch_cmp_with_expiry, complexity_bucket, complexity_bucket_ord,
+    delivery_job_selection, deserialize_required_tools, image_bytes_match_media_type,
+    inline_safe_artifact_media_type, is_inline_image_media_type, is_system_identity_tag,
     is_textual_artifact_media_type, labeled_or_unset, media_type_for_artifact_path,
     normalize_required_tools, normalize_task_dependencies, normalize_task_tags,
     normalized_artifact_media_type, push_external_ref_if_missing, resolve_task_dependencies,
@@ -51,6 +60,10 @@ pub use model::{
 };
 pub use os_requirement::{HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags};
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
+pub use readiness::{
+    ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage, TaskReadiness,
+    readiness_gaps, task_readiness, task_readiness_json,
+};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,
     TASK_SHOW_PROJECTION_FIELDS_CSV, TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field,

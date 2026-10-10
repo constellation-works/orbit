@@ -25,8 +25,8 @@ mod tools;
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
 use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,
-    apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_invocation_audit_context,
-    apply_trusted_mcp_audit_provenance,
+    apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_tool_call_index,
+    apply_invocation_audit_context, apply_trusted_mcp_audit_provenance,
 };
 use baseline::apply_baseline_schema;
 use feature::apply_feature_schema_ledger;
@@ -35,11 +35,15 @@ use host_registry::{
     apply_host_registry_core, apply_hub_registry_metadata, apply_workspace_coordination_projections,
 };
 use introspect::table_exists;
-use invocation::{apply_invocation_telemetry_columns, apply_invocations_ts_index};
+use invocation::{
+    apply_invocation_provider, apply_invocation_telemetry_columns,
+    apply_invocation_workspace_scope, apply_invocations_ts_index,
+    apply_provider_limit_observations, apply_provider_limit_readings,
+};
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_id_allocations, apply_job_runs_created_index,
-    apply_job_runs_job_created_and_retry_indexes,
+    apply_job_run_id_allocations, apply_job_run_states, apply_job_runs_created_index,
+    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
 };
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
 use operation_mode::apply_remove_operation_mode;

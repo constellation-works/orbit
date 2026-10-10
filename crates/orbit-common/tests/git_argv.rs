@@ -3,6 +3,8 @@
 //! the plumbing Orbit drives still runs.
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
+orbit_common::isolate_test_process!();
+
 use std::path::Path;
 
 use orbit_common::OrbitError;

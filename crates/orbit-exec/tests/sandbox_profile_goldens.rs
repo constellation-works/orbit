@@ -55,7 +55,7 @@ const OUTPUT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_OUTPUT";
 /// Set on the child only: the fixture root, which is also its `HOME` parent.
 const ROOT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_ROOT";
 const CHILD_TEST: &str = "render_compiled_profiles_in_a_pinned_environment";
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 
 #[test]
 fn compiled_sandbox_profiles_match_their_goldens() {
@@ -265,7 +265,9 @@ struct Case {
     provider: &'static str,
     profile: ResolvedFsProfile,
     /// The directory the child starts in.
+    #[cfg(target_os = "linux")]
     cwd: PathBuf,
+    #[cfg(target_os = "linux")]
     managed_worktree: bool,
     kind: CaseKind,
 }
@@ -483,7 +485,9 @@ impl Fixture {
                 name: "leaf_worker",
                 provider: "codex",
                 profile: profile("implementer", read(&self.worktree), leaf_modify),
+                #[cfg(target_os = "linux")]
                 cwd: self.worktree.clone(),
+                #[cfg(target_os = "linux")]
                 managed_worktree: true,
                 kind: CaseKind::Agent,
             },
@@ -491,7 +495,9 @@ impl Fixture {
                 name: "reviewer",
                 provider: "claude",
                 profile: profile("reviewer", read(&self.inspection), reviewer_modify),
+                #[cfg(target_os = "linux")]
                 cwd: self.inspection.clone(),
+                #[cfg(target_os = "linux")]
                 managed_worktree: false,
                 kind: CaseKind::Agent,
             },
@@ -506,7 +512,9 @@ impl Fixture {
                     ],
                     vec![format!("{}/**", self.plugin_state.display())],
                 ),
+                #[cfg(target_os = "linux")]
                 cwd: self.plugin_state.clone(),
+                #[cfg(target_os = "linux")]
                 managed_worktree: false,
                 kind: CaseKind::PluginBackend,
             },
@@ -518,7 +526,9 @@ impl Fixture {
                     read(&self.repo),
                     vec![format!("{}/src/**", self.repo.display())],
                 ),
+                #[cfg(target_os = "linux")]
                 cwd: self.repo.clone(),
+                #[cfg(target_os = "linux")]
                 managed_worktree: false,
                 kind: CaseKind::ProviderPair("claude"),
             },
@@ -526,7 +536,9 @@ impl Fixture {
                 name: "redirected_global_runtime_store",
                 provider: "claude",
                 profile: profile("implementer", read(&self.repo), redirected_modify),
+                #[cfg(target_os = "linux")]
                 cwd: self.repo.clone(),
+                #[cfg(target_os = "linux")]
                 managed_worktree: false,
                 kind: CaseKind::Agent,
             },

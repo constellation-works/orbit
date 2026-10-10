@@ -17,7 +17,7 @@ pub enum ExportFormat {
 
 #[derive(Args)]
 #[command(
-    after_help = "`--format` here names the export file's serialization (json or csv) and shadows the global `--format` (auto|table|json|ndjson), which this command does not accept: the export is written to --output, not to stdout."
+    after_help = "`--format` here names the export file's serialization (json or csv) and shadows the global `--format` (auto|table|plain|json|ndjson), which this command does not accept: the export is written to --output, not to stdout."
 )]
 pub struct AuditExportArgs {
     /// Export file format. Local to this command — it shadows the global
@@ -131,6 +131,12 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
             "job_run_id",
             "activity_id",
             "step_index",
+            "self_reported_actor",
+            "plugin",
+            "plugin_secrets",
+            "plugin_secret_updates",
+            "brokered",
+            "peer_pid",
         ])
         .map_err(|e| OrbitError::Io(format!("write csv header: {e}")))?;
 
@@ -182,6 +188,19 @@ fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
                 event.activity_id.clone().unwrap_or_default(),
                 event
                     .step_index
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                event.self_reported_actor.clone().unwrap_or_default(),
+                serde_json::to_string(&event.plugin)
+                    .map_err(|e| OrbitError::Execution(format!("serialize plugin: {e}")))?,
+                serde_json::to_string(&event.plugin_secrets)
+                    .map_err(|e| OrbitError::Execution(format!("serialize plugin secrets: {e}")))?,
+                serde_json::to_string(&event.plugin_secret_updates).map_err(|e| {
+                    OrbitError::Execution(format!("serialize plugin secret updates: {e}"))
+                })?,
+                event.brokered.to_string(),
+                event
+                    .peer_pid
                     .map(|value| value.to_string())
                     .unwrap_or_default(),
             ])

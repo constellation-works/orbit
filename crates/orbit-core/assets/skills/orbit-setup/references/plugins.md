@@ -49,7 +49,7 @@ elsewhere in the source repository are not walked and do not block an install.
 orbit plugin scaffold demo               # start a new plugin from a working example
 orbit plugin validate ./my-plugin --render  # inspect the manifest and effective backend profile
 orbit plugin add ./my-plugin             # install for this machine (disabled)
-orbit plugin upgrade my-plugin           # update and review permission changes
+orbit plugin upgrade my-plugin ./my-plugin  # explicit source; review permission changes
 orbit plugin enable my-plugin            # put its tools on the surface
 orbit plugin list                        # what is installed or pinned here
 orbit plugin show my-plugin              # tools, panels, and requested versus granted
@@ -69,9 +69,15 @@ command starts, so an enable takes effect on the next command — restart a
 long-lived `orbit mcp serve` to pick it up in that session.
 
 `add --grant …` requires `--enable`. For an installed namespace, `plugin
-upgrade <ns> [source]` uses the recorded source by default and prints the old
-and new permission requests. If filesystem roots, network mode, environment
-names, Orbit-tool callbacks or the sandbox widened, Orbit disables the plugin,
+upgrade <ns> <source>` requires an explicit, non-empty source and prints the old
+and new permission requests. Omitting the source refuses before fetching or
+installing anything. The recorded database source is informational and can be
+rewritten by a plugin with `orbit_tools`; it is not bound by the host-owned
+grant witness. Review and supply the intended source on every upgrade instead
+of copying the recorded value without checking it.
+
+If filesystem roots, network mode, environment names, Orbit-tool callbacks or
+the sandbox widened, Orbit disables the plugin,
 clears its grants and prints the `plugin enable --grant …` re-consent command.
 An unchanged or narrower request keeps the existing state. Supplying
 `upgrade --grant …` is explicit re-consent and enables the new manifest.
@@ -294,13 +300,15 @@ profile fails; so does a TCP connection without the `network` grant. A
 `sandbox: none` plugin needs `unsandboxed` and is reported by
 `orbit plugin doctor` for as long as it stays enabled.
 
-Callbacks are the only way back into Orbit. The host issues a per-call session
-(token plus the child's pid and start time) when it spawns the backend;
+Callbacks are the only way back into Orbit. The host hands the backend its
+per-call session record on file descriptor 3, inherited by descendants;
 `ORBIT_PLUGIN` and `ORBIT_ALLOWED_TOOLS` are information for the child, not the
-gate. `orbit tool run` and MCP `tools/call` look up that session — by the token
-or by process ancestry if the child unsets its environment — and refuse anything
-outside the recorded grants. Unsetting or rewriting the variables cannot expand
-the set, and the plugin's own good behaviour is not the boundary.
+gate. `orbit tool run` and MCP `tools/call` verify that descriptor against the
+host-owned session record and refuse anything outside its effective tool ceiling.
+Closing the descriptor is a refusal; changing environment variables or using
+`setsid` cannot expand access. The retired token/ancestry path is available only
+with the deprecated `plugin.legacy_callback_identity` setting, off by default;
+`orbit plugin doctor` reports it when enabled.
 
 Who may *call* a plugin tool is decided by its `execution_kind`, not by the
 manifest: a `read_only` tool is callable by any caller Orbit can identify, and

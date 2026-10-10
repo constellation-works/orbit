@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use fs2::FileExt;
@@ -23,13 +24,53 @@ const FILE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 /// to reach `execve` on a loaded host, not for a holder to finish its work.
 const UNCLAIMED_LOCK_GRACE: Duration = Duration::from_secs(2);
 
-/// Deadline and warning policy for one advisory file-lock acquisition.
+/// Infix after the lock file's name that names a shared holder's record
+/// beside it: `<lock>.holder-<pid>-<seq>`. Records are files, not a
+/// directory, because a lock's parent may be a store partition whose
+/// subdirectories are read as its records; a dot-prefixed lock's records stay
+/// dot-prefixed infrastructure beside it.
+const SHARED_HOLDER_INFIX: &str = ".holder-";
+
+/// Suffix after the lock file's name that names its turnstile:
+/// `<lock>.turnstile`. Dot-prefixed beside a dot-prefixed lock for the same
+/// reason as the shared holders' records.
+const TURNSTILE_SUFFIX: &str = ".turnstile";
+
+/// Most shared holders one diagnostic line names before summarizing the rest.
+const MAX_NAMED_SHARED_HOLDERS: usize = 8;
+
+static SHARED_HOLDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Deadline, warning and diagnostic policy for one advisory file-lock
+/// acquisition.
 #[derive(Debug, Clone, Copy)]
 pub struct FileLockOptions {
     /// Fail acquisition after this duration.
     pub timeout: Duration,
     /// Emit one contention warning after this duration.
     pub warn_after: Duration,
+    /// Record each shared holder beside the lock file, so a waiter blocked by
+    /// readers can name them. An exclusive holder is always recorded. Costs a
+    /// file create and remove per shared acquisition, so it is meant for
+    /// coordination locks, not per-record locks taken by every read.
+    pub record_shared_holders: bool,
+    /// Log the label and held duration when a holder releases the lock after
+    /// holding it at least this long.
+    pub warn_held_after: Option<Duration>,
+    /// Give a waiting exclusive acquirer priority over shared acquirers that
+    /// arrive after it. A refused exclusive acquirer holds the lock's
+    /// turnstile (`<lock>.turnstile`) until it takes the lock, and a shared
+    /// acquirer passes through the turnstile before trying the lock, so once
+    /// a writer queues, new readers wait behind it while the readers already
+    /// inside drain. Without it a writer succeeds only at an instant when no
+    /// reader holds the lock, and readers that keep overlapping starve it to
+    /// its deadline.
+    ///
+    /// Every acquirer of the lock must agree on this. A shared acquirer that
+    /// already holds a lock the queued writer's blockers may wait on must
+    /// not pass the turnstile, or the two waits close a cycle; such a nested
+    /// acquisition turns this off.
+    pub prefer_exclusive_waiters: bool,
 }
 
 impl Default for FileLockOptions {
@@ -37,14 +78,18 @@ impl Default for FileLockOptions {
         Self {
             timeout: DEFAULT_FILE_LOCK_TIMEOUT,
             warn_after: DEFAULT_FILE_LOCK_WARN_AFTER,
+            record_shared_holders: false,
+            warn_held_after: None,
+            prefer_exclusive_waiters: false,
         }
     }
 }
 
-/// Advisory metadata recorded by an exclusive lock holder.
+/// Advisory metadata recorded by a lock holder: in the lock file by an
+/// exclusive holder, beside it by a shared one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileLockHolderInfo {
-    /// Process ID of the exclusive holder that wrote this metadata.
+    /// Process ID of the holder that wrote this metadata.
     pub pid: u32,
     /// RFC 3339 acquisition timestamp.
     pub acquired_at: String,
@@ -63,6 +108,10 @@ pub struct FileLockTimeout {
     pub timeout_ms: u64,
     /// Advisory exclusive-holder metadata, when a complete record was readable.
     pub holder: Option<FileLockHolderInfo>,
+    /// Live shared holders, for a lock whose readers record themselves
+    /// ([`FileLockOptions::record_shared_holders`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shared_holders: Vec<FileLockHolderInfo>,
 }
 
 impl std::fmt::Display for FileLockTimeout {
@@ -80,6 +129,12 @@ impl std::fmt::Display for FileLockTimeout {
                 " (held by pid {} since {}, op: {})",
                 holder.pid, holder.acquired_at, holder.label
             )?;
+        } else if !self.shared_holders.is_empty() {
+            write!(
+                formatter,
+                " (held shared by {})",
+                describe_shared_holders(&self.shared_holders)
+            )?;
         }
         Ok(())
     }
@@ -93,13 +148,51 @@ impl std::error::Error for FileLockTimeout {}
 pub struct FileLockGuard {
     file: File,
     clear_holder_on_drop: bool,
+    /// This holder's record beside the lock, removed on release.
+    shared_record: Option<PathBuf>,
+    /// Logs the hold on release once it passes the configured threshold.
+    hold: Option<HoldReport>,
 }
 
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
+        if let Some(record) = &self.shared_record {
+            let _ = std::fs::remove_file(record);
+        }
         if self.clear_holder_on_drop {
             let _ = clear_file_lock_holder(&self.file);
         }
+        if let Some(hold) = &self.hold {
+            hold.report();
+        }
+    }
+}
+
+/// What a holder needs to say on release that it held the lock too long.
+#[derive(Debug)]
+struct HoldReport {
+    lock_path: PathBuf,
+    label: String,
+    exclusive: bool,
+    acquired: Instant,
+    warn_after: Duration,
+}
+
+impl HoldReport {
+    fn report(&self) {
+        let held = self.acquired.elapsed();
+        if held < self.warn_after {
+            return;
+        }
+        crate::tracing::warn!(
+            target: "orbit.common.fs.file_lock",
+            lock_path = %self.lock_path.display(),
+            label = %self.label,
+            mode = if self.exclusive { "exclusive" } else { "shared" },
+            held_ms = duration_millis(held),
+            threshold_ms = duration_millis(self.warn_after),
+            "advisory file lock held past its threshold",
+        );
     }
 }
 
@@ -143,7 +236,7 @@ pub fn acquire_exclusive_file_lock(
 /// A refusal carrying no holder record is exactly that case: the previous
 /// owner cleared its record when it dropped its guard, and a new owner writes
 /// one as soon as it acquires. Such a refusal is waited out for
-/// [`UNCLAIMED_LOCK_GRACE`] and reported as contention only if it outlives it.
+/// `UNCLAIMED_LOCK_GRACE` and reported as contention only if it outlives it.
 /// A refusal a holder does claim returns `Ok(None)` immediately, so a caller
 /// whose correct response to real contention is "exit" never queues behind a
 /// live pass.
@@ -168,6 +261,8 @@ pub fn try_acquire_exclusive_file_lock(
                 return Ok(Some(FileLockGuard {
                     file: lock_file,
                     clear_holder_on_drop: true,
+                    shared_record: None,
+                    hold: None,
                 }));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -220,6 +315,94 @@ pub fn read_file_lock_holder(lock_path: &Path) -> Option<FileLockHolderInfo> {
     read_file_lock_holder_with_hook(lock_path, |_| {})
 }
 
+/// Read the records shared holders keep beside `lock_path`, oldest first.
+///
+/// Only a lock acquired with [`FileLockOptions::record_shared_holders`] has
+/// any. A record whose process is gone is a crashed holder's leftover — the
+/// OS released its lock with the process — so it is skipped and removed.
+/// Torn and unreadable records are skipped, like the exclusive record.
+fn read_shared_file_lock_holders(lock_path: &Path) -> Vec<FileLockHolderInfo> {
+    let (Some(parent), Some(prefix)) = (lock_path.parent(), shared_holder_prefix(lock_path)) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut holders = Vec::new();
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(&prefix))
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Some(file) = open_lock_holder_file(&path, |_| {}) else {
+            continue;
+        };
+        let Some(holder) = read_holder_record(file) else {
+            continue;
+        };
+        if holder_process_gone(holder.pid) {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            holders.push(holder);
+        }
+    }
+    holders.sort_by(|left, right| left.acquired_at.cmp(&right.acquired_at));
+    holders
+}
+
+/// Whether a recorded holder's process has exited. Only Unix can tell; a
+/// record elsewhere is kept and its holder named.
+fn holder_process_gone(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        !crate::process::identity::process_is_alive(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+fn read_holder_record(mut file: File) -> Option<FileLockHolderInfo> {
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn shared_holder_prefix(lock_path: &Path) -> Option<String> {
+    let name = lock_path.file_name()?.to_str()?;
+    Some(format!("{name}{SHARED_HOLDER_INFIX}"))
+}
+
+/// Record this shared holder beside the lock. Best effort, like the
+/// exclusive record: the OS lock is authoritative, and a store that refuses
+/// the record still serves the read.
+fn write_shared_holder_record(lock_path: &Path, label: &str) -> Option<PathBuf> {
+    let prefix = shared_holder_prefix(lock_path)?;
+    let sequence = SHARED_HOLDER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let path = lock_path.with_file_name(format!("{prefix}{}-{sequence}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    let file = open_private_file(&path, &mut options).ok()?;
+    let holder = FileLockHolderInfo {
+        pid: std::process::id(),
+        acquired_at: chrono::Utc::now().to_rfc3339(),
+        label: label.to_string(),
+    };
+    match write_file_lock_holder_inner(&file, &holder) {
+        Ok(()) => Some(path),
+        Err(_) => {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+}
+
 /// Test-only seam that runs `before_open` between path resolution and the
 /// no-follow open, so a test can deterministically swap the resolved final
 /// component for a symlink and prove the open still rejects it [ORB-12029].
@@ -238,10 +421,7 @@ fn read_file_lock_holder_with_hook(
     lock_path: &Path,
     before_open: impl FnOnce(&Path),
 ) -> Option<FileLockHolderInfo> {
-    let mut file = open_lock_holder_file(lock_path, before_open)?;
-    let mut raw = String::new();
-    file.read_to_string(&mut raw).ok()?;
-    serde_json::from_str(&raw).ok()
+    read_holder_record(open_lock_holder_file(lock_path, before_open)?)
 }
 
 /// Resolve `lock_path`'s parent directory to its canonical form.
@@ -324,8 +504,17 @@ fn acquire_file_lock(
     options: FileLockOptions,
     exclusive: bool,
 ) -> io::Result<FileLockGuard> {
-    let started = Instant::now();
-    let mut warned = false;
+    let mut wait = ContentionWait::new(lock_path, label, options);
+    let turnstile_path = options
+        .prefer_exclusive_waiters
+        .then(|| turnstile_path(lock_path))
+        .flatten();
+    if !exclusive && let Some(turnstile) = &turnstile_path {
+        pass_turnstile(turnstile, lock_path, &mut wait)?;
+    }
+    // Held by this exclusive acquirer from its first refusal until it takes
+    // the lock, so readers arriving meanwhile queue behind it.
+    let mut queued: Option<FileLockGuard> = None;
 
     loop {
         let acquisition = if exclusive {
@@ -335,30 +524,36 @@ fn acquire_file_lock(
         };
         match acquisition {
             Ok(()) => {
-                if exclusive {
+                drop(queued);
+                let shared_record = if exclusive {
                     write_file_lock_holder(&lock_file, label);
-                }
+                    None
+                } else if options.record_shared_holders {
+                    write_shared_holder_record(lock_path, label)
+                } else {
+                    None
+                };
                 return Ok(FileLockGuard {
                     file: lock_file,
                     clear_holder_on_drop: exclusive,
+                    shared_record,
+                    hold: options.warn_held_after.map(|warn_after| HoldReport {
+                        lock_path: lock_path.to_path_buf(),
+                        label: label.to_string(),
+                        exclusive,
+                        acquired: Instant::now(),
+                        warn_after,
+                    }),
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                let elapsed = started.elapsed();
-                if elapsed >= options.timeout {
-                    let timeout = FileLockTimeout {
-                        lock_path: lock_path.to_path_buf(),
-                        label: label.to_string(),
-                        timeout_ms: duration_millis(options.timeout),
-                        holder: read_file_lock_holder(lock_path),
-                    };
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, timeout));
+                if exclusive
+                    && queued.is_none()
+                    && let Some(turnstile) = &turnstile_path
+                {
+                    queued = try_hold_turnstile(turnstile, label);
                 }
-                if !warned && elapsed >= options.warn_after {
-                    warned = true;
-                    warn_for_contention(lock_path, label, elapsed);
-                }
-                std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(options.timeout - elapsed));
+                wait.refused(|| describe_file_lock_holders(lock_path))?;
             }
             Err(error) => {
                 return Err(classify_or_wrap_lock_io(lock_path, error, |error| {
@@ -369,15 +564,154 @@ fn acquire_file_lock(
     }
 }
 
-fn warn_for_contention(lock_path: &Path, label: &str, elapsed: Duration) {
-    let holder = read_file_lock_holder(lock_path)
+/// One acquisition's deadline, contention warning and retry pacing, shared by
+/// its turnstile and lock waits so the two together stay within one deadline.
+struct ContentionWait<'a> {
+    lock_path: &'a Path,
+    label: &'a str,
+    options: FileLockOptions,
+    started: Instant,
+    warned: bool,
+}
+
+impl<'a> ContentionWait<'a> {
+    fn new(lock_path: &'a Path, label: &'a str, options: FileLockOptions) -> Self {
+        Self {
+            lock_path,
+            label,
+            options,
+            started: Instant::now(),
+            warned: false,
+        }
+    }
+
+    /// Account for one refusal: time out past the deadline, warn once past
+    /// the warning threshold naming `holder()`, otherwise sleep before the
+    /// next attempt.
+    fn refused(&mut self, holder: impl FnOnce() -> String) -> io::Result<()> {
+        let elapsed = self.started.elapsed();
+        if elapsed >= self.options.timeout {
+            let timeout = FileLockTimeout {
+                lock_path: self.lock_path.to_path_buf(),
+                label: self.label.to_string(),
+                timeout_ms: duration_millis(self.options.timeout),
+                holder: read_file_lock_holder(self.lock_path),
+                shared_holders: read_shared_file_lock_holders(self.lock_path),
+            };
+            return Err(io::Error::new(io::ErrorKind::TimedOut, timeout));
+        }
+        if !self.warned && elapsed >= self.options.warn_after {
+            self.warned = true;
+            warn_for_contention(self.lock_path, self.label, elapsed, &holder());
+        }
+        std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(self.options.timeout - elapsed));
+        Ok(())
+    }
+}
+
+fn turnstile_path(lock_path: &Path) -> Option<PathBuf> {
+    let name = lock_path.file_name()?.to_str()?;
+    Some(lock_path.with_file_name(format!("{name}{TURNSTILE_SUFFIX}")))
+}
+
+/// Wait until no exclusive acquirer is queued at `turnstile`, then pass
+/// straight through: the shared hold is dropped before the lock is tried, so
+/// readers never hold the turnstile while they wait or work.
+///
+/// The turnstile only orders acquirers; the lock itself still excludes. So a
+/// reader never creates it — a missing turnstile means no writer has queued,
+/// and a read must not leave a file behind — and one it cannot open or lock
+/// is passed rather than failing the read.
+fn pass_turnstile(
+    turnstile: &Path,
+    lock_path: &Path,
+    wait: &mut ContentionWait<'_>,
+) -> io::Result<()> {
+    let Ok(gate) = super::open_read_only_no_follow(turnstile) else {
+        return Ok(());
+    };
+    loop {
+        match FileExt::try_lock_shared(&gate) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait.refused(|| describe_queued_exclusive_waiter(turnstile, lock_path))?;
+            }
+            Ok(()) | Err(_) => return Ok(()),
+        }
+    }
+}
+
+/// Queue at `turnstile` if no other exclusive acquirer already holds it.
+/// The holder record names this waiter to the readers it holds back. A
+/// turnstile that cannot be created or locked leaves the waiter unqueued:
+/// it still takes the lock, only without priority.
+fn try_hold_turnstile(turnstile: &Path, label: &str) -> Option<FileLockGuard> {
+    let gate = open_lock_file(turnstile, label).ok()?;
+    FileExt::try_lock_exclusive(&gate).ok()?;
+    write_file_lock_holder(&gate, label);
+    Some(FileLockGuard {
+        file: gate,
+        clear_holder_on_drop: true,
+        shared_record: None,
+        hold: None,
+    })
+}
+
+/// Name the exclusive acquirer a reader is queued behind, and whoever that
+/// acquirer is itself waiting on.
+fn describe_queued_exclusive_waiter(turnstile: &Path, lock_path: &Path) -> String {
+    let waiter = read_file_lock_holder(turnstile).map_or_else(
+        || "unknown".to_string(),
+        |holder| {
+            format!(
+                "pid {} since {} ({})",
+                holder.pid, holder.acquired_at, holder.label
+            )
+        },
+    );
+    format!(
+        "queued exclusive waiter: {waiter}; waiting on {}",
+        describe_file_lock_holders(lock_path)
+    )
+}
+
+/// Name whoever holds `lock_path` for a contention diagnostic: the exclusive
+/// holder's record, else every live shared holder's, else `unknown`.
+fn describe_file_lock_holders(lock_path: &Path) -> String {
+    if let Some(holder) = read_file_lock_holder(lock_path) {
+        return format!(
+            "pid {} since {} ({})",
+            holder.pid, holder.acquired_at, holder.label
+        );
+    }
+    let shared = read_shared_file_lock_holders(lock_path);
+    if shared.is_empty() {
+        return "unknown".to_string();
+    }
+    format!("shared: {}", describe_shared_holders(&shared))
+}
+
+fn describe_shared_holders(holders: &[FileLockHolderInfo]) -> String {
+    let mut described = holders
+        .iter()
+        .take(MAX_NAMED_SHARED_HOLDERS)
         .map(|holder| {
             format!(
                 "pid {} since {} ({})",
                 holder.pid, holder.acquired_at, holder.label
             )
         })
-        .unwrap_or_else(|| "unknown".to_string());
+        .collect::<Vec<_>>()
+        .join("; ");
+    if holders.len() > MAX_NAMED_SHARED_HOLDERS {
+        described.push_str(&format!(
+            "; {} more",
+            holders.len() - MAX_NAMED_SHARED_HOLDERS
+        ));
+    }
+    described
+}
+
+fn warn_for_contention(lock_path: &Path, label: &str, elapsed: Duration, holder: &str) {
     crate::tracing::warn!(
         target: "orbit.common.fs.file_lock",
         lock_path = %lock_path.display(),

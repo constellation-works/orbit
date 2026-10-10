@@ -232,7 +232,7 @@ def main():
         "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
         "category": "Productivity"
     }]}, indent=2) + "\n")
-    evidence = json.loads((ROOT / "docs/mcp-apps-evidence-template.json").read_text())
+    evidence = json.loads((ROOT / "docs/qa/mcp-apps-evidence-template.json").read_text())
     changed = subprocess.check_output(["git", "diff", "--name-only", "HEAD", "-z"], cwd=ROOT).split(b"\0")
     untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=ROOT).split(b"\0")
     digest = hashlib.sha256()

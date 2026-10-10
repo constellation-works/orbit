@@ -10,8 +10,17 @@ spec:
     `pr_failure_handoff` recorded on the run the task was linked to before
     this run (`prior_job_run_id`). It is used only when no operator discarded
     it since that run (`orbit task update --discard-candidate`) and the task's
-    description, acceptance criteria and selectors still match the digest
-    recorded with it; otherwise the outcome is `fresh` with the reason.
+    description and acceptance criteria still match the digest recorded with
+    it (a selector edit keeps it); otherwise the outcome is `fresh` with the
+    reason and a `reason_code`. A run held on named external evidence records
+    no handoff: when the task's latest decision is that run's
+    `review_evidence_received`, the candidate is the commit the task's
+    `review-evidence-hold.json` names, under the same discard and spec
+    checks. A clean merge of it is `resumed_held`: `implement` is false and
+    validation is not run here, so the pipeline's own validation and fresh
+    review judge it. A conflict is `resumed_repaired` with trigger
+    `conflict`, and a held commit no longer in the repository is `fresh`
+    with `candidate_missing`.
     A usable candidate is squash-merged onto the run's clean checkout of
     `base_sha` and left as uncommitted changes. A candidate whose failed
     step is the implementation (`implement_bundle` or `implement_one`) or
@@ -26,6 +35,35 @@ spec:
     tool is `resumed_unjudged`: the run's own validation step decides. Every
     outcome with a candidate is written to the task history as a
     `candidate_resume` event naming the source run and SHA.
+    A claimed leaf, PR or owner-local, sets `claimed` and passes
+    `candidate`, the reference the owner kept from the task's last claim;
+    the owner has already retired a discarded one, one whose spec changed
+    and one this host cannot fetch, recording why in the task's history, so
+    none of those checks runs here and nothing is written to the task's
+    history. A candidate missing from this object store is fetched from
+    `origin`: from its `durable_ref` when its leaf carried it to one, else
+    from its branch. A clean merge
+    is `resumed_repaired` with trigger `continuation` (`review` when the
+    before-PR review refused it): the claimed implementer always runs and
+    the leaf's own validation judges the result.
+    When the task's prior run executed on another machine
+    (`prior_foreign_run`, a claim's leaf), its id is never looked up in this
+    machine's run store. An owner-local run continues the candidate the
+    owner kept from the task's last claim instead, under the same discard,
+    spec and fetchability checks as a claim's admission: a refusal is
+    `fresh` with that typed reason, and a clean merge is `resumed_repaired`
+    with trigger `continuation` (`review` when the before-PR review refused
+    it). The outcome is written to the task history naming the claim and
+    the machine that committed the candidate. A prior run on this machine
+    that recorded no failure handoff falls back to the candidate the owner
+    kept from that run's claim.
+    A repair claim's leaf instead passes `claim_repair`, the candidate an
+    owner's landing stopped on a base conflict or stale base. It is
+    squash-merged the same way and is always `resumed_repaired`: trigger
+    `conflict` with `conflicting_paths`, or `landing` when it applied
+    cleanly or its changes are already on the new base. If that candidate
+    cannot be restored, the repair leaf fails rather than implementing
+    fresh without its work.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, base_sha, task_ids]
@@ -43,6 +81,26 @@ spec:
           type: string
       prior_job_run_id:
         type: [string, "null"]
+      prior_foreign_run:
+        type: [object, "null"]
+        description: >
+          The task's prior run when another machine executed it: `run_id`
+          and `machine_id`. Takes precedence over `prior_job_run_id`.
+      claimed:
+        type: boolean
+      candidate:
+        type: [object, "null"]
+        description: >
+          Claimed mode only: the preserved candidate's `branch` and
+          `head_sha`, with `source_run_id`, `failed_step_id` and, when its
+          leaf carried it to `origin`, `durable_ref`.
+      claim_repair:
+        type: [object, "null"]
+        description: >
+          Claimed mode only, a repair claim's leaf: the candidate whose
+          landing stopped (`branch`, `head_sha`, `base_sha`), with
+          `repairs_claim_id`, `handoff_id` and `stop_evidence`. It takes
+          precedence over `candidate`.
   output_schema_json:
     type: object
     required: [phase, outcome, implement]
@@ -51,19 +109,31 @@ spec:
         type: string
       outcome:
         type: string
-        enum: [fresh, resumed_validated, resumed_repaired, resumed_unjudged]
+        enum: [fresh, resumed_validated, resumed_held, resumed_repaired, resumed_unjudged]
       implement:
         type: boolean
       reason:
         type: [string, "null"]
+      reason_code:
+        type: [string, "null"]
+        description: >
+          Set when `outcome` is `fresh`: `bundle`, `no_prior_run`,
+          `no_candidate`, `candidate_discarded`, `spec_unrecorded`,
+          `spec_changed`, `not_durable`, `candidate_missing` or
+          `already_on_base`.
       repair:
         type: [object, "null"]
         description: >
           What the implementer repairs: `trigger` (`implementation`, `conflict`,
-          `validation` or `review`) and its `output`, plus `failed_step_id`,
+          `validation`, `review`, `continuation` or `landing`) and its `output`, plus `failed_step_id`,
           `conflicting_paths` or the failing `command`.
       source_run_id:
         type: [string, "null"]
+      source_machine_id:
+        type: [string, "null"]
+        description: >
+          The machine that executed `source_run_id`, when the candidate came
+          from a claim's leaf the owner kept it from.
       source_branch:
         type: [string, "null"]
       source_sha:

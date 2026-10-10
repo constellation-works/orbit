@@ -5,38 +5,47 @@ use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
     /// Record the `pipeline.invoke` audit for a direct-path submission, which
-    /// does not route through [`Self::submit_pipeline_run`].
+    /// does not route through [`Self::submit_pipeline_run`]. Audit failures
+    /// are logged without replacing the submission outcome.
     pub(super) fn record_submission_audit(
         &self,
         job_name: &str,
         input: &Value,
         actor: Option<&str>,
         result: &Result<PipelineInvokeResult, OrbitError>,
-    ) -> Result<(), OrbitError> {
-        self.record_pipeline_audit(
-            "pipeline.invoke",
-            result.as_ref().ok().map(|value| value.run_id.as_str()),
-            actor,
-            match result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "priority": Option::<&str>::None,
-                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
-                "input_hash": input_hash(input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )
+    ) {
+        log_best_effort(
+            "record pipeline submission audit",
+            result
+                .as_ref()
+                .ok()
+                .map(|value| value.run_id.as_str())
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "pipeline.invoke",
+                result.as_ref().ok().map(|value| value.run_id.as_str()),
+                actor,
+                match result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
+                },
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "priority": Option::<&str>::None,
+                    "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                    "input_hash": input_hash(input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
     }
     /// Persist a pipeline run and hand it to a detached worker.
     ///
-    /// `resume` distinguishes the two submission shapes: `None` is a fresh
-    /// attempt with a blank pipeline; `Some(plan)` links the new run to its
-    /// source, seeds it with that source's checkpoints, and reconciles the
-    /// lineage's task ownership before the worker can reach `worktree_setup`.
+    /// A fresh attempt starts with a blank pipeline. Replay links its source
+    /// while keeping that blank state; `resume: Some(plan)` instead seeds the
+    /// source's checkpoints and reconciles the lineage's task ownership before
+    /// the worker can reach `worktree_setup`.
     pub(crate) fn submit_persisted_pipeline_run(
         &self,
         submission: PipelineSubmission<'_>,
@@ -69,10 +78,12 @@ impl OrbitRuntime {
             definition,
             input,
             resume,
+            replay_source_run_id,
             actor,
             action_key,
             retry_key,
             trusted_host,
+            reconciliation,
             trigger,
         } = submission;
         // [ORB-11354] The reserved admission key is writable by exactly one
@@ -83,6 +94,10 @@ impl OrbitRuntime {
         if !trusted_host && run_input_declares_trusted_host(&input) {
             return Err(reserved_trusted_host_key_error(job_name));
         }
+        if !reconciliation && run_input_declares_review_reconciliation(&input) {
+            return Err(reserved_reconciliation_key_error(job_name));
+        }
+        self.reclaim_worktrees_on_admission();
         // [ORB-11333] The review admission follows the same discipline: a
         // child inherits its parent's snapshot, an ordinary delivery
         // submission captures the effective policy once, and ordinary input
@@ -120,6 +135,8 @@ impl OrbitRuntime {
             }
 
             let submitted_at = Utc::now();
+            let mut existing_automation_run = false;
+            let mut seed_after_insert = false;
             let run = if let Some(admission) = admission {
                 match self
                     .stores()
@@ -140,9 +157,17 @@ impl OrbitRuntime {
                     }
                 }
             } else if let Some(key) = action_key {
-                self.stores()
-                    .jobs()
-                    .insert_automation_job_run(job_name, input.clone(), key)?
+                match self.stores().jobs().insert_automation_job_run(
+                    job_name,
+                    input.clone(),
+                    key,
+                )? {
+                    KeyedJobRunAdmission::Admitted(run) => *run,
+                    KeyedJobRunAdmission::Existing(run) => {
+                        existing_automation_run = true;
+                        *run
+                    }
+                }
             } else if let Some(retry_key) = retry_key {
                 // [ORB-13560] The retry-key probe and the insert are one store
                 // transaction, so concurrent submitters of one key — in any
@@ -159,7 +184,7 @@ impl OrbitRuntime {
                         input: input.clone(),
                     })? {
                     KeyedJobRunAdmission::Admitted(run) => {
-                        self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                        seed_after_insert = true;
                         *run
                     }
                     KeyedJobRunAdmission::Existing(run) => {
@@ -199,10 +224,10 @@ impl OrbitRuntime {
                         1,
                         submitted_at,
                         Some(input.clone()),
-                        None,
+                        replay_source_run_id.map(ToOwned::to_owned),
                     )?,
                 };
-                self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                seed_after_insert = true;
                 run
             };
 
@@ -211,14 +236,96 @@ impl OrbitRuntime {
             } else {
                 trigger
             };
-            self.record_run_trigger(&run.run_id, &trigger)?;
+            // [ORB-14524] The run row is committed. A failure from here to the
+            // worker handoff would otherwise strand a pending run with no
+            // worker, holding its concurrency slot and retry/resume key until
+            // the unclaimed-run grace expires, so it is terminalized before the
+            // error is returned. A reused automation run belongs to its original
+            // admission and keeps its state.
+            let delivered = (|| -> Result<ChildSubmission, OrbitError> {
+                if seed_after_insert {
+                    self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                }
+                // The transaction's outcome, rather than the run's
+                // pending/running state, decides initialization. A retry may
+                // resolve a pending run whose worker has already started
+                // writing checkpoints or controls.
+                if !existing_automation_run {
+                    self.record_run_trigger(&run.run_id, &trigger)?;
+                    // [ORB-14777] A child inherits its drain's environment, so
+                    // only the submission that starts a process records it.
+                    if admission.is_none() {
+                        self.record_run_env_pass_unset(&run.run_id)?;
+                    }
+                }
 
-            // Pin the definition before the worker can exist. A direct-path
-            // submission must not depend on the source file surviving
-            // unchanged until the detached worker gets around to reading it.
-            if let SubmittedDefinition::Snapshot { yaml, .. } = &definition
-                && let Err(error) = self.write_run_definition_snapshot(&run.run_id, yaml)
+                // Pin the definition before the worker can exist. A direct-path
+                // submission must not depend on the source file surviving
+                // unchanged until the detached worker gets around to reading it.
+                if let SubmittedDefinition::Snapshot { yaml, .. } = &definition {
+                    self.write_run_definition_snapshot(&run.run_id, yaml)?;
+                }
+
+                // Reaping other orphaned runs of the job does not concern this
+                // submission; its failure must not fail an admitted run.
+                log_best_effort(
+                    "reconcile stale job runs",
+                    &run.run_id,
+                    self.reconcile_stale_job_runs(Some(job_name)),
+                );
+                let active_runs = self
+                    .stores()
+                    .jobs()
+                    .list_pending_or_running_job_runs(job_name)?;
+                let queue_position =
+                    pipeline_run_queue_position(&active_runs, &run.run_id, spec.max_active_runs);
+                let queued = queue_position.is_some();
+
+                // A repeated automation admission resolves the original run.
+                // Only pending runs need delivery; the existing Start CAS
+                // fences workers.
+                if (action_key.is_none() || run.state == JobRunState::Pending)
+                    && let Err(error) = self.spawn_pipeline_worker(
+                        &run.run_id,
+                        actor,
+                        input["__worker_containment_strict"] == true,
+                    )
+                {
+                    let log_note =
+                        match pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id) {
+                            Ok(worker_log) => format!("; worker log: '{}'", worker_log.display()),
+                            Err(_) => String::new(),
+                        };
+                    let message = format!(
+                        "pipeline worker for run '{}' could not start from registered \
+                         workspace '{}': {error}{log_note}",
+                        run.run_id,
+                        self.paths().repo_root.display(),
+                    );
+                    let error_code =
+                        matches!(error, OrbitError::WorkerContainmentUnavailable { .. })
+                            .then_some(worker::scope::WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE);
+                    log_best_effort(
+                        "finalize startup failure",
+                        &run.run_id,
+                        self.finalize_pipeline_worker_startup_failure(
+                            &run, &message, error_code, actor,
+                        ),
+                    );
+                    return Err(error);
+                }
+                Ok(ChildSubmission::Submitted(PipelineInvokeResult {
+                    run_id: run.run_id.clone(),
+                    job_name: job_name.to_string(),
+                    submitted_at: submitted_at.to_rfc3339(),
+                    queued,
+                    queue_position,
+                }))
+            })();
+            if let Err(error) = &delivered
+                && !existing_automation_run
             {
+                // A no-op when the spawn branch already terminalized the run.
                 log_best_effort(
                     "finalize startup failure",
                     &run.run_id,
@@ -229,75 +336,38 @@ impl OrbitRuntime {
                         actor,
                     ),
                 );
-                return Err(error);
             }
-
-            self.reconcile_stale_job_runs(Some(job_name))?;
-            let active_runs = self
-                .stores()
-                .jobs()
-                .list_pending_or_running_job_runs(job_name)?;
-            let queue_position =
-                pipeline_run_queue_position(&active_runs, &run.run_id, spec.max_active_runs);
-            let queued = queue_position.is_some();
-
-            // A repeated automation admission resolves the original run. Only
-            // pending runs need delivery; the existing Start CAS fences workers.
-            if (action_key.is_none() || run.state == JobRunState::Pending)
-                && let Err(error) = self.spawn_pipeline_worker(
-                    &run.run_id,
-                    actor,
-                    input["__worker_containment_strict"] == true,
-                )
-            {
-                let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id)?;
-                let message = format!(
-                    "pipeline worker for run '{}' could not start from registered workspace '{}': \
-                     {error}; worker log: '{}'",
-                    run.run_id,
-                    self.paths().repo_root.display(),
-                    worker_log.display(),
-                );
-                let error_code = matches!(error, OrbitError::WorkerContainmentUnavailable { .. })
-                    .then_some(worker::scope::WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE);
-                log_best_effort(
-                    "finalize startup failure",
-                    &run.run_id,
-                    self.finalize_pipeline_worker_startup_failure(
-                        &run, &message, error_code, actor,
-                    ),
-                );
-                return Err(error);
-            }
-            Ok(ChildSubmission::Submitted(PipelineInvokeResult {
-                run_id: run.run_id,
-                job_name: job_name.to_string(),
-                submitted_at: submitted_at.to_rfc3339(),
-                queued,
-                queue_position,
-            }))
+            delivered
         })();
 
         if let Some(plan) = resume {
-            self.record_pipeline_audit(
-                "pipeline.resume",
-                result.as_ref().ok().and_then(ChildSubmission::run_id),
-                actor,
-                match &result {
-                    Ok(_) => AuditEventStatus::Success,
-                    Err(_) => AuditEventStatus::Failure,
-                },
-                json!({
-                    "actor": actor,
-                    "job_name": job_name,
-                    "source_run_id": plan.source.run_id,
-                    "attempt": plan.attempt,
-                    "resumed_from_checkpoints": plan.resume_state.is_some(),
-                    "checkpoint_batch_id": plan.checkpoint_batch_id,
-                    "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
-                }),
-                result.as_ref().err().map(|error| error.to_string()),
-            )?;
+            log_best_effort(
+                "record resume submission audit",
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(ChildSubmission::run_id)
+                    .unwrap_or_default(),
+                self.record_pipeline_audit(
+                    "pipeline.resume",
+                    result.as_ref().ok().and_then(ChildSubmission::run_id),
+                    actor,
+                    match &result {
+                        Ok(_) => AuditEventStatus::Success,
+                        Err(_) => AuditEventStatus::Failure,
+                    },
+                    json!({
+                        "actor": actor,
+                        "job_name": job_name,
+                        "source_run_id": plan.source.run_id,
+                        "attempt": plan.attempt,
+                        "resumed_from_checkpoints": plan.resume_state.is_some(),
+                        "checkpoint_batch_id": plan.checkpoint_batch_id,
+                        "run_id": result.as_ref().ok().and_then(ChildSubmission::run_id),
+                    }),
+                    result.as_ref().err().map(|error| error.to_string()),
+                ),
+            );
         }
 
         result
@@ -401,11 +471,30 @@ impl OrbitRuntime {
         run_id: &str,
         trigger: &JobRunTrigger,
     ) -> Result<(), OrbitError> {
-        let Some(mut state) = self.read_run_state(run_id)? else {
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.trigger = Some(trigger.clone());
+                Ok(())
+            })?;
+        Ok(())
+    }
+
+    /// [ORB-14777] Record which pass-listed variables this submitting process
+    /// does not hold, so `run show` and the dashboard explain a worker that
+    /// fell back to another login. Writes nothing when none are unset.
+    fn record_run_env_pass_unset(&self, run_id: &str) -> Result<(), OrbitError> {
+        let unset = self.unset_env_pass_names();
+        if unset.is_empty() {
             return Ok(());
-        };
-        state.trigger = Some(trigger.clone());
-        self.write_run_state(run_id, &state)
+        }
+        self.stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.env_pass_unset = unset.clone();
+                Ok(())
+            })?;
+        Ok(())
     }
 }
 

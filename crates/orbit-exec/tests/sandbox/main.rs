@@ -1,5 +1,6 @@
 //! Platform sandbox enforcement: Linux Landlock and bwrap, and macOS
-//! `sandbox-exec`. Each module is compiled only on its platform.
+//! `sandbox-exec`. Kernel modules compile only on their platform; apply-probe
+//! classification and guard-output fixtures run on every platform.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -10,4 +11,7 @@
 
 mod linux_landlock;
 mod linux_sandbox;
+mod macos_compile;
 mod macos_sandbox;
+
+mod apply_probe;

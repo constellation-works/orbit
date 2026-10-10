@@ -1,6 +1,6 @@
 //! Audit event listing and summary tile aggregation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
 
 use crate::state::{DashboardState, Ws};
@@ -17,7 +17,8 @@ use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
 use super::denials::{collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary};
-use super::incidents::{ROLLUP_SCAN_LIMIT, failure_category_summaries};
+use super::incidents::{ROLLUP_SCAN_LIMIT, agent_family_key, failure_category_summaries};
+use super::jobs::FAILED_RUN_STATES;
 use super::{
     AuditQuery, AuditSummaryQuery, DEFAULT_SUMMARY_WINDOW, HISTORY_DEFAULT_LIMIT,
     HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit, map_runtime_error, server_error,
@@ -46,7 +47,19 @@ const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
 /// the truncated start hour. [`build_sparkline`] never emits more than this.
 const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
+/// The incident rollup itself is bounded to this many source rows, so an
+/// exact incident drilldown never needs more IDs than this.
+const MAX_AUDIT_EVENT_IDS: usize = 10_000;
+
 pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
+    let event_ids = match q.ids.as_deref() {
+        Some(raw) => match parse_audit_event_ids(raw) {
+            Ok(ids) => Some(ids),
+            Err(message) => return bad_request(message),
+        },
+        None => None,
+    };
+
     let since = match q.since.as_deref() {
         Some(raw) => match parse_since(raw) {
             Ok(ts) => Some(ts),
@@ -55,7 +68,10 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         None => None,
     };
 
-    let status = match q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let raw_status = q.status.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let non_success = raw_status == Some("non_success");
+    let status = match raw_status {
+        Some("non_success") => None,
         Some(raw) => match AuditEventStatus::from_str(raw) {
             Ok(s) => Some(s),
             Err(msg) => return bad_request(msg),
@@ -117,6 +133,13 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     };
 
     let post_filter = AuditPostFilter {
+        agent_family: q
+            .agent_family
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(agent_family_key),
+        non_success,
         execution_id: q
             .execution_id
             .as_deref()
@@ -138,7 +161,9 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     };
 
     match blocking("audit list", move || {
-        let events = if post_filter.is_empty() {
+        let events = if let Some(ids) = event_ids.as_deref() {
+            runtime.list_audit_events_by_ids(ids, filter.workspace_id.as_deref())?
+        } else if post_filter.is_empty() {
             // Every requested predicate has a column, so the page is exactly the
             // SQL window: no prefetch, no Rust-side slicing.
             runtime.list_audit_events_filtered(&filter)?
@@ -157,9 +182,36 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     }
 }
 
-/// Predicates the SQLite schema has no column for, applied to each fetched
-/// row in Rust.
+fn parse_audit_event_ids(raw: &str) -> Result<Vec<i64>, String> {
+    if raw.split(',').count() > MAX_AUDIT_EVENT_IDS {
+        return Err(format!(
+            "ids must contain at most {MAX_AUDIT_EVENT_IDS} values"
+        ));
+    }
+
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_id in raw.split(',') {
+        let id = raw_id
+            .parse::<i64>()
+            .map_err(|_| "ids must be comma-separated positive audit row IDs".to_string())?;
+        if id <= 0 {
+            return Err("ids must be comma-separated positive audit row IDs".to_string());
+        }
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return Err("ids must include at least one audit row ID".to_string());
+    }
+    Ok(ids)
+}
+
+/// Predicates without a direct store filter, applied to each fetched row in Rust.
 struct AuditPostFilter {
+    agent_family: Option<String>,
+    non_success: bool,
     execution_id: Option<String>,
     profile: Option<String>,
     /// Lowercased free-text needle.
@@ -168,10 +220,22 @@ struct AuditPostFilter {
 
 impl AuditPostFilter {
     fn is_empty(&self) -> bool {
-        self.execution_id.is_none() && self.profile.is_none() && self.needle.is_none()
+        self.agent_family.is_none()
+            && !self.non_success
+            && self.execution_id.is_none()
+            && self.profile.is_none()
+            && self.needle.is_none()
     }
 
     fn matches(&self, e: &orbit_core::AuditEvent) -> bool {
+        if let Some(family) = self.agent_family.as_deref()
+            && agent_family_key(&e.role) != family
+        {
+            return false;
+        }
+        if self.non_success && e.status == AuditEventStatus::Success {
+            return false;
+        }
         if let Some(eid) = self.execution_id.as_deref()
             && e.execution_id != eid
         {
@@ -321,6 +385,7 @@ struct AuditSummaryBundle {
     v2_denials: i64,
     failed_events: u64,
     failure_incidents: u64,
+    failure_incidents_truncated: bool,
     failure_incidents_by_class: BTreeMap<String, u64>,
     failed_events_by_class: BTreeMap<String, u64>,
     affected_runs_by_class: BTreeMap<String, u64>,
@@ -378,6 +443,10 @@ fn summary_payload(
         // is how many distinct problems those rows represent.
         "failed_events": bundle.failed_events,
         "failure_incidents": bundle.failure_incidents,
+        // All counts derived from the incident scan share this coverage,
+        // while `events` is the uncapped SQL total for the window.
+        "failure_incidents_truncated": bundle.failure_incidents_truncated,
+        "failure_incidents_scan_limit": ROLLUP_SCAN_LIMIT,
         "failure_incidents_by_class": bundle.failure_incidents_by_class,
         "failed_events_by_class": bundle.failed_events_by_class,
         "affected_runs_by_class": bundle.affected_runs_by_class,
@@ -452,7 +521,10 @@ fn compute_audit_summary_bundle(
     failures_vec.sort_by_key(|v| std::cmp::Reverse(v["count"].as_i64().unwrap_or(0)));
     failures_vec.truncate(8);
 
-    let mut by_avg: Vec<&AuditToolAggregate> = tool_aggs.iter().collect();
+    let mut by_avg: Vec<&AuditToolAggregate> = tool_aggs
+        .iter()
+        .filter(|tool| is_named_tool(&tool.tool_name))
+        .collect();
     by_avg.sort_by(|a, b| {
         b.avg_duration_ms
             .partial_cmp(&a.avg_duration_ms)
@@ -460,20 +532,10 @@ fn compute_audit_summary_bundle(
     });
     let mut duration_vec = Vec::with_capacity(8);
     for t in by_avg.iter().take(8) {
-        // `"unknown"` is the synthetic bucket for rows with NULL `tool_name`;
-        // a `tool_name = 'unknown'` query would miss them entirely, so we
-        // pull NULL-tool durations through a dedicated path.
-        let p95 = if t.tool_name == "unknown" {
-            runtime
-                .audit_event_durations_null_tool(&since)
-                .map(|d| orbit_core::application::audit_event::compute_p95(&d))
-                .unwrap_or(0)
-        } else {
-            runtime
-                .audit_event_stats(Some(since), Some(t.tool_name.clone()))
-                .map(|s| s.p95_duration_ms)
-                .unwrap_or(0)
-        };
+        let p95 = runtime
+            .audit_event_stats(Some(since), Some(t.tool_name.clone()))
+            .map(|s| s.p95_duration_ms)
+            .unwrap_or(0);
         duration_vec.push(json!({
             "tool": t.tool_name,
             "count": t.total,
@@ -585,6 +647,7 @@ fn compute_audit_summary_bundle(
         v2_denials,
         failed_events: incidents.raw_failed_events,
         failure_incidents: incidents.incident_count(),
+        failure_incidents_truncated: incidents.truncated,
         failure_incidents_by_class: incidents.incidents_by_class,
         failed_events_by_class: incidents.raw_events_by_class,
         affected_runs_by_class: incidents.affected_runs_by_class,
@@ -718,19 +781,15 @@ fn count_failed_runs(
     since: DateTime<Utc>,
 ) -> Result<i64, orbit_core::OrbitError> {
     let mut total: u64 = 0;
-    for state in [
-        JobRunState::Failed,
-        JobRunState::Timeout,
-        JobRunState::Interrupted,
-    ] {
-        total += runtime.count_job_runs(JobRunListParams {
+    for state in FAILED_RUN_STATES {
+        total = total.saturating_add(runtime.count_job_runs(JobRunListParams {
             job_id: None,
             state: Some(state),
             terminal_only: false,
             since: Some(since),
             limit: None,
             ..Default::default()
-        })?;
+        })?);
     }
     Ok(i64::try_from(total).unwrap_or(i64::MAX))
 }

@@ -92,8 +92,5 @@ pub(super) fn apply_friction_rehome_target(conn: &Connection) -> Result<(), Orbi
     if !table_exists(conn, "friction_records")? {
         return Ok(());
     }
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE friction_records ADD COLUMN rehome_to TEXT",
-    )
+    add_column_if_missing(conn, "friction_records", "rehome_to", "TEXT")
 }

@@ -15,8 +15,8 @@ spec:
     excluded_branch_failures. The guard also applies to older snapshots that
     included task PR failures in current_failures.
     Clusters the snapshot's current, non-stale landing failures by root cause
-    (workflow, failing job, failing step, normalized error signature, and the
-    commit the runner actually tested) so one regression repeated across a push
+    (workflow, normalized failing-test identity/signature and tested commit
+    across jobs and steps, or workflow/step/signature/commit without a test identity) so one regression repeated across a push
     run and a pull-request run of the same commit becomes one task rather than
     several. The normalized signature prefers a concrete test/panic diagnostic
     over ANSI styling, generic cancellation/process/cargo trailers, and
@@ -34,20 +34,44 @@ spec:
     the task can later ship through the ordinary pull-request route only after
     task-pilot validation and explicit CI-sweep admission. Filing itself never
     promotes or dispatches implementation. It is deduped
-    against still-open tasks first by a commit-independent failure key carried
+    against exact-key operator coverage first: archived or rejected sweep tasks
+    with covered_by hold their key while the task or GitHub PR cover is open.
+    Landed covers hold older checkouts; a failure containing the landed commit
+    files a new task naming the cover as a fix that did not hold. Unavailable
+    cover evidence stays explicitly withheld, and a closed unmerged cover
+    releases its key. Plain archive/rejection holds for
+    ci_failure.operator_suppression_hours (default 6) from the status event.
+    Every operator hold appears in withheld and audit.withheld with outcome,
+    reason, failure key, owner and cover or expiry; it produces no pilot.
+    Otherwise it checks still-open tasks first by an exact failure key carried
     as a `ci-failure:<key>` tag, then by rejected exact-key tasks whose comments
     name one still-open covering owner, then by a shared high-confidence
     material coverage assessment over untagged tasks. Coverage matches a
     generated workflow/job/step brief or a specific error together with the
     failing command or the same run and job identity; generic npx/cargo
     wrappers, a shared workflow or file, or task completion alone do not
-    suppress a current failure. After open-owner lookup misses, a bounded
+    suppress a current failure. Compiler keys preserve the complete diagnostic
+    set, source coordinates and observed checkout. A separate open-owner check
+    reuses only proposed/backlog/in-progress/review/blocked CI-sweep tasks with
+    an equal complete code/message/file-path set, ignoring coordinates and
+    checkout. It appends each new run URL, checkout and exact key as a comment
+    once, leaving the owner's exact tag intact. Different diagnostic sets and
+    closed owners do not match this check. After open-owner lookup misses, a bounded
     completed-owner assessment verifies structured task artifacts against the
     exact source diagnostics, failing and passing command results, authoritative
     delivery state and Git applicability. Proven pre-fix observations are
     retained as task artifacts on the existing owner and are not pilot candidates.
     Missing or contradictory proof is reported in repair_assessments as unresolved;
-    ordinary proposed filing and pilot checks remain available. A repeated sweep
+    ordinary proposed filing and pilot checks remain available. A cluster with
+    no open owner is not filed when a `ci-failure-sweep` task completed within
+    30 days with the same failure key or the same normalized signature (compiler
+    cause identity, or a concrete non-fallback signature) and its delivery run
+    merged a landed commit that descends from the cluster's tested commit: the
+    failure predates its repair, so it is listed in `pending_supersession`
+    (reason `repaired_by_descendant_landing`, naming the task and landed commit)
+    and a later sweep files it only if a run on repaired code still fails.
+    Collection's own in-flight holds pass through in the same list, and the
+    audit counts both with their run ids. A repeated sweep
     over a run that is still red,
     or a root cause already owned by a manual task, therefore does not file
     the same work twice. Filing never mutates the covering task's tags or
@@ -77,7 +101,9 @@ spec:
     read, a registration, dedupe-lookup, or task-creation failure — leaves the
     whole snapshot in doubt and fails the activity with a bounded
     `retryable_error` payload, as does a snapshot in which nothing was complete
-    enough to file. A current failure is never converted to
+    enough to file. Errors collection already reported as persistent
+    (`persistent_retryable_errors`) never block filing; the audit carries
+    their count and details. A current failure is never converted to
     `no_current_failure` merely because its handoff failed. Every
     successful output includes an `audit` object with counts and identities for
     latest runs, current and investigated failures, created tasks, existing
@@ -178,6 +204,11 @@ spec:
         items:
           type: object
           required: [task_id, failure_key, workflow, job, step, tested_commit, run_ids, run_urls, ref_kinds, head_branches]
+      withheld:
+        type: array
+        description: Exact-key operator holds with outcome, reason, owner, and cover or expiry.
+        items:
+          type: object
       skipped_existing:
         type: array
         items:
@@ -194,7 +225,7 @@ spec:
               type: string
             match_kind:
               type: string
-              enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair]
+              enum: [exact_key, material_coverage, confirmed_duplicate, covered_by_repair, open_compiler_diagnostics]
             match_evidence:
               type: object
       attributed:
@@ -209,6 +240,15 @@ spec:
           Bounded completed-owner assessments: covered_by_repair with referenced
           validation and source provenance, or unresolved with a reason. An
           unresolved assessment does not certify coverage or admission.
+        items:
+          type: object
+      pending_supersession:
+        type: array
+        description: >
+          Failures deferred for a possible repair rather than filed: collection's
+          `newer_descendant_run_in_flight` holds and filing's
+          `repaired_by_descendant_landing` holds, each with its reason and
+          evidence. Nothing in this list is a CI pass.
         items:
           type: object
       skipped_over_cap:

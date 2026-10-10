@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631]
-last_validated: 2026-09-27
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
+last_validated: 2026-10-06
 ---
 
 # Upgrade Orbit Safely
@@ -23,6 +23,12 @@ orbit update --allow-downgrade --version 0.18.0
 orbit update --json               # machine-readable report
 ```
 
+`--check` exits `0` with `outcome: already_current` when the resolved release is
+equal to or older than the running version. This includes a prerelease newer than
+the latest stable release, or a mirror whose published version lags the installed
+one. Only a newer target reports `outcome: update_available` and exits `3`.
+The check downloads no release archive and does not converge workspace state.
+
 `orbit update` does the whole upgrade in one defined order:
 
 1. Resolve the target version — the newest published release, or the one `--version` names.
@@ -34,9 +40,7 @@ orbit update --json               # machine-readable report
    sequence instead — uninstall the legacy formula, then install the canonical one — because the
    two conflict rather than coexisting; a canonical-only install gets the ordinary qualified
    upgrade.
-3. Acquire generation admission against the same resolved authority `--preflight` uses,
-   refusing while any participating Orbit process is live, then take the exclusive
-   install-directory lock so two updates cannot interleave.
+3. Take the exclusive install-directory lock so two updates cannot interleave.
 4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
    running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,
    and older installed versions are decided from that evidence — a writer that started on
@@ -44,19 +48,38 @@ orbit update --json               # machine-readable report
    a release. `--check` stays read-only and does not take the lock.
 5. Download the release archive, authenticate the checksum manifest against the trusted
    release signing keys, compare the archive's SHA-256, and extract its single `orbit` member
-   into a staging file beside the installed one.
-6. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
+   into a staging file beside the installed one. Run the staged executable's `--version`
+   and require it to match the requested release, and its `update --contract`, before
+   copying a backup or replacing anything. A mislabeled release, failed version probe, or
+   unparseable version is refused with the installed executable untouched. Each
+   `--version` and `update --contract` probe is killed after
+   `ORBIT_UPDATE_PROBE_TIMEOUT_SECS` seconds (default 30). The probes run before
+   admission, so a candidate that hangs fails the update without ever holding an
+   authority: other Orbit commands keep running meanwhile.
+6. Acquire generation admission against the same resolved authorities `--preflight` uses —
+   waiting up to `ORBIT_UPGRADE_QUIESCE_SECS` for one-shot commands and clock ticks to
+   finish, admitting beside a live process that hands over to the staged release, and
+   refusing while any other long-lived Orbit process is live (see
+   [`--contract` and `--preflight`](#--contract-and---preflight) and
+   [Which update paths hand over](#which-update-paths-hand-over)). An update whose target
+   is already installed renames nothing, so it takes this admission before converging
+   and nothing hands over to it.
+7. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
    atomic same-directory rename, and confirm the installed binary reports the requested
    version. If it does not, the previous executable is copied into a complete sibling staging
    file and atomically renamed over the replacement, so concurrent launches see either the
    complete replacement or the complete previous executable; the retained backup is not consumed
-   and no workspace state is touched.
-7. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
+   and no workspace state is touched. If the restore fails too, the error reports both the
+   verification and restore failures, identifies the rejected candidate still installed, and
+   names the retained backup. Restore that backup before retrying the update. This also applies
+   to local-candidate updates. Then wait for the processes admitted to hand over to
+   re-exec into the installed release, and pin its generation.
+8. Run `orbit migrate --confirm`, then `orbit workspace sync` — **using the newly installed
    binary**, in the selected workspace. Orbit passes the resolved root to both subprocesses;
    an explicit `--root` remains authoritative even when `ORBIT_ROOT` names another workspace.
    Only the new binary carries the migrations and managed asset definitions for the version
    being installed.
-8. Run `orbit clock repair`, again as the newly installed binary. The launchd/systemd sweep
+9. Run `orbit clock repair`, again as the newly installed binary. The launchd/systemd sweep
    unit embeds an absolute program path, so an install that lands somewhere else — Homebrew
    to `~/.orbit/bin`, say — leaves the unit invoking a binary that may no longer exist. The
    step rewrites the unit to the installed binary and re-registers it, and the update report
@@ -75,8 +98,9 @@ upgrade`, `cargo install` — still needs one `orbit clock repair` by hand; `orb
 `clock-unit` row and a hand-run `orbit sweep` both name it.
 
 Everything before the swap fails with nothing changed. After the swap the command never
-reports success on an incomplete upgrade: it exits `4` with `outcome: needs_recovery` and
-names the step that failed.
+reports success on an incomplete upgrade. Installed verification failures return an error
+describing whether rollback succeeded. Failures during generation pinning or convergence
+exit `4` with `outcome: needs_recovery` and name the step that failed.
 
 ### Upgrade admission: compatibility generations
 
@@ -101,7 +125,11 @@ Each binary is compiled with a **compatibility identity**, which `orbit update
 The authority records the envelope of every identity admitted since it last had no
 participant in `.generation-compat.json`, and each live process registers a
 record — pid, role, access, digest, identity and start time — under
-`.generation-participants/`. A newcomer is admitted beside the live processes when:
+`.generation-participants/`. The next joiner replaces that envelope when it can
+take `.generation.lock` exclusively, which happens only after every previous
+holder has exited. An exited process does not stay in the envelope, and it does
+not make a process that is still running yield. A newcomer is admitted beside
+the live processes when:
 
 - every live reader can read what the newcomer migrates to, and it can read theirs;
 - the oldest live writer keeps writing correctly through the newcomer's migrations;
@@ -132,11 +160,19 @@ read-compatible or breaking migration beyond them) does not fail at once:
    - the dashboard drains its connections and exits;
    - a pipeline worker completes its current top-level step, checkpoints it, records
      its run **`interrupted`** with error code `upgrade_quiesce` — not failed — and
-     exits. `orbit job resume <run_id>` continues it from that checkpoint once the
-     upgrade is done. A claimed leaf on a follower is the exception: generic resume
-     refuses it, so recover its claim on the owner and let a drain re-admit it. A
-     drain coordinator yields between admission passes and admits no new leaves
-     meanwhile; its already running leaves yield at their own step boundaries.
+     exits. Once the generation settles, the clock tick sweep resumes it
+     automatically at most once from that checkpoint (`orbit job resume <run_id>`
+     remains available for manual continuation). The clock resumes only runs the
+     current upgrade interrupted — within the last 30 minutes. It skips a run
+     interrupted by an earlier upgrade, a drain (or `workspace_ship_pipeline`
+     wrapper) whose window has elapsed or whose admissions were stopped, and a run
+     superseded by a newer run of the same drain or routine. Each resume and skip
+     is recorded once as a `pipeline.run.upgrade_resume` audit event with its
+     reason, and a run with a recorded decision is not reconsidered.
+     A claimed leaf on a follower is the
+     exception: generic resume refuses it, so recover its claim on the owner and let a
+     drain re-admit it. A drain coordinator yields between admission passes and admits
+     no new leaves meanwhile; its already running leaves yield at their own step boundaries.
 4. Once every participant is gone the switch takes the authority, records its own
    identity, and runs.
 
@@ -155,6 +191,24 @@ Quiesce those through their owners (or let long steps finish) and retry. An **ol
 binary never displaces newer processes: it is refused as incompatible, and a
 read-only command whose readers would break is refused the same way.
 
+Ordinary startups whose identities the recorded envelope already admits join under
+**shared** admission, so any number of
+concurrent commands, workers and clients start side by side. Only a join that must
+change the authority (reseed it, widen the envelope, take over, or wait for a switch)
+and `orbit update` take admission exclusively. An exclusive waiter publishes a locked
+record under `.generation-admission-waiters/` before waiting. New shared admissions
+yield while that waiter is live, so existing admissions drain and an envelope-widening
+startup progresses even while more compatible startups arrive. Dropping the waiter
+(success or timeout) withdraws its record; a crash releases its lock, so an abandoned
+record cannot block admission. Observing waiters requires only read permission; a
+participant unable to publish a record retains lock-only admission.
+A process that finds admission held by
+an upgrade is refused within about a second rather than queued: `an upgrade is pending
+(a generation switch is pending: ...)` for a switch, or `an upgrade is in progress` for
+an update or takeover. One held only by other startups waits up to
+`ORBIT_UPGRADE_QUIESCE_SECS`, then is refused with `admission stayed contended by other
+starting Orbit processes ..., with no upgrade pending`, which is safe to retry.
+
 #### Handing a long-lived process over to a replaced executable
 
 `orbit mcp serve`, the dashboard, and drain coordinators notice when the installed
@@ -166,6 +220,10 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  Only requests accepted by the MCP transport count as in flight; malformed or
+  dropped messages cannot prevent handover when their errors omit the request id.
+  A buffered partial line larger than 32 KiB defers handover: the current image
+  keeps reading and serving the client, then retries at a later idle boundary.
 - The dashboard drains, then execs the new image on the same address without
   reopening a browser.
 - A drain coordinator (`drain-adopt-v1`) execs between admission passes and **adopts**
@@ -206,9 +264,17 @@ invocation can be refused by, in the order the update takes them:
    replaces: the executable is the running one (`~/.orbit/bin/orbit` for a
    managed install), and every client started *without* an override — including
    persistent `orbit mcp serve` processes — joins the host-global root.
+3. The initialized workspace that convergence would use, when that directory
+   is a different authority. An initialized `--root` / `ORBIT_ROOT` selects it. An
+   override that is not yet an initialized workspace is still probed as a
+   generation root: `--preflight` does not require `orbit workspace init` on
+   that path, and it includes a workspace discovered from the working directory
+   when one exists. `orbit update` without `--preflight` still refuses that
+   uninitialized explicit root before it converges. Spellings of the same
+   directory are one authority.
 
-Both are listed in `admission_roots`, and a refusal names the authority it came
-from. Exit 0 returns:
+Every distinct authority is listed in `admission_roots`, and a refusal names
+the authority it came from. Exit 0 returns:
 
 ```json
 {"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","admission_contract":"compatibility-generation-v2","compatibility":{…},"quiesce_timeout_secs":120,"global_root":"/srv/project","admission_roots":["/srv/project","/home/operator/.orbit"]}
@@ -216,16 +282,93 @@ from. Exit 0 returns:
 
 Exit 1 with `upgrade admission refused` on stderr means stop before installation;
 `--json` emits the CLI's normal JSON error envelope on stderr. This is an observation,
-**not a reservation**. `orbit update` itself still takes each authority **exclusively**:
-it refuses while any participant is live or a switch is pending, retains admission
-across staging and replacement, and pins the candidate's generation (with the
-candidate's reported identity, so compatible builds may join once it releases). Use
-`--preflight` to learn whether it would be admitted now; use an installer that renames
-over the executable when long-lived processes should stay up and hand over instead.
-`--check` only checks release availability and is not this probe.
+**not a reservation**.
+
+Both the probe and `orbit update` take each authority's admission exclusively, so no
+Orbit process joins behind them, and then treat each live participant by its role:
+
+- A **one-shot command** or **clock tick** finishes on its own. Admission waits for it,
+  polling, up to `ORBIT_UPGRADE_QUIESCE_SECS` (default 120, at most one day); past that
+  it refuses with `still running after waiting <N>s for them to finish` and names it.
+  While admission waits, a new Orbit process queues behind it, and refuses as an
+  upgrade in progress once the update holds the generation.
+- A **long-lived** process — `mcp serve`, `mcp listen`, the dashboard, a drain or pipeline
+  worker — refuses at once, unless the admission names a candidate it will hand over to
+  (below).
+- A holder that **never registered** (an `executable-generation-v1` binary, or a
+  sandboxed child that cannot write the root) refuses at once: it cannot be named by
+  role or asked to hand over. A registered process keeps its record, renamed to
+  `<record>.releasing` and still locked, until it has released `.generation.lock`, so
+  admission waits for one that is exiting instead of mistaking it for an unregistered
+  holder.
+
+Each refusal names every blocker by pid, role and start time with the remedy for its
+role — let a command finish; let a tick finish or `orbit clock pause`; close the MCP
+client of a server that cannot hand over; stop and restart `mcp listen` or the
+dashboard; let a run finish or cancel it — for example:
+
+```text
+upgrade admission refused: Orbit clients or commands are still running: pid 3772 (mcp serve,
+started 2026-10-07T06:14:52Z) — it hands over (mcp-stdio-v1) only to a candidate renamed over
+the executable, which `orbit update` (a newer release) and `orbit update --local-candidate`
+admit and then install; nothing is renamed here, so close its MCP client to proceed without
+one; and any processes that did not register (…); leave the installation and stores
+unchanged. …
+```
+
+That remedy appears where nothing is renamed: a `--preflight` without `--candidate`, or an
+update whose target is already installed. The updates it names admit the server and hand
+it over.
+
+**Candidate-aware preflight.** `orbit update --preflight --candidate <path>` observes the
+admission an update that renames `<path>` over the executable would take. It first asks the
+candidate for its `update --contract` (refusing a candidate that does not report
+`compatibility-generation-v2`). A stdio `orbit mcp serve` whose stdin can be polled
+registers that it hands over with `mcp-stdio-v1`; when the candidate reports that
+capability, the server is admitted beside and listed in `handover`, the processes that
+re-exec into the candidate once it is renamed into place:
+
+```json
+{"schema_version":1,"admitted":true,"reservation":false,"candidate":"/srv/build/orbit","handover":[{"pid":3772,"role":"mcp_serve","started_at":"2026-10-07T06:14:52Z","resume":"mcp-stdio-v1"}],…}
+```
+
+Without `--candidate`, `handover` is empty and such a server refuses like any other
+long-lived process. A server whose stdin cannot be polled (a regular file,
+`/dev/null`), a `--mode remote` proxy, and a build that predates this registration do
+not hand over and still refuse, as do `mcp listen`, the dashboard and drains. Like the
+plain probe, this is an observation that reserves nothing and installs nothing.
+
+##### Which update paths hand over
+
+| Path | Live handover-capable `mcp serve` |
+|------|-----------------------------------|
+| `orbit update`, `orbit update --version <v>` installing a different release | Admitted and handed over |
+| `orbit update --local-candidate … --install-target …` installing different bytes | Admitted and handed over |
+| Either of the above when the target is already installed (the convergence re-run) | Refused: nothing is renamed |
+| `orbit update --preflight` | Refused: nothing is renamed |
+| `orbit update --preflight --candidate <path>` | Named in `handover`; observation only |
+| A raw copy or rename by another installer | Hands over, but without admission, backup, pin or convergence |
+
+The two installing paths stage and verify the candidate first, then take admission
+with what its `update --contract` reports in `resume`. They list each process admitted
+that way in the report's `handover` array (and a `handover:` line in the text report),
+rename the candidate over the executable, and keep admission exclusive while those
+processes reach an idle point and re-exec into it. Only once each has released the
+replaced generation do they pin the candidate's generation (with its reported identity,
+so compatible builds may join once it releases) and release admission. The resumed
+processes join that pinned generation; the session, pid and stdio pipes survive. While
+the update waits, new Orbit processes queue behind it rather than refuse.
+
+The wait is bounded by `ORBIT_UPGRADE_QUIESCE_SECS`. A session that is still answering a
+request hands over once it is idle; a request that itself waits on a new Orbit command
+cannot finish until the bound expires. If a process has not handed over by then, the
+executable is already replaced, so the update exits `4` with `outcome: needs_recovery`:
+`did not hand over to it within <N>s`, nothing pinned or converged. Close the named MCP
+clients and re-run the same update to converge. `--check` only checks release
+availability and is not an admission probe.
 
 Admission also requires each authority's `.generation.lock` to be *writable*, and
-`orbit update` checks that before anything is downloaded, staged or replaced. An
+`orbit update` checks that before anything is replaced. An
 authority that can never record a takeover — a `~/.orbit` on a read-only mount, or one
 whose record another user owns — refuses `orbit update --root <scratch>` up front with
 `the record cannot be written from here`, rather than replacing the binary and
@@ -260,7 +403,8 @@ participant reads the cache but never writes it, so a read-only join leaves the
 root byte-identical.
 OS locks release on exit or crash (and on exec, which is how a handover leaves);
 never unlink `.generation.lock`, `.generation-admission.lock`,
-`.generation-compat.json`, `.generation-pending.json` or `.generation-participants/`
+`.generation-compat.json`, `.generation-pending.json`, `.generation-participants/`
+or live records under `.generation-admission-waiters/`
 to force admission. Keep them in the authoritative root and out of lock-file garbage
 collection. A participant record left by a process that exited without cleanup is
 unlocked, and the next admission collects it.
@@ -302,10 +446,13 @@ checks stay in force.
 
 ### Recovery and resumption
 
-Re-running `orbit update` is the resume. At the installed version it skips the replacement and
+Re-running the update is the resume. At the installed version it skips the replacement and
 re-runs the same idempotent convergence steps, so a run that failed at `migrate --confirm`,
 `workspace sync`, or `clock repair` is finished by running it again — or by running that one
-command directly and reading its diagnostics. `clock repair` fails when the unit manager
+command directly and reading its diagnostics. A bare `orbit update` resolves the newest published
+release, so it resumes only when that release is the installed one. The recovery output for a
+published release names the exact command instead: `orbit update --version <installed>`, plus
+`--allow-downgrade` when the run replaced a newer binary with an older one. `clock repair` fails when the unit manager
 refuses to reload the rewritten unit; it names the `launchctl`/`systemctl` command to run. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
 includes that root explicitly, so retrying from a different checkout does not silently switch the
 workspace being repaired.
@@ -356,6 +503,103 @@ signature to 16 KiB, and the compressed archive to 256 MiB. An input over its li
 before the installed executable is replaced, including when an HTTP server omits
 `Content-Length`. The extracted executable has a separate 256 MiB limit.
 
+### Deploy a locally built candidate pinned to a source commit
+
+When a fix must reach a host before it is released, install a build of an exact
+source commit through the same guarded replacement instead of copying a binary over
+the installed one. `--preflight` followed by a raw copy is not an install: it gives up
+admission between the probe and the copy, keeps no backup and converges nothing.
+
+```sh
+set -eu
+SHA='replace-with-the-full-40-or-64-hex-commit'
+WORKSPACE='/absolute/path/to/the-intended-workspace'
+test -z "$(git status --porcelain)" # start in a clean Orbit source checkout
+git fetch --all
+git cat-file -e "$SHA^{commit}"
+git checkout --detach "$SHA"
+test "$(git rev-parse HEAD)" = "$SHA"
+test -z "$(git status --porcelain)"
+cargo build --release --locked -p orbit-cli
+C="$(pwd -P)/target/release/orbit"
+"$C" update --local-candidate "$C" --source-commit "$SHA" \
+  --write-candidate-manifest ~/orbit-candidate-"$SHA".json
+# Stop clients that cannot hand over (see below), then run from the intended workspace so
+# discovery and convergence use that workspace rather than the source checkout.
+cd "$WORKSPACE"
+"$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
+  --source-commit "$SHA" --install-target ~/.orbit/bin/orbit --json
+```
+
+**Trust is `operator_attested`.** The manifest records what the operator asserts — the
+source commit — beside what Orbit can compute: the candidate's SHA-256 and its target
+triple read from the executable header. Orbit cannot prove the bytes were built from
+that commit, so the report says `trust: operator_attested`, `signed_release: false`, and
+gives each field's evidence (`operator_attested`, `computed_from_accepted_bytes`,
+`executable_header`). Build from a clean checkout of the pinned commit and keep your own
+build evidence. Each platform builds its own candidate: two hosts on the same commit
+share source, not bytes. The release path, its signature verification and trusted keys
+are unchanged; a local candidate never satisfies them.
+
+The manifest (`kind: orbit-local-candidate`, `schema_version: 1`) is written once —
+an existing path is never overwritten — and abbreviated commits are refused.
+
+**Bootstrap.** Run the *candidate's* `orbit update`, not the installed one: an installed
+build that predates `--local-candidate` cannot install it, and the candidate never
+assumes it is the install target. `--install-target` is required and names the managed
+executable (`~/.orbit/bin/orbit`, or `$ORBIT_INSTALL_DIR/orbit`). It is refused when
+it is not named `orbit`, is a symbolic link or not a regular file, is not owned by the
+invoking user, or is owned by a package manager (npm, Homebrew, `cargo install`, a
+checkout build) or an unknown install. Its identity (device and inode) is re-checked
+under the update lock and again immediately before the swap.
+
+Then the ordinary update order applies, with the candidate in place of a download:
+
+1. Inspect the install target, then acquire the install-directory lock.
+2. Stream the candidate into the staging file beside the target (1 GiB limit) and hash
+   the staged copy. Those are the accepted bytes: replacing or rewriting the candidate
+   path afterwards does not change what is installed.
+3. Require the manifest's commit to equal `--source-commit`, its digest and target to
+   equal the accepted bytes, and the target to match the installation. A candidate
+   rebuilt after its manifest was written is refused.
+4. Require the staged candidate's admission contract and version, and apply the
+   [downgrade](#downgrades) rules with `--allow-downgrade`. An **equal** version with a
+   different digest is a replacement, not `already_current`.
+5. Acquire generation admission for the invocation, host-global, and selected workspace
+   roots (each distinct authority is locked). A live process that hands over to the
+   staged candidate is admitted beside and listed in `handover`; any other live
+   long-lived client on any of them refuses the update. Workspace discovery follows the
+   current directory independently of `HOME`: run from the intended workspace, and for
+   isolated smoke checks use an isolated checkout as well as isolated `HOME` and install
+   target. The JSON report's `workspace_root` and `admission_roots` show the selected
+   workspace and every authority held through convergence.
+6. Back up to `<orbit>.previous`, swap atomically, confirm the installed digest and
+   version, wait for the admitted processes to hand over, pin the candidate's
+   generation, then run the convergence steps as the installed candidate.
+
+Every refusal before step 6 leaves the executable, its backup, the generation record
+and every store untouched.
+
+**Clients.** A clock tick or one-shot command in flight is waited for (see
+[`--contract` and `--preflight`](#--contract-and---preflight)). An idle stdio `orbit mcp
+serve` whose stdin can be polled hands over to the installed candidate and keeps its
+session (see [Which update paths hand over](#which-update-paths-hand-over)). Other live
+processes — the dashboard, drain coordinators, `mcp listen`, a stdio server that cannot
+hand over — make the update refuse with `upgrade admission refused`; they keep running
+on the installed build and a claimed run is not interrupted or reset. Stop them (stop
+the dashboard, let or cancel drains finish, close the MCP client of a server that cannot
+hand over and confirm the backend exited), run the update, and reconnect: they start
+from the installed candidate.
+
+**Replay and recovery.** Re-running the same command once the target already holds the
+accepted digest skips replacement, re-pins and re-runs convergence (`outcome:
+already_current`); that is how an interrupted run finishes. A failure after the swap
+exits `4` with `outcome: needs_recovery`; the recovery text and
+`local_candidate.retry_command` carry the exact command, including `--root` when one
+selected the workspace. The report also lists `admission_roots`, the before and after
+installed digests, and `release_source: local candidate (operator_attested, not a
+signed release)`.
+
 ## Understand the version ledgers
 
 Two ledgers guard `.orbit/` state and auto-apply on workspace open:
@@ -380,6 +624,13 @@ root). Its v5 task/allocator format also supports the additive `task_action_keys
 table. The repaired executable ensures that table when opening a writable v5
 registry, without raising the reader-compatibility floor. A complete v5 registry
 can still open read-only; missing additive storage requires a writable open.
+
+A v5 registry may also carry `task_envelope_stamps`, a derived cache created the
+first time a task listing records which `task.yaml` files it has already checked
+against the index. It does not change the registry version; an older binary
+ignores it, and a reader trusts a stamp only while the file and its index row
+still match, so a stale or missing stamp costs one re-parse. `orbit task reindex`
+rebuilds the index rows and leaves stamps to be re-recorded on the next listing.
 
 ### Recover a task registry marked version 6
 
@@ -620,12 +871,69 @@ for the removal release; delete them from config.toml. Config get/set reject
 these retired keys with migration guidance. The runtime no longer honors
 `ORBIT_SEARCH_COMPANION*` environment overrides.
 
+## Job run state migration (schema v38)
+
+Store schema v38 (`job_run_states`) moves every run's pipeline state out of
+`job_runs` into a 1:1 side table and drops the old column, so run listings no
+longer read each checkpoint's overflow pages. It is breaking: older binaries
+read the dropped column, so a newer writer waits for them to quiesce (see
+[the quiesce wait](#a-migration-older-processes-cannot-keep-the-quiesce-wait)).
+
+- **Duration.** About 18 s per GB of pipeline state on SSD storage, roughly
+  40 s for a 2.3 GB `job_runs`, longer when its pages are cold. The open that
+  applies it holds the store write lock throughout; another process opening the
+  store meanwhile gives up after the 5 s busy timeout with a SQLite contention
+  error and succeeds once the migration commits.
+- **Disk.** The move runs in one transaction, so the WAL grows by about the
+  size of the moved state before it is checkpointed. Keep at least that much
+  free space beside `orbit.db`. The database file itself barely grows.
+- **Interruption.** An interrupted migration rolls back to v37 with every state
+  still in `job_runs`; the next store open starts it again.
+- **Freelist.** The `orbit.store.sqlite` log line `moved job run pipeline state
+  into job_run_states` reports `moved_runs`, `elapsed_ms` and `freelist_bytes`.
+  The freelist left behind is small (about one 64-run batch); reclaiming it
+  takes `VACUUM`, which needs exclusive access and is never run automatically.
+
+## Job run recency indexes (schema v39)
+
+Store schema v39 adds two expression indexes on `job_runs`, keyed by workspace
+(and state) and the run's recency, `COALESCE(finished_at, started_at,
+created_at)`. Recency-ordered run pages, such as the dashboard's all-workspace
+Recent Runs, then read only their page instead of sorting every run in the
+workspace. The migration is additive: older binaries keep reading and writing,
+so it waits for nothing. Building the indexes reads `job_runs` once while the
+opening process holds the store write lock, which takes well under a second for
+tens of thousands of runs.
+
+## Provider limit observations (schema v40)
+
+Store schema v40 adds the `provider_limit_observations` table, where a run
+records the usage limit its provider reported: one row per provider, model and
+window (see [Provider failure holds](../CONFIG.md#provider-failure-holds)). The
+migration is additive: it creates an empty table and rewrites nothing, so
+older binaries keep reading and writing and it waits for nothing.
+
+## Provider usage-window readings (schema v41)
+
+Store schema v41 adds `used_percent`, `window_minutes` and `gating` (default 1)
+to `provider_limit_observations`. After every Codex or Claude run, the run
+records the provider's own usage-window readings there, with source `event`.
+The migration is additive: it adds nullable or defaulted columns and rewrites
+nothing, so older binaries keep writing and it waits for nothing. An older
+binary that updates an existing row leaves these columns from the earlier
+reading, so trust them only on a row whose `source` is `event`. An older binary
+cannot read a row whose `source` is `event`.
+
 ## Verify the upgrade
 
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when
 a package manager owns the binary, and run steps 2–5 in every other registered workspace:
 
-1. Replace or upgrade the binary.
+1. Replace or upgrade the binary. Running `orbit init` (the install step) also creates, in every
+   registered workspace on the host, each shipped routine and auto-task that is absent there, and
+   prints what it created per workspace. It is create-only: existing definitions are not
+   refreshed, retired, or rewritten, so step 3 still converges those. `orbit update` converges only
+   the workspace it runs in and does not run this pass for the others.
 2. Run `orbit migrate` (or `orbit migrate --dry-run`) to review pending layout/store changes,
    then `orbit migrate --confirm` to apply them.
 3. Run `orbit workspace sync` to apply the provenance-safe managed-artifact actions. Operator

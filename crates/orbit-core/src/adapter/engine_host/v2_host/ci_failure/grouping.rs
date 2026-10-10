@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::Value;
 
 use super::cluster::{FailureCluster, job_log_source};
@@ -32,16 +33,17 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         }
         let workflow = value_string(failure, "workflow");
         let (job, step) = failing_job_and_step(failure);
-        let log_excerpt = selected_diagnostic(failure)
+        let raw_excerpt = selected_diagnostic(failure)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| value_string(failure, "log_excerpt"));
+        let log_excerpt = strip_ansi_sequences(&raw_excerpt);
         let signature = error_signature(&log_excerpt, &step);
         let test_names = failure_test_names(failure);
         let test_identity = test_names.join("\u{1f}");
         let grouping_identity = if test_identity.is_empty() {
             format!("signature:{}", signature.text)
         } else {
-            format!("test:{test_identity}")
+            format!("test:{test_identity}:{}", signature.text)
         };
         let tested_commit = tested_commit(failure);
 
@@ -58,14 +60,20 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         // step wrappers and shared paths are never sufficient.
         let failure_key = match &compiler_cause {
             Some(cause) => digest(&["compiler", cause, &tested_commit]),
+            None if !test_identity.is_empty() && !signature.step_fallback => {
+                digest(&[&workflow, "test", &test_identity, &signature.text])
+            }
             None => digest(&[&workflow, &job, &step, &signature.text]),
         };
-        let cluster_key = if compiler_cause.is_some() {
+        let cluster_key = if compiler_cause.is_some()
+            || (!test_identity.is_empty() && !signature.step_fallback)
+        {
             digest(&[&failure_key, &tested_commit])
         } else {
             digest(&[&workflow, &step, &grouping_identity, &tested_commit])
         };
 
+        let per_job_key = digest(&[&workflow, &job, &step, &signature.text]);
         let cluster = grouped.entry(cluster_key.clone()).or_insert_with(|| {
             order.push(cluster_key.clone());
             FailureCluster {
@@ -102,6 +110,11 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         }
         if let Some(key) = legacy_key {
             cluster.legacy_keys.insert(key);
+        }
+        // Preserve shipped per-job ownership after the test-key migration.
+        // These tags are exact identities, not broader material fingerprints.
+        if per_job_key != cluster.failure_key {
+            cluster.legacy_keys.insert(per_job_key);
         }
         cluster.runs.push(failure.clone());
     }
@@ -176,6 +189,7 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
             excerpt
         }
     };
+    let log = strip_ansi_sequences(&log);
     let mut after_failures_header = false;
     for line in log.lines() {
         let payload = signature_payload(line);
@@ -197,6 +211,7 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
         if let Some(rest) = line.strip_prefix("thread '")
             && let Some((name, suffix)) = rest.split_once("' panicked")
             && !name.trim().is_empty()
+            && !matches!(name.trim(), "main" | "<unnamed>")
             && !suffix.trim().is_empty()
         {
             names.insert(name.trim().to_string());
@@ -204,6 +219,7 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
         if let Some(rest) = line.strip_prefix("thread \"")
             && let Some((name, suffix)) = rest.split_once("\" panicked")
             && !name.trim().is_empty()
+            && !matches!(name.trim(), "main" | "<unnamed>")
             && !suffix.trim().is_empty()
         {
             names.insert(name.trim().to_string());

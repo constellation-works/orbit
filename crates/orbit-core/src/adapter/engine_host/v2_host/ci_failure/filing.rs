@@ -22,17 +22,26 @@
 //! commit collapses into one task instead of two.
 //!
 //! Ordinary `failure_key` tags omit the commit to keep a still-open repair
-//! across branch advances. Proven compiler causes instead include the exact
+//! across branch advances. Concrete failing-test keys omit job and step
+//! wrappers so equal test signatures retain one owner across job ordering.
+//! Proven compiler causes instead include the exact
 //! diagnostic set, source locations and observed checkout, omitting job and
 //! workflow wrappers. That conservative proof consolidates cross-job failures
 //! without conflating different compiler operands or source revisions. Shipped
-//! per-job tags remain readable for the same immutable supplying evidence.
+//! per-job test tags remain exact owners; legacy compiler tags require the
+//! same immutable supplying evidence.
+//! A separate complete code/message/path identity reuses an open CI-sweep
+//! compiler owner across checkout and coordinate changes. Each new observation
+//! is appended to its comments with the exact key preserved as evidence.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_engine::ci_run_event::is_branch_event;
+use orbit_types::task::{
+    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -45,12 +54,15 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
 };
+use super::cluster::FailureCluster;
 use super::evidence::{
     audit_summary, bounded_error, deferral_audit, deferred_errors, exclude_already_repaired,
-    filing_audit, normalize_retryable_error, partition_retryable_errors, repaired_audit,
-    retryable_pipeline_error, run_id_key, split_deferred_failures,
+    filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
+    repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
 };
+use super::fields::value_string;
 use super::grouping::cluster_failures;
+use super::landed_repair::LandedRepairs;
 use super::repair_assessment;
 use super::runner_os;
 
@@ -68,17 +80,10 @@ const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 /// Provenance tag: every task this step files carries it.
 pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 /// Prefix of the dedupe tag, completed by the failure key.
-pub(crate) const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 /// Title prefix on every task this step files, so a sweep-filed task is
 /// identifiable in a backlog listing without reading its tags.
 pub(super) const CI_FAILURE_SWEEP_TITLE_PREFIX: &str = "[ci-failure-sweep] ";
-/// The system crew name. Filed tasks belong on the system lane, matching the
-/// shipped `ci-failure-remediation` auto-task — but this is a plain default,
-/// not a hard-coded assumption that the lane is configured: a workspace whose
-/// crew roster has no `system` entry still gets its task filed, just without
-/// a crew set.
-const SYSTEM_CREW: &str = "system";
-
 const DEFAULT_MAX_TASKS: u64 = 5;
 const MAX_MAX_TASKS: u64 = 20;
 /// Log bytes carried into a task description. `collect_ci_evidence` has already
@@ -146,6 +151,7 @@ where
             "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
+            "withheld": [],
             "skipped_over_cap": [],
             "deferred": [],
             "audit": audit,
@@ -300,6 +306,13 @@ where
         }));
     }
     let audit = inconclusive_audit(deferral_audit(audit, &deferred), &inconclusive);
+    // Failures collection held back while a descendant's run is in flight.
+    // Filing adds the ones whose repair already landed on a descendant.
+    let mut pending_supersession = evidence
+        .get("pending_supersession")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let clusters = cluster_failures(&complete);
 
     if !complete.is_empty() && clusters.is_empty() {
@@ -339,13 +352,15 @@ where
             "pilot_candidate_count": 0,
             "pilot_candidates": [],
             "skipped_existing": [],
+            "withheld": [],
             "skipped_over_cap": [],
             "deferred": [],
             "inconclusive": inconclusive,
             "already_repaired": already_repaired,
+            "pending_supersession": pending_supersession,
             "attributed": attributed,
             "excluded_branch_failures": excluded_branch_failures,
-            "audit": audit,
+            "audit": pending_audit(audit, &pending_supersession),
             "detail": if inconclusive.is_empty() {
                 "no landing-branch repair remains; task-branch evidence is retained on its owner and other branch failures are excluded"
             } else {
@@ -358,31 +373,33 @@ where
     let mut pilot_candidates = Vec::new();
     let mut pilot_candidate_ids = BTreeSet::new();
     let mut skipped_existing = Vec::new();
+    let mut withheld = Vec::new();
     let mut skipped_over_cap = Vec::new();
     // Two clusters in one snapshot can share a failure key when the same root
     // cause was tested at two commits. The first filing closes the second.
     let mut filed_keys: BTreeSet<String> = BTreeSet::new();
-    // Probed once per sweep rather than assumed: a workspace whose crew
-    // roster has no `system` entry still needs filing to succeed, degrading
-    // the same way any other task with an unrecognized crew does instead of
-    // failing the sweep.
-    let system_crew = runtime
-        .validate_crew_name(Some(SYSTEM_CREW))
-        .is_ok()
-        .then(|| SYSTEM_CREW.to_string());
-
+    let mut filed_compiler_sets: BTreeMap<String, String> = BTreeMap::new();
     // Complete every external lookup before the first task write. A transient
     // duplicate-check failure must leave no partial filing or dedupe state.
     // Every cluster and legacy key is assessed against one snapshot: the
     // task list is hydrated at most once per filing and each open task's
     // comments are read at most once, however many clusters the run has.
     let lookup = SnapshotDuplicateLookup::new(lookup);
+    let mut operator_covers = super::operator_cover::OperatorCovers::new(runtime)?;
+    let operator_assessments = clusters
+        .iter()
+        .map(|cluster| operator_covers.assess(cluster, &lookup))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut assessor = repair_assessment::Assessor::new(runtime);
     let mut repair_assessments = Vec::new();
     let duplicate_matches = clusters
         .iter()
-        .map(|cluster| {
-            let existing = cluster.find_covering_task(&lookup).map_err(|error| {
+        .zip(&operator_assessments)
+        .map(|(cluster, operator)| {
+            if operator.withheld.is_some() {
+                return Ok(None);
+            }
+            let mut existing = cluster.find_covering_task(&lookup).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,
@@ -395,6 +412,18 @@ where
                     })],
                 )
             })?;
+            // Only the disproven cover (or its owner) loses coverage. A
+            // later completed repair remains a valid duplicate owner.
+            if existing.as_ref().is_some_and(|matched| {
+                operator.failed_covers.iter().any(|cover| {
+                    cover["cover"].as_str() == Some(matched.task_id.as_str())
+                        || cover["task_id"].as_str() == Some(matched.task_id.as_str())
+                }) && lookup
+                    .get_task(&matched.task_id)
+                    .is_ok_and(|task| task.status == TaskStatus::Done)
+            }) {
+                existing = None;
+            }
             if existing.is_some() {
                 return Ok(existing);
             }
@@ -407,6 +436,31 @@ where
                 match_kind: "covered_by_repair",
                 evidence: assessment.evidence,
             }))
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()?;
+    // A failure with no open owner may still predate a completed repair.
+    let mut landed_repairs = LandedRepairs::new(runtime);
+    let descendant_landings = clusters
+        .iter()
+        .zip(&duplicate_matches)
+        .zip(&operator_assessments)
+        .map(|((cluster, duplicate_match), operator)| {
+            if duplicate_match.is_some() || operator.withheld.is_some() {
+                return Ok(None);
+            }
+            landed_repairs.find(cluster, &lookup).map_err(|error| {
+                retryable_pipeline_error(
+                    "dedupe_lookup",
+                    &audit,
+                    vec![json!({
+                        "stage": "registration",
+                        "operation": "find_landed_repair",
+                        "failure_key": cluster.failure_key,
+                        "retryable": true,
+                        "message": bounded_error(&error.to_string()),
+                    })],
+                )
+            })
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let duplicate_tasks = duplicate_matches
@@ -435,9 +489,29 @@ where
 
     let attributed = retain_branch_observations(runtime, &branch_observations)?;
 
-    for ((cluster, duplicate_match), duplicate_task) in
-        clusters.iter().zip(duplicate_matches).zip(duplicate_tasks)
+    for ((((cluster, duplicate_match), duplicate_task), descendant_landing), operator) in clusters
+        .iter()
+        .zip(duplicate_matches)
+        .zip(duplicate_tasks)
+        .zip(descendant_landings)
+        .zip(operator_assessments)
     {
+        if let Some(entry) = operator.withheld {
+            withheld.push(entry);
+            continue;
+        }
+        let duplicate_match = duplicate_match.or_else(|| {
+            let identity = cluster.open_compiler_identity()?;
+            let task_id = filed_compiler_sets.get(&identity)?.clone();
+            Some(DuplicateTaskMatch {
+                task_id,
+                match_kind: "open_compiler_diagnostics",
+                evidence: json!({
+                    "fingerprint": "ci_open_compiler_diagnostics",
+                    "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
+                }),
+            })
+        });
         if let Some(DuplicateTaskMatch {
             task_id,
             match_kind,
@@ -446,6 +520,9 @@ where
         {
             if match_kind == "covered_by_repair" {
                 repair_assessment::retain(runtime, &task_id, &evidence)?;
+            }
+            if match_kind == "open_compiler_diagnostics" {
+                retain_compiler_observations(runtime, &task_id, cluster)?;
             }
             if let Some(existing) = duplicate_task {
                 let expected_key_tag =
@@ -467,6 +544,10 @@ where
                 "match_evidence": evidence,
                 "sources": cluster.filing_entry(&task_id)["sources"],
             }));
+            continue;
+        }
+        if let Some(pending) = descendant_landing {
+            pending_supersession.push(pending);
             continue;
         }
         if filed_keys.contains(&cluster.failure_key) {
@@ -510,17 +591,29 @@ where
             "github-actions".to_string(),
         ];
         tags.extend(os_tags.iter().cloned());
+        let mut description = cluster.description(evidence, &runners);
+        if !operator.failed_covers.is_empty() {
+            description.push_str("\n## Prior operator covers that did not hold\n\n");
+            for cover in &operator.failed_covers {
+                description.push_str(&format!(
+                    "- Cover `{}` landed at `{}`; the failing checkout contains this fix and the same failure key reproduced.\n",
+                    cover["cover"].as_str().unwrap_or_default(),
+                    cover["landed_commit"].as_str().unwrap_or_default(),
+                ));
+            }
+        }
         let task_id = add_task(TaskAddParams {
             title: cluster.title(),
-            description: cluster.description(evidence, &runners),
+            description,
             acceptance_criteria: cluster.acceptance_criteria(),
             tags,
+            context_files: cluster.context_files(),
             // Deliberately empty: the evidence is already in the description,
             // so the task ships on the ordinary agent baseline.
             required_tools: Vec::new(),
-            crew: system_crew.clone(),
+            crew: None,
             priority: TaskPriority::High,
-            complexity: TaskComplexity::Unassessed,
+            complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Bug),
             // Filing is quarantine, not dispatch authorization. The
             // task-pilot apply boundary is the only CI-sweep path that may
@@ -544,15 +637,26 @@ where
             )
         })?;
         filed_keys.insert(cluster.failure_key.clone());
+        if let Some(identity) = cluster.open_compiler_identity() {
+            filed_compiler_sets.insert(identity, task_id.clone());
+        }
         let mut filing = cluster.filing_entry(&task_id);
         filing["runner_os"] = json!(runners);
         filing["os_tags"] = json!(os_tags);
+        if !operator.failed_covers.is_empty() {
+            filing["failed_covers"] = json!(operator.failed_covers);
+        }
         pilot_candidate_ids.insert(task_id);
         pilot_candidates.push(filing.clone());
         filed.push(filing);
     }
 
-    let final_audit = filing_audit(audit, &filed, &skipped_existing);
+    let mut final_audit = pending_audit(
+        filing_audit(audit, &filed, &skipped_existing),
+        &pending_supersession,
+    );
+    final_audit["withheld_count"] = json!(withheld.len());
+    final_audit["withheld"] = json!(withheld);
     Ok(json!({
         "outcome": OUTCOME_CURRENT_FAILURES,
         "capability": capability,
@@ -562,6 +666,7 @@ where
         "pilot_candidate_count": pilot_candidates.len(),
         "pilot_candidates": pilot_candidates,
         "skipped_existing": skipped_existing,
+        "withheld": withheld,
         "repair_assessments": repair_assessments,
         "attributed": attributed,
         "excluded_branch_failures": excluded_branch_failures,
@@ -569,13 +674,15 @@ where
         "deferred": deferred,
         "inconclusive": inconclusive,
         "already_repaired": already_repaired,
+        "pending_supersession": pending_supersession,
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
 }
 
-/// Pushes may describe an older landing commit; PR/queue checkouts must match
-/// a currently observed landing tip. Never substitute the PR's source SHA.
+/// Branch-event runs (push, schedule or dispatch) may describe an older
+/// landing commit; PR/queue checkouts must match a currently observed landing
+/// tip. Never substitute the PR's source SHA.
 fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
     let Some(checkout) = failure["actual_checkout_shas"]
         .as_array()
@@ -592,7 +699,7 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
         .any(|head| {
             matches!(head["kind"].as_str(), Some("integration" | "release"))
                 && (head["current_head_sha"].as_str() == Some(checkout)
-                    || (failure["event"] == "push"
+                    || (failure["event"].as_str().is_some_and(is_branch_event)
                         && head["branch"].as_str().is_some()
                         && head["branch"] == failure["head_branch"]
                         && failure["event_reported_head_sha"].as_str() == Some(checkout)))
@@ -600,12 +707,43 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
 }
 
 fn task_branch_owner(failure: &Value) -> Option<String> {
-    let branch = failure["head_branch"]
-        .as_str()?
-        .strip_prefix("orbit/ORB-")?;
-    let number = branch.split('-').next()?;
-    (!number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| format!("ORB-{number}"))
+    let branch = failure["head_branch"].as_str()?.strip_prefix("orbit/")?;
+    let mut parts = branch.splitn(3, '-');
+    let owner = format!("{}-{}", parts.next()?, parts.next()?);
+    is_valid_orb_task_id(&owner).then_some(owner)
+}
+
+/// Re-read comments on each append so retries and repeated sources within one
+/// snapshot retain one comment per observation without mutating the exact tag.
+fn retain_compiler_observations(
+    runtime: &OrbitRuntime,
+    owner: &str,
+    cluster: &FailureCluster,
+) -> Result<(), OrbitError> {
+    for run in &cluster.runs {
+        let message = format!(
+            "CI compiler observation: run `{}` {}; checkout `{}`; exact failure key `{CI_FAILURE_KEY_TAG_PREFIX}{}`.",
+            value_string(run, "run_id"),
+            value_string(run, "url"),
+            cluster.tested_commit,
+            cluster.failure_key,
+        );
+        if runtime
+            .get_task_comments(owner)?
+            .iter()
+            .any(|comment| comment.message == message)
+        {
+            continue;
+        }
+        runtime.update_task(
+            owner,
+            TaskUpdateParams {
+                comment: Some(message),
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Immutable, content-addressed receipts survive retries without duplicate

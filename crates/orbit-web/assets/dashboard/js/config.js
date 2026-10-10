@@ -10,13 +10,15 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 
-import { captureFocus, el, fetchJson, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
-import { hostReading, hostVerdict, onHostResources } from './host-resources.js';
+import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
+import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
 const $ = (id) => document.getElementById(id);
 
 /// Rendered in place of a value that does not exist, matching `config show`.
 const NO_VALUE = "–";
+const EMPTY_ARRAY = "—";
 
 /// Which file a sub-view reads and writes. `effective` never writes global:
 /// the layered view's edits go to the workspace file, which is the per-user,
@@ -29,6 +31,8 @@ const SUBTAB_SOURCES = {
   crews: { path: "/api/config/effective", scope: "workspace" },
   keys: { path: "/api/config/keys", scope: null },
   system: { path: "/api/config/file?scope=global", scope: "global" },
+  // Settings › Hosts is owned by hosts.js; it reads `/api/hosts`.
+  hosts: { path: "/api/hosts", scope: null },
 };
 
 /// The System tab is the resource throttle only: its keys, in display order.
@@ -67,8 +71,10 @@ export function setConfigSubtab(name) {
   if (name !== activeSubtab) {
     editing = null;
     lastPayload = null;
+    if (name === "hosts" || activeSubtab === "hosts") resetHostsView();
   }
   activeSubtab = name;
+  updateConfigChrome();
 }
 
 export function getConfigSubtab() {
@@ -76,6 +82,11 @@ export function getConfigSubtab() {
 }
 
 export async function fetchAndRenderConfig() {
+  // The host file is machine-global, so Hosts renders in the aggregate view too.
+  if (activeSubtab === "hosts") {
+    updateConfigChrome();
+    return fetchAndRenderHosts();
+  }
   if (isAggregateView()) {
     renderPanelPlaceholder("config-body");
     $("config-count").textContent = "—";
@@ -85,7 +96,16 @@ export async function fetchAndRenderConfig() {
   await requestPanel(
     "config-body",
     `${activeSubtab}:${getWorkspace() || ""}`,
-    () => (activeSubtab === "system" ? fetchSystem(source) : fetchJson(source.path)),
+    async () => {
+      try {
+        return await (activeSubtab === "system" ? fetchSystem(source) : fetchJson(source.path));
+      } catch (error) {
+        if (error.status === 400 && source.path.startsWith("/api/config/file")) {
+          error.remedy = "Correct the configuration in the named file, then reload this view.";
+        }
+        throw error;
+      }
+    },
     (payload) => {
       lastPayload = payload;
       render(payload);
@@ -98,6 +118,9 @@ export async function fetchAndRenderConfig() {
 // closing an editor), which removes the control that was just used. Handing
 // focus to its rebuilt counterpart keeps a keyboard user where they were.
 function render(payload) {
+  // A refresh that withdraws operator authority ends the edit session. Leaving
+  // it set would hide the editor and still freeze the host poll that waits on it.
+  if (!editable(payload)) editing = null;
   const body = $("config-body");
   if (!body) return;
   const restoreBody = captureFocus(body);
@@ -109,6 +132,7 @@ function render(payload) {
 
 function renderPanels(payload, body) {
   body.replaceChildren();
+  updateConfigChrome();
   renderControls(payload);
   if (activeSubtab === "keys") {
     renderKeyReference(body, payload);
@@ -127,6 +151,8 @@ function renderPanels(payload, body) {
   body.appendChild(layersStrip(payload));
   const binding = registryStrip(payload);
   if (binding) body.appendChild(binding);
+  const review = reviewStrip(payload);
+  if (review) body.appendChild(review);
   for (const section of payload.sections || []) {
     body.appendChild(section.kind === "crews" ? crewsPanel(payload, {}) : sectionPanel(section, payload));
   }
@@ -153,7 +179,8 @@ function renderControls(payload) {
   const controls = $("config-controls");
   if (!controls) return;
   controls.replaceChildren();
-  if (activeSubtab === "crews") return;
+  controls.hidden = activeSubtab === "crews";
+  if (controls.hidden) return;
 
   if (activeSubtab === "system") {
     controls.appendChild(reloadButton());
@@ -301,6 +328,104 @@ function registryStrip(payload) {
   return strip;
 }
 
+// The automatic-review switches, each with its source: before-PR review is
+// `review.before_pr`, before-landing review is `review.before_landing`, and
+// after-landing review is the delivery-code-review auto-task's own `enabled`
+// flag.
+function reviewStrip(payload) {
+  const review = payload.review;
+  if (!review) return null;
+  const strip = el("div", { class: "config-strip config-review" });
+  if (review.error) {
+    strip.appendChild(reviewAlert("Review status is unavailable", review.error));
+    strip.appendChild(reviewDiagnostics([`Review status: ${review.error}`]));
+    return strip;
+  }
+
+  const before = review.before_pr || {};
+  const beforeProblems = Array.isArray(before.problems) ? before.problems : [];
+  const landing = review.before_landing || {};
+  const landingProblems = Array.isArray(landing.problems) ? landing.problems : [];
+  const after = review.after_landing || {};
+  const afterHealth = after.health || null;
+  const afterProblems = Array.isArray(afterHealth?.problems) ? afterHealth.problems : [];
+  const statuses = [
+    reviewSwitchStatus(
+      "Before-PR review",
+      before.enabled === true,
+      beforeProblems,
+      "It can gate delivery before PR creation.",
+    ),
+    reviewSwitchStatus(
+      "Before-landing review",
+      landing.enabled === true,
+      landingProblems,
+      "It can gate an open PR before it lands.",
+    ),
+    reviewSwitchStatus(
+      "After-landing review",
+      after.enabled === true,
+      afterProblems,
+      "It can review landed deliveries on this host.",
+    ),
+  ];
+  statuses.sort((left, right) => Number(right.unhealthy) - Number(left.unhealthy));
+  for (const status of statuses) strip.appendChild(status.node);
+
+  if (review.healthy === false && !statuses.some((status) => status.unhealthy)) {
+    strip.insertBefore(reviewAlert("Review is unhealthy", "The review switches could not be confirmed healthy."), strip.firstChild);
+  }
+  const diagnostics = [
+    before.line ? `Before-PR review: ${before.line}` : null,
+    landing.line ? `Before-landing review: ${landing.line}` : null,
+    after.line ? `After-landing review: ${after.line}` : null,
+    afterHealth?.line ? `After-landing health: ${afterHealth.line}` : null,
+  ].filter(Boolean);
+  if (diagnostics.length) strip.appendChild(reviewDiagnostics(diagnostics));
+  return strip;
+}
+
+function reviewSwitchStatus(label, enabled, problems, healthyReason) {
+  const unhealthy = enabled && problems.length > 0;
+  const row = el("div", { class: `config-review-status ${unhealthy ? "alert" : enabled ? "healthy" : "inactive"}` });
+  if (unhealthy) row.setAttribute("role", "alert");
+  row.appendChild(el("span", {
+    class: "config-review-switch",
+    text: `${label}: ${enabled ? "on" : "off"} · ${unhealthy ? "unhealthy" : enabled ? "healthy" : "inactive"}`,
+  }));
+  row.appendChild(el("span", {
+    class: "config-review-reason",
+    text: unhealthy ? `${String(problems[0]).replace(/[.!?]+$/, "")}.` : enabled ? healthyReason : "This switch is disabled.",
+  }));
+  if (unhealthy) {
+    row.appendChild(el("span", { class: "config-review-remedy" }, ["Run ", el("code", { text: "orbit doctor" }), "."]));
+  }
+  return { node: row, unhealthy };
+}
+
+function reviewAlert(title, reason) {
+  const row = el("div", { class: "config-review-status alert" });
+  row.setAttribute("role", "alert");
+  row.appendChild(el("span", { class: "config-review-switch", text: title }));
+  row.appendChild(el("span", { class: "config-review-reason", text: reason }));
+  row.appendChild(el("span", { class: "config-review-remedy" }, ["Run ", el("code", { text: "orbit doctor" }), "."]));
+  return row;
+}
+
+function reviewDiagnostics(lines) {
+  const details = el("details", { class: "config-review-details" });
+  details.appendChild(el("summary", { text: "Full review diagnostics" }));
+  details.appendChild(el("pre", { class: "config-review-diagnostic", text: lines.join("\n") }));
+  return details;
+}
+
+function updateConfigChrome() {
+  const explainer = $("config-explainer");
+  if (explainer) explainer.hidden = activeSubtab !== "effective";
+  const controls = $("config-controls");
+  if (controls && activeSubtab === "crews") controls.hidden = true;
+}
+
 function fact(label, value) {
   return el("span", { class: "config-fact" }, [
     el("span", { class: "config-fact-label", text: label }),
@@ -317,7 +442,6 @@ function sectionPanel(section, payload) {
   const header = el("header", {}, [
     el("span", {}, [
       el("span", { class: "config-section-title", text: section.title }),
-      section.key_prefix ? el("span", { class: "config-section-prefix mono", text: `${section.key_prefix}.*` }) : null,
       el("span", { class: "config-section-blurb", text: section.blurb }),
     ]),
     el("span", { class: "config-header-right" }, [
@@ -382,7 +506,7 @@ function matchesFilter(row) {
 function keyRow(row, payload) {
   const node = el("div", { class: `config-row state-${row.state}` });
   node.dataset.key = row.key;
-  if (editing && editing.kind === "key" && editing.key === row.key) {
+  if (keyEditable(row, payload) && editing && editing.kind === "key" && editing.key === row.key) {
     node.classList.add("editing");
     node.appendChild(keyEditor(row, payload, node));
     return node;
@@ -393,6 +517,7 @@ function keyRow(row, payload) {
 
 function keyCells(row, payload, node) {
   const prefix = row.key.slice(0, row.key.length - String(row.label || row.key).length);
+  const canEdit = keyEditable(row, payload);
   const cells = el("div", { class: "config-row-main" }, [
     el("span", { class: "config-key mono" }, [
       prefix ? el("span", { class: "config-key-prefix", text: prefix }) : null,
@@ -406,9 +531,9 @@ function keyCells(row, payload, node) {
         el("span", { class: "config-shadow", text: shadow.note }),
       ),
     ]),
-    editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key"),
+    canEdit ? editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key") : null,
   ]);
-  if (editable(payload)) {
+  if (canEdit) {
     cells.classList.add("clickable");
     cells.addEventListener("click", (event) => {
       if (event.target.closest("button")) return;
@@ -418,6 +543,10 @@ function keyCells(row, payload, node) {
   const error = pendingError(node, row.key);
   if (error) cells.appendChild(error);
   return cells;
+}
+
+function keyEditable(row, payload) {
+  return editable(payload) && row.settable !== false;
 }
 
 function sourceChip(row) {
@@ -439,7 +568,7 @@ function editButton(onClick, title) {
 
 function displayValue(value) {
   if (value == null) return NO_VALUE;
-  if (Array.isArray(value)) return value.length ? value.join(" ") : "[]";
+  if (Array.isArray(value)) return value.length ? value.join(" ") : EMPTY_ARRAY;
   if (typeof value === "string") return value === "" ? '""' : value;
   return String(value);
 }
@@ -449,14 +578,22 @@ function displayValue(value) {
 /// An edit session. `draft` holds what the operator typed, field by field, so
 /// every re-render — a background refresh, a save in flight, a refused write —
 /// rebuilds the editor from the draft rather than the last server payload. The
-/// session is bound to the workspace it was opened in; only a successful save,
-/// Cancel, Reload, or a workspace or sub-tab switch ends it.
+/// session is bound to the workspace it was opened in. A successful save,
+/// Cancel, Reload, a workspace or sub-tab switch, or a payload that withdraws
+/// operator authority ends it.
 function startEdit(next) {
+  if (!editable(lastPayload)) return;
+  if (next.kind === "key" && !keySettable(next.key, lastPayload)) return;
   editing = { ...next, error: null, pending: false, draft: {}, workspace: getWorkspace() };
   if (lastPayload) render(lastPayload);
   // The control that opened the editor is gone; land in the editor's first field.
   const field = $("config-body")?.querySelector(".config-editor input, .config-editor select, .config-editor textarea");
   if (field && typeof field.focus === "function") field.focus();
+}
+
+function keySettable(key, payload) {
+  const row = (payload?.sections || []).flatMap((section) => section.keys || []).find((entry) => entry.key === key);
+  return row?.settable !== false;
 }
 
 function cancelEdit() {
@@ -491,7 +628,7 @@ function cancelOnEscape(editor) {
 /// Writes are governed; a caller without the operator capability sees the
 /// rows read-only rather than an edit that 403s on save.
 function editable(payload) {
-  return payload?.config_set?.authorized !== false;
+  return payload?.config_set?.authorized !== false && !hostWriteRefusal();
 }
 
 function writeScope() {
@@ -751,10 +888,7 @@ async function fetchSystem(source) {
 
 async function fetchHostResources() {
   try {
-    // The host is the serving machine, whatever workspace is selected, so this
-    // read deliberately skips the workspace parameter the other reads carry.
-    const response = await fetch("/api/host/resources");
-    return response.ok ? await response.json() : null;
+    return await fetchHostResourcePayload();
   } catch {
     return null;
   }
@@ -808,7 +942,7 @@ function systemPanel(payload) {
       : [],
   ]));
   body.appendChild(systemVerdict(host, verdict, rows, payload));
-  const head = el("div", { class: "config-sys-grid config-sys-head" }, [
+  const head = el("div", { class: "config-sys-grid config-sys-head col-head" }, [
     el("span", { text: "resource" }),
     el("span", { text: "live reading" }),
     el("span", { text: "throttle at" }),
@@ -846,7 +980,7 @@ function systemVerdict(host, verdict, rows, payload) {
 
 /// The open editor for `row`, or null; it sits under the row it belongs to.
 function openEditor(row, payload) {
-  if (!row || !editing || editing.kind !== "key" || editing.key !== row.key) return null;
+  if (!editable(payload) || !row || !editing || editing.kind !== "key" || editing.key !== row.key) return null;
   const node = el("div", { class: "config-row editing" });
   node.dataset.key = row.key;
   node.appendChild(keyEditor(row, payload, node));
@@ -854,9 +988,7 @@ function openEditor(row, payload) {
 }
 
 function describePressure(pressure) {
-  const since = new Date(pressure.since);
-  const when = Number.isNaN(since.getTime()) ? pressure.since : `${since.toISOString().slice(0, 16).replace("T", " ")}Z`;
-  return `${pressure.resource} ${Math.round(pressure.percent)}% ≥ ${pressure.high_percent}% since ${when}`;
+  return `${pressure.resource} ${Math.round(pressure.percent)}% ≥ ${pressure.high_percent}% since ${formatDateTime(pressure.since)}`;
 }
 
 function systemResource(resource, rows, payload, host) {
@@ -905,6 +1037,8 @@ function systemValueCell(row, payload) {
 
 // ------------------------------------------------------------------- crews
 
+const CREW_COLUMNS = ["Name", "Provider", "Model", "Limit", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
+
 function crewsPanel(payload, { standalone }) {
   const crews = payload.crews || [];
   const panel = el("section", { class: "panel config-section config-crews" });
@@ -922,6 +1056,14 @@ function crewsPanel(payload, { standalone }) {
     ]),
   );
   const body = el("div", { class: "config-section-body" });
+  const head = el("div", { class: "config-crew-cells config-crew-head col-head" });
+  head.setAttribute("role", "row");
+  for (const label of CREW_COLUMNS) {
+    const cell = el("span", { text: label });
+    cell.setAttribute("role", "columnheader");
+    head.appendChild(cell);
+  }
+  body.appendChild(head);
   if (!crews.length && !(editing && editing.kind === "crew" && editing.name === "")) {
     body.appendChild(
       el("div", {
@@ -960,7 +1102,7 @@ function crewRow(crew, payload) {
     node.appendChild(crewEditor(crew, payload, false));
     return node;
   }
-  const cells = el("div", { class: "config-crew-cells" }, [
+  const identity = el("span", { class: "config-crew-identity" }, [
     el("span", { class: "config-key mono" }, [
       el("span", { text: crew.name }),
       disabled
@@ -971,23 +1113,65 @@ function crewRow(crew, payload) {
           })
         : null,
     ]),
-    providerCell(crew.provider),
-    el("span", { class: "config-value mono", text: displayValue(crew.model) }),
-    el("span", { class: "config-value mono", text: displayValue(crew.effort) }),
-    el("span", { class: "config-value mono", text: displayValue(crew.tags) }),
-    el("span", { class: `config-source ${crew.source}`, text: crew.source }),
-    el("span", { class: "config-description" }, [
-      crew.description ? el("span", { text: crew.description }) : null,
-      referenced.length
-        ? el("span", { class: "config-referenced", text: `referenced by ${referenced.join(", ")}` })
-        : null,
-    ]),
-    editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : null,
+    crew.description ? el("span", { class: "config-crew-description", text: crew.description }) : null,
   ]);
+  const usedBy = el("span", { class: "config-crew-usage" }, referenced.length
+    ? referenced.map((reference) => el("span", { class: "config-crew-use", text: reference }))
+    : [el("span", { class: "config-crew-use", text: EMPTY_ARRAY })]);
+  const cells = el("div", { class: "config-crew-cells" }, [
+    identity,
+    providerCell(crew.provider),
+    el("span", { class: "config-value mono", text: displayCrewValue(crew.model) }),
+    crewLimitCell(crew.limit),
+    el("span", { class: "config-value mono", text: displayCrewValue(crew.effort) }),
+    el("span", { class: "config-value mono", text: displayCrewValue(crew.tags) }),
+    el("span", { class: `config-source ${crew.source}`, text: displayCrewValue(crew.source) }),
+    usedBy,
+    editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : el("span", { text: EMPTY_ARRAY }),
+  ].map((value, index) => el("div", { class: "config-crew-cell" }, [
+    el("span", { class: "config-crew-label", text: CREW_COLUMNS[index] }),
+    value,
+  ])));
   node.appendChild(cells);
   const error = pendingError(node, `crews.${crew.name}`);
   if (error) node.appendChild(error);
   return node;
+}
+
+function displayCrewValue(value) {
+  return value == null || value === "" ? EMPTY_ARRAY : displayValue(value);
+}
+
+// [ORB-14698] The crew's tightest live usage window on this host: how much of
+// it is used, when it resets, and a badge while admission skips the crew.
+// The server's provider-limit view decides all of it; nothing is judged here.
+function crewLimitCell(limit) {
+  const cell = el("span", { class: "config-crew-limit" });
+  if (!limit) {
+    cell.appendChild(el("span", { class: "config-value mono", text: EMPTY_ARRAY, title: "No live usage reading covers this crew" }));
+    return cell;
+  }
+  const used = limit.used_percent == null
+    ? (limit.exhausted ? "exhausted" : "–")
+    : `${Math.round(Number(limit.used_percent))}%`;
+  const windowLabel = limit.window || "usage window";
+  cell.appendChild(el("span", { class: "config-crew-limit-line" }, [
+    el("span", { class: "config-value mono", text: used }),
+    el("span", { class: "config-crew-limit-window mono", text: limit.scope ? `${windowLabel} · ${limit.scope}` : windowLabel }),
+    limit.gated
+      ? el("span", {
+          class: "config-crew-gated",
+          text: "gated",
+          title: `Admission skips this crew until ${formatDateTime(limit.until)} (limit ${limit.threshold}%)`,
+        })
+      : null,
+  ]));
+  const resets = limit.resets_at || limit.until;
+  cell.appendChild(el("span", {
+    class: "config-crew-limit-reset",
+    text: `${limit.resets_at ? "resets" : "counts until"} ${formatDateTime(resets)}`,
+  }));
+  return cell;
 }
 
 function providerCell(provider) {
@@ -997,7 +1181,7 @@ function providerCell(provider) {
   // keeps the neutral accent rather than inventing a colour.
   dot.style.background = `var(--ag-${String(provider || "").toLowerCase()}, var(--accent))`;
   cell.appendChild(dot);
-  cell.appendChild(el("span", { text: displayValue(provider) }));
+  cell.appendChild(el("span", { text: displayCrewValue(provider) }));
   return cell;
 }
 
@@ -1127,7 +1311,7 @@ function pathsPanel(payload) {
 
 function renderKeyReference(body, payload) {
   const keys = (payload.keys || []).filter((key) =>
-    !filterText || String(key.key).toLowerCase().includes(filterText),
+    key.settable !== false && (!filterText || String(key.key).toLowerCase().includes(filterText)),
   );
   const panel = el("section", { class: "panel config-section" });
   panel.appendChild(

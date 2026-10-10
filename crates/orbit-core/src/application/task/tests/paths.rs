@@ -81,3 +81,72 @@ fn explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors() {
         );
     }
 }
+
+/// Deterministic interleaving: a strict write screened a declared target
+/// against the task's grant, then another writer revoked that grant before
+/// this write committed. The write must fail instead of storing a missing
+/// target nothing authorizes; a declaration over the per-task bound is
+/// refused outright.
+#[test]
+fn a_screened_write_is_refused_when_the_grant_it_relied_on_changes() {
+    if !enter_isolated_child(
+        module_path!(),
+        "a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
+    ) {
+        return;
+    }
+    let (_root, runtime) = explicit_root_runtime();
+    let declared = vec![
+        "file:src/main.rs".to_string(),
+        "file:src/new.rs".to_string(),
+    ];
+    let task = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Declared target".to_string(),
+            description: "Creates src/new.rs.".to_string(),
+            context_creation: runtime
+                .authorize_missing_context(&declared)
+                .expect("declare"),
+            context_files: declared.clone(),
+            ..Default::default()
+        })
+        .expect("add task");
+
+    let screened = runtime
+        .ensure_context_selectors_exist_for_update(&task.id, &declared)
+        .expect("the declared target passes the strict check");
+    let revoke = vec!["file:src/main.rs".to_string()];
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                context_creation: runtime
+                    .ensure_context_selectors_exist_for_update(&task.id, &revoke)
+                    .expect("screen revocation"),
+                context_files: Some(revoke.clone()),
+                ..Default::default()
+            },
+        )
+        .expect("revoke");
+    let stale = runtime.update_task(
+        &task.id,
+        crate::application::task::TaskUpdateParams {
+            context_files: Some(declared),
+            context_creation: screened,
+            ..Default::default()
+        },
+    );
+    assert!(
+        matches!(stale, Err(OrbitError::InvalidInput(_))),
+        "{stale:?}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").context_files,
+        revoke
+    );
+
+    let too_many = (0..=orbit_types::task::MAX_CONTEXT_CREATION_SELECTORS)
+        .map(|index| format!("file:src/new_{index}.rs"))
+        .collect::<Vec<_>>();
+    assert!(runtime.authorize_missing_context(&too_many).is_err());
+}

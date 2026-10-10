@@ -37,13 +37,13 @@ const menuLabel = Astro.locals.t('menuButton.accessibleLabel');
 </details>
 
 <style>
+  /* Bare icon, like the header's Search button: no fill, ring or shadow. */
   .orbit-home-menu-toggle {
     align-items: center;
-    background-color: var(--sl-color-white);
+    background-color: transparent;
     border: 0;
-    border-radius: 50%;
-    box-shadow: var(--sl-shadow-md);
-    color: var(--sl-color-black);
+    box-shadow: none;
+    color: var(--sl-color-gray-1);
     cursor: pointer;
     display: flex;
     height: var(--sl-menu-button-size);
@@ -67,23 +67,9 @@ const menuLabel = Astro.locals.t('menuButton.accessibleLabel');
     outline-offset: 2px;
   }
 
-  .orbit-home-menu[open] .orbit-home-menu-toggle {
-    background-color: var(--sl-color-gray-2);
-    box-shadow: none;
-  }
-
   .orbit-home-menu[open] .open-menu,
   .orbit-home-menu:not([open]) .close-menu {
     display: none;
-  }
-
-  :global([data-theme='light']) .orbit-home-menu-toggle {
-    background-color: var(--sl-color-black);
-    color: var(--sl-color-white);
-  }
-
-  :global([data-theme='light']) .orbit-home-menu[open] .orbit-home-menu-toggle {
-    background-color: var(--sl-color-gray-5);
   }
 
   .orbit-home-menu-panel {

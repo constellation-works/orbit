@@ -18,7 +18,25 @@ const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 /// Each argv (after `orbit`) whose `--help` is pinned, and its golden path
 /// under `tests/help_goldens/`.
 const CASES: &[(&[&str], &str)] = &[
+    (&[], "root.txt"),
+    (&["run"], "run/root.txt"),
+    (&["init"], "init.txt"),
+    (&["host", "add"], "host/add.txt"),
+    (&["host", "remove"], "host/remove.txt"),
+    (&["doctor"], "doctor.txt"),
+    (&["search"], "search.txt"),
+    (&["gc"], "gc/root.txt"),
+    (&["gc", "audit"], "gc/audit.txt"),
+    (&["gc", "runs"], "gc/runs.txt"),
+    (&["gc", "tmp"], "gc/tmp.txt"),
+    (&["gc", "worktrees"], "gc/worktrees.txt"),
+    (&["run"], "run/root.txt"),
+    (&["run", "history"], "run/history.txt"),
+    (&["run", "cancel"], "run/cancel.txt"),
     (&["run", "agent"], "run/agent.txt"),
+    (&["run", "job"], "run/job.txt"),
+    (&["run", "task-pilot"], "run/task-pilot.txt"),
+    (&["job", "resume"], "job/resume.txt"),
     (&["run", "logs"], "run/logs.txt"),
     (&["friction"], "friction/root.txt"),
     (&["friction", "add"], "friction/add.txt"),
@@ -37,6 +55,8 @@ const CASES: &[(&[&str], &str)] = &[
     (&["plugin", "test"], "plugin/test.txt"),
     (&["mcp", "listen"], "mcp/listen.txt"),
     (&["tool", "run"], "tool/run.txt"),
+    (&["web", "serve"], "web/serve.txt"),
+    (&["web", "connect"], "web/connect.txt"),
 ];
 
 fn golden_path(relative: &str) -> PathBuf {
@@ -66,6 +86,7 @@ fn help_matches_the_shipped_surface() {
             .env("HOME", &home)
             .env("USERPROFILE", &home)
             .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
             .args(*args)
             .arg("--help")
             .output()
@@ -76,7 +97,9 @@ fn help_matches_the_shipped_surface() {
             args.join(" "),
             String::from_utf8_lossy(&output.stderr)
         );
-        let actual = String::from_utf8(output.stdout).expect("help is UTF-8");
+        let actual = String::from_utf8(output.stdout)
+            .expect("help is UTF-8")
+            .replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
         let path = golden_path(relative);
         if update {
             fs::write(&path, &actual)

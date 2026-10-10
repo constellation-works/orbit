@@ -1,6 +1,8 @@
 //! `orbit run readiness` read-only auto-drain diagnostic.
 
+use chrono::Utc;
 use clap::Args;
+use orbit_core::application::task::ProviderLimitReading;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
@@ -13,7 +15,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. When CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory or disk pressure holds them too.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -29,9 +31,6 @@ pub struct ReadinessCommand {
     /// Repeatable and comma-separated; omitted, no crew restriction applies.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ReadinessCommand {
@@ -77,6 +76,21 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    for warning in capacity["build_budget_warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(message) = warning["message"].as_str() {
+            lines.push(format!(
+                "Build-budget warning ({}): {message}",
+                warning["run_id"].as_str().unwrap_or("drain")
+            ));
+        }
+    }
+    if let Some(error) = capacity["build_budget_error"].as_str() {
+        lines.push(format!("Build-budget error: {error}"));
+    }
     if let Some(run_id) = capacity["drain_run_id"].as_str() {
         lines.push(format!("Running drain: {run_id}."));
     }
@@ -106,9 +120,14 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
     {
         lines.push(throttle.hold_reason());
     }
+    lines.extend(provider_limit_lines(&payload["provider_limits"]));
+    if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
+        lines.push(budget);
+    }
     if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
         lines.push(format!("Occupied slots: {phases}."));
     }
+    lines.extend(approval_lines(&payload["approvals"]));
     if let Some(tasks) = payload["tasks"].as_array() {
         for task in tasks {
             let task_id = task["task_id"].as_str().unwrap_or("-");
@@ -121,19 +140,116 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
                 .map(|ids| format!(" blocked-by={ids}"))
                 .unwrap_or_default();
-            // A host-OS wait is named, so the line says which host it needs.
-            let host = (reason == "host_os_mismatch")
-                .then(|| task["detail"].as_str())
-                .flatten()
-                .map(|detail| format!(": {detail}"))
+            // A host-OS wait names the host, and a native-OS requirement the
+            // tag to add. A local-route review hold names the remedy, and
+            // a provider limit its window, reset and skipped crews. Other
+            // long repair instructions stay in JSON.
+            let host = matches!(
+                reason,
+                "host_os_mismatch"
+                    | "native_os_required"
+                    | "local_route_before_pr"
+                    | "local_route_before_landing"
+                    | "provider_limit"
+            )
+            .then(|| task["detail"].as_str())
+            .flatten()
+            .map(|detail| format!(": {detail}"))
+            .unwrap_or_default();
+            // [ORB-14624] Which tasks a CPU-only throttle still admits, and
+            // which jump the queue before their frozen batch expires.
+            let light = if task["cpu_light"].as_bool() == Some(true) {
+                " cpu-light"
+            } else {
+                ""
+            };
+            let deadline = task["frozen_batch_deadline"]
+                .as_str()
+                .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "{task_id}: {} ({reason}){crew}{blocked_by}{host}",
+                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{host}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
     }
+    if let (Some(tasks), Some(total)) = (payload["tasks"].as_array(), payload["total"].as_u64())
+        && (tasks.len() as u64) < total
+    {
+        lines.push(format!(
+            "showing {} of {total} backlog tasks; use --limit N or name task ids",
+            tasks.len()
+        ));
+    }
     lines
+}
+
+/// [ORB-14117] An `--approve-proposed` drain's approvals so far, and why the
+/// remaining proposed tasks are held. A task task-pilot verified as already
+/// fixed gets its own line with the pilot's evidence.
+fn approval_lines(approvals: &Value) -> Vec<String> {
+    if approvals["enabled"].as_bool() != Some(true) {
+        return Vec::new();
+    }
+    let held = approvals["held_by_reason"]
+        .as_object()
+        .map(|reasons| {
+            reasons
+                .iter()
+                .map(|(reason, count)| format!("{reason}={count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|reasons| !reasons.is_empty())
+        .map(|reasons| format!(" ({reasons})"))
+        .unwrap_or_default();
+    let closed = match approvals["closed_total"].as_u64() {
+        Some(total) if total > 0 => format!("; {total} closed as already fixed"),
+        _ => String::new(),
+    };
+    let mut lines = vec![format!(
+        "Proposed approval: {} approved by drain {}{closed}; {} awaiting pilot; {} held{held}.",
+        approvals["approved_total"],
+        approvals["drain_run_id"].as_str().unwrap_or("-"),
+        approvals["awaiting_pilot"],
+        approvals["held_total"],
+    )];
+    for task in approvals["held"].as_array().into_iter().flatten() {
+        if task["reason"] == "pilot_verified_no_diff" {
+            lines.push(format!(
+                "  Task {}: pilot_verified_no_diff ({})",
+                task["task_id"].as_str().unwrap_or("-"),
+                task["detail"].as_str().unwrap_or("no evidence recorded"),
+            ));
+        }
+    }
+    lines
+}
+
+/// [ORB-14698] One line per provider usage reading that keeps crews out of
+/// admission: its window, use against the threshold, reset and the crews
+/// skipped until then.
+fn provider_limit_lines(readings: &Value) -> Vec<String> {
+    let now = Utc::now();
+    serde_json::from_value::<Vec<ProviderLimitReading>>(readings.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|reading| reading.gated)
+        .map(|reading| format!("Provider limits: {}", reading.skipped_line(now)))
+        .collect()
+}
+
+/// [ORB-14624] While CPU alone throttles, the reserved light slots are the
+/// only ones open, so say how many are left.
+fn cpu_light_budget_line(budget: &Value) -> Option<String> {
+    if budget["applies"].as_bool() != Some(true) {
+        return None;
+    }
+    Some(format!(
+        "CPU-light budget: {} of {} reserved slots in use, {} left; only cpu-light \
+         auto-tasks start while CPU alone is held.",
+        budget["active"], budget["reserved"], budget["remaining"],
+    ))
 }
 
 /// [ORB-12968] A pending host shutdown holds every new admission, so it is

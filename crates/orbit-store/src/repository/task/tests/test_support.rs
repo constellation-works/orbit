@@ -29,6 +29,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             pr_status: None,
             job_run_id: None,
             crew: None,
+            crew_source: None,
             orchestrator: None,
             relations: Vec::new(),
             tags: vec!["task-artifacts".to_string()],

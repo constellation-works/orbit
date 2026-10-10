@@ -50,8 +50,15 @@ pub fn pipeline_wait_status_is_success(status: &str) -> bool {
     matches!(status, "success" | "succeeded")
 }
 
+/// A child that ended `held` awaiting named evidence or a forge. It is settled
+/// but neither a success nor a failure [ORB-14748].
+pub fn pipeline_wait_status_is_held(status: &str) -> bool {
+    status == "held"
+}
+
 pub fn pipeline_wait_status_is_settled(status: &str) -> bool {
     pipeline_wait_status_is_success(status)
+        || pipeline_wait_status_is_held(status)
         || matches!(status, "failed" | "timeout" | "cancelled" | "interrupted")
 }
 

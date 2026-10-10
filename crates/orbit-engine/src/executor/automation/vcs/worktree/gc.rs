@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
@@ -14,14 +14,10 @@ use serde_json::Value;
 use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
 use super::super::git::{git_command_success, git_output, git_success};
-use super::cleanup::remove_worktree;
+use super::cleanup::{remove_unregistered_directory, remove_worktree};
 use super::{
     WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
 };
-
-/// The Cargo build directory a worktree accumulates — the only path
-/// target-only collection touches.
-const BUILD_OUTPUT_DIR: &str = "target";
 
 /// Task statuses that settle the work as done — the only statuses that
 /// license discarding a run's worktree and branch. Every other status
@@ -42,10 +38,14 @@ pub struct WorktreeGcOptions {
     /// Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips
     /// the walk unless this is set; deletion always measures before removal.
     pub estimate_bytes: bool,
-    /// Reclaim only each eligible worktree's `target/` build output and keep
-    /// the checkout. Eligibility needs a terminal run with no live worker,
-    /// not a settled task, so failed and blocked runs stay rescuable.
+    /// Reclaim declared rebuildable output and keep the checkout. Eligibility
+    /// needs a terminal run with no live worker, not a settled task, so failed
+    /// and blocked runs stay rescuable.
     pub target_only: bool,
+    /// Declared relative paths; omission keeps the historical target default.
+    pub reclaim_patterns: Option<Vec<String>>,
+    /// Reclaim paths in worktrees retained by the full sweep.
+    pub reclaim_kept: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -63,13 +63,20 @@ pub struct WorktreeGcReport {
     /// that licensed removal, or the remedy for a worktree GC cannot touch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Per-pattern output retained, measured or reclaimed inside this worktree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reclaim: Vec<super::reclaim::WorktreeReclaimReport>,
 }
 
 /// What an operator can do about a directory Git does not list as a
-/// worktree of this checkout. GC never removes one.
+/// worktree of this checkout and that GC cannot show to be the remains of a
+/// failed removal. GC never removes one.
 const NOT_REGISTERED_REMEDY: &str = "Git does not list this directory as a worktree of this \
      checkout, so GC never removes it. If the worktree was moved, `git worktree repair <path>` \
      re-registers it; otherwise inspect it and delete it by hand once nothing in it is needed.";
+
+const LEFTOVER_DETAIL: &str = "Git no longer listed this directory as a worktree: an earlier \
+     removal failed partway. Removed the remains of the terminal run's worktree.";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorktreeGcResult {
@@ -85,16 +92,40 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     options: &WorktreeGcOptions,
 ) -> Result<WorktreeGcResult, OrbitError> {
     let mut known_paths = BTreeMap::<PathBuf, Vec<&JobRun>>::new();
+    // Path derivation runs before the run-id filter, so one record whose
+    // token cannot name a directory used to abort every sweep — including
+    // one scoped to an unrelated run — until that record was pruned
+    // [ORB-14099]. Index the runs that resolve, so a shared path is still
+    // ambiguous when another resolvable run occupies it, and report an
+    // in-scope failure instead of returning it.
+    let mut reports = Vec::new();
     for run in runs {
-        for path in expected_paths(repo_root, run)? {
-            known_paths.entry(path).or_default().push(run);
+        match run_worktree_paths(repo_root, run) {
+            Ok(paths) => {
+                for path in paths {
+                    known_paths.entry(path).or_default().push(run);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    run_id = %run.run_id,
+                    %error,
+                    "worktree GC could not derive a worktree path for a run; continuing the sweep"
+                );
+                if options
+                    .run_id
+                    .as_deref()
+                    .is_none_or(|wanted| wanted == run.run_id)
+                {
+                    reports.push(unresolvable_run_report(run, &error));
+                }
+            }
         }
     }
 
     let registered = registered_worktree_paths(repo_root)?;
     let lookups = SweepTaskLookups::new(task_host);
 
-    let mut reports = Vec::new();
     for (path, matching_runs) in &known_paths {
         let selected_runs = matching_runs
             .iter()
@@ -112,7 +143,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         if !path.exists() {
             continue;
         }
-        if matching_runs.len() > 1 {
+        if matching_runs.len() > 1 && matching_runs.iter().any(|run| !run.state.is_terminal()) {
             reports.extend(selected_runs.into_iter().map(|run| WorktreeGcReport {
                 path: path.clone(),
                 run_id: Some(run.run_id.clone()),
@@ -123,6 +154,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 action: "skipped:ambiguous_run_path".to_string(),
                 bytes_reclaimed: 0,
                 detail: None,
+                reclaim: Vec::new(),
             }));
             continue;
         }
@@ -132,26 +164,86 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         // must not abort the sweep before it reaches every other worktree.
         // Report it and move on; the pass as a whole still succeeds with a
         // partial summary.
-        let report = classify_known(repo_root, path, run, &lookups, options, &registered)
-            .unwrap_or_else(|error| {
-                tracing::warn!(
-                    path = %path.display(),
-                    run_id = %run.run_id,
-                    %error,
-                    "worktree GC failed to classify or remove a worktree; continuing the sweep"
-                );
-                WorktreeGcReport {
-                    path: path.clone(),
-                    run_id: Some(run.run_id.clone()),
-                    run_state: Some(run.state),
-                    task_id: None,
-                    task_status: None,
-                    pr_status: None,
-                    action: format!("failed:{error}"),
-                    bytes_reclaimed: 0,
-                    detail: None,
+        let report = (|| {
+            // Terminal overlap is collectable only when every mapped run
+            // passes the same safety gates. Preflight without deleting so an
+            // unsettled task or live worker belonging to another run still
+            // protects the shared path. Remove it at most once per sweep.
+            let preflight = WorktreeGcOptions {
+                delete: false,
+                estimate_bytes: false,
+                ..options.clone()
+            };
+            for other in matching_runs
+                .iter()
+                .filter(|other| other.run_id != run.run_id)
+            {
+                let mut report =
+                    classify_known(repo_root, path, other, &lookups, &preflight, &registered)?;
+                let eligible = if options.target_only {
+                    "would_reclaim"
+                } else {
+                    "would_remove"
+                };
+                if report.action != eligible
+                    && !(options.target_only && report.action == "skipped:no_reclaimable_paths")
+                {
+                    report.detail = Some(format!(
+                        "another mapped run retains this path: {}",
+                        report.action
+                    ));
+                    report.run_id = Some(run.run_id.clone());
+                    report.run_state = Some(run.state);
+                    report.action = "skipped:ambiguous_run_path".to_string();
+                    return Ok(report);
                 }
-            });
+            }
+            classify_known(repo_root, path, run, &lookups, options, &registered)
+        })()
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                path = %path.display(),
+                run_id = %run.run_id,
+                %error,
+                "worktree GC failed to classify or remove a worktree; continuing the sweep"
+            );
+            WorktreeGcReport {
+                path: path.clone(),
+                run_id: Some(run.run_id.clone()),
+                run_state: Some(run.state),
+                task_id: None,
+                task_status: None,
+                pr_status: None,
+                action: format!("failed:{error}"),
+                bytes_reclaimed: 0,
+                detail: None,
+                reclaim: Vec::new(),
+            }
+        });
+        let mut report = report;
+        // Full collection preserves the checkout's original keep reason and
+        // reclaims only declared output after every mapped run passes the
+        // terminal/worker/registration gates. Never reclaim a shared active path.
+        if options.reclaim_kept
+            && !options.target_only
+            && report.action.starts_with("skipped:")
+            && matching_runs
+                .iter()
+                .all(|run| run.state.is_terminal() && !worker_may_be_alive(run))
+            && path_is_registered(&registered, path)
+            && fs::symlink_metadata(path)
+                .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        {
+            match super::reclaim::collect(path, reclaim_patterns(options), options.delete) {
+                Ok(paths) => {
+                    report.bytes_reclaimed = paths.iter().map(|path| path.bytes_reclaimed).sum();
+                    report.reclaim = paths;
+                }
+                Err(error) => {
+                    report.detail = Some(format!("reclaim failed: {error}"));
+                }
+            }
+        }
         reports.push(report);
     }
 
@@ -169,14 +261,16 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                     action: "skipped:unrecognized".to_string(),
                     bytes_reclaimed: 0,
                     detail: None,
+                    reclaim: Vec::new(),
                 });
             }
         }
     }
 
-    // This repairs already-stale Git administration entries. It is safe in
-    // dry-run mode because it never removes a worktree directory or branch.
-    git_success(repo_root, &["worktree", "prune"])?;
+    // Estimates (including doctor's probe) are read-only.
+    if options.delete {
+        git_success(repo_root, &["worktree", "prune"])?;
+    }
 
     reports.sort_by(|left, right| left.path.cmp(&right.path));
     let bytes_reclaimed = reports.iter().map(|report| report.bytes_reclaimed).sum();
@@ -188,9 +282,9 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
 }
 
 /// One sweep's task lookups. Results and transport failures are memoized by
-/// owner route and task, so a down owner is contacted once while another
-/// route can still answer. A missing route is not an outage and is not carried
-/// over: another run's claim may name a route.
+/// owner route and task, so a down owner is contacted once per prefix while
+/// local and unroutable prefixes still get their own verdict. A missing route
+/// is not an outage and is not carried over: another run's claim may name a route.
 struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
     host: &'a H,
     answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
@@ -207,7 +301,10 @@ impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
     }
 
     fn lookup(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
-        let scope = self.host.worktree_gc_task_lookup_scope(run_id);
+        let scope = self
+            .host
+            .worktree_gc_task_lookup_scope(run_id)
+            .map(|scope| format!("{scope}/{}", task_id_prefix(task_id).unwrap_or_default()));
         if let Some(scope) = scope.as_ref() {
             let key = (scope.clone(), task_id.to_string());
             if let Some(answer) = self.answers.borrow().get(&key) {
@@ -280,6 +377,7 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         action: String::new(),
         bytes_reclaimed: 0,
         detail: None,
+        reclaim: Vec::new(),
     };
 
     // Secondary gate: never disturb a worktree that may still back a live
@@ -305,7 +403,12 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = "skipped:not_a_real_directory".to_string();
         return Ok(report);
     }
-    if !path_is_registered(registered, path) {
+    // Git unregisters a worktree before it finishes deleting the directory,
+    // so a removal that failed partway leaves a mapped, unregistered
+    // directory. That leftover is reclaimed below through the same task
+    // gates; any other unregistered directory may be a moved worktree.
+    let registered_here = path_is_registered(registered, path);
+    if !registered_here && (options.target_only || !is_failed_removal_leftover(path)) {
         report.action = "skipped:not_registered_worktree".to_string();
         report.detail = Some(NOT_REGISTERED_REMEDY.to_string());
         return Ok(report);
@@ -348,6 +451,9 @@ fn classify_known<H: RuntimeHost + ?Sized>(
                 )
             }
             WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved", None),
+            WorktreeGcTaskLookup::TaskPrefixUnroutable => {
+                (None, None, "skipped:task_prefix_unroutable", None)
+            }
             WorktreeGcTaskLookup::NoOwnerRoute(reason) => {
                 (None, None, "skipped:no_owner_route", Some(reason))
             }
@@ -373,6 +479,10 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = action.to_string();
         report.detail = detail;
         return Ok(report);
+    }
+
+    if !registered_here {
+        return reclaim_failed_removal_leftover(path, run, options, report);
     }
 
     // Reported safety net, not a deletion gate: a task can be settled with
@@ -424,107 +534,150 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     Ok(report)
 }
 
-/// Target-only collection: reclaim `<worktree>/target` and nothing else.
-///
-/// The checkout — committed, uncommitted and untracked work alike — stays, so
-/// a failed or blocked run can still be rescued. That is why the task gate
-/// does not apply here: the caller has already required a terminal run, and
-/// the build output is reproducible from the checkout it sits in.
+/// Whether a directory is what a failed `git worktree remove` leaves: Git
+/// has dropped its administrative entry, so the `.git` link is gone or names
+/// a directory that no longer exists. A link that still resolves means the
+/// worktree was moved and `git worktree repair` can bring it back, and an
+/// unreadable or unexpected `.git` is not something GC can vouch for.
+fn is_failed_removal_leftover(path: &Path) -> bool {
+    let link = path.join(".git");
+    match fs::symlink_metadata(&link) {
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        Ok(metadata) if metadata.is_file() => fs::read_to_string(&link)
+            .ok()
+            .and_then(|content| {
+                content
+                    .lines()
+                    .find_map(|line| line.strip_prefix("gitdir:"))
+                    .map(|target| PathBuf::from(target.trim()))
+            })
+            .is_some_and(|admin_dir| {
+                matches!(
+                    fs::symlink_metadata(&admin_dir),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                )
+            }),
+        Ok(_) => false,
+    }
+}
+
+/// A terminal run record can precede its worker's actual exit. A recorded
+/// worker that is alive, or whose liveness cannot be decided, keeps its files.
+fn worker_may_be_alive(run: &JobRun) -> bool {
+    run.pid.is_some_and(|pid| {
+        probe_process_liveness(pid, run.pid_start_time.as_deref()) != ProcessLiveness::Exited
+    })
+}
+
+/// Reclaim the directory a failed removal left behind. The run is terminal
+/// and its tasks are settled by the time this runs; Git cannot be asked
+/// about the tree (its registration is gone), so the dirty-tree check and the
+/// branch are not consulted — Git passed its own checks before it started
+/// deleting.
+fn reclaim_failed_removal_leftover(
+    path: &Path,
+    run: &JobRun,
+    options: &WorktreeGcOptions,
+    mut report: WorktreeGcReport,
+) -> Result<WorktreeGcReport, OrbitError> {
+    if worker_may_be_alive(run) {
+        report.action = "skipped:worker_alive".to_string();
+        return Ok(report);
+    }
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
+    report.bytes_reclaimed = estimated_bytes;
+    if !options.delete {
+        report.action = "would_remove".to_string();
+        report.detail = Some(LEFTOVER_DETAIL.to_string());
+        return Ok(report);
+    }
+    remove_unregistered_directory(path)?;
+    report.action = "removed".to_string();
+    report.detail = Some(LEFTOVER_DETAIL.to_string());
+    Ok(report)
+}
+
+/// Reclaim only declared output, keeping committed and unmatched work.
 fn collect_build_output(
     worktree: &Path,
     run: &JobRun,
     options: &WorktreeGcOptions,
     mut report: WorktreeGcReport,
 ) -> Result<WorktreeGcReport, OrbitError> {
-    // A terminal run record can precede its worker's actual exit (a cancelled
-    // agent still finishing a build). A recorded worker that is alive, or
-    // whose liveness cannot be decided, keeps its build output.
-    if run.pid.is_some_and(|pid| {
-        probe_process_liveness(pid, run.pid_start_time.as_deref()) != ProcessLiveness::Exited
-    }) {
+    if worker_may_be_alive(run) {
         report.action = "skipped:worker_alive".to_string();
         return Ok(report);
     }
-    let target = worktree.join(BUILD_OUTPUT_DIR);
-    let metadata = match fs::symlink_metadata(&target) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            report.action = "skipped:no_target".to_string();
-            return Ok(report);
-        }
-        Err(error) => {
-            return Err(OrbitError::Execution(format!(
-                "failed to inspect build output '{}': {error}",
-                target.display()
-            )));
-        }
-    };
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        report.action = "skipped:target_not_a_real_directory".to_string();
-        return Ok(report);
-    }
-    // Only ignored content is build output. A tracked file, or an untracked
-    // one Git does not ignore, under `target/` is somebody's work.
-    if !git_output(
-        worktree,
-        &[
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            BUILD_OUTPUT_DIR,
-        ],
-    )?
-    .trim()
-    .is_empty()
+    report.reclaim = super::reclaim::collect(worktree, reclaim_patterns(options), options.delete)?;
+    report.bytes_reclaimed = report.reclaim.iter().map(|path| path.bytes_reclaimed).sum();
+    report.action = if report
+        .reclaim
+        .iter()
+        .any(|path| matches!(path.action.as_str(), "removed" | "would_remove"))
     {
-        report.action = "skipped:target_not_ignored".to_string();
-        return Ok(report);
-    }
-
-    let estimated_bytes = if options.delete || options.estimate_bytes {
-        directory_bytes(&target)?
+        if options.delete {
+            "reclaimed"
+        } else {
+            "would_reclaim"
+        }
     } else {
-        0
-    };
-    report.bytes_reclaimed = estimated_bytes;
-    if !options.delete {
-        report.action = "would_remove_target".to_string();
-        return Ok(report);
+        "skipped:no_reclaimable_paths"
     }
-    // `remove_dir_all` unlinks symlinks inside the tree rather than following
-    // them, so nothing outside `target/` is reachable from here.
-    fs::remove_dir_all(&target).map_err(|error| {
-        OrbitError::Execution(format!(
-            "failed to remove build output '{}': {error}",
-            target.display()
-        ))
-    })?;
-    report.action = "removed_target".to_string();
+    .to_string();
     Ok(report)
 }
 
-/// Whether any worktree this run could have left behind still holds a real
-/// `target/` build output directory. A cheap probe — no Git, no walk — for
-/// callers that sweep many finished runs and collect only those with
-/// something to reclaim.
-pub fn run_worktree_has_build_output(repo_root: &Path, run: &JobRun) -> bool {
-    expected_paths(repo_root, run).is_ok_and(|paths| {
-        paths.iter().any(|path| {
-            fs::symlink_metadata(path.join(BUILD_OUTPUT_DIR))
-                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-        })
+fn reclaim_patterns(options: &WorktreeGcOptions) -> &[String] {
+    // The same default as config admission for hosts without configuration.
+    static DEFAULT: std::sync::LazyLock<Vec<String>> =
+        std::sync::LazyLock::new(|| vec!["target".into()]);
+    options.reclaim_patterns.as_deref().unwrap_or(&DEFAULT)
+}
+
+/// Whether any of this run's checkouts contains a declared output match.
+/// A prefilter only: collection still enforces registration, worker and Git gates.
+pub fn run_worktree_has_reclaim_output(
+    repo_root: &Path,
+    run: &JobRun,
+    patterns: &[String],
+) -> bool {
+    run_worktree_paths(repo_root, run).is_ok_and(|paths| {
+        paths
+            .iter()
+            .any(|path| super::reclaim::has_matches(path, patterns))
     })
 }
 
-/// Every directory this run could have left behind.
+/// A run whose stored token cannot name a directory. Setup never created one
+/// for it, so the report has no path; the sweep continues and the entry stays
+/// visible until the record is pruned.
+fn unresolvable_run_report(run: &JobRun, error: &OrbitError) -> WorktreeGcReport {
+    let task_ids = attributed_task_ids(run);
+    WorktreeGcReport {
+        path: PathBuf::new(),
+        run_id: Some(run.run_id.clone()),
+        run_state: Some(run.state),
+        task_id: (!task_ids.is_empty()).then(|| task_ids.join(",")),
+        task_status: None,
+        pr_status: None,
+        action: format!("failed:{error}"),
+        bytes_reclaimed: 0,
+        detail: None,
+        reclaim: Vec::new(),
+    }
+}
+
+/// Every directory this run could have left behind, primary path first.
 ///
 /// The identity is re-derived with the same rule `setup_worktree` used
 /// (ORB-10427) — never re-spelled here. A run whose input names no task never
 /// reached `setup_worktree`; its worktree, if any, is the shared batch
 /// worktree keyed by run id.
-fn expected_paths(repo_root: &Path, run: &JobRun) -> Result<Vec<PathBuf>, OrbitError> {
+pub fn run_worktree_paths(repo_root: &Path, run: &JobRun) -> Result<Vec<PathBuf>, OrbitError> {
     let input = run.input.as_ref().unwrap_or(&Value::Null);
     let Ok(identity) = WorktreeIdentity::from_input(input, Some(&run.run_id)) else {
         return Ok(vec![resolve_shared_worktree_path(repo_root, &run.run_id)?]);

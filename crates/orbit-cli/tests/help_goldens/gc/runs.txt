@@ -1,0 +1,38 @@
+Drop the pipeline state of terminal runs older than `retention.runs_days`, keeping their run and step rows
+
+Usage: orbit gc runs [OPTIONS]
+
+Options:
+      --apply
+          Drop what the plan lists; without this flag the command only reports
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --older-than-days <DAYS>
+          Retention window in days, overriding `retention.runs_days` (default 60)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Without --apply this only reports. Only success, failed, timeout, cancelled and interrupted runs of this workspace are selected; a held run, which review evidence can still resume, and every non-terminal run are never touched. The run row, its steps and its summary stay, so `orbit run show` and run history keep working, and `archived_at` records when the state was dropped.
+
+Examples:
+  orbit gc runs
+  orbit gc runs --apply

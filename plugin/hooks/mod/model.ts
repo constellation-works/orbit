@@ -159,19 +159,169 @@ export function card(task: OrbitTask, workspace: string): string {
   return lines.join('\n')
 }
 
-const COMMIT = /\bgit((?:\s+-c\s+\S+|\s+-C\s+\S+)*)\s+commit\b/
+// Sticky: tried only where a command can start. The subcommand must end at
+// whitespace or a shell separator, so `commit-tree` and `commit-graph` miss.
+const COMMIT =
+  /(?:(?:[A-Za-z_]\w*=\S*|if|elif|while|until|then|else|do|time|!)\s+)*git(?:\s+-[cC]\s+\S+)*\s+commit(?=[\s;&|()<>]|$)/y
+const COMMAND_START = new Set([';', '&', '|', '(', ')', '{', '\n'])
+
+type Heredoc = { delimiter: string; stripTabs: boolean; end: number }
+
+/** Read a heredoc delimiter as a shell word, removing quotes and escapes. */
+function heredocAt(command: string, start: number): Heredoc | null {
+  if (command.slice(start, start + 2) !== '<<' || command[start + 2] === '<' || command[start - 1] === '<') return null
+  let i = start + 2
+  const stripTabs = command[i] === '-'
+  if (stripTabs) i++
+  while (command[i] === ' ' || command[i] === '\t') i++
+  const wordStart = i
+  let quote: string | null = null
+  let delimiter = ''
+  for (; i < command.length; i++) {
+    const ch = command[i]
+    if (quote === null && /[\s;&|()<>]/.test(ch)) break
+    if (ch === quote) quote = null
+    else if (quote === null && (ch === "'" || ch === '"')) quote = ch
+    else if (ch === '\\' && quote !== "'" && (quote === null || /[$`"\\\n]/.test(command[i + 1] ?? ''))) {
+      const escaped = command[++i]
+      if (escaped === undefined) return null
+      if (escaped !== '\n') delimiter += escaped
+    } else delimiter += ch
+  }
+  return i > wordStart && quote === null ? { delimiter, stripTabs, end: i } : null
+}
+
+/** Bodies start after the command line and are consumed in redirection order. */
+function afterHeredocs(command: string, start: number, heredocs: Heredoc[]): number | null {
+  for (const { delimiter, stripTabs } of heredocs) {
+    let found = false
+    while (start < command.length) {
+      const newline = command.indexOf('\n', start)
+      const end = newline < 0 ? command.length : newline
+      const line = command.slice(start, end)
+      start = newline < 0 ? command.length : newline + 1
+      if ((stripTabs ? line.replace(/^\t+/, '') : line) === delimiter) {
+        found = true
+        break
+      }
+    }
+    if (!found) return null
+  }
+  return start
+}
+
+/** End index of the first `git commit` at a command position outside quotes. */
+function commitEnd(command: string): number | null {
+  let quote: string | null = null
+  let arithmeticDepth = 0
+  let atStart = true
+  const heredocs: Heredoc[] = []
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+    if (quote !== null) {
+      if (ch === '\\' && quote === '"') i++
+      else if (ch === quote) quote = null
+      continue
+    }
+    // In arithmetic, << is a shift rather than a heredoc redirection.
+    if (arithmeticDepth > 0) {
+      if (ch === '(') arithmeticDepth++
+      else if (ch === ')') arithmeticDepth--
+      else if (ch === '\\') i++
+      else if (ch === "'" || ch === '"') quote = ch
+      continue
+    }
+    if (ch === '(' && command[i + 1] === '(') {
+      arithmeticDepth = 2
+      i++
+      atStart = false
+      continue
+    }
+    if (ch === '\n') {
+      if (heredocs.length > 0) {
+        const end = afterHeredocs(command, i + 1, heredocs)
+        if (end === null) return null
+        i = end - 1
+        heredocs.length = 0
+      }
+      atStart = true
+      continue
+    }
+    // A removed backslash-newline does not change the command position.
+    if (ch === '\\' && command[i + 1] === '\n') {
+      i++
+      continue
+    }
+    if (/\s/.test(ch)) continue
+    if (ch === '#' && (i === 0 || /[\s;&|()<>]/.test(command[i - 1]))) {
+      const newline = command.indexOf('\n', i)
+      if (newline < 0) return null
+      i = newline - 1
+      continue
+    }
+    if (ch === '<') {
+      const heredoc = heredocAt(command, i)
+      if (heredoc !== null) {
+        heredocs.push(heredoc)
+        i = heredoc.end - 1
+        atStart = false
+        continue
+      }
+    }
+    if (atStart) {
+      COMMIT.lastIndex = i
+      if (COMMIT.test(command)) return COMMIT.lastIndex
+    }
+    atStart = COMMAND_START.has(ch)
+    if (ch === '\\') i++
+    else if (ch === "'" || ch === '"') quote = ch
+  }
+  return null
+}
 
 /**
  * The command with a `Task:` trailer on its first `git commit`, or null when
- * the command makes no commit or already names a trailer or a task line.
+ * the command makes no commit there (quoted text and other `git commit-*`
+ * subcommands and heredoc bodies do not count) or already names a trailer or
+ * a task line.
  */
 export function withTaskTrailer(command: string, taskId: string): string | null {
-  if (!COMMIT.test(command) || /--trailer\b|\bTask:/.test(command)) return null
+  const end = commitEnd(command)
+  if (end === null || /--trailer\b|\bTask:/.test(command)) return null
   if (/\s--amend\b/.test(command)) return null
-  return command.replace(COMMIT, match => `${match} --trailer 'Task: ${taskId}'`)
+  return `${command.slice(0, end)} --trailer 'Task: ${taskId}'${command.slice(end)}`
 }
 
 export const findRunId = (output: string): string | null => RUN_ID.exec(output)?.[0] ?? null
+
+export type ShipRun = {
+  job: string
+  state: string
+  error: string | null
+  startedAt: number | null
+  taskIds: string[]
+  children: string[]
+}
+
+/** Reads the run and durable gate/delivery dispatches from `orbit run show --json`. */
+export function parseShipRun(stdout: string): ShipRun {
+  const parsed: unknown = JSON.parse(stdout)
+  const run = isRecord(parsed) && isRecord(parsed.run) ? parsed.run : {}
+  const pipeline = isRecord(parsed) && isRecord(parsed.pipeline_state) ? parsed.pipeline_state : {}
+  const dispatches = Array.isArray(pipeline.child_dispatches) ? pipeline.child_dispatches.filter(isRecord) : []
+  const startedAt = Date.parse(text(run.started_at))
+  return {
+    job: text(run.job_id),
+    state: text(run.state) || 'running',
+    error: text(run.error_message) || null,
+    startedAt: Number.isFinite(startedAt) ? startedAt : null,
+    taskIds: strings(run.task_ids),
+    children: dispatches
+      .filter(child => child.job_name === 'task_gate_pipeline' || child.job_name === 'task_pr_pipeline')
+      .map(child => text(child.child_run_id))
+      .filter(id => id !== ''),
+  }
+}
 
 export type RunEvent = { type: string; step: string | null }
 

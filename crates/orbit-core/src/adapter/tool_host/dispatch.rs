@@ -1,10 +1,11 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// Everything the dispatch table knows about *who* is making this call.
 ///
@@ -44,7 +45,8 @@ pub(super) fn execute(
         model,
         reservation_owner,
     } = caller;
-    let (input, redaction_report) = super::artifact_redaction::sanitize_tool_input(action, input)?;
+    let (input, mut redaction_report) =
+        super::artifact_redaction::sanitize_tool_input(action, input)?;
     if let Some(mut result) =
         super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
     {
@@ -52,8 +54,11 @@ pub(super) fn execute(
             runtime,
             action,
             &mut result,
-            &redaction_report,
-            None,
+            &mut redaction_report,
+            session_context
+                .worker_invocation
+                .as_ref()
+                .map(|binding| binding.task_id.as_str()),
             agent.as_deref(),
             model.as_deref(),
         )?;
@@ -63,14 +68,6 @@ pub(super) fn execute(
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
     let mut response = match action {
-        OrbitBuiltinAction::AdrAdd
-        | OrbitBuiltinAction::AdrShow
-        | OrbitBuiltinAction::AdrList
-        | OrbitBuiltinAction::AdrRestore
-        | OrbitBuiltinAction::AdrUpdate
-        | OrbitBuiltinAction::AdrSupersede => Err(OrbitError::InvalidInput(
-            "ADR lifecycle tools have been retired; edit docs/design/**/4_decisions.md".to_string(),
-        )),
         OrbitBuiltinAction::AgentInvoke => {
             super::agent_tools::invoke(runtime, session_context, input, agent, model)
         }
@@ -132,7 +129,13 @@ pub(super) fn execute(
         OrbitBuiltinAction::StateGet => super::state_tools::get(task_scope, input),
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
         OrbitBuiltinAction::TaskAdd => {
-            let written = super::task_tools::add(runtime, input, agent, model)?;
+            let written = super::task_tools::add(
+                runtime,
+                input,
+                agent,
+                model,
+                session_context.worker_invocation.as_ref(),
+            )?;
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
         }
@@ -153,6 +156,18 @@ pub(super) fn execute(
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
         }
+        OrbitBuiltinAction::TaskReconcileReview => {
+            let result = crate::application::review::reconciliation::reconcile_review(
+                runtime,
+                session_context,
+                &input,
+            )?;
+            persisted_task_id = result
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok(result)
+        }
         OrbitBuiltinAction::TaskReviewReset => {
             let result = crate::application::review::reset_review(runtime, &input)?;
             persisted_task_id = result
@@ -163,6 +178,12 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
         OrbitBuiltinAction::TaskUpdate => {
+            // An operator is a caller holding operator capability and naming
+            // no agent identity; only such a caller can close out a rescued
+            // blocked task without starting work on it.
+            let operator = agent.is_none()
+                && model.is_none()
+                && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
             let written = super::task_tools::update(
                 runtime,
                 input,
@@ -170,6 +191,7 @@ pub(super) fn execute(
                 model,
                 reservation_owner,
                 runtime.artifact_origin(session_context),
+                operator,
             )?;
             persisted_task_id = Some(written.persisted_id);
             Ok(written.response)
@@ -198,7 +220,7 @@ pub(super) fn execute(
         runtime,
         action,
         &mut response,
-        &redaction_report,
+        &mut redaction_report,
         persisted_task_id.as_deref(),
         agent_for_audit.as_deref(),
         model_for_audit.as_deref(),

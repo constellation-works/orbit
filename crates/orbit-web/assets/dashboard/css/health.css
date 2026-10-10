@@ -29,7 +29,7 @@
   font-family: var(--font-mono); font-size: 18px; color: var(--fg);
 }
 .rel-tile-hint {
-  font-family: var(--font-mono); font-size: 10px; color: var(--fg-dim);
+  font-family: var(--font-sans); font-size: 11px; color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
 .rel-rate {
@@ -44,20 +44,12 @@
 td .rel-rate { font-size: 12px; }
 .rel-note {
   margin: 0; padding: 10px 16px;
-  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  font-family: var(--font-sans); font-size: 12px; line-height: 1.5;
   color: var(--fg-dim); border-bottom: 1px solid var(--border);
 }
 .rel-note-warn { color: var(--priority-medium); }
 .rel-chart-wrap { padding: 14px 16px; background: var(--bg); }
-.rel-chart-title {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: capitalize;
-  letter-spacing: 0;
-  color: var(--fg);
-  margin-bottom: 10px;
-}
+.rel-chart-title { margin-bottom: 10px; }
 .rel-chart {
   display: flex; align-items: flex-end; gap: 2px;
   height: 110px; padding: 6px 8px;
@@ -174,7 +166,6 @@ td .rel-rate { font-size: 12px; }
 .incident-evidence th, .incident-evidence td {
   padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top;
 }
-.incident-evidence th { color: var(--fg-dim); font: 10px var(--font-sans); }
 .incident-evidence td { font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
 .incident-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -201,3 +192,92 @@ td .rel-rate { font-size: 12px; }
   .incident-surface { flex: 1 1 100%; }
   .incident-actions > * { flex: 1 1 100%; }
 }
+
+/* Errors: one card per failed event on phones (see `.card-table`). */
+@media (max-width: 600px) {
+  table.diag-table tbody tr {
+    grid-template-areas:
+      "source ts"
+      "run run"
+      "provider step"
+      "target target"
+      "recovery recovery"
+      "message message";
+  }
+  table.diag-table td.c-source { grid-area: source; color: var(--state-failed); font-weight: 600; }
+  table.diag-table td.c-ts { grid-area: ts; text-align: right; color: var(--fg-dim); }
+  table.diag-table td.c-job_run { grid-area: run; font-family: var(--font-mono); color: var(--fg); }
+  table.diag-table td.c-provider { grid-area: provider; color: var(--fg-dim); }
+  table.diag-table td.c-step { grid-area: step; text-align: right; color: var(--fg-dim); }
+  table.diag-table td.c-target { grid-area: target; overflow-wrap: anywhere; color: var(--fg-dim); }
+  table.diag-table td.c-recovered { grid-area: recovery; }
+  table.diag-table td.c-message { grid-area: message; font-size: 12px; }
+}
+
+.incident-class-chip { background: transparent; cursor: pointer; }
+.incident-class-chip[aria-pressed="true"] { background: var(--bg-elev); color: var(--fg); border-color: var(--accent); }
+.agent-diagnostics summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
+#diag-implement-one-body .card-title { overflow-wrap: anywhere; }
+#diag-implement-one-body .summary-table { table-layout: auto; }
+#diag-implement-one-body .summary-table th:first-child { width: auto; }
+#diag-implement-one-body .summary-table td:not(.num) { min-width: 12ch; white-space: normal; overflow-wrap: anywhere; }
+#diag-implement-one-body .card-body { overflow-x: auto; }
+.diag-table td.c-target { overflow-wrap: anywhere; }
+.diag-table td.c-recovered { color: var(--state-success); white-space: normal; }
+
+/* Health › Doctor [ORB-14830]: one row per `orbit doctor` check. Problems
+   lead with their full message and remediation; passing and skipped checks
+   fold into a disclosure below them. Status words are spelled out, so the
+   colour only reinforces what the text says. */
+.doctor-body { overflow-y: auto; background: var(--bg); }
+.doctor-meta { overflow-wrap: anywhere; }
+.doctor-list { display: flex; flex-direction: column; }
+.doctor-row {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--fg-dim);
+}
+.doctor-row.error { border-left-color: var(--state-error); }
+.doctor-row.warning { border-left-color: var(--state-pending); }
+.doctor-row.ok { border-left-color: var(--state-success); }
+.doctor-row.skipped { border-left-color: var(--state-disabled); }
+.doctor-row.info { border-left-color: var(--accent); }
+.doctor-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.doctor-status {
+  min-width: 7ch; font: 600 10px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim);
+}
+.doctor-status.error { color: var(--state-error); }
+.doctor-status.warning { color: var(--state-pending); }
+.doctor-status.ok { color: var(--state-success); }
+.doctor-status.info { color: var(--accent); }
+.doctor-check { color: var(--fg); font: 12.5px var(--font-mono); overflow-wrap: anywhere; }
+.doctor-duration { margin-left: auto; color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
+.doctor-message {
+  margin: 0; color: var(--fg); font: 12.5px/1.5 var(--font-sans);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.doctor-remediation {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 6px 10px; border-radius: 4px; background: var(--bg-sunk);
+  color: var(--fg-dim); font: 12px/1.6 var(--font-sans);
+}
+.doctor-remediation-label {
+  flex: 0 0 auto; font: 600 10px var(--font-mono);
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-mute);
+}
+.doctor-remediation-text { min-width: 0; overflow-wrap: anywhere; }
+.doctor-command { display: inline-flex; align-items: baseline; gap: 4px; margin: 0 2px; }
+.doctor-command code {
+  padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-elev); color: var(--fg); font: 11.5px var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.doctor-copy {
+  padding: 0 4px; border: 0; background: none; cursor: copy;
+  color: var(--accent); font: 10.5px var(--font-sans);
+}
+.doctor-copy:hover { text-decoration: underline; }
+.doctor-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.doctor-passing summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
+.doctor-passing .doctor-message { color: var(--fg-dim); }

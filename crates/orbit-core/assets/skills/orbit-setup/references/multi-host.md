@@ -2,8 +2,8 @@
 
 A repository checkout, a logical workspace, and a machine's live task store are
 different things. Sharing Git history does not synchronize Orbit's control
-plane. Select one authoritative owner for a logical workspace and reach it
-through MCP when operating its tasks.
+plane. Select one authoritative owner for a logical workspace and use the CLI
+or MCP route to its live store when operating its tasks.
 
 ## Owners and replicas
 
@@ -67,12 +67,44 @@ hosts that must share a prefix, `workspace init --task-id-start <N>` and
 cross-host lock. A shared config file also shares that floor. The ID space is
 bounded, so distinct prefixes are preferable to guessed disjoint ranges.
 
+## Register and select a host
+
+On the calling machine:
+
+```bash
+orbit host add <ssh-target>
+orbit host list
+```
+
+The add command reads the remote identity, including its task prefix. On the
+CLI or federated MCP, an ID-only task show/update routes to the host whose
+prefix the ID carries, without an SSH command or `--workspace`. An explicit
+workspace selects that store instead; writes still obey the sole-writer rule.
+Workspace-scoped operations such as task creation, listing and eligibility do
+not route by prefix. The full routed-tool list and typed-error remedies are in
+[tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection).
+
+For a remote workspace-scoped tool call, use `--host <name-or-machine_id>`
+with `--workspace <workspace-name-or-ws_id>` on `orbit tool run`. Orbit reads
+the host's live list and copies its matching selector. For a follower drain,
+run from the replica checkout:
+
+```bash
+orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 8h
+```
+
+Without `--host`, `--pull` requires the full host-qualified selector copied
+unchanged from federated discovery. Host-local commands such as `workspace`,
+`doctor` and `run show` do not accept this routing flag; use them on the
+execution host. Registration, the doctor's `hosts` row and the one-release
+legacy migration are in [remote-access.md](remote-access.md).
+
 ## Scheduling and claims
 
 Routine definitions carry no host field: every host with a registered owner
 checkout and an enabled clock evaluates them against its own store. Inspect
-their seeded names with `orbit routine list`. Definition enablement travels
-through Git; last-fire timestamps and pauses do not. Two hosts running the same
+their seeded names with `orbit routine list`. Definitions and enablement are
+per-user, gitignored checkout state; copy changes deliberately. Last-fire timestamps and pauses stay host-local. Two hosts running the same
 routine each evaluate it independently, and `overlap: forbid` is local — pause
 it on the hosts that should not run it.
 

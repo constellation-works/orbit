@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -141,6 +140,50 @@ fn routine_clock_is_not_a_compatibility_alias() {
         .failure();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_flags_an_installed_clock_without_deadline_or_descendant_cleanup() {
+    let fixture = Fixture::initialized();
+    let unit_dir = fixture.home.join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).unwrap();
+    let program = env!("CARGO_BIN_EXE_orbit")
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    for settings in ["", "TimeoutStartSec=infinity\nKillMode=process\n"] {
+        fs::write(
+            unit_dir.join("orbit-sweep.service"),
+            format!("[Service]\nType=oneshot\n{settings}ExecStart=\"{program}\" clock tick\n"),
+        )
+        .unwrap();
+        let root_arg = fixture.root.to_string_lossy();
+        let args = ["--root", root_arg.as_ref(), "doctor", "--format", "json"];
+        let output = command(&fixture.repo, &fixture.home, &args, None)
+            .args(args)
+            .output()
+            .unwrap();
+        let rows: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "doctor output: {error}; {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        let clock = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["check"] == "clock-unit")
+            .expect("doctor includes installed clock check");
+        assert_eq!(
+            clock["status"], "warning",
+            "unsafe unit must be actionable: {clock}"
+        );
+        assert!(
+            clock["remediation"].is_string(),
+            "unsafe unit must offer repair: {clock}"
+        );
+    }
+}
+
 fn assert_sweep_used_custom_root(outcome: &Value) {
     assert_eq!(outcome["machine_name"], "sweep-root-host");
     assert_eq!(outcome["dry_run"], true);
@@ -220,7 +263,7 @@ fn assert_home_empty(home: &Path) {
 }
 
 fn init_git_repo(repo: &Path) {
-    run_git(repo, &["init", "--quiet"]);
+    crate::git_repo::init(repo);
     run_git(repo, &["config", "user.name", "Orbit Test"]);
     run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -230,7 +273,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

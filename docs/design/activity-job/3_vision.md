@@ -3,8 +3,8 @@ summary: "Activity / Job — Vision"
 type: design
 title: "Activity / Job — Vision"
 owner: codex
-last_updated: 2026-07-20
-last_validated: 2026-09-13
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: activity-job
 doc_role: vision
@@ -37,7 +37,7 @@ Agent dispatch advises rather than enforces: the declared `tools:` list is deleg
 
 ### 1.5 Which limits should stay structural literals?
 
-`task_auto_pipeline` relies on literal `max_workers` and `max_iterations`. Should those stay static, or do we need templated numerics?
+The concurrency cap in `task_auto_pipeline` remains the literal `fan_out.max_workers: 5`; the `input.concurrency` value does not reach that cap. Should the cap stay fixed or become configurable through templated numerics?
 
 ### 1.6 What is the right audit landing zone?
 
@@ -124,7 +124,7 @@ None of these are research contributions. Activity / Job earns its keep only if 
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.
-- **[T20260418-2143]** — Wire `V2RuntimeHost` in orbit-core and add `orbit activity run-v2`.
+- **[T20260418-2143]** — Wire `V2RuntimeHost` in orbit-core and add its standalone activity runner.
 - **[T20260418-2210]** — Reshape `V2RuntimeHost` to keep `orbit-agent` types out of orbit-core.
 - **[T20260419-0002]** — Add `workspace_path` provenance to the v2 audit envelope.
 - **[T20260419-0104]** — Add `backend: cli` dispatch for v2 `agent_loop`.

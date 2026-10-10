@@ -17,7 +17,8 @@ use orbit_types::workflow::activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
-    ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState,
+    ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState, RunStateUpdate,
+    TaskCancellationPolicy,
 };
 use serde_json::Value;
 
@@ -39,6 +40,21 @@ pub(crate) const CANCELLATION_COMPLETION_AUDIT: &str = "pipeline.run.cancel.comp
 #[cfg(unix)]
 pub(crate) const CANCELLATION_WORKER_EXIT_AUDIT: &str = "pipeline.run.cancel.worker_exit";
 
+pub(super) fn cancellation_note(actor: &str, reason: Option<&str>) -> String {
+    match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        Some(reason) => format!("run cancelled by {actor}: {reason}"),
+        None => format!("run cancelled by {actor}"),
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct CancellationRequest<'a> {
+    pub actor: &'a str,
+    pub source: &'a str,
+    pub reason: Option<&'a str>,
+    pub block_task: bool,
+}
+
 impl OrbitRuntime {
     pub fn cancel_job_run(&self, run_id: &str) -> Result<JobRunCancelResult, OrbitError> {
         self.cancel_job_run_with_context(run_id, "system", "runtime")
@@ -54,7 +70,7 @@ impl OrbitRuntime {
     }
 
     /// Cancel a run and preserve the requesting surface and optional reason in
-    /// its v2 audit trail and any coupled task's blocked history note.
+    /// its v2 audit trail and coupled task history.
     ///
     /// This is the immediate cancel; a live pull drain's graceful cancel and
     /// `force` go through `cancel_job_run_with_options`. [ORB-13663]
@@ -70,14 +86,50 @@ impl OrbitRuntime {
         source: &str,
         reason: Option<&str>,
     ) -> Result<JobRunCancelResult, OrbitError> {
-        let mut result = self.cancel_job_run_cascading(
+        self.cancel_job_run_with_reason_and_policy(run_id, actor, source, reason, true)
+    }
+
+    /// Cancel a run while selecting whether cancellation returns coupled tasks
+    /// to backlog or preserves the legacy blocked state. The policy is
+    /// persisted before signalling the owner so whichever process finalizes
+    /// the run applies the same decision.
+    pub(crate) fn cancel_job_run_with_reason_and_policy(
+        &self,
+        run_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        block_task: bool,
+    ) -> Result<JobRunCancelResult, OrbitError> {
+        self.cancel_job_run_with_reason_and_policy_and_signal(
             run_id,
             actor,
             source,
             reason,
+            block_task,
             signal_run_owner_process,
-            0,
-        )?;
+        )
+    }
+
+    pub(super) fn cancel_job_run_with_reason_and_policy_and_signal<F>(
+        &self,
+        run_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        block_task: bool,
+        signal: F,
+    ) -> Result<JobRunCancelResult, OrbitError>
+    where
+        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
+    {
+        let request = CancellationRequest {
+            actor,
+            source,
+            reason,
+            block_task,
+        };
+        let mut result = self.cancel_job_run_cascading(run_id, request, signal, 0)?;
         result.pull_settlements = self.pull_settlements_after_cancel(run_id);
         Ok(result)
     }
@@ -105,9 +157,7 @@ impl OrbitRuntime {
     pub(super) fn cancel_job_run_cascading<F>(
         &self,
         run_id: &str,
-        actor: &str,
-        source: &str,
-        reason: Option<&str>,
+        request: CancellationRequest<'_>,
         signal: F,
         depth: usize,
     ) -> Result<JobRunCancelResult, OrbitError>
@@ -118,9 +168,20 @@ impl OrbitRuntime {
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
         let request_id = audit_execution_id("cancel");
+        let reason = request
+            .reason
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty());
 
         if run.state.is_terminal() {
-            self.record_cancellation_request(&run, &request_id, actor, source)?;
+            self.record_cancellation_request(
+                &run,
+                &request_id,
+                request.actor,
+                request.source,
+                reason,
+                request.block_task,
+            )?;
             self.record_cancellation_completion(&run, &request_id, "already_terminal", None, None)?;
             return Ok(cancellation_result(
                 &run,
@@ -128,8 +189,8 @@ impl OrbitRuntime {
                 run.state,
                 false,
                 None,
-                actor,
-                source,
+                request.actor,
+                request.source,
             ));
         }
         run.state
@@ -137,7 +198,21 @@ impl OrbitRuntime {
             .map_err(|msg| {
                 OrbitError::JobValidation(format!("cannot cancel job run '{}': {}", run_id, msg))
             })?;
-        self.record_cancellation_request(&run, &request_id, actor, source)?;
+        self.record_cancellation_request(
+            &run,
+            &request_id,
+            request.actor,
+            request.source,
+            reason,
+            request.block_task,
+        )?;
+        self.persist_task_cancellation_policy(
+            &run,
+            TaskCancellationPolicy {
+                block: request.block_task,
+                note: cancellation_note(request.actor, reason),
+            },
+        )?;
         let signal_attempted = run.state == JobRunState::Running && run.pid.is_some();
         let signal_outcome = if signal_attempted {
             match signal(&run) {
@@ -212,8 +287,8 @@ impl OrbitRuntime {
                 after_signal.state,
                 signal_attempted,
                 signal_outcome,
-                actor,
-                source,
+                request.actor,
+                request.source,
             )
             .with_providers_stopped(providers_stopped));
         }
@@ -222,11 +297,7 @@ impl OrbitRuntime {
         let duration_ms = run
             .started_at
             .map(|s| now.signed_duration_since(s).num_milliseconds().max(0) as u64);
-        let reason = reason.map(str::trim).filter(|reason| !reason.is_empty());
-        let diagnostic = match reason {
-            Some(reason) => format!("run cancelled by {actor}: {reason}"),
-            None => format!("run cancelled by {actor}"),
-        };
+        let diagnostic = cancellation_note(request.actor, reason);
         self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             run_id,
             JobRunState::Cancelled,
@@ -253,8 +324,8 @@ impl OrbitRuntime {
                     cancelled_run.state,
                     signal_attempted,
                     signal_outcome,
-                    actor,
-                    source,
+                    request.actor,
+                    request.source,
                 )
                 .with_providers_stopped(providers_stopped));
             }
@@ -262,6 +333,7 @@ impl OrbitRuntime {
                 .state
                 .try_transition(orbit_types::workflow::RunEvent::Cancel)
                 .err()
+                .map(|error| error.to_string())
                 .unwrap_or_else(|| {
                     format!(
                         "stored state remained {} after cancellation",
@@ -276,20 +348,20 @@ impl OrbitRuntime {
         self.record_run_cancelled_audit(
             &cancelled_run,
             &request_id,
-            actor,
-            source,
+            request.actor,
+            request.source,
             reason,
             run.state,
         )?;
         self.mark_cancelled_pipeline_state(&cancelled_run)?;
-        self.settle_child_dispatches_on_cancel(&cancelled_run, actor, depth)?;
+        self.settle_child_dispatches_on_cancel(&cancelled_run, request, depth)?;
         self.record_event(OrbitEvent::JobRunCancelled {
             job_id: run.job_id.clone(),
             run_id: run_id.to_string(),
             previous_state: Some(run.state.to_string()),
             final_state: Some(JobRunState::Cancelled.to_string()),
-            actor: Some(actor.to_string()),
-            source: Some(source.to_string()),
+            actor: Some(request.actor.to_string()),
+            source: Some(request.source.to_string()),
             signal_attempted: Some(signal_attempted),
             signal_outcome: signal_outcome.clone(),
         })?;
@@ -306,8 +378,8 @@ impl OrbitRuntime {
             JobRunState::Cancelled,
             signal_attempted,
             signal_outcome,
-            actor,
-            source,
+            request.actor,
+            request.source,
         )
         .with_providers_stopped(providers_stopped))
     }
@@ -409,6 +481,8 @@ impl OrbitRuntime {
         request_id: &str,
         actor: &str,
         source: &str,
+        reason: Option<&str>,
+        block_task: bool,
     ) -> Result<(), OrbitError> {
         self.record_pipeline_audit(
             CANCELLATION_REQUEST_AUDIT,
@@ -423,10 +497,67 @@ impl OrbitRuntime {
                 "owner_pid_start_time": run.pid_start_time,
                 "actor": actor,
                 "source": source,
+                "reason": reason,
+                "block_task": block_task,
                 "requested_at": Utc::now().to_rfc3339(),
             }),
             None,
         )
+    }
+
+    fn persist_task_cancellation_policy(
+        &self,
+        run: &JobRun,
+        policy: TaskCancellationPolicy,
+    ) -> Result<(), OrbitError> {
+        self.update_cancellation_state(run, true, &mut |_, state| {
+            state.task_cancellation_policy = Some(policy.clone());
+            state.updated_at = Utc::now();
+            Ok(())
+        })
+    }
+
+    /// Preserve worker checkpoints and lineage in every cancellation write,
+    /// including a worker's first checkpoint racing state initialization.
+    fn update_cancellation_state(
+        &self,
+        run: &JobRun,
+        create: bool,
+        update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        #[cfg(test)]
+        run_cancellation_state_write_hook();
+        match self.stores().jobs().update_run_state(&run.run_id, update)? {
+            RunStateUpdate::Updated => Ok(()),
+            RunStateUpdate::NotFound => Err(OrbitError::not_found(
+                NotFoundKind::JobRun,
+                run.run_id.clone(),
+            )),
+            RunStateUpdate::NoState if !create => Ok(()),
+            RunStateUpdate::NoState => {
+                let mut state = PipelineState::new(
+                    run.run_id.clone(),
+                    run.job_id.clone(),
+                    run.input
+                        .clone()
+                        .unwrap_or_else(|| Value::Object(Default::default())),
+                );
+                update(run.state, &mut state)?;
+                #[cfg(test)]
+                run_cancellation_state_write_hook();
+                if self
+                    .stores()
+                    .jobs()
+                    .initialize_run_state(&run.run_id, &state)?
+                {
+                    Ok(())
+                } else {
+                    // A worker initialized first. Merge into its document
+                    // instead of replacing it with our prepared state.
+                    self.update_cancellation_state(run, create, update)
+                }
+            }
+        }
     }
 
     fn record_cancellation_signal_acknowledgement(
@@ -528,10 +659,11 @@ impl OrbitRuntime {
         self.stores().jobs().read_run_states(run_ids)
     }
 
-    /// Persist a run's pipeline state. The write side of [`Self::read_run_state`],
-    /// for callers outside the store layer that own a read-modify-write of the
-    /// run's own state — dispatch checkpoints, waiting reasons, cancellation.
+    /// Persist a complete run-state snapshot. Changes that must survive another
+    /// writer use the store's transactional `update_run_state` instead.
     pub fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError> {
+        #[cfg(test)]
+        run_cancellation_state_write_hook();
         self.stores().jobs().write_run_state(run_id, state)
     }
 
@@ -552,13 +684,17 @@ impl OrbitRuntime {
     /// `running`: a cancelled parent must still name the child it left behind,
     /// which is the only handle on that work.
     ///
+    /// A cascaded child inherits the parent's task disposition
+    /// (`request.block_task`), so a cancel that returns tasks to backlog does
+    /// not block the tasks of the children it propagates to.
+    ///
     /// Cascading is best effort. A child that already terminalized, or that
     /// refuses cancellation, is recorded as such and never blocks the parent's
     /// own cancellation from completing.
     fn settle_child_dispatches_on_cancel(
         &self,
         run: &JobRun,
-        actor: &str,
+        request: CancellationRequest<'_>,
         depth: usize,
     ) -> Result<(), OrbitError> {
         let Some(state) = self.read_run_state(&run.run_id)? else {
@@ -583,7 +719,7 @@ impl OrbitRuntime {
                 let (outcome, error) = match policy {
                     ChildCancellationPolicy::Detach => ("detached".to_string(), None),
                     ChildCancellationPolicy::Cascade => {
-                        self.cascade_cancel_child(&child_run_id, actor, depth)
+                        self.cascade_cancel_child(&child_run_id, request, depth)
                     }
                 };
                 (
@@ -598,15 +734,14 @@ impl OrbitRuntime {
             })
             .collect();
 
-        // Re-read: cascading a child re-enters cancellation, and the parent's
-        // own state must be stamped from whatever that left behind.
-        let Some(mut state) = self.read_run_state(&run.run_id)? else {
-            return Ok(());
-        };
-        for (child_run_id, cancellation) in settled {
-            state.terminalize_child_dispatch(&child_run_id, cancellation);
-        }
-        self.write_run_state(&run.run_id, &state)
+        // Cascading re-enters cancellation. Merge the outcomes atomically
+        // into the latest state, preserving concurrent checkpoints/dispatches.
+        self.update_cancellation_state(run, false, &mut |_, state| {
+            for (child_run_id, cancellation) in &settled {
+                state.terminalize_child_dispatch(child_run_id, cancellation.clone());
+            }
+            Ok(())
+        })
     }
 
     /// Cancel one blocking child, reporting what happened rather than failing
@@ -614,7 +749,7 @@ impl OrbitRuntime {
     fn cascade_cancel_child(
         &self,
         child_run_id: &str,
-        actor: &str,
+        request: CancellationRequest<'_>,
         depth: usize,
     ) -> (String, Option<String>) {
         // A dispatch graph is a DAG in practice, so this bound is a backstop
@@ -629,9 +764,12 @@ impl OrbitRuntime {
         }
         match self.cancel_job_run_cascading(
             child_run_id,
-            actor,
-            CHILD_CASCADE_SOURCE,
-            None,
+            CancellationRequest {
+                actor: request.actor,
+                source: CHILD_CASCADE_SOURCE,
+                reason: None,
+                block_task: request.block_task,
+            },
             signal_run_owner_process,
             depth + 1,
         ) {
@@ -658,7 +796,7 @@ impl OrbitRuntime {
     /// waits are momentary and meaningless once terminal, but the child a
     /// parent dispatched outlives the parent's own record of waiting for it.
     pub(super) fn mark_cancelled_pipeline_state(&self, run: &JobRun) -> Result<(), OrbitError> {
-        if let Some(mut state) = self.read_run_state(&run.run_id)? {
+        self.update_cancellation_state(run, run.input.is_some(), &mut |_, state| {
             if let Some(object) = state.pipeline.as_object_mut() {
                 object.insert(
                     "status".to_string(),
@@ -672,29 +810,30 @@ impl OrbitRuntime {
             }
             state.clear_waiting_reasons();
             state.updated_at = Utc::now();
-            self.write_run_state(&run.run_id, &state)?;
-        } else if run.input.is_some() {
-            let mut state = PipelineState::new(
-                run.run_id.clone(),
-                run.job_id.clone(),
-                run.input
-                    .clone()
-                    .unwrap_or_else(|| Value::Object(Default::default())),
-            );
-            if let Some(object) = state.pipeline.as_object_mut() {
-                object.insert(
-                    "status".to_string(),
-                    Value::String(JobRunState::Cancelled.to_string()),
-                );
-                object.insert(
-                    "state".to_string(),
-                    Value::String(JobRunState::Cancelled.to_string()),
-                );
-                object.insert("cancelled".to_string(), Value::Bool(true));
-            }
-            self.write_run_state(&run.run_id, &state)?;
-        }
-        Ok(())
+            Ok(())
+        })
+    }
+}
+
+// One-shot, thread-local seam at the write boundary: deterministic tests can
+// commit worker progress after a stale snapshot was prepared. No production
+// hook exists, and taking it before invocation permits a follow-up interleaving.
+#[cfg(test)]
+thread_local! {
+    static CANCELLATION_STATE_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(super) fn set_cancellation_state_write_hook(hook: impl FnOnce() + 'static) {
+    CANCELLATION_STATE_WRITE_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_cancellation_state_write_hook() {
+    let hook = CANCELLATION_STATE_WRITE_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
     }
 }
 

@@ -2,7 +2,7 @@
 title: State Compatibility — Overview
 owner: claude
 last_updated: 2026-09-13
-last_validated: 2026-09-13
+last_validated: 2026-10-06
 status: Draft
 feature: state-compatibility
 doc_role: overview
@@ -39,7 +39,7 @@ with an inherited `ORBIT_BIN`, and a deploy script probing run history before
 it swaps the binary all coexist. One schema bump turned every one of them
 into a flag day, and each incident was worked around out of band — copying
 binaries, special-casing error text in deploy scripts (2026-08-10:
-F2026-08-063/064; 2026-09-13: `update-orbit.sh` on dk-server-1).
+F2026-08-063/064; 2026-09-13: `update-orbit.sh` on the owner host).
 
 The version number alone cannot answer "is this safe to read?" — a binary
 knows nothing about migrations that shipped after it. So the newer binary
@@ -47,20 +47,24 @@ answers in advance, and the older binary reads that answer.
 
 ## 2 Core Concepts
 
-- **Migration compatibility.** Every migration in both registries declares
-  itself `Additive` (older binaries read the result correctly and ignore what
-  they do not know) or `Breaking` (it removes, renames, or reinterprets state
-  an older binary reads or writes).
-- **Compatibility record.** Whenever a binary applies a migration it records
-  the breaking migrations it knows about, beside the version it just stamped:
-  `state/layout.compat` for the layout, the `migration.compat` row in
+- **Migration compatibility.** Each migration is `Additive`, `ReadCompatible`,
+  or `Breaking`. `Additive` changes let older binaries keep reading and
+  writing safely; `ReadCompatible` changes let them read but require writes
+  to be blocked; `Breaking` changes require older binaries to refuse.
+- **Compatibility record.** When a binary applies a migration it records the
+  ledger version and the known `Breaking` and `ReadCompatible` migrations:
+  `state/layout.compat` for the layout and the `migration.compat` row in
   `schema_meta` for the database.
-- **Forward-compatible open.** An older binary that finds no breaking
-  migration above its own supported version opens the state **read-only**
-  instead of refusing. Reads are served; writes are refused per operation.
-- **Scoped refusal.** Anything else — a breaking migration the binary lacks,
-  a missing, stale, or unreadable record — refuses the open exactly as
-  before, naming the first breaking migration the binary lacks.
+- **Forward-compatible open.** With a current, readable record and no newer
+  breaking migration, an older binary may open newer state. It may keep
+  writing only when all newer migrations are `Additive`. For a newer store
+  schema, SQLite can enforce read-only access when a `ReadCompatible`
+  migration is present. Workspace-layout writes cannot be gated this way, so
+  a newer layout with a `ReadCompatible` migration is refused.
+- **Scoped refusal.** A breaking migration the binary lacks, a newer
+  read-compatible layout migration, or a missing, stale, unknown-format, or
+  unreadable record refuses the open. Store-schema records with
+  `ReadCompatible` migrations remain readable in read-only mode.
 
 ## 3 At a Glance
 

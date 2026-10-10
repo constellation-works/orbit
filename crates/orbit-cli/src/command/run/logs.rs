@@ -30,10 +30,6 @@ pub struct RunLogsArgs {
     #[arg(short = 'f', long)]
     pub follow: bool,
 
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-
     /// Report stored run records as-is: skip stale-run reconciliation, which
     /// finalizes an orphaned pending or running run as interrupted and
     /// releases its task reservations
@@ -109,7 +105,10 @@ fn follow_logs(
     json: bool,
     writer: &mut dyn Write,
 ) -> Result<(), FollowError> {
-    let mut offset = 0;
+    let mut feeds = vec![(path.to_path_buf(), 0)];
+    if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
+        feeds.push((agent_path, 0));
+    }
     let mut streamed = HashMap::<(String, String), FollowedPrefix>::new();
     let mut completed = HashSet::new();
     loop {
@@ -117,16 +116,18 @@ fn follow_logs(
         // invocation captures have already been persisted.
         let run = read.show(runtime, run_id)?;
         if step.is_none() {
-            drain_provider_lines(path, run_id, &mut offset, &mut streamed, json, writer)?;
+            for (path, offset) in &mut feeds {
+                drain_provider_lines(path, run_id, offset, &mut streamed, json, writer)?;
+            }
         }
         if step.is_some() || run.state.is_terminal() {
-            let records =
-                filter_cli_invocation_records(runtime.collect_run_cli_invocations(run_id)?, step);
+            // The step filter and the emitted-invocation set apply before any
+            // blob is read, so each capture is loaded once however long the
+            // run keeps polling.
+            let records = runtime.collect_new_run_cli_invocations(run_id, step, &completed)?;
             let mut captures = std::collections::BTreeMap::<(String, String), String>::new();
             for record in &records {
-                if !completed.insert(record.event_id.clone()) {
-                    continue;
-                }
+                completed.insert(record.event_id.clone());
                 let provider = record.provider.as_deref().unwrap_or("unknown");
                 for (stream, text) in [("stdout", &record.stdout), ("stderr", &record.stderr)] {
                     let capture = captures
@@ -153,9 +154,10 @@ fn follow_logs(
                 // Only skip a proven prefix; otherwise replay the capture so
                 // a following reader never silently loses retained evidence.
                 if prefix.is_some() && remainder.is_none() {
-                    eprintln!(
+                    writeln!(
+                        std::io::stderr().lock(),
                         "Live logs differ from the retained capture; replaying captured {stream} for {provider}."
-                    );
+                    )?;
                 }
                 let remainder = remainder.unwrap_or(&capture);
                 if !remainder.is_empty() {
@@ -274,7 +276,7 @@ fn emit_follow_record(
         })?;
         writeln!(writer)?;
     } else if stream == "stderr" {
-        eprint!("{text}");
+        std::io::stderr().lock().write_all(text.as_bytes())?;
     } else {
         writer.write_all(text.as_bytes())?;
     }

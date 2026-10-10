@@ -167,6 +167,29 @@ impl RegisteredRuntimeFactory {
         )
     }
 
+    /// Initialized workspace named by an explicit root, if that path is one.
+    ///
+    /// `Ok(None)` does not relax [`Self::try_resolve_initialized_roots`]: that
+    /// entry point still errors when the same explicit path is not initialized.
+    pub fn try_initialized_explicit_root(
+        cwd: &Path,
+        raw: &str,
+    ) -> Result<Option<PathBuf>, OrbitError> {
+        orbit_core::runtime::initialized_explicit_workspace_root(raw, cwd)
+    }
+
+    /// Initialized workspace discovered from `cwd`, ignoring `--root` and `ORBIT_ROOT`.
+    ///
+    /// Uses the same catalog hint as [`Self::try_resolve_initialized_roots`].
+    /// Returns `Ok(None)` when nothing initialized is found. A broken workspace
+    /// config is still an error.
+    pub fn try_resolve_initialized_cwd_roots(
+        cwd: &Path,
+    ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
+        let hint = workspace_root_hint(cwd);
+        orbit_core::runtime::try_resolve_initialized_cwd_roots_with_hint(cwd, hint.as_ref())
+    }
+
     pub fn initialize_with_root_override(
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntime, OrbitError> {
@@ -535,6 +558,7 @@ impl RegisteredRuntimeFactory {
     ) -> Result<OrbitRuntime, OrbitError> {
         let identity = inspect_machine_identity(global_root)?;
         sync_task_prefix_for_identity(global_root, &identity)?;
+        let replica_owner = replica_owner_for_binding(&binding);
         OrbitRuntime::from_resolved_roots_with_binding_for(
             global_root,
             shared_root,
@@ -542,7 +566,13 @@ impl RegisteredRuntimeFactory {
             binding,
             host_lifetime,
         )
-        .map(|runtime| attach_registry_context(runtime, global_root, &identity))
+        .map(|runtime| {
+            attach_registry_context(
+                runtime.with_coordination_write_owner(replica_owner),
+                global_root,
+                &identity,
+            )
+        })
     }
 
     /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.

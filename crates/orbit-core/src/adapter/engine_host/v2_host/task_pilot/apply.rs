@@ -5,82 +5,32 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{ContextCreationState, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::ci_failure::admission as ci_failure_admission;
 
+use super::admission::{
+    Admission, CheckedAdmission, PreparedTaskSnapshot, PromotionAuthority, ValidatedTask,
+    approve_promoted, close_verified_no_diff, context_creation_identity, material_components,
+};
 use super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
+use super::drain_promotion::{self, DrainAuthority};
 use super::persist::{
-    ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, stale_task,
-    task_operation_id, task_outcome,
+    ApplyTaskOutcome, apply_task, failed_partition, operation_was_applied,
+    record_applied_assessment, source_superseded, stale_task, superseded_task, task_operation_id,
+    task_outcome,
 };
 use super::source::SourceSnapshot;
 use super::{
-    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, requested_workspace_root,
-    required_string, required_string_array, string_array, string_array_value,
+    CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED, VALIDATION_TOOL_WARNINGS,
+    action_failed, member_ready, requested_workspace_root, required_os, required_string,
+    required_string_array, string_array, string_array_value, unauthorized_missing_targets,
     validate_after_selectors, validate_recommendations,
 };
-
-#[derive(Clone)]
-pub(super) struct PreparedTaskSnapshot {
-    pub(super) context_files: Vec<String>,
-    pub(super) status: TaskStatus,
-    pub(super) complexity: Option<TaskComplexity>,
-    pub(super) title: String,
-    pub(super) tags: Vec<String>,
-    pub(super) material: Option<(String, String)>,
-    pub(super) status_neutral_fingerprint: Option<String>,
-    /// Freshness-component digests captured with the fingerprint. Absent on a
-    /// payload prepared before components were recorded; malformed input fails
-    /// the apply instead of dropping the names.
-    pub(super) material_components: Option<BTreeMap<String, String>>,
-    /// Deterministic feasibility findings for the tools this task's acceptance
-    /// criteria require, computed at preparation [ORB-11980].
-    validation_tool_warnings: Vec<String>,
-}
-
-pub(super) struct ValidatedTask {
-    pub(super) task_id: String,
-    pub(super) after: Vec<String>,
-    pub(super) assessment: Value,
-    pub(super) admission: Option<Value>,
-    pub(super) promote: bool,
-    pub(super) complexity: TaskComplexity,
-    pub(super) operation_id: String,
-}
-
-fn material_components(
-    entry: &Value,
-    action: &str,
-) -> Result<Option<BTreeMap<String, String>>, DispatchError> {
-    let Some(value) = entry.get("material_components") else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let Some(object) = value.as_object() else {
-        return Err(action_failed(
-            action,
-            "prepared task material_components must be an object of component digests",
-        ));
-    };
-    let mut components = BTreeMap::new();
-    for (key, digest) in object {
-        let Some(digest) = digest.as_str() else {
-            return Err(action_failed(
-                action,
-                format!("prepared task material_components.{key} must be a string digest"),
-            ));
-        };
-        components.insert(key.clone(), digest.to_string());
-    }
-    Ok(Some(components))
-}
 
 pub(in super::super) fn apply(
     runtime: &OrbitRuntime,
@@ -127,7 +77,7 @@ pub(in super::super) fn apply(
         .get("prior_applied_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let carried_task_outcomes = input
+    let mut carried_task_outcomes = input
         .get("carried_task_outcomes")
         .map(|value| {
             value
@@ -137,7 +87,7 @@ pub(in super::super) fn apply(
         })
         .transpose()?
         .unwrap_or_default();
-    let claim = crate::application::automation::members::claim(runtime, prepared_value, &[])
+    let claim = crate::application::automation::members::claim(runtime, prepared_value)
         .map_err(|error| action_failed(action, error.to_string()))?;
     // The same consumer policy prepare fingerprinted under; a run without a
     // claim evaluates the default eligibility and configured freshness
@@ -198,6 +148,13 @@ pub(in super::super) fn apply(
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     material_components: material_components(entry, action)?,
+                    history_len: serde_json::from_value(
+                        entry.get("history_len").cloned().unwrap_or(Value::Null),
+                    )
+                    .map_err(|error| {
+                        action_failed(action, format!("invalid history_len: {error}"))
+                    })?,
+                    context_creation_identity: context_creation_identity(entry, action)?,
                 },
             ))
         })
@@ -208,6 +165,32 @@ pub(in super::super) fn apply(
             "prepared.tasks contains duplicate task snapshots",
         ));
     }
+    // Tasks whose material the branch changed since preparation settle
+    // superseded, whatever their pilot returned, so their members are claimed
+    // afresh at the head; disjoint siblings still apply [ORB-14476]. Prepare
+    // already set aside the tasks it found stale, and those another writer
+    // changed between selection and hydration; apply carries them.
+    let source_superseded_tasks = match &claim {
+        Some(claim) => crate::application::automation::members::stale_tasks(
+            runtime,
+            claim,
+            &policy,
+            prepared_value,
+            &prepared_before.keys().cloned().collect::<Vec<_>>(),
+            &BTreeMap::new(),
+        )
+        .map_err(|error| action_failed(action, error.to_string()))?,
+        None => BTreeMap::new(),
+    };
+    for set_aside in ["superseded_by_source", "superseded_during_preparation"]
+        .into_iter()
+        .filter_map(|field| prepared.get(field).and_then(Value::as_array))
+    {
+        carried_task_outcomes.extend(set_aside.iter().cloned());
+    }
+    let failed_partition = |partition_index: u64, task_ids: &[String], error: String| {
+        failed_partition(partition_index, task_ids, error, &source_superseded_tasks)
+    };
 
     // Each partition is its own validation boundary. A malformed or stale
     // partition mutates none of its tasks, but it cannot discard an unrelated
@@ -215,6 +198,17 @@ pub(in super::super) fn apply(
     let ci_sweep_filing = input
         .get("ci_sweep_filing")
         .filter(|value| !value.is_null());
+    let piloted_elsewhere = if let Some(filing) = ci_sweep_filing
+        && prepared_before.is_empty()
+    {
+        let task_id = required_string(filing, "task_id", action)?;
+        ci_failure_admission::piloted_elsewhere(action, task_id, prepared_value)?
+    } else {
+        None
+    };
+    if let Some(outcome) = &piloted_elsewhere {
+        carried_task_outcomes.push(outcome.clone());
+    }
     let promotion_authorized = input
         .get("promotion_authorized")
         .map(|value| {
@@ -224,17 +218,57 @@ pub(in super::super) fn apply(
         })
         .transpose()?
         .unwrap_or(false);
-    if ci_sweep_filing.is_some() && prepared_before.len() != 1 {
+    if ci_sweep_filing.is_some()
+        && prepared_before.len() + usize::from(piloted_elsewhere.is_some()) != 1
+    {
         return Err(action_failed(
             action,
             "CI-sweep admission requires exactly one prepared task",
         ));
+    }
+    let drain_promotion = input
+        .get("drain_promotion")
+        .filter(|value| !value.is_null());
+    let authority = match (ci_sweep_filing, drain_promotion) {
+        (Some(_), Some(_)) => {
+            return Err(action_failed(
+                action,
+                "ci_sweep_filing and drain_promotion are separate authorities; supply one",
+            ));
+        }
+        (Some(filing), None) => PromotionAuthority::CiSweep(filing, promotion_authorized),
+        (None, Some(_)) if !promotion_authorized => {
+            return Err(action_failed(
+                action,
+                "drain_promotion requires promotion_authorized",
+            ));
+        }
+        (None, Some(record)) => PromotionAuthority::Drain(DrainAuthority::verify(
+            runtime,
+            action,
+            record,
+            input.get("run_id").and_then(Value::as_str),
+        )?),
+        (None, None) => PromotionAuthority::None,
+    };
+    let has_ci_sweep_authority = matches!(&authority, PromotionAuthority::CiSweep(..));
+    if let (PromotionAuthority::CiSweep(filing, _), Some(prepared_task_id)) =
+        (&authority, prepared_before.keys().next())
+    {
+        let filed_task_id = required_string(filing, "task_id", action)?;
+        if filed_task_id != prepared_task_id {
+            return Err(action_failed(
+                action,
+                format!("CI-sweep filing names task {filed_task_id}, expected {prepared_task_id}"),
+            ));
+        }
     }
 
     let mut seen_task_ids = BTreeSet::new();
     let mut partition_decisions = Vec::with_capacity(expected_partitions.len());
     let mut task_results = Vec::with_capacity(prepared_before.len());
     let mut ci_sweep_admission = Vec::new();
+    let mut drain_approval = Vec::new();
     let mut resulting_fingerprints = BTreeMap::new();
 
     for (position, expected) in expected_partitions.iter().enumerate() {
@@ -394,21 +428,24 @@ pub(in super::super) fn apply(
                 continue;
             };
             let snapshot = &prepared_before[task_id];
-            let reported_before =
-                match required_string_array(assessment, "context_files_before", action) {
-                    Ok(before) => before,
-                    Err(error) => {
-                        outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
-                        continue;
-                    }
-                };
-            if reported_before != snapshot.context_files {
-                outcomes.push(stale_task(
-                    task_id,
-                    "reported_context_snapshot_mismatch",
-                    "agent context_files_before does not match this run's prepared snapshot",
-                ));
+            if let Some(detail) = source_superseded_tasks.get(task_id) {
+                outcomes.push(source_superseded(task_id, detail));
                 continue;
+            }
+            match superseded_task(runtime, task_id, snapshot, &policy, has_ci_sweep_authority) {
+                Ok(Some(outcome)) => {
+                    outcomes.push(outcome);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(error.to_string()),
+                    ));
+                    continue;
+                }
             }
             let disposition = match required_string(assessment, "disposition", action) {
                 Ok(value) => value,
@@ -425,6 +462,28 @@ pub(in super::super) fn apply(
                         continue;
                     }
                 };
+            // The grant is read from the task, never from the prepared
+            // payload or the agent's result. The write boundary refuses a
+            // grant that moved since preparation, after its replay receipt
+            // check, so a retried apply still settles as already applied.
+            let creation = match runtime
+                .get_task(task_id)
+                .and_then(|task| runtime.context_creation_state(&task))
+            {
+                Ok(creation) => creation,
+                Err(OrbitError::NotFound { .. }) => ContextCreationState::Absent,
+                Err(error) => {
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(format!(
+                            "read task {task_id} creation authorization: {error}"
+                        )),
+                    ));
+                    continue;
+                }
+            };
+            let authorized_creation = creation.selectors();
             let selectors = match validate_after_selectors(
                 action,
                 task_id,
@@ -433,6 +492,7 @@ pub(in super::super) fn apply(
                 &proposed_after,
                 &workspace_root,
                 source.as_ref(),
+                authorized_creation,
             ) {
                 Ok(selectors) => selectors,
                 Err(error) => {
@@ -440,7 +500,46 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
-            let after = selectors.values;
+            if !authorized_creation.is_empty() && disposition != "selectors" {
+                outcomes.push(task_outcome(
+                    task_id,
+                    "invalid",
+                    Some(format!(
+                        "task {task_id} holds operator-authorized creation targets {}; a {disposition} \
+                         assessment cannot drop them. Keep them as selectors; only an operator \
+                         revokes them, by replacing context_files through orbit.task.update",
+                        authorized_creation.join(", ")
+                    )),
+                ));
+                continue;
+            }
+            // The pilot cannot revoke operator intent by omission: every
+            // granted target it left out is kept, and reported.
+            let mut after = selectors.values;
+            let retained = authorized_creation
+                .iter()
+                .filter(|selector| !after.contains(selector))
+                .cloned()
+                .collect::<Vec<_>>();
+            after.extend(retained.iter().cloned());
+            let reauthorization = match unauthorized_missing_targets(
+                action,
+                &snapshot.context_files,
+                &after,
+                authorized_creation,
+                &workspace_root,
+                source.as_ref(),
+            ) {
+                Ok(findings) => findings,
+                Err(error) => {
+                    outcomes.push(task_outcome(
+                        task_id,
+                        "apply_failed",
+                        Some(error.to_string()),
+                    ));
+                    continue;
+                }
+            };
             let complexity = match validate_recommendations(action, task_id, assessment) {
                 Ok(complexity) => complexity,
                 Err(error) => {
@@ -468,6 +567,18 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
+            let native_os = match required_os(
+                action,
+                task_id,
+                assessment,
+                current.acceptance_criteria.len(),
+            ) {
+                Ok(requirements) => requirements,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
             // The pilot never sees the deterministic findings — the lane's
             // validation-tool feasibility [ORB-11980] and this boundary's
             // over-attachment budget [ORB-12228] — so apply attaches them
@@ -476,6 +587,12 @@ pub(in super::super) fn apply(
             // host's.
             let mut assessment = (*assessment).clone();
             if let Value::Object(fields) = &mut assessment {
+                // The host owns the before snapshot. An optional legacy agent
+                // echo cannot override it or change audit/replay identity.
+                fields.insert(
+                    "context_files_before".to_string(),
+                    json!(snapshot.context_files),
+                );
                 fields.insert(
                     VALIDATION_TOOL_WARNINGS.to_string(),
                     json!(snapshot.validation_tool_warnings),
@@ -489,43 +606,127 @@ pub(in super::super) fn apply(
                     CONTEXT_ATTACHMENT_WARNINGS.to_string(),
                     json!(over_attachment_findings(complexity, &after)),
                 );
+                if !retained.is_empty() {
+                    fields.insert(CONTEXT_CREATION_RETAINED.to_string(), json!(retained));
+                }
+                if !reauthorization.is_empty() {
+                    fields.insert(
+                        CONTEXT_REAUTHORIZATION_REQUIRED.to_string(),
+                        json!(reauthorization),
+                    );
+                }
             }
 
-            let admission = match ci_sweep_filing
-                .map(|filing| {
+            let operation_id = task_operation_id(prepared_value, task_id, &assessment);
+            let admission = match &authority {
+                PromotionAuthority::CiSweep(filing, authorized) => {
+                    let mut admission_task = current.clone();
+                    if snapshot.status == TaskStatus::Proposed
+                        && current.status == TaskStatus::Backlog
+                    {
+                        match operation_was_applied(runtime, task_id, &operation_id) {
+                            Ok(true) => {
+                                // The atomic CI-sweep write itself promotes to
+                                // backlog. Reconstruct admission reporting from
+                                // its original status only for this operation's
+                                // receipt; apply_task rechecks it under task locks.
+                                admission_task.status = snapshot.status;
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                outcomes.push(task_outcome(
+                                    task_id,
+                                    "apply_failed",
+                                    Some(error.to_string()),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
                     ci_failure_admission::assess(
                         action,
                         task_id,
-                        &current,
+                        &admission_task,
                         &assessment,
                         &after,
                         filing,
-                        promotion_authorized,
+                        *authorized,
                     )
-                })
-                .transpose()
-            {
-                Ok(admission) => admission,
+                    .map(|outcome| match outcome {
+                        ci_failure_admission::AdmissionOutcome::Decision(decision) => {
+                            CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
+                        }
+                        ci_failure_admission::AdmissionOutcome::Superseded(outcome) => {
+                            CheckedAdmission::Superseded(outcome)
+                        }
+                    })
+                }
+                PromotionAuthority::Drain(drain) => drain_promotion::assess(
+                    action,
+                    task_id,
+                    snapshot,
+                    &current,
+                    &assessment,
+                    &after,
+                    complexity,
+                    drain,
+                )
+                .map(|decision| CheckedAdmission::Apply(Some(Admission::Drain(decision)))),
+                PromotionAuthority::None => Ok(CheckedAdmission::Apply(None)),
+            };
+            let admission = match admission {
+                Ok(CheckedAdmission::Apply(admission)) => admission,
+                Ok(CheckedAdmission::Superseded(outcome)) => {
+                    outcomes.push(outcome);
+                    continue;
+                }
                 Err(error) => {
                     outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
                     continue;
                 }
             };
-            let promote = admission
-                .as_ref()
-                .is_some_and(|decision| decision["decision"] == "promote");
-            let operation_id = task_operation_id(prepared_value, task_id, &assessment);
-            let validated = ValidatedTask {
+            // The CI sweep promotes inside the atomic pilot write; a drain
+            // approves afterwards through the approve transition, so its
+            // history names the drain.
+            let promote = matches!(
+                &admission,
+                Some(Admission::CiSweep(decision)) if decision["decision"] == "promote"
+            );
+            let history_marker = match &admission {
+                Some(Admission::Drain(decision)) => drain_promotion::hold_marker(decision),
+                _ => None,
+            };
+            let mut validated = ValidatedTask {
                 task_id: task_id.clone(),
                 after,
                 assessment,
                 admission,
                 promote,
+                history_marker,
                 complexity,
                 operation_id,
+                required_os: native_os,
             };
 
-            match apply_task(runtime, snapshot, &validated, prepared_value, &policy) {
+            let outcome = apply_task(runtime, snapshot, &validated, prepared_value, &policy);
+            let outcome = match (outcome, &authority) {
+                (
+                    Ok(
+                        applied @ (ApplyTaskOutcome::Applied(_)
+                        | ApplyTaskOutcome::AlreadyApplied(_)),
+                    ),
+                    PromotionAuthority::Drain(drain),
+                ) => approve_promoted(runtime, &mut validated, snapshot, &policy, drain)
+                    .map(|()| applied),
+                (outcome, _) => outcome,
+            };
+            if matches!(
+                outcome,
+                Ok(ApplyTaskOutcome::Applied(_) | ApplyTaskOutcome::AlreadyApplied(_))
+            ) {
+                close_verified_no_diff(runtime, &mut validated);
+            }
+            match outcome {
                 Ok(ApplyTaskOutcome::Applied(fingerprint)) => {
                     if let Some(fingerprint) = fingerprint {
                         resulting_fingerprints.insert(task_id.clone(), fingerprint);
@@ -538,6 +739,7 @@ pub(in super::super) fn apply(
                         "applied",
                         &mut task_results,
                         &mut ci_sweep_admission,
+                        &mut drain_approval,
                     );
                 }
                 Ok(ApplyTaskOutcome::AlreadyApplied(fingerprint)) => {
@@ -552,11 +754,13 @@ pub(in super::super) fn apply(
                         "already_applied",
                         &mut task_results,
                         &mut ci_sweep_admission,
+                        &mut drain_approval,
                     );
                 }
                 Ok(ApplyTaskOutcome::Stale(reason, detail)) => {
                     outcomes.push(stale_task(task_id, reason, &detail));
                 }
+                Ok(ApplyTaskOutcome::Superseded(outcome)) => outcomes.push(outcome),
                 Err(error) => outcomes.push(task_outcome(
                     task_id,
                     "apply_failed",
@@ -570,12 +774,16 @@ pub(in super::super) fn apply(
             .filter(|outcome| {
                 !matches!(
                     outcome["outcome"].as_str(),
-                    Some("applied" | "already_applied")
+                    Some("applied" | "already_applied" | "superseded")
                 )
             })
             .count();
         let outcome = if unresolved == 0 {
-            "applied"
+            if outcomes.iter().any(|task| task["outcome"] == "superseded") {
+                "superseded"
+            } else {
+                "applied"
+            }
         } else if applied_task_ids.is_empty()
             && outcomes.iter().all(|outcome| outcome["outcome"] == "stale")
         {
@@ -588,7 +796,7 @@ pub(in super::super) fn apply(
         let error = outcomes.iter().find_map(|task| {
             (!matches!(
                 task["outcome"].as_str(),
-                Some("applied" | "already_applied")
+                Some("applied" | "already_applied" | "superseded")
             ))
             .then(|| {
                 task.get("error")
@@ -657,15 +865,24 @@ pub(in super::super) fn apply(
             .filter_map(|decision| decision["applied_task_ids"].as_array())
             .map(Vec::len)
             .sum::<usize>();
-    let unresolved_tasks = carried_task_outcomes.len() as u64
+    let unresolved_tasks = carried_task_outcomes
+        .iter()
+        .filter(|task| task["outcome"] != "superseded")
+        .count() as u64
         + partition_decisions
             .iter()
             .filter_map(|decision| decision.get("unresolved_count").and_then(Value::as_u64))
             .sum::<u64>();
     let succeeded = failed_partitions.is_empty()
         && skipped_stale_partitions.is_empty()
-        && carried_task_outcomes.is_empty();
+        && carried_task_outcomes
+            .iter()
+            .all(|task| task["outcome"] == "superseded");
     let status = if succeeded { "succeeded" } else { "failed" };
+    let superseded_count = task_outcomes
+        .iter()
+        .filter(|task| task["outcome"] == "superseded")
+        .count();
     let error = (!succeeded).then(|| {
         let first_unresolved = partition_decisions
             .iter()
@@ -675,7 +892,7 @@ pub(in super::super) fn apply(
                     .as_array()?
                     .iter()
                     .find(|task| {
-                        !matches!(task["outcome"].as_str(), Some("applied" | "already_applied"))
+                        !matches!(task["outcome"].as_str(), Some("applied" | "already_applied" | "superseded"))
                     })?;
                 let classification = task
                     .get("reason")
@@ -692,7 +909,7 @@ pub(in super::super) fn apply(
                 ))
             })
             .or_else(|| {
-                carried_task_outcomes.first().map(|task| {
+                carried_task_outcomes.iter().find(|task| task["outcome"] != "superseded").map(|task| {
                     format!(
                         "carried task {}: {}",
                         task["task_id"].as_str().unwrap_or("<unknown>"),
@@ -793,10 +1010,13 @@ pub(in super::super) fn apply(
     Ok(json!({
         "member_evidence": member_evidence,
         "status": status,
+        "outcome": if succeeded && superseded_count > 0 { "superseded" } else { status },
+        "superseded_count": superseded_count,
         "error": error,
         "mode": mode,
         "workspace_path": workspace_root,
         "source": prepared.get("source").cloned().unwrap_or(Value::Null),
+        "source_age": prepared.get("source_age").cloned().unwrap_or(Value::Null),
         "discovery": {
             "task_ids": prepared.get("task_ids").cloned().unwrap_or_else(|| json!([])),
             "excluded": prepared.get("excluded").cloned().unwrap_or_else(|| json!([])),
@@ -815,5 +1035,6 @@ pub(in super::super) fn apply(
         "non_repairable_outcomes": non_repairable_outcomes,
         "tasks": task_results,
         "ci_sweep_admission": ci_sweep_admission,
+        "drain_approval": drain_approval,
     }))
 }

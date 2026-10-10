@@ -42,6 +42,10 @@ const PRIVATE_DIR_MODE: u32 = 0o700;
 /// current user (`0o700`) instead of relying on the process umask. Existing
 /// directories are left unchanged so callers do not unexpectedly chmod a
 /// workspace root or home directory.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "non-Unix fallback for the private-directory helper; Unix uses an explicit owner-only mode"
+)]
 pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -57,6 +61,10 @@ pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
 ///
 /// Unlike [`create_private_dir_all`], this preserves [`fs::create_dir`]'s
 /// exclusive-create behavior and returns `AlreadyExists` for an existing path.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "non-Unix fallback for the private-directory helper; Unix uses an explicit owner-only mode"
+)]
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -376,9 +384,13 @@ pub fn remove_path_if_exists(path: &Path) -> io::Result<()> {
 
 /// Writes `content` to `path`, creating parent directories as needed. Not
 /// atomic — for crash-safe writes use [`atomic_write_text`].
+#[allow(
+    clippy::disallowed_methods,
+    reason = "this compatibility helper deliberately promises non-atomic writes; durable replacements use atomic_write_text"
+)]
 pub fn write_text_with_parent(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        create_private_dir_all(parent)?;
     }
     fs::write(path, content)
 }
@@ -470,11 +482,9 @@ pub enum LockFileNaming {
     /// lock protocol.
     DotPrefixedSibling,
     /// `{file_name}.lock` — the target's exact file name with `.lock`
-    /// appended, no extra leading dot. Required when another process already
-    /// defines the lock file it expects beside a target Orbit does not
-    /// exclusively own (for example Claude Code locking `~/.claude.json.lock`
-    /// beside its own `~/.claude.json`); acquiring anything else lets the two
-    /// writers race past each other.
+    /// appended, no extra leading dot. Only interoperates with peers using
+    /// advisory file locks at that path. Peers using mkdir/mtime locks (such
+    /// as Claude Code) need [`super::directory_lock::with_directory_lock`].
     AppendedSuffix,
 }
 

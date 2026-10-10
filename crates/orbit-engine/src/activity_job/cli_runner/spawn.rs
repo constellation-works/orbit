@@ -1,7 +1,11 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
+#[cfg(test)]
+use orbit_exec::bwrap_program_for_audit;
 use orbit_exec::{
     BwrapProbeOutcome, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
     LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest,
@@ -88,8 +92,33 @@ pub(crate) fn prepare_sandbox_for_dispatch(
             },
         }),
         Some(sandbox) if sandbox.kind == ExecutorSandboxKind::LinuxBwrap => {
-            let probe = probe_bwrap();
+            let probe = linux_bwrap_probe_for_dispatch();
             prepare_linux_sandbox_for_dispatch_with_probe(sandbox, probe)
+        }
+        Some(sandbox)
+            if sandbox.kind == ExecutorSandboxKind::MacosSandboxExec
+                && !sandbox_exec_available() =>
+        {
+            let unavailable = sandbox_exec_unavailable_message();
+            if !sandbox.allow_fallback {
+                return Err(SpawnError::permanent(format!(
+                    "{unavailable}; declare allow_fallback: true to permit bare exec"
+                )));
+            }
+            tracing::warn!(
+                target: "orbit.engine.cli_runner",
+                "{unavailable}; falling back to bare exec because executor declares allow_fallback"
+            );
+            Ok(PreparedSandbox {
+                effective: None,
+                metadata: SandboxDispatchMetadata {
+                    backend: Some("bare-fallback".to_string()),
+                    trusted_wrapper: Some(orbit_exec::sandbox_exec_program_for_audit().to_string()),
+                    probe_outcome: Some(unavailable),
+                    write_enforcement: "write_delegated".to_string(),
+                    read_enforcement: "read_delegated".to_string(),
+                },
+            })
         }
         Some(sandbox) => Ok(PreparedSandbox {
             effective: Some(sandbox),
@@ -112,6 +141,14 @@ pub(crate) fn prepare_sandbox_for_dispatch(
             },
         }),
     }
+}
+
+fn linux_bwrap_probe_for_dispatch() -> BwrapProbeOutcome {
+    #[cfg(test)]
+    if let Some(probe) = probe_overriding_user_namespace_refusal() {
+        return probe;
+    }
+    probe_bwrap()
 }
 
 fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
@@ -280,6 +317,15 @@ fn spawn_linux_bwrap(
     .map_err(|error| SpawnError::permanent(error.to_string()))?;
     reject_unsatisfiable_managed_grants(sandbox.managed_worktree, &plan.dropped_grants)?;
     report_unsatisfied_grants(&plan.dropped_grants);
+    // Test builds can keep this compiled guard and exec the provider bare
+    // when the host refuses the user namespace `bwrap` needs. Production
+    // always reaches `spawn_under_linux_bwrap` below.
+    #[cfg(test)]
+    if post_run_guard_without_user_namespace() {
+        let mut spawned = spawn_bare(program, args, env, cwd)?;
+        spawned._linux_mount_plan = Some(plan);
+        return Ok(spawned);
+    }
     let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
         plan: &plan,
         env,
@@ -410,46 +456,13 @@ fn spawn_macos_sandboxed(
     sandbox: &ResolvedSandbox,
     provider: &str,
 ) -> Result<SpawnedChild, SpawnError> {
-    spawn_macos_sandboxed_with(
-        program,
-        args,
-        env,
-        cwd,
-        sandbox,
-        provider,
-        sandbox_exec_available(),
-    )
-}
-
-/// Test-friendly variant of [`spawn_macos_sandboxed`]: callers pass an
-/// explicit availability flag instead of probing the trusted wrapper. Production
-/// routes through the public wrapper which resolves the trusted absolute path; tests
-/// can assert the fail-closed and fallback branches without mutating
-/// process-global state.
-// pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-fn spawn_macos_sandboxed_with(
-    program: &str,
-    args: &[String],
-    env: &[(String, String)],
-    cwd: Option<&Path>,
-    sandbox: &ResolvedSandbox,
-    provider: &str,
-    sandbox_exec_present: bool,
-) -> Result<SpawnedChild, SpawnError> {
-    if !sandbox_exec_present {
-        let unavailable = sandbox_exec_unavailable_message();
-        if sandbox.allow_fallback {
-            tracing::warn!(
-                target: "orbit.engine.cli_runner",
-                program = program,
-                "{unavailable}; falling back to bare exec because executor declares allow_fallback"
-            );
-            return spawn_bare(program, args, env, cwd);
-        }
-        // A missing trusted sandbox-exec binary won't appear between retry
-        // attempts — deterministic environment failure.
+    if !sandbox_exec_available() {
+        // Fallback is decided during preparation, before inner sandbox flags,
+        // audit argv and the plugin broker are selected. A wrapper lost after
+        // that decision must never turn this prepared launch into bare exec.
         return Err(SpawnError::permanent(format!(
-            "{unavailable}; declare allow_fallback: true to permit bare exec"
+            "{}; trusted wrapper became unavailable after sandbox preparation",
+            sandbox_exec_unavailable_message()
         )));
     }
 
@@ -589,4 +602,48 @@ fn validate_ca_certificate_path(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static POST_RUN_GUARD_WITHOUT_USER_NAMESPACE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+fn post_run_guard_without_user_namespace() -> bool {
+    POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(Cell::get)
+}
+
+#[cfg(test)]
+fn probe_overriding_user_namespace_refusal() -> Option<BwrapProbeOutcome> {
+    post_run_guard_without_user_namespace().then(|| BwrapProbeOutcome {
+        available: true,
+        trusted_path: bwrap_program_for_audit().to_string(),
+        detail: "test seam: compile the post-run guard without a user namespace".to_string(),
+        // The seam does not execute Bubblewrap, so it has no selected source
+        // or version. Dispatch reads availability and the trusted path only.
+        source: None,
+        version: None,
+    })
+}
+
+/// Compile a managed Linux post-run guard and let the provider exit without
+/// a user namespace.
+///
+/// Some kernels refuse unprivileged user namespaces, so `/usr/bin/bwrap`
+/// never reaches provider exit and the guard cannot be observed. This seam
+/// exists only in test builds: dispatch still snapshots the real deny rules,
+/// then execs the provider bare. Production probes and spawns Bubblewrap.
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+pub(crate) fn with_post_run_guard_without_user_namespace<T>(body: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(|flag| flag.set(false));
+        }
+    }
+    POST_RUN_GUARD_WITHOUT_USER_NAMESPACE.with(|flag| flag.set(true));
+    let _reset = Reset;
+    body()
 }

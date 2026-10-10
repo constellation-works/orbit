@@ -3,6 +3,9 @@
 # Failure semantics:
 # - `implement_bundle` runs one task at a time in the shared worktree.
 # - If `implement_one` fails, pending changes remain in the shared worktree for inspection.
+# - An implementer-declared blocker (`task_blocked_by_agent`) stops the bundle
+#   before the next step. Step and final recovery do not run, and pending
+#   changes stay in the worktree.
 # - If all implementations succeed, `commit` snapshots the bundle branch before merge.
 # - `validate` runs `workflow.required_validation_commands` on that committed
 #   candidate; a failing command stops the run before anything is merged.
@@ -20,7 +23,8 @@ spec:
   state: enabled
   owns_task_worktree: true
   # Holds each task's delivery slot while live; a task may also select this
-  # job for local shipping with a `delivery:task_local_pipeline` tag.
+  # job for local shipping with a `delivery:task_local_pipeline` tag, which a
+  # PR-mode workspace honours too (the per-task local override).
   task_delivery:
     modes: [local]
   kind: workflow
@@ -72,7 +76,9 @@ spec:
     # candidate and that output to repair. A candidate preserved from
     # `implement_bundle` or any step before `commit` is unfinished
     # (ORB-14024): the implementer always runs on it. A discarded candidate,
-    # a changed spec or a bundle implements fresh.
+    # a changed spec or a bundle implements fresh. ORB-14603: after a failed
+    # claim, the candidate the owner kept from it is continued, never a local
+    # run that shares the leaf's id.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:
@@ -81,6 +87,7 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
         prior_job_run_id: "{{ steps.worktree.output.prior_job_run_id }}"
+        prior_foreign_run: "{{ steps.worktree.output.prior_foreign_run }}"
 
     - id: implement_bundle
       when: "{{ steps.resume_candidate.output.implement }} == true"
@@ -103,6 +110,7 @@ spec:
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         scope: all
+        verify_already_landed: true
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
@@ -112,6 +120,10 @@ spec:
     # command fails here, so step recovery can repair the candidate
     # (committing the fix) and the post-recovery attempt reruns the whole
     # suite. An empty list is a no-op.
+    # ORB-14258: a failure the base shares fails as a typed `baseline_red`
+    # with no recovery; run finalization holds the tasks in the backlog until
+    # `base_ref` moves to a commit where the command passes, instead of
+    # blocking them.
     - id: validate
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
@@ -121,6 +133,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        base_ref: "{{ steps.worktree.output.base_ref }}"
 
     - id: merge
       recovery_activity: step_failure_recovery

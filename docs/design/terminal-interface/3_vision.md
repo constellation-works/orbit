@@ -2,7 +2,7 @@
 title: Terminal Interface — Vision
 owner: claude
 last_updated: 2026-08-01
-last_validated: 2026-09-20
+last_validated: 2026-10-08
 status: Accepted
 feature: terminal-interface
 doc_role: vision

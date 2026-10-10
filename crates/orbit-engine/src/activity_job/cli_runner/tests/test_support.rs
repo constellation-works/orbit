@@ -1,13 +1,14 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::BlobStore;
+use orbit_common::OrbitError;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
 
 use super::super::super::audit_writer::V2AuditWriter;
-use super::super::super::dispatcher::{DispatchError, ResolvedCliExecutor};
+use super::super::super::dispatcher::{DispatchError, ResolvedCliExecutor, ResolvedSandbox};
 use crate::context::{ResolvedActivityTools, RuntimeHost};
 
 pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> {
@@ -15,15 +16,50 @@ pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> 
 }
 
 /// A host that launches `command` as the provider CLI and otherwise keeps the
-/// trait defaults (no sandbox, no task context, no workspace identity), except
-/// that deny-mode tool policies resolve against a fixed registry.
+/// trait defaults (no task context), except that deny-mode tool policies
+/// resolve against a fixed registry. Sandbox, primary checkout, and a
+/// persistence-refresh failure are optional so a test can force one post-run
+/// check without standing up the rest of the runtime.
 pub(in crate::activity_job::cli_runner) struct TestHost {
     command: String,
+    sandbox: Option<ResolvedSandbox>,
+    workspace_root: Option<PathBuf>,
+    refresh_error: Option<String>,
 }
 
 impl TestHost {
     pub(in crate::activity_job::cli_runner) fn with_command(command: String) -> Self {
-        Self { command }
+        Self {
+            command,
+            sandbox: None,
+            workspace_root: None,
+            refresh_error: None,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(in crate::activity_job::cli_runner) fn with_sandbox(
+        mut self,
+        sandbox: ResolvedSandbox,
+    ) -> Self {
+        self.sandbox = Some(sandbox);
+        self
+    }
+
+    pub(in crate::activity_job::cli_runner) fn with_workspace_root(
+        mut self,
+        root: PathBuf,
+    ) -> Self {
+        self.workspace_root = Some(root);
+        self
+    }
+
+    pub(in crate::activity_job::cli_runner) fn fail_persistence_refresh(
+        mut self,
+        message: impl Into<String>,
+    ) -> Self {
+        self.refresh_error = Some(message.into());
+        self
     }
 }
 
@@ -49,6 +85,35 @@ impl RuntimeHost for TestHost {
                 TEST_REGISTERED_TOOLS.iter().copied(),
             ),
         })
+    }
+
+    fn resolve_executor_sandbox(
+        &self,
+        _provider: &str,
+        _fs_profile: Option<&str>,
+        _subprocess_cwd: Option<&Path>,
+    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+        Ok(self.sandbox.clone())
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> orbit_tools::ToolContext {
+        orbit_tools::ToolContext {
+            workspace_root: self.workspace_root.clone(),
+            ..orbit_tools::ToolContext::default()
+        }
+    }
+
+    fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
+        match &self.refresh_error {
+            Some(message) => Err(OrbitError::Store(message.clone())),
+            None => Ok(()),
+        }
     }
 }
 

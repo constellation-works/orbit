@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-09-28
-last_validated: 2026-09-28
+last_updated: 2026-10-05
+last_validated: 2026-10-05
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -80,7 +80,7 @@ created_at: 2026-05-11T00:00:00Z
 updated_at: 2026-05-11T00:00:00Z
 ```
 
-The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (`ORB-`, `F`, `L`, or `ADR-` IDs); legacy task relation types remain task-only. `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
+The envelope should not include prose bodies, comments, review message bodies, execution summaries, `workspace_path`, `repo_root`, `agent`, `model`, or the old `batch_id` name. Local execution bindings live in the local task registry, keyed by task ID and workspace binding. Execution fan-out membership is `job_run_id`, a foreign reference to the job-run store rather than a task relation. `crew` selects the named execution crew; `orchestrator` is separate, explicit attribution for the named crew responsible for orchestrating the task. It never selects a model/provider and is never inferred from actor attribution or `crew`. A non-empty orchestrator must name a configured crew and may be set, changed, or cleared only while the task is `proposed` or `backlog`; stored aliases remain readable if configuration later removes them. `relations` can also carry cross-artifact provenance via `produces` and `resolves` targets (`ORB-`, `F`, `L`, or `ADR-` IDs); `covered_by` targets a task or GitHub PR external key (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`) for exact-key CI operator coverage. Legacy task relation types remain task-only. `schema_version` remains `1`: readers default a missing `orchestrator` to `null`, but older writers may drop the new field, so forward compatibility is limited to tolerant reads rather than preservation through legacy rewrites.
 
 ## 3. Prose Documents
 
@@ -137,7 +137,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Task artifact discovery surfaces (`orbit.task.show --field artifacts`, `orbit task artifacts --task <ID>`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
+Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit artifacts <ID> --task`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -152,7 +152,7 @@ Metadata listing stays compact and payloads are fetched on demand:
 | attach | MCP | `orbit.task.artifact.put` with `id`, `source_path`, optional `path` |
 | attach | CLI | `orbit task artifact put <ID> <SOURCE> --path <ARTIFACT_PATH>` |
 | list | MCP | `orbit.task.show` with `field: "artifacts"` — `path`, `media_type`, `size`, `created_by` |
-| list | CLI | `orbit task artifacts --task <ID>` |
+| list | CLI | `orbit artifacts <ID> --task` |
 | view | MCP | `orbit.task.artifact.get` with `id` and `path` |
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
@@ -218,7 +218,7 @@ Local-first Orbit uses `~/.orbit/tasks/` as the canonical store for task artifac
 
 - the machine-local allocation authority and its next available numeric suffix;
 - workspace bindings, including `workspace_id`, slug, repo root, workspace path, `.orbit` path, and optional remote/path fingerprints for rebind;
-- task-to-workspace bindings for resolving local operations such as `orbit task start`;
+- task-to-workspace bindings for resolving local operations such as `orbit task show`;
 - generated status, terminal-month, relation, and tag indexes for fast list/filter/relation surfaces;
 - task-lock reservations or pointers to the existing `task_reservations` SQLite store, keyed by workspace binding and canonical task IDs while preserving file-overlap conflict checks.
 
@@ -243,11 +243,16 @@ The bundle remains canonical. The registry maintains generated projections from 
 - `task_bundle_tags`: normalized tag rows with AND-style filtering semantics.
 - `task_bundle_relations`: directed `(source_task_id, relation_type, target_id)` rows plus an inverse lookup index for task targets.
 
-Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Task search uses the optional workspace lexical index for BM25 over title, description, plan, execution summary, and acceptance criteria. The bundle matcher supplements those hits with comments, external references, artifact manifest paths, and tasks without indexed chunks; without task chunks, the bundle matcher is the only source. Neither source opens artifact payloads. The bundle matcher judges the caller's status, tag, and path filters from the index-validated envelopes before reading anything, prunes each remaining task from its envelope, its four documents, its comments, and its manifest (never its event log), reads whole only the tasks that can match, and stops as soon as the candidate budget fills. A damaged event log that a search did not need therefore does not fail it; a damaged document still does.
+Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly, and the same refused rebuild is not retried until a bundle, registration or unresolved target changes (or a retry interval passes). Task search uses the optional workspace lexical index for BM25 over title, description, plan, execution summary, and acceptance criteria. The bundle matcher supplements those hits with comments, external references, artifact manifest paths, and tasks without indexed chunks; without task chunks, the bundle matcher is the only source. Neither source opens artifact payloads. The bundle matcher judges the caller's status, tag, and path filters from the index-validated envelopes before reading anything, prunes each remaining task from its envelope, its four documents, its comments, and its manifest (never its event log), reads whole only the tasks that can match, and stops as soon as the candidate budget fills. A damaged event log that a search did not need therefore does not fail it; a damaged document still does.
 
 That comparison also supplies the metadata candidate selection filters and orders by, so it runs against every registered envelope. To keep it from re-parsing unchanged files, each process holds the parsed envelopes in memory and re-proves one against its file's stamp — filesystem identity, length, and modification time — before reusing it; anything the stamp cannot vouch for is read and parsed again. A stamp is evidence that a file was not rewritten rather than proof that its bytes are unchanged, so it never stands alone: the `updated_at` comparison above still runs on every reused envelope, and explicit reindex re-reads and re-validates every bundle from disk.
 
 ## 8. Crash Consistency
+
+Ordinary task updates persist artifacts before document and history changes. An
+artifact store rejection therefore leaves the task's status, document and history
+unchanged. Accepted artifacts are not rolled back if a later document or history
+write fails; this ordering does not make the combined update transactional.
 
 The v2 bundle is local and file-backed, so multi-file mutations are not fully transactional. The implementation keeps the envelope canonical and makes generated data rebuildable, but the following interrupted states are expected repair cases:
 

@@ -21,6 +21,7 @@ pub struct Task {
     pub plan: String,
     #[serde(default)]
     pub execution_summary: String,
+    /// Optional admission footprint. An empty list holds no context locks.
     pub context_files: Vec<String>,
     #[serde(default)]
     pub created_by: Option<String>,
@@ -53,6 +54,10 @@ pub struct Task {
     pub job_run_machine: Option<ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
+    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
+    /// Absent on legacy records; assignment history can recover it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     /// Explicit named crew that owns orchestration of this task. This is
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,21 +77,37 @@ impl Display for Task {
 }
 
 impl Task {
-    /// Digest of what a candidate implementation answers to: the description,
-    /// acceptance criteria and context selectors (order-insensitive). A
-    /// preserved candidate is resumed only while this is unchanged
-    /// [ORB-13985].
+    /// Digest of what a candidate implementation answers to: the description
+    /// and acceptance criteria. A preserved or held candidate is resumed only
+    /// while this is unchanged [ORB-13985]. Context selectors are preparation
+    /// hints, not what the task means, so editing them keeps the candidate
+    /// [ORB-14450].
     pub fn spec_digest(&self) -> String {
         use sha2::{Digest, Sha256};
+        let spec = serde_json::json!({
+            "description": self.description,
+            "acceptance_criteria": self.acceptance_criteria,
+        });
+        format!("{:x}", Sha256::digest(spec.to_string().as_bytes()))
+    }
+
+    /// Whether a recorded [`Self::spec_digest`] still describes this task.
+    /// Digests recorded before [ORB-14450] also covered the selectors; they
+    /// match while the selectors are unchanged too.
+    pub fn spec_digest_matches(&self, recorded: &str) -> bool {
+        use sha2::{Digest, Sha256};
+        if recorded == self.spec_digest() {
+            return true;
+        }
         let mut selectors = self.context_files.iter().collect::<Vec<_>>();
         selectors.sort();
         selectors.dedup();
-        let spec = serde_json::json!({
+        let legacy = serde_json::json!({
             "description": self.description,
             "acceptance_criteria": self.acceptance_criteria,
             "context_files": selectors,
         });
-        format!("{:x}", Sha256::digest(spec.to_string().as_bytes()))
+        recorded == format!("{:x}", Sha256::digest(legacy.to_string().as_bytes()))
     }
 
     /// The task an envelope and its body documents describe.
@@ -125,6 +146,7 @@ impl Task {
             relations: envelope.relations,
             job_run_id: envelope.job_run_id,
             crew: envelope.crew,
+            crew_source: envelope.crew_source,
             orchestrator: envelope.orchestrator,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,
@@ -236,6 +258,16 @@ pub fn task_matches_tags(task: &Task, required_tags: &[String]) -> bool {
     required_tags
         .iter()
         .all(|tag| available.contains(tag.as_str()))
+}
+
+/// Prefix of system identity tags assigned to CI failure tracking tasks.
+pub const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+
+/// Whether a tag is a system identity tag that tracks automated system provenance.
+pub fn is_system_identity_tag(tag: &str) -> bool {
+    tag.trim()
+        .to_ascii_lowercase()
+        .starts_with(CI_FAILURE_KEY_TAG_PREFIX)
 }
 
 /// Tag prefix a task uses to select the job that delivers it when shipped.
@@ -628,10 +660,43 @@ where
 
 /// Canonical automatic admission order, shared by reporting and the owner store.
 pub fn automatic_dispatch_cmp(left: &Task, right: &Task) -> std::cmp::Ordering {
-    let band = |task: &Task| {
+    automatic_dispatch_cmp_with_expiry(left, false, right, false)
+}
+
+/// [`automatic_dispatch_cmp`] with each task's frozen-batch expiry
+/// [ORB-14624]. An expiring task — one whose frozen delivery batch nears its
+/// admission deadline — joins the corrective band and leads its priority
+/// there, so it sorts ahead of every same-priority task outside the critical
+/// band. Critical work still leads, and a higher-priority corrective task
+/// still sorts first.
+pub fn automatic_dispatch_cmp_with_expiry(
+    left: &Task,
+    left_expiring: bool,
+    right: &Task,
+    right_expiring: bool,
+) -> std::cmp::Ordering {
+    automatic_dispatch_cmp_for_host(left, left_expiring, right, right_expiring, None, None)
+}
+
+/// Automatic dispatch order for an executor pulling from an owner.
+///
+/// After band, priority and frozen-batch expiry, prefer tasks whose OS
+/// requirement the executor satisfies but the owner does not. Age and task
+/// ID settle the remaining ties. Equal host OSes preserve local dispatch
+/// order; an owner outside the OS namespace can run only unrestricted tasks.
+pub fn automatic_dispatch_cmp_for_host(
+    left: &Task,
+    left_expiring: bool,
+    right: &Task,
+    right_expiring: bool,
+    owner_os: Option<crate::task::HostOs>,
+    executor_os: Option<crate::task::HostOs>,
+) -> std::cmp::Ordering {
+    let band = |task: &Task, expiring: bool| {
         if task.priority == TaskPriority::Critical {
             0
-        } else if task.task_type == TaskType::Bug
+        } else if expiring
+            || task.task_type == TaskType::Bug
             || task
                 .tags
                 .iter()
@@ -648,9 +713,15 @@ pub fn automatic_dispatch_cmp(left: &Task, right: &Task) -> std::cmp::Ordering {
         TaskPriority::Medium => 2,
         TaskPriority::Low => 3,
     };
-    band(left)
-        .cmp(&band(right))
+    let affinity = |task: &Task| {
+        let requirement = crate::task::TaskOsRequirement::from_tags(&task.tags);
+        requirement.satisfied_by(executor_os) && !requirement.satisfied_by(owner_os)
+    };
+    band(left, left_expiring)
+        .cmp(&band(right, right_expiring))
         .then(priority(left.priority).cmp(&priority(right.priority)))
+        .then(right_expiring.cmp(&left_expiring))
+        .then_with(|| affinity(right).cmp(&affinity(left)))
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }

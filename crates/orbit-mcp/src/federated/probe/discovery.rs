@@ -13,15 +13,12 @@ pub(crate) fn snapshot_from_discovery_content(
     destination: &Destination,
     content: &Value,
 ) -> Result<DestinationSnapshot, OrbitError> {
-    let machine_id = content["machine_id"]
-        .as_str()
-        .ok_or_else(|| {
-            unreachable(
-                destination,
-                "discovery answer carried no machine_id".to_string(),
-            )
-        })?
-        .to_string();
+    let host = crate::HostFacts::from_envelope(content).ok_or_else(|| {
+        unreachable(
+            destination,
+            "discovery answer carried no machine_id".to_string(),
+        )
+    })?;
     // Crew keys ride on the rows but are not workspace record fields, which
     // refuse unknown keys; lift them out before the rows are read.
     let mut rows = content["workspaces"].clone();
@@ -44,7 +41,8 @@ pub(crate) fn snapshot_from_discovery_content(
         )
     })?;
     Ok(DestinationSnapshot {
-        machine_id,
+        machine_id: host.machine_id.clone(),
+        host,
         workspaces,
         crews,
     })

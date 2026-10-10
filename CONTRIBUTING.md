@@ -15,7 +15,7 @@ Areas where help goes furthest: locking, worktree management, execution primitiv
 
 You need Rust 1.89 or newer, `git`, and `rg` (ripgrep). Running the `orbit-cli`
 tests also needs `uv` on `PATH` (CI uses 0.11.28). To run the website, you also
-need Node 18+.
+need Node 22.12 or newer.
 
 ```bash
 git clone https://github.com/constellation-works/orbit && cd orbit
@@ -35,8 +35,9 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
 5. **Run the gates** before opening the PR:
 
    ```bash
-   make ci-fast    # fmt and repository guardrails
-   make ci-lint    # clippy -D warnings
+   make ci-fast    # fmt and repository guardrails; no Rust tests
+   make ci-test-affected  # full tests for changed crates and workspace dependents
+   make ci-lint    # clippy and rustdoc, -D warnings
    make goldens    # CLI help and MCP snapshots
    ```
 

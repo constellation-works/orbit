@@ -1,5 +1,6 @@
 //! One evaluation pass: baseline, reconcile, observe, then admit what is due.
 
+use super::adopt::{Adoption, adopt};
 use super::reconcile::{reconcile, retire_covered_prefix};
 use super::{DEFINITION_CHANGED, DeliveryHost, Evaluation, input_digest, observe, stall};
 use crate::AutomationError;
@@ -72,6 +73,7 @@ fn evaluate_pass(
                 excluded: vec![],
                 unresolved: Default::default(),
                 associations: Default::default(),
+                lookup_retries: Default::default(),
                 active: None,
                 stall: None,
             };
@@ -93,22 +95,66 @@ fn evaluate_pass(
         }
     };
 
-    // Reconcile admitted work even when disabled or a definition was edited.
-    if !dry_run
-        && state
+    // Resolve minted claims and reconcile even when disabled or edited. A
+    // crash can leave a task behind before its action id was checkpointed.
+    let mut retry_scheduled = false;
+    if !dry_run && let Some(active) = &state.active {
+        if matches!(active.state, BatchState::Claimed | BatchState::Admitted)
+            && active.action_id.is_none()
+            && let Some(id) = host.action_id(active)?
+        {
+            let mut next = state.clone();
+            if let Some(active) = &mut next.active {
+                active.action_id = Some(id);
+            }
+            state = commit(store, &state, next, None)?;
+        }
+        if state
             .active
             .as_ref()
-            .is_some_and(|attempt| attempt.action_id.is_some())
-    {
-        state = reconcile(store, host, state, now)?;
+            .is_some_and(|active| active.action_id.is_some())
+        {
+            let previous_attempt = state.active.as_ref().map(|active| active.attempt);
+            state = reconcile(store, host, state, now)?;
+            // A retry just scheduled by settlement has no executing action.
+            // It can carry the compatible settings forward in this pass,
+            // before admission, while retaining its frozen batch and backoff.
+            retry_scheduled = state.active.as_ref().is_some_and(|active| {
+                active.state == BatchState::Claimed
+                    && active.action_id.is_none()
+                    && Some(active.attempt) != previous_attempt
+            });
+        }
     }
 
+    // A settings-only edit is adopted in place and the pass carries on; any
+    // other edit holds the consumer and names why.
     if state.epoch != epoch || state.branch != trigger.branch {
-        return diagnostic(store, consumer, DEFINITION_CHANGED, Some(state));
+        let action_terminal =
+            retry_scheduled || super::reconcile::action_liveness(host, &state, now)?.terminal;
+        match adopt(store, host, &request, &state, action_terminal)? {
+            Adoption::Adopted(adopted) => state = *adopted,
+            Adoption::Refused(refusals) => {
+                let mut changed = diagnostic(store, consumer, DEFINITION_CHANGED, Some(state))?;
+                changed.refusals = refusals;
+                return Ok(changed);
+            }
+        }
     }
 
     if !enabled {
         return diagnostic(store, consumer, "disabled", Some(state));
+    }
+
+    // Parked batches retain their debt until recovery. Reconciliation and
+    // definition adoption above still run, but source observation cannot help
+    // a batch whose executor budget has already ended.
+    if state
+        .active
+        .as_ref()
+        .is_some_and(|active| matches!(active.state, BatchState::Exhausted | BatchState::Failed))
+    {
+        return diagnostic(store, consumer, "needs_attention", Some(state));
     }
 
     // A consumer an operator has to repair observes nothing: retrying the same
@@ -161,8 +207,7 @@ fn evaluate_pass(
 
     if let Some(active) = &state.active {
         let reason = match active.state {
-            BatchState::Failed => "batch_failed",
-            BatchState::Exhausted => "needs_attention",
+            BatchState::Failed | BatchState::Exhausted => "needs_attention",
             _ => "batch_pending",
         };
         return diagnostic(store, consumer, reason, Some(state));

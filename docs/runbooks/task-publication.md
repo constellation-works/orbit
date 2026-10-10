@@ -5,7 +5,7 @@ tags: [operations, backup, recovery, git, task-publication]
 paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/workflow/task/**"]
 related_features: [task-publication, task-artifacts, host-registry]
 related_artifacts: [ORB-11077, ORB-11142, ORB-11145, ORB-11426]
-last_validated: 2026-09-25
+last_validated: 2026-10-09
 ---
 
 # Publish Orbit Tasks to a Dedicated Repository
@@ -171,7 +171,8 @@ orbit --workspace "$ORBIT_WORKSPACE" task publication publish \
   --json
 ```
 
-V1 has no sensitivity-scanner integration. `include` still refuses attached bytes unless the
+The store exposes an attachment sensitivity-scanner hook, but the current Orbit CLI
+does not configure a scanner. `include` therefore refuses attached bytes unless the
 operator deliberately adds `--allow-unscanned-attachments`; repository privacy is not a
 substitute for reviewing those bytes. If a secret ever reaches Git history, rotate the
 credential and perform provider-side history remediation. Deleting it from the latest commit
@@ -179,6 +180,15 @@ is not erasure.
 
 Publication uses an Orbit-owned cache. It does not check out, switch, stage, or change the
 source-worktree branch.
+
+If a push lands but saving the local success record fails or is interrupted, retry the same
+publish command. Orbit uses private recovery evidence keyed by commit to report `reconciled`
+without another push, even after a concurrent attempt loses its compare-and-swap. Repeated
+retries keep this evidence until a later publish observes the durably recorded success.
+That publish prunes records through the acknowledged generation; newer attempts remain.
+Preserve the owner's `state/task-publication/` cache while recovering a lost success save.
+Legacy single-file recovery records are still recognized. An unrelated remote tip continues
+to require authority resolution.
 
 ## Verify the snapshot
 
@@ -200,6 +210,10 @@ Later publishes advance the same linear lineage with compare-and-swap semantics.
 
 ## Inspect and recover a publication
 
+Inspect and restore refuse embedded remote credentials before invoking Git or creating a
+consumer cache. This includes a token used as the HTTP(S) username with no password;
+use an explicit `GIT_ASKPASS` helper or SSH authentication instead. Refusal diagnostics redact userinfo.
+
 Inspection is read-only and does not require an owner-local publication binding. Supply the
 expected pairing facts rather than trusting the repository to declare its own identity:
 
@@ -216,7 +230,9 @@ orbit --workspace <local-consumer-workspace> task publication inspect \
 The result labels every record with publication time, generation, workspace, source identity,
 authority, publication ID, commit, freshness, completeness, and `render_authority: snapshot`.
 It is not live owner state. Pairing mismatch, unsupported schema, corrupt JSONL, changed bundle
-or attachment bytes, or invalid Git lineage returns no trusted task projection.
+or attachment bytes, invalid Git lineage, or a symlink or other non-regular entry at the
+envelope or under `tasks/` returns no trusted task projection. The link is refused before its
+target is read.
 
 Restore the global `config.toml` (including its `[machine]` table) plus `workspaces.json` authority evidence first.
 V1 has no authority-transfer command: the selected recovery workspace must be an owner checkout

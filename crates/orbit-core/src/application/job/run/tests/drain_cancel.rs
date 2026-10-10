@@ -6,17 +6,21 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{
     AdmissionReceipt, AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
     AdmissionTaskSummary, ClaimMutation, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionClaim,
     ExecutionClaimPhase, ExecutionLocation, LocalPullAdmission, LocalPullMutation, LocalPullPhase,
     PullDestination,
 };
+use orbit_store::contracts::{TaskCreateParams, TaskReservationReleaseReason};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
+use super::super::actions::CancellationRequest;
 use super::{insert_pending_run, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::tests::run_isolated_test;
@@ -95,6 +99,192 @@ fn drain(runtime: &OrbitRuntime, job: &str, input: Value) -> JobRun {
     run
 }
 
+fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
+    let task = runtime
+        .stores()
+        .task_records()
+        .create(TaskCreateParams {
+            actor: "test".into(),
+            parent_id: None,
+            title: "cancel candidate".into(),
+            description: "candidate should remain available".into(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: "Resume the candidate after cancellation".into(),
+            execution_summary: String::new(),
+            context_files: vec!["file:src/candidate.rs".into()],
+            repo_root: None,
+            created_by: Some("test".into()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::Medium,
+            complexity: Some(TaskComplexity::Low),
+            task_type: TaskType::Bug,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            crew_source: None,
+            orchestrator: None,
+            comments: Vec::new(),
+            context_creation: Vec::new(),
+        })
+        .expect("create task");
+    runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(run.run_id.clone()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("couple task to run");
+    task.id
+}
+
+#[test]
+fn operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_legacy_behavior() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_legacy_behavior,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+
+    let run = insert_pending_run(&runtime, "task_pr_pipeline");
+    let task_id = in_progress_task(&runtime, &run);
+    let cancelled = runtime
+        .cancel_job_run_with_options_and_signal(
+            &run.run_id,
+            CancellationRequest {
+                actor: "operator",
+                source: "fixture",
+                reason: Some("preserve the candidate for later"),
+                block_task: false,
+            },
+            false,
+            |_| unreachable!("pending run must not signal its owner"),
+        )
+        .expect("cancel task leaf");
+    assert_eq!(cancelled.outcome, "cancelled");
+    let task = runtime.get_task(&task_id).expect("task after cancel");
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.plan, "Resume the candidate after cancellation");
+    assert_eq!(
+        task.context_files,
+        vec!["file:src/candidate.rs".to_string()]
+    );
+    assert_eq!(task.job_run_id.as_deref(), Some(run.run_id.as_str()));
+    let cancellation_policy = runtime
+        .read_run_state(&run.run_id)
+        .expect("run state")
+        .and_then(|state| state.task_cancellation_policy)
+        .expect("durable cancellation policy");
+    assert!(!cancellation_policy.block);
+    assert!(!cancellation_policy.note.is_empty());
+    let history = runtime.get_task_history(&task_id).expect("task history");
+    let entry = history.last().expect("cancel history");
+    assert_eq!(entry.event, "workflow_run_cancelled");
+    assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+    assert_eq!(entry.to_status, Some(TaskStatus::Backlog));
+    assert!(
+        entry.note.as_deref().is_some_and(|note| !note.is_empty()),
+        "cancellation history must retain a note"
+    );
+
+    let run = insert_pending_run(&runtime, "task_pr_pipeline");
+    let task_id = in_progress_task(&runtime, &run);
+    let cancelled = runtime
+        .cancel_job_run_with_options_and_signal(
+            &run.run_id,
+            CancellationRequest {
+                actor: "operator",
+                source: "fixture",
+                reason: Some("keep the old blocked behavior"),
+                block_task: true,
+            },
+            false,
+            |_| unreachable!("pending run must not signal its owner"),
+        )
+        .expect("cancel task leaf with block");
+    assert_eq!(cancelled.outcome, "cancelled");
+    let task = runtime.get_task(&task_id).expect("blocked task");
+    assert_eq!(task.status, TaskStatus::Blocked);
+    assert_eq!(
+        task.context_files,
+        vec!["file:src/candidate.rs".to_string()]
+    );
+    let cancellation_policy = runtime
+        .read_run_state(&run.run_id)
+        .expect("run state")
+        .and_then(|state| state.task_cancellation_policy)
+        .expect("durable cancellation policy");
+    assert!(cancellation_policy.block);
+    let history = runtime.get_task_history(&task_id).expect("task history");
+    let entry = history.last().expect("cancel history");
+    assert_eq!(entry.event, "workflow_run_failed");
+    assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+    assert_eq!(entry.to_status, Some(TaskStatus::Blocked));
+}
+
+#[test]
+fn cancellation_policy_is_durable_before_the_owner_is_signalled() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &cancellation_policy_is_durable_before_the_owner_is_signalled,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "task_pr_pipeline");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("mark run running");
+    let task_id = in_progress_task(&runtime, &run);
+
+    let cancelled = runtime
+        .cancel_job_run_with_options_and_signal(
+            &run.run_id,
+            CancellationRequest {
+                actor: "operator",
+                source: "fixture",
+                reason: Some("worker saw the cancel request"),
+                block_task: false,
+            },
+            false,
+            |_| {
+                runtime
+                    .finalize_job_run_with_reservation_cleanup(
+                        &run.run_id,
+                        JobRunState::Cancelled,
+                        Utc::now(),
+                        Some(1),
+                        TaskReservationReleaseReason::RunTerminal,
+                    )
+                    .expect("worker terminalizes during cancellation signal");
+                Ok("worker_observed_cancel".into())
+            },
+        )
+        .expect("cancel run");
+
+    assert_eq!(cancelled.outcome, "already_terminal");
+    assert_eq!(cancelled.final_state, "cancelled");
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Backlog
+    );
+    let history = runtime.get_task_history(&task_id).expect("task history");
+    let entry = history.last().expect("cancel history");
+    assert_eq!(entry.event, "workflow_run_cancelled");
+    assert_eq!(entry.from_status, Some(TaskStatus::InProgress));
+    assert_eq!(entry.to_status, Some(TaskStatus::Backlog));
+}
+
 fn admission(
     runtime: &OrbitRuntime,
     owner: &Owner,
@@ -107,7 +297,9 @@ fn admission(
         request_id: format!("request-{}", owner.receipts.lock().unwrap().len()),
         caller_version: "fixture".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        caller_review_policy: "none".into(),
+        caller_fingerprint: None,
+        caller_before_pr: false,
+        review_gate: false,
         run_context: AdmissionRunContext {
             run_id: drain.run_id.clone(),
             job_name: drain.job_id.clone(),
@@ -117,9 +309,11 @@ fn admission(
             mode: "pr".into(),
             base_branch: "agent-main".into(),
             landing_branch: "agent-main".into(),
-            review_policy: "none".into(),
+            before_pr: false,
+            before_landing: false,
             completion: "review".into(),
             authorization_reference: None,
+            review: None,
         },
         crews: None,
         os: None,
@@ -146,6 +340,7 @@ fn admission(
             footprint: vec![],
             reservation_id: format!("reservation-{id}"),
             reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+            repair: None,
             phase: ExecutionClaimPhase::Claimed,
         }),
         task: Some(AdmissionTaskSummary {
@@ -154,6 +349,7 @@ fn admission(
             complexity: None,
             crew: None,
             context_files: vec![],
+            resume_candidate: None,
         }),
         invalid_candidates: vec![],
         deferred_conflicts: vec![],
@@ -228,9 +424,12 @@ fn forced_pull_cancel_releases_admissions_persisted_during_stop_and_keeps_inheri
     let cancel = runtime
         .cancel_job_run_with_options_and_signal(
             &selected.run_id,
-            "operator",
-            "fixture",
-            None,
+            CancellationRequest {
+                actor: "operator",
+                source: "fixture",
+                reason: None,
+                block_task: true,
+            },
             true,
             |_| {
                 // This runs after the initial carried snapshot, while the worker
@@ -302,9 +501,12 @@ fn forced_pull_cancel_stops_a_late_launch_without_touching_another_live_drains_a
     let cancel = runtime
         .cancel_job_run_with_options_and_signal(
             &selected.run_id,
-            "operator",
-            "fixture",
-            None,
+            CancellationRequest {
+                actor: "operator",
+                source: "fixture",
+                reason: None,
+                block_task: true,
+            },
             true,
             |_| {
                 late_leaf =
@@ -392,9 +594,12 @@ fn forced_local_cancel_handles_children_persisted_during_stop_and_preserves_othe
     let cancel = runtime
         .cancel_job_run_with_options_and_signal(
             &selected.run_id,
-            "operator",
-            "fixture",
-            None,
+            CancellationRequest {
+                actor: "operator",
+                source: "fixture",
+                reason: None,
+                block_task: true,
+            },
             true,
             |_| {
                 for child in [&stoppable.run_id, &unstoppable.run_id, missing] {
@@ -460,4 +665,136 @@ fn forced_local_cancel_handles_children_persisted_during_stop_and_preserves_othe
         0,
         "the final scan must include lineage closed by the parent's cancellation"
     );
+}
+
+#[test]
+fn forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_always_releases_the_claim()
+ {
+    if run_isolated_test(std::any::type_name_of_val(
+        &forced_pull_cancel_applies_the_operators_block_choice_to_a_stopped_leaf_and_always_releases_the_claim,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+    let owner = Arc::new(Owner::default());
+    let runtime = runtime.with_drain_owner_transport(owner.clone());
+
+    for (block_task, expected) in [(false, TaskStatus::Backlog), (true, TaskStatus::Blocked)] {
+        let selected = drain(
+            &runtime,
+            "workspace_pull_pipeline",
+            json!({"destination": destination()}),
+        );
+        let mut leaf = None;
+        let mut task_id = None;
+        let cancel = runtime
+            .cancel_job_run_with_options_and_signal(
+                &selected.run_id,
+                CancellationRequest {
+                    actor: "operator",
+                    source: "fixture",
+                    reason: None,
+                    block_task,
+                },
+                true,
+                |_| {
+                    let record = admission(&runtime, &owner, &selected, LocalPullPhase::Launching);
+                    let leaf_run = runtime
+                        .stores()
+                        .jobs()
+                        .get_job_run(record.leaf_run_id.as_ref().unwrap())
+                        .unwrap()
+                        .unwrap();
+                    task_id = Some(in_progress_task(&runtime, &leaf_run));
+                    leaf = Some(leaf_run.run_id);
+                    Ok("confirmed_fixture_stop".into())
+                },
+            )
+            .unwrap();
+        let leaf = leaf.unwrap();
+
+        assert_eq!(cancel.forced_runs, vec![leaf.clone()]);
+        let policy = runtime
+            .read_run_state(&leaf)
+            .unwrap()
+            .and_then(|state| state.task_cancellation_policy)
+            .expect("the stopped leaf persists the cancellation policy");
+        assert_eq!(
+            policy.block, block_task,
+            "the operator's choice reaches the stopped leaf, not a forced default"
+        );
+        assert_eq!(
+            runtime.get_task(&task_id.unwrap()).unwrap().status,
+            expected
+        );
+        // The release promise is independent of the choice: the owner's claim
+        // is released (its task returns to backlog) even under `--block`.
+        assert!(
+            owner.claims.lock().unwrap().is_empty(),
+            "block_task={block_task} must not keep the owner's claim"
+        );
+        assert!(
+            runtime
+                .stores()
+                .jobs()
+                .local_pull_for_run(&leaf)
+                .unwrap()
+                .is_some_and(|record| matches!(record.settlement, Some(ClaimMutation::Release(_)))),
+            "block_task={block_task} must leave the recorded settlement a release"
+        );
+    }
+}
+
+#[test]
+fn cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &cancelled_parent_cascades_the_operators_block_choice_to_its_blocking_child,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+
+    for (block_task, expected) in [(false, TaskStatus::Backlog), (true, TaskStatus::Blocked)] {
+        let parent = drain(&runtime, "task_pr_pipeline", json!({}));
+        let child = insert_pending_run(&runtime, "task_pr_pipeline");
+        let task_id = in_progress_task(&runtime, &child);
+        let mut state = runtime.read_run_state(&parent.run_id).unwrap().unwrap();
+        state.record_child_dispatch(ChildDispatch::submitted(
+            child.run_id.clone(),
+            "task_pr_pipeline".into(),
+            "invoke".into(),
+            true,
+            false,
+            Utc::now(),
+        ));
+        runtime.write_run_state(&parent.run_id, &state).unwrap();
+
+        runtime
+            .cancel_job_run_with_options_and_signal(
+                &parent.run_id,
+                CancellationRequest {
+                    actor: "operator",
+                    source: "fixture",
+                    reason: None,
+                    block_task,
+                },
+                false,
+                |_| Ok("confirmed_fixture_stop".into()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .get_job_run_backend(&child.run_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            JobRunState::Cancelled
+        );
+        assert_eq!(
+            runtime.get_task(&task_id).unwrap().status,
+            expected,
+            "the cascaded child follows block_task={block_task}"
+        );
+    }
 }

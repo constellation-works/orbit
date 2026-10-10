@@ -10,11 +10,13 @@
 //! - **Access** is SSH login plus the `agent` or `operator` capability the
 //!   governed-operation rows require [ORB-12564]. There is no callers file.
 //! - **Attempt ownership** is the claim journal's own fence. Every mutation
-//!   here reaches it as a [`ClaimInvocation`] whose machine is the session's
-//!   trusted caller machine, never a machine named in tool input. A follower
-//!   can only name *which* claim it is settling; the journal refuses it unless
-//!   that claim was admitted to this same machine and is still in a phase
-//!   that permits the write.
+//!   here reaches it as a [`ClaimInvocation`] whose machine comes from the
+//!   session, never tool input. For SSH MCP that machine is the caller-chosen
+//!   remote label; for local sessions it is the accepting machine's identity.
+//!   The journal compares it with the admitted execution machine, bound run
+//!   and phase. This prevents mixed attempts among cooperating executors, not
+//!   impersonation by someone able to start a server with another label:
+//!   local account access and SSH login are already trusted owner access.
 //! - **Observations** are the owner's own. A handoff payload names the
 //!   candidate to look at; the owner reads the published pull request from the
 //!   provider and resolves both commits in its own checkout before the journal
@@ -29,18 +31,22 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
-    ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    HandoffObservation, JobRunQuery,
+    AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
+    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
+    ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
     JobRunState,
-    handoff::{HandoffDelivery, TaskHandoff},
+    handoff::{HandoffCandidate, HandoffDelivery, TaskHandoff},
 };
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::application::automation::source::Source;
+use crate::application::task::PilotAdmissionHold;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{ensure_distributed_mutation_available, owner_binary_version};
@@ -91,7 +97,8 @@ impl crate::OrbitRuntime {
     ) -> Result<TaskPullResponse, OrbitError> {
         ensure_distributed_mutation_available("orbit.task.pull")?;
         self.ensure_distributed_owner_workspace()?;
-        let identity = self.session_admission_identity(session)?;
+        let identity =
+            self.session_admission_identity(session, request.run_context.machine_name.as_deref())?;
         let boundary = self.admission_boundary()?;
         if matches!(
             boundary.lookup_admission(&identity, &request.request_id)?,
@@ -101,12 +108,12 @@ impl crate::OrbitRuntime {
             if request.ship != owner {
                 return Err(OrbitError::InvalidInput(format!(
                     "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
-                     '{}', review policy '{}', completion '{}'; re-read the probe before sending \
-                     a new request",
+                     '{}', review.before_pr {}, completion '{}'; re-read the probe before \
+                     sending a new request",
                     owner.mode,
                     owner.base_branch,
                     owner.landing_branch,
-                    owner.review_policy,
+                    super::contract::on_off(owner.before_pr),
                     owner.completion
                 )));
             }
@@ -241,14 +248,33 @@ impl crate::OrbitRuntime {
     ///
     /// `remote` refuses a local candidate: it exists only in the executor's
     /// checkout, which the owner cannot read, and followers never run local
-    /// mode. Already-landed delivery keeps its own typed report through the
-    /// no-diff verifier and is not a route a claimed leaf takes.
+    /// mode. NoDiff verifies a clean-tree checkpoint against the base its run
+    /// synchronized onto, which the owner's live base must still contain; the
+    /// executor's branch need not be published.
     pub(crate) fn observe_claim_handoff(
         &self,
         handoff: &TaskHandoff,
         remote: bool,
     ) -> Result<HandoffObservation, OrbitError> {
+        let claim = self.current_claim(&handoff.claim_id)?;
+        let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
+            &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
+            &claim.request_id,
+        )?
+        else {
+            return Err(refused("original claim receipt unavailable"));
+        };
         let candidate = match handoff.candidate.delivery {
+            HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
+                self,
+                &self.paths().repo_root,
+                handoff,
+                if receipt.request.ship.mode == "pr" {
+                    "remote"
+                } else {
+                    "local"
+                },
+            )?,
             HandoffDelivery::LocalCandidate if remote => {
                 return Err(refused(
                     "a follower cannot hand off a local candidate: followers never execute \
@@ -282,14 +308,6 @@ impl crate::OrbitRuntime {
                 ));
             }
         };
-        let claim = self.current_claim(&handoff.claim_id)?;
-        let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
-            &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
-            &claim.request_id,
-        )?
-        else {
-            return Err(refused("original claim receipt unavailable"));
-        };
         let original = receipt
             .claim
             .as_ref()
@@ -312,6 +330,7 @@ impl crate::OrbitRuntime {
                 )));
             }
         }
+        let review = self.observe_handoff_review(handoff, &candidate)?;
         // An empty list is no required check: the handoff is accepted with no
         // validation logs, the way the owner's own delivery runs none.
         Ok(HandoffObservation {
@@ -319,7 +338,36 @@ impl crate::OrbitRuntime {
             candidate,
             required_commands: self.workflow_required_validation_commands().to_vec(),
             owner_completion_authority: self.owner_completion_authority(),
+            review,
         })
+    }
+
+    /// The owner's reading of the facts a before-PR certificate stands on
+    /// [ORB-13895]: whether the reviewed base is in the history of the base
+    /// the owner observed the candidate on, and the repository identity its
+    /// coverage matches certificates against. `None` for a handoff carrying
+    /// no before-PR evidence; the claim journal judges the rest.
+    fn observe_handoff_review(
+        &self,
+        handoff: &TaskHandoff,
+        candidate: &HandoffCandidate,
+    ) -> Result<Option<HandoffReviewObservation>, OrbitError> {
+        let Some(evidence) = handoff.review.evidence() else {
+            return Ok(None);
+        };
+        let repo_root = &self.paths().repo_root;
+        let repository = Source::new(repo_root)
+            .repository()
+            .map_err(orbit_automation::automation_error_to_orbit)?;
+        Ok(Some(HandoffReviewObservation {
+            reviewed_base_sha: evidence.reviewed_base_sha.clone(),
+            reviewed_base_is_ancestor: orbit_engine::review_gate::contains_commit(
+                repo_root,
+                &evidence.reviewed_base_sha,
+                &candidate.base.commit,
+            )?,
+            repository,
+        }))
     }
 
     /// One admission on this owner's commit boundary. Shared by the routed
@@ -331,14 +379,112 @@ impl crate::OrbitRuntime {
         identity: &AdmissionIdentity,
         request: &AdmissionRequest,
     ) -> Result<AdmissionLookup, OrbitError> {
+        let mut admission_holds = self
+            .live_local_delivery_runs()?
+            .into_iter()
+            .map(|(task, run)| {
+                (
+                    task,
+                    format!("live local delivery run {run} is carrying it"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (task, runs) in
+            crate::application::automation::preparation::active_task_pilot_preparations(self)?
+        {
+            admission_holds.entry(task).or_insert_with(|| {
+                format!(
+                    "active task-pilot preparation holds it: {}",
+                    runs.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            });
+        }
+        // Backlog holds are read before the admission section, which stalls
+        // every task write on the host [ORB-14724]. The section re-checks
+        // pilot holds only for the candidate it is about to claim, from the
+        // bundle it read, so one applied after this read is still honoured.
+        let backlog =
+            self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?;
+        // A native-OS finding holds only an executor whose OS cannot produce
+        // the evidence, so it is judged against the requesting executor.
+        for task in &backlog {
+            let comments = self.get_task_comments(&task.id)?;
+            match self
+                .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
+            {
+                Some(PilotAdmissionHold::HostOperational(hold)) => {
+                    self.record_host_operational_hold(&task.id, &hold)?;
+                    admission_holds.insert(task.id.clone(), hold.detail());
+                }
+                Some(PilotAdmissionHold::OperatorValidation(hold)) => {
+                    self.record_operator_validation_hold(&task.id, &hold)?;
+                    admission_holds.insert(task.id.clone(), hold.detail());
+                }
+                Some(PilotAdmissionHold::NativeOs(hold)) => {
+                    if let Some(wait) = hold.wait_on(task, request.os) {
+                        admission_holds.insert(task.id.clone(), wait);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Match local dispatch's expiry boost and its best-effort fallback:
+        // unreadable deadlines affect ordering, never admission eligibility.
+        let expiring_tasks = match crate::application::automation::expiring_frozen_batch_tasks(
+            self,
+            chrono::Utc::now(),
+        ) {
+            Ok(expiring) => expiring.into_keys().collect(),
+            Err(error) => {
+                tracing::warn!(
+                    "could not read frozen batch deadlines; pull backlog keeps its ordinary order: {error}"
+                );
+                Default::default()
+            }
+        };
         boundary.admit_task(
             identity,
             request,
+            &AdmissionOrdering {
+                owner_os: self.host_os(),
+                expiring_tasks,
+            },
             owner_binary_version(),
             &self.paths().repo_root,
             &self.data_root(),
-            &self.live_local_delivery_runs()?,
+            &admission_holds,
+            &self.baseline_held_tasks(&backlog),
+            &|task, comments, history| match self.pilot_admission_hold_in(
+                task,
+                comments,
+                &|| Ok(history.to_vec()),
+            )? {
+                Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
+                Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
+                Some(PilotAdmissionHold::NativeOs(hold)) => Ok(hold.wait_on(task, request.os)),
+                _ => Ok(None),
+            },
         )
+    }
+
+    /// Each `backlog` task a red base still holds, mapped to why
+    /// [ORB-14258]. Only the clock tick's recorded verdicts are read, so no
+    /// Git or validation command runs on pull admission [ORB-14739]; a hold
+    /// that lifts a moment late only defers the task to the next request.
+    fn baseline_held_tasks(&self, backlog: &[Task]) -> BTreeMap<String, String> {
+        let mut held = BTreeMap::new();
+        for task in backlog {
+            match self.standing_baseline_hold(task) {
+                Ok(Some(why)) => {
+                    held.insert(task.id.clone(), why);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
+                }
+            }
+        }
+        held
     }
 
     /// Each task a live run on this owner holds the delivery slot of, mapped
@@ -411,9 +557,10 @@ impl crate::OrbitRuntime {
     fn session_admission_identity(
         &self,
         session: &ToolSessionContext,
+        display_name: Option<&str>,
     ) -> Result<AdmissionIdentity, OrbitError> {
         let machine = self.session_caller_machine(session)?;
-        Ok(trusted_identity(&machine, session))
+        Ok(trusted_identity(&machine, session, display_name))
     }
 
     /// The claim a follower names, read from the journal. Absence is the

@@ -1,14 +1,14 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-09-19
+last_validated: 2026-10-07
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
 feature: federated-mcp
 tags: [federated-mcp, mcp, spec]
 related_features: [federated-mcp, host-registry, mcp-bridge]
-related_artifacts: [ORB-11044, ORB-11023, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-14449, ORB-14448, ORB-11044, ORB-11023, ORB-11017, ORB-11015, ORB-11014, ORB-11013, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Spec: Federated workspace MCP
@@ -21,7 +21,7 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Mux, not fleet registry
 
-1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records.
+1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records. Once [ORB-14448] ships, the operator registers them with `orbit host add` into the host-registry host file ([host-commands](../../host-registry/specs/host-commands.md)). The gateway reads that file and still registers, probes or retires nothing itself.
 2. The accepting machine is an implicit local destination, using its existing stable `machine_id` and workspace registry. That is this host's own membership, not fleet discovery.
 3. The gateway does not auto-discover the owner checkout of a repository and does not perform placement.
 4. The gateway must not reinterpret a selector against its own local catalog. A copied `hm_*/ws_*` selector is delivered to the destination encoded in the token: the local in-process host when that destination is this machine, otherwise the configured SSH remote.
@@ -29,23 +29,29 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Destination membership file
 
-Remote federated membership is declared only in the machine-global operator file `~/.orbit/mcp-destinations.toml`. It is not part of workspace `config.toml`, `workspaces.json`, or host-registry. Local workspaces require no destination row: federated serve always includes the accepting machine. A missing file or an empty `destinations` list is a valid local-only configuration.
+Remote federated membership is the machine-global host file `~/.orbit/hosts.toml`, written by `orbit host add` and owned by host-registry ([host-commands](../../host-registry/specs/host-commands.md), [ORB-14448]). It is not part of workspace `config.toml` or `workspaces.json`. Each entry supplies the `ssh` target and `machine_id` the mux routes by; its `name` and `task_prefix` are host-registry fields the mux does not read. Local workspaces require no entry: federated serve always includes the accepting machine. A missing file or an empty `hosts` list is a valid local-only configuration.
 
-The v1 file shape is an array of additional SSH remotes:
+```toml
+schema_version = 1
+
+[[hosts]]
+name = "orbit-linux"
+machine_id = "hm_alpha"
+ssh = "orbit-linux"
+task_prefix = "AL"
+```
+
+The host file is validated at config load, before the gateway advertises tools or accepts any `tools/call`: a duplicate `machine_id` makes the whole file invalid with `ambiguous_destination`, and every other host-file invariant (unique names and prefixes, valid SSH target, no entry for the local machine) fails closed with its host-registry code.
+
+**Legacy file, one release.** While `~/.orbit/mcp-destinations.toml` is the only file, its rows are the membership:
 
 ```toml
 [[destinations]]
 ssh = "orbit-linux"
 machine_id = "hm_alpha"
-
-[[destinations]]
-ssh = "operator@orbit-build"
-machine_id = "hm_beta"
 ```
 
-Each configured row has exactly two required keys: `ssh`, an SSH alias or `user@host` transport target, and `machine_id`, the destination's stable `hm_…` identity. A machine-id-only row is invalid and fails closed at config load with an actionable `invalid_input` (missing `ssh`). TCP/MCP destination rows are not a v1 file variant. A duplicate `machine_id` makes the entire file invalid with `ambiguous_destination` during config load, before the gateway advertises tools or accepts any `tools/call`.
-
-If a valid configured row already names the accepting machine's `machine_id`, the mux exposes exactly one route for that machine — the implicit local in-process destination — rather than duplicating selectors or opening loopback SSH.
+Each legacy row has exactly two required keys, `ssh` and `machine_id`. A machine-id-only row fails closed at config load with an actionable `invalid_input`, and a duplicate `machine_id` is `ambiguous_destination`. If a legacy row names the accepting machine's `machine_id`, the mux exposes exactly one route for that machine — the implicit local in-process destination — rather than duplicating selectors or opening loopback SSH. The first `orbit host` mutation migrates the legacy rows into the host file and deletes the legacy file. If both files exist, federated serve refuses with `host_file_conflict`, naming both paths.
 
 ## Selector identity
 
@@ -53,7 +59,7 @@ If a valid configured row already names the accepting machine's `machine_id`, th
 2. Callers must not parse the token and must not construct it from `machine.name` or by concatenating remembered identifiers. The only caller-facing way to obtain a selector is to copy the `selector` field from federated `orbit_workspace_list`.
 3. Display names such as `orbit-linux/ws_orbit` are not selectors.
 4. The selector is addressing data, not a path, URL, logical-only workspace ID, or authorization credential. Possession of a selector is not authorization.
-5. Every workspace-scoped federated tool accepts the selector. The gateway routes that call to the encoded destination. Federated `tools/list` advertises that callers must copy `selector` from federated `orbit.workspace.list` and must not treat cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector and does not inherit the v1 id-only default.
+5. Every workspace-scoped federated tool accepts the selector. The gateway routes that call to the encoded destination. Federated `tools/list` advertises that callers must copy `selector` from federated `orbit.workspace.list` and must not treat cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` does not inherit the v1 id-only default. Amendment ([ORB-14449]): an id-only call to an id-routed task tool is delivered to the host its task-id prefix names ([host-routing](../../host-registry/specs/host-routing.md)), and its schema marks `workspace` optional. A call that carries a selector is routed by that selector.
 6. A token that is not uniquely host-qualified (a bare `ws_*`, a display host name, a v1 session-defaulted `ws_*`, or any other form that does not match the normative encoding) is `unknown_selector` **before forwarding**, not `ambiguous_destination`.
 7. Duplicate `machine_id` across configured destinations is a **config-load** `ambiguous_destination`. The mux must not treat that collision as a per-call routing outcome.
 8. Federated serve does not take `--workspace ws_*`. A bound session, if any, may only hold a host-qualified selector. v1 `orbit mcp serve --workspace` and the v1 `tools/list` snapshot stay unchanged.
@@ -116,8 +122,8 @@ Implemented in [ORB-11014] as `orbit mcp serve --mode federated`
 file; the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
-`machine_id`. After [ORB-11015] the mux advertises the canonical 21-tool
-surface: this list stays session-unbound and answered by the mux, and every
+`machine_id`. After [ORB-11015] the mux advertises the canonical MCP tool
+surface. This list stays session-unbound and answered by the mux, and every
 workspace-scoped tool is delivered to the destination encoded in the copied
 selector.
 
@@ -137,7 +143,7 @@ Federated list does **not** inherit that envelope or that filter:
    | `checkout_health` | Repo-root presence at that destination: `active`, `invalid`, or `unknown` if the host cannot be probed |
    | `capabilities` | Classes the destination currently **advertises** for that workspace (a hint; see Capabilities vs checkout roles) |
 
-   `machine_name` is the accepting machine's `machine.name` for the implicit local destination. For configured remotes it is the operator's `ssh` target: the v1 discovery envelope carries no display name, so that alias is the only display identity the mux can honestly attribute to a remote. [ORB-12725] renamed this key from `host`, retiring *host* for the machine sense across Orbit.
+   `machine_name` is the accepting machine's `machine.name` for the implicit local destination. For configured remotes it is the operator's `ssh` target. Since [ORB-14448] the discovery envelope also carries the destination's own `machine_name`, but the mux still attributes the configured target, so a list row never changes with what a remote reports about itself. [ORB-12725] renamed this key from `host`, retiring *host* for the machine sense across Orbit.
 
    The federated-only keys are exactly `selector`, `machine_name`, `machine_id`, `reachability`, `checkout_health`, and `capabilities`. `capabilities` is an array whose values are `control_plane` and/or `execute`. These names are protocol keys; implementations must not substitute a combined `health` key or the prose labels used to describe them.
 
@@ -181,11 +187,13 @@ Classification and delivery are budgeted separately [ORB-11023]. SSH setup, the 
 
 Once that request is written the call may already have executed and committed on the destination, and killing the transport does not undo it. A lost answer there is therefore `outcome_unknown`, never `unreachable_destination`: the latter means a delivery miss and invites the retry that would duplicate the write. This is a post-dispatch outcome and does **not** enter the precedence ladder above — everything in that ladder is decided before the destination sees the call.
 
+An unusable answer has the same ambiguity: malformed JSON and oversized response lines preserve `outcome_unknown`, along with the destination/tool/request identity and the failure diagnostics. This also applies to calls on the internal drain admission route. The mux does not automatically replay these requests. Malformed answers during read-only initialization or discovery remain `unreachable_destination`.
+
 Both budgets bound writing a request as well as awaiting its answer, and unrelated messages the destination emits never extend them. A write still blocked at its deadline ends the session: `unreachable_destination` if the request line never fully left, otherwise `outcome_unknown` for a routed `tools/call`.
 
 | Class | Error identity | When |
 |---|---|---|
-| outcome unknown | `outcome_unknown` | The routed `tools/call` request was written and its answer never arrived (budget exceeded, or the session ended mid-call) |
+| outcome unknown | `outcome_unknown` | The routed tool or internal drain request was written and its answer was lost or unusable (budget exceeded, session ended, malformed JSON, or oversized response line) |
 
 ## mcp-bridge invariant exception
 

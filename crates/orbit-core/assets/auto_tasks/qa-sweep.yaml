@@ -40,10 +40,15 @@ template:
     reported exit status.
 
     Before reporting anything, search the workspace's configured task or issue surface
-    for open work covering the same problem. For each real issue that is not already
-    filed, create a durable record on that surface. Give it severity-appropriate
-    priority and put the relevant commits, observed evidence, and exact
-    reproduction steps in its description. Skip duplicates.
+    for open work covering the same problem. File each confirmed finding with
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Give it severity-appropriate priority and put the relevant commits, observed
+    evidence, and exact reproduction steps in its description. Derive canonical
+    `file:` selectors from every evidenced source path, removing the line suffix,
+    and add the matching regression-test location. Use existing paths where
+    possible; for a test file that must be created, set
+    `allow_missing_context: true` and identify that intended path. Never file a
+    finding without context selectors. Skip duplicates.
 
     A non-duplicate failing test that blocks the repository's
     standard validation command must be filed as a durable issue even when
@@ -61,8 +66,9 @@ template:
     cursor artifact, `sweep-cursor.json`, which the scheduler reads to decide
     whether the next tick has anything left to validate. Its exact content is
     `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`;
-    attach it through the workspace's task artifact surface, sourcing it from a
-    scratch file in an ignored directory inside the checkout. Write it on every
+    write it to `.orbit/tmp/sweep-cursor.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool show <tool.name>` prints the tool's schema. Write it on every
     completed sweep, including one that found nothing to fix — a sweep without
     it leaves the next tick no cursor to compare the branch tip against.
 

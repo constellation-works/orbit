@@ -1,10 +1,12 @@
 pub mod cwd;
+pub mod directory_lock;
 pub mod file_lock;
 pub mod generation;
 pub mod git;
 pub mod io;
 pub mod overlap_index;
 pub mod path;
+pub mod path_glob;
 pub mod reverse_lines;
 pub mod selector;
 pub mod task_io;

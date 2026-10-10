@@ -1,14 +1,14 @@
 //! Crew admission, optional-property diagnostics and workflow lane aliases.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
     ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
-    CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL, CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL,
-    CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL,
-    PI_DEFAULT_MODEL,
+    CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
+    COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
+    OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort, validate_antigravity_model};
@@ -156,9 +156,9 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
     for (name, model, provider) in [
         ("opus", CLAUDE_DEFAULT_STRONG, "claude"),
         ("sonnet", CLAUDE_DEFAULT_WEAK, "claude"),
+        ("haiku", CLAUDE_HAIKU_MODEL, "claude"),
         ("fable", CLAUDE_FABLE_MODEL, "claude"),
         ("sol", CODEX_SOL_MODEL, "codex"),
-        ("terra", CODEX_TERRA_MODEL, "codex"),
         ("luna", CODEX_LUNA_MODEL, "codex"),
         ("astra", CODEX_ASTRA_MODEL, "codex"),
         ("gemini", GEMINI_CREW_MODEL, "gemini"),
@@ -197,9 +197,12 @@ fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {
         effort: None,
     }
 }
+/// `crew_field_path` names the file that supplied `[crews.<name>].<field>`,
+/// which a layered load can only know per field after the merge.
 pub(super) fn crews_from_raw(
     raw: Option<&BTreeMap<String, RawCrewEntry>>,
     config_path: &Path,
+    crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
 ) -> Result<(BTreeMap<String, Crew>, Vec<IgnoredCrewProperty>), OrbitError> {
     let Some(raw_crews) = raw else {
         return Ok((default_crews(), Vec::new()));
@@ -216,7 +219,7 @@ pub(super) fn crews_from_raw(
         reject_unpoolable_crew_name_in_config(trimmed, "[crews]", config_path)?;
         let crew = Crew {
             name: trimmed.to_string(),
-            assignment: crew_assignment_from_raw(trimmed, entry, config_path, &mut ignored)?,
+            assignment: crew_assignment_from_raw(trimmed, entry, crew_field_path, &mut ignored)?,
             description: normalized_crew_description(entry.description.as_deref()),
             tags: normalized_crew_tags(&entry.tags),
             enabled: entry.enabled.unwrap_or(true),
@@ -301,7 +304,7 @@ fn normalized_crew_tags(raw: &[String]) -> Vec<String> {
 fn crew_assignment_from_raw(
     crew: &str,
     raw: &RawCrewEntry,
-    config_path: &Path,
+    crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
     ignored: &mut Vec<IgnoredCrewProperty>,
 ) -> Result<CrewAssignment, OrbitError> {
     let has_legacy = raw.planner.is_some() || raw.implementer.is_some() || raw.reviewer.is_some();
@@ -325,29 +328,31 @@ fn crew_assignment_from_raw(
             raw.effort.as_deref(),
             &provider,
             raw.model.as_deref(),
-            config_path,
+            crew_field_path,
             ignored,
         ),
     })
 }
 
 /// Optional crew effort: invalid or provider-unsupported values are ignored
-/// so a mistyped optional key cannot fail every command. [ORB-12720]
+/// so a mistyped optional key cannot fail every command. The ignored record
+/// names the file that set the effort, not the merged document. [ORB-12720]
 fn crew_effort_from_raw(
     crew: &str,
     raw_effort: Option<&str>,
     provider: &str,
     raw_model: Option<&str>,
-    config_path: &Path,
+    crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
     ignored: &mut Vec<IgnoredCrewProperty>,
 ) -> Option<ReasoningEffort> {
     let raw_effort = raw_effort?;
+    let config_path = crew_field_path(crew, "effort");
     let effort = match raw_effort.parse::<ReasoningEffort>() {
         Ok(effort) => effort,
         Err(error) => {
             ignore_optional_crew_property(
                 ignored,
-                config_path,
+                &config_path,
                 crew,
                 "effort",
                 raw_effort,
@@ -362,7 +367,7 @@ fn crew_effort_from_raw(
         Err(_) => {
             ignore_optional_crew_property(
                 ignored,
-                config_path,
+                &config_path,
                 crew,
                 "effort",
                 raw_effort,
@@ -378,7 +383,7 @@ fn crew_effort_from_raw(
     {
         ignore_optional_crew_property(
             ignored,
-            config_path,
+            &config_path,
             crew,
             "effort",
             raw_effort,

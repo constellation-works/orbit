@@ -2,14 +2,14 @@
 title: Operations as Data — Migration Cookbook
 owner: claude
 last_updated: 2026-07-26
-last_validated: 2026-09-24
+last_validated: 2026-10-09
 status: Accepted
 feature: operations-as-data
 doc_role: reference
 type: design
 summary: Step-by-step procedure for migrating a noun to the operation registry, and for adding a verb to an already-migrated noun.
 tags: [operations-as-data, architecture, adr-0209, cookbook]
-paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-cli/src/command/operation_args.rs"]
+paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data]
 related_artifacts: [ORB-10358]
 ---
@@ -51,11 +51,11 @@ For a noun with verbs `v₁…vₙ`, find:
 |------|--------------------------|
 | MCP `Tool` impls | `crates/orbit-tools/src/builtin/orbit/<noun>/*.rs` |
 | MCP registration + workspace scope | `crates/orbit-tools/src/builtin/orbit/register.rs` |
-| Action enum variants | `crates/orbit-tools/src/lib.rs` (`OrbitBuiltinAction`) |
+| Action enum variants | `crates/orbit-tools/src/host.rs` (`OrbitBuiltinAction`) |
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
 | Handlers | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
 | CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>.rs` |
-| CLI audit metadata | `crates/orbit-cli/src/command/operation_registry.rs` |
+| CLI audit metadata | `crates/orbit-cli/src/command/operation/registry.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
 
 Note where the *same* field is described differently in two places. Do **not**
@@ -100,7 +100,9 @@ compiler cannot:
 - subcommand order matches the shipped `--help` order (assert the literal list);
 - MCP exposure matches `docs/design/mcp-bridge/references/conformance-v1.yaml`.
 
-See `crates/orbit-common/src/governance/friction/tests/mod.rs`.
+Use the registry in `crates/orbit-common/src/governance/friction/operations.rs`
+as the worked example. Exercise the derived public surface at the boundary;
+the original friction registry unit tests have been retired.
 
 ### Step 4. Collapse the action enum
 
@@ -123,8 +125,10 @@ loop over the registry through `register_operation`, and delete the noun's block
 from `register_builtins`.
 
 Then assert the derived schemas equal the shipped ones — name, description,
-parameter order, types, requiredness, and the exact description strings. See
-`crates/orbit-tools/src/builtin/orbit/friction/tests/derived_schema.rs`.
+parameter order, types, requiredness, and the exact description strings. Use
+`crates/orbit-tools/tests/tools/mcp_definitions.rs` for the public definition
+boundary and `crates/orbit-cli/tests/snapshots/mcp_tools_list.json` for the
+shipped schema baseline; the original derived-schema unit tests have been retired.
 
 ### Step 6. Derive the CLI
 
@@ -134,7 +138,7 @@ Delete the per-verb `Args` structs and `Execute` impls. Keep the parent
 impls that are three lines each, delegating to `operation_args`. Keep the
 response renderers — those are presentation and stay per-noun.
 
-Update `command/operation_registry.rs`'s arm for the noun to read
+Update `command/operation/registry.rs`'s arm for the noun to read
 `invocation.spec.name`, `invocation.target_id()`, and `invocation.json` instead
 of matching verb by verb.
 

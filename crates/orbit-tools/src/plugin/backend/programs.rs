@@ -91,7 +91,7 @@ pub fn resolve_declared_program(
 /// A recorded path is granted only while it still names the executable the
 /// operator consented to: it must exist, be an executable regular file, and
 /// still be its own canonical path. It is also never granted inside a
-/// host-owned tree ([`PLUGIN_GLOBAL_READ_DENY_DIRS`]) — a Landlock read rule
+/// host-owned tree (`PLUGIN_GLOBAL_READ_DENY_DIRS`) — a Landlock read rule
 /// on a single file inside a denied directory would hand the child that
 /// file, so a program there could buy back another plugin's state.
 pub fn program_statuses(

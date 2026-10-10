@@ -9,14 +9,17 @@ use chrono::{DateTime, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_store::contracts::RoutineFireRecord;
-use orbit_types::workflow::RoutineTarget;
+use orbit_store::contracts::{JobRunQuery, RoutineFireRecord, RoutineFireState};
+use orbit_types::workflow::{JobRun, JobRunState, RoutineTarget};
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
 use super::RoutineMachineIdentity;
 use super::due::{next_occurrence, parse_cron};
 use super::loader::{
-    LoadedRoutine, RetiredRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines,
+    DiscoveredWorkspaces, LoadedRoutine, OwnerOnlyRoutine, RetiredRoutine, RoutineLoadError,
+    RoutineWorkspaceProvider, collect_host_routines,
 };
+use crate::OrbitRuntime;
 
 /// Operator-facing schedule readiness. Theoretical next-slot math may still be
 /// present; this state says whether that time is armed.
@@ -67,7 +70,9 @@ pub struct RoutineStatus {
     pub last_evaluated_slot: Option<String>,
     /// Next scheduled slot (RFC 3339, host-local), when computable.
     pub next_due: Option<String>,
-    /// Most recent fire attempt recorded on this host.
+    /// Most recent fire recorded on this host, from whichever trigger fired
+    /// it: the cron fire store, or for a state- or delivery-triggered routine
+    /// the newest run that routine's automation admitted when that is newer.
     pub last_fire: Option<RoutineFireRecord>,
     pub automation: Option<serde_json::Value>,
 }
@@ -127,6 +132,9 @@ pub struct RoutineStatusReport {
     pub retired: Vec<RetiredRoutine>,
     /// Fail-closed load failures (these routines are absent).
     pub load_errors: Vec<RoutineLoadError>,
+    /// Definitions in a replica checkout that only the owner schedules:
+    /// listed with the owner-authority reason, never toggled or fired here.
+    pub owner_only: Vec<OwnerOnlyRoutine>,
 }
 
 impl RoutineStatusReport {
@@ -159,7 +167,8 @@ pub fn routine_statuses_with_providers(
 
     let discovered = workspace_provider.discover_workspaces(global_root)?;
     let mut load_errors = discovered.errors.clone();
-    let mut collection = collect_routines(&discovered.entries);
+    let host = collect_host_routines(&discovered);
+    let mut collection = host.collection;
     load_errors.append(&mut collection.errors);
 
     let pauses = store.routine_pauses()?;
@@ -168,7 +177,7 @@ pub fn routine_statuses_with_providers(
     let mut statuses = Vec::with_capacity(collection.routines.len());
     for routine in collection.routines {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
-        let last_fire = store.routine_latest_fire(&routine.definition.name)?;
+        let cron_fire = store.routine_latest_fire(&routine.definition.name)?;
         let cursor = store.routine_cursor(&routine.definition.name)?;
         let paused_at = pauses
             .get(&routine.definition.name)
@@ -176,6 +185,7 @@ pub fn routine_statuses_with_providers(
         let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
             discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine(runtime,&routine.definition,now_utc) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
         });
+        let last_fire = newest_fire(cron_fire, automation_fire(&discovered, &routine)?);
         statuses.push(RoutineStatus {
             routine,
             paused_at,
@@ -193,7 +203,170 @@ pub fn routine_statuses_with_providers(
         statuses,
         retired: collection.retired,
         load_errors,
+        owner_only: host.owner_only,
     })
+}
+
+/// The latest run a state- or delivery-triggered routine's automation admitted.
+///
+/// Those fires never touch the cron fire store: the run itself carries the
+/// routine as its trigger, so the run record is the fire record. A cron-only
+/// routine has no such runs and is not queried.
+fn automation_fire(
+    discovered: &DiscoveredWorkspaces,
+    routine: &LoadedRoutine,
+) -> Result<Option<RoutineFireRecord>, OrbitError> {
+    let trigger = &routine.definition.trigger;
+    if trigger.deliveries_landed.is_none() && trigger.state.is_none() {
+        return Ok(None);
+    }
+    let Some((_, runtime)) = discovered
+        .entries
+        .iter()
+        .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
+    else {
+        return Ok(None);
+    };
+    let run = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(routine.definition.target.job_name().to_string()),
+            trigger_routine: Some(routine.definition.name.clone()),
+            limit: Some(1),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?
+        .into_iter()
+        .next();
+    Ok(run.map(|run| fire_from_run(&routine.definition.name, &routine.source_workspace, run)))
+}
+
+fn fire_from_run(name: &str, source_workspace: &str, run: JobRun) -> RoutineFireRecord {
+    let state = match run.state {
+        JobRunState::Pending | JobRunState::Running | JobRunState::Retrying => {
+            RoutineFireState::Dispatched
+        }
+        JobRunState::Success | JobRunState::Held => RoutineFireState::Succeeded,
+        JobRunState::Skipped => RoutineFireState::Skipped,
+        JobRunState::Timeout => RoutineFireState::TimedOut,
+        JobRunState::Failed | JobRunState::Cancelled | JobRunState::Interrupted => {
+            RoutineFireState::Failed
+        }
+    };
+    let updated = run.finished_at.or(run.started_at).unwrap_or(run.created_at);
+    RoutineFireRecord {
+        routine_name: name.to_string(),
+        slot: run.created_at.to_rfc3339(),
+        attempt: run.attempt,
+        state,
+        run_id: Some(run.run_id),
+        source_workspace: source_workspace.to_string(),
+        detail: None,
+        created_at: run.created_at.to_rfc3339(),
+        updated_at: updated.to_rfc3339(),
+    }
+}
+
+/// The later of a cron fire and an automation-admitted run, by creation time.
+fn newest_fire(
+    cron: Option<RoutineFireRecord>,
+    automation: Option<RoutineFireRecord>,
+) -> Option<RoutineFireRecord> {
+    let (Some(cron_fire), Some(auto_fire)) = (&cron, &automation) else {
+        return cron.or(automation);
+    };
+    let at = |fire: &RoutineFireRecord| DateTime::parse_from_rfc3339(&fire.created_at).ok();
+    match (at(cron_fire), at(auto_fire)) {
+        (Some(cron_at), Some(auto_at)) if auto_at <= cron_at => cron,
+        (Some(_), Some(_)) => automation,
+        _ => cron,
+    }
+}
+
+/// A selected checkout is the entire discovery scope: never another store by
+/// cwd, never a client-supplied path.
+struct SelectedCheckout<'a>(&'a OrbitRuntime);
+
+impl RoutineWorkspaceProvider for SelectedCheckout<'_> {
+    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let runtime = self.0;
+        let workspace = Workspace {
+            id: runtime.workspace_id()?,
+            name: runtime.workspace_label(),
+            owner_machine_id: runtime
+                .workspace_runtime_binding()
+                .and_then(|binding| binding.owner_machine_id.clone()),
+            git_remote: None,
+            ship_mode: None,
+            base_branch: runtime.workspace_base_branch().into(),
+            status: WorkspaceStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        Ok(DiscoveredWorkspaces::single_checkout(
+            workspace,
+            runtime.clone(),
+        ))
+    }
+}
+
+/// Routine status for one selected checkout, with the same replica rule the
+/// host sweep applies.
+pub(crate) fn checkout_routine_statuses(
+    runtime: &OrbitRuntime,
+) -> Result<RoutineStatusReport, OrbitError> {
+    routine_statuses_with_providers(
+        &runtime.global_root(),
+        RoutineMachineIdentity {
+            machine_id: runtime
+                .automation_machine_identity()
+                .unwrap_or("local")
+                .into(),
+            machine_name: "Selected host".into(),
+        },
+        &SelectedCheckout(runtime),
+        Utc::now(),
+    )
+}
+
+/// Toggle one routine definition in a selected checkout [ORB-14173].
+///
+/// An owner checkout keeps the general coordination-write guard. A replica
+/// checkout may change only the replica-local definitions it schedules for
+/// itself; a definition its owner schedules is refused with the owner named,
+/// and a claimed worker never toggles anything.
+pub(crate) fn toggle_checkout_routine(
+    runtime: &OrbitRuntime,
+    name: &str,
+    target: &str,
+    expected_enabled: bool,
+    enabled: bool,
+) -> Result<RoutineToggleOutcome, OrbitError> {
+    let replica =
+        runtime.worker_invocation().is_none() && runtime.coordination_write_owner().is_some();
+    if !replica {
+        runtime.ensure_coordination_task_write_permitted()?;
+    }
+    let report = checkout_routine_statuses(runtime)?;
+    if let Some(owned) = report
+        .owner_only
+        .iter()
+        .find(|owned| owned.routine.definition.name == name)
+    {
+        return Err(OrbitError::CapabilityRefused(owned.reason.clone()));
+    }
+    let status = report
+        .statuses
+        .iter()
+        .find(|status| status.routine.definition.name == name)
+        .ok_or_else(|| OrbitError::InvalidInput("routine unavailable in this workspace".into()))?;
+    if status.routine.definition.target.as_ref_string() != target {
+        return Ok(RoutineToggleOutcome::TargetConflict {
+            actual_target: status.routine.definition.target.clone(),
+        });
+    }
+    set_routine_enabled(&status.routine, expected_enabled, enabled)
 }
 
 /// The routine's next scheduled occurrence, rendered host-local.

@@ -12,16 +12,21 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
 
+pub use super::baseline::{BaseFailureCheck, BaseFailureVerdict, verify_base_failure};
 use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    base_sync_mode_from_input, git_output, git_output_raw, git_success,
-    resolve_worktree_start_point,
+    base_sync_mode_from_input, git_command_success, git_failure_error, git_output, git_output_raw,
+    git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
 };
+pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
 
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";
+
+/// The catalog activity a before-PR reviewer runs as.
+pub const REVIEWER_ACTIVITY: &str = "agent_review_repair";
 
 /// The pinned candidate a reviewer is handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +266,34 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
     Ok(paths)
 }
 
+/// [ORB-14632] Whether the repository-relative `path` differs between
+/// commits `from` and `to`: its content or mode changed, or it was added or
+/// deleted. Rename detection stays off, so a file moved away reads as deleted
+/// at `path`, and `path` is a literal pathspec, never a pattern.
+pub fn path_changed_between(
+    workspace_path: &Path,
+    from: &str,
+    to: &str,
+    path: &str,
+) -> Result<bool, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &[
+            "--literal-pathspecs",
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "--end-of-options",
+            from,
+            to,
+            "--",
+            path,
+        ],
+    )?;
+    Ok(raw.split('\0').any(|changed| !changed.is_empty()))
+}
+
 /// What a managed landing looks like against the reviewed candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandedFacts {
@@ -269,6 +302,99 @@ pub struct LandedFacts {
     pub is_candidate_commit: bool,
     pub parents: usize,
     pub span_commits: usize,
+}
+
+/// Whether `ancestor` is `descendant` or in its history. An object the
+/// checkout does not hold is not contained.
+pub fn contains_commit(
+    workspace_path: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, OrbitError> {
+    git_command_success(
+        workspace_path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )
+}
+
+/// Publish a held candidate `commit` on `origin` as
+/// `orbit-evidence/<branch>`, where `<branch>` is the worktree's current
+/// branch, and return that ref. The candidate otherwise exists only in this
+/// worktree, and another machine fetches it from `origin` to run a named check
+/// at it. The ref is apart from the delivery branch, so a later delivery of
+/// the task pushes its own history unhindered, and the task's next hold
+/// replaces it.
+pub fn publish_held_candidate(workspace_path: &Path, commit: &str) -> Result<String, OrbitError> {
+    let branch = git_output(
+        workspace_path,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?
+    .trim()
+    .to_string();
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err(OrbitError::Execution(
+            "the worktree is not on a named branch".to_string(),
+        ));
+    }
+    let target = format!("refs/heads/orbit-evidence/{branch}");
+    git_success(
+        workspace_path,
+        &["push", "--quiet", "origin", &format!("+{commit}:{target}")],
+    )?;
+    Ok(target)
+}
+
+/// [ORB-14450] The stable patch id of the whole change from `base` to
+/// `head`, taken as one diff so a squash or a rebase of the same change
+/// yields the same id; `None` when the range changes nothing.
+pub fn patch_id(
+    workspace_path: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Option<String>, OrbitError> {
+    let run = |args: &[&str], stdin: Option<&[u8]>| {
+        let outcome = git_run_bytes(workspace_path, args, stdin)?;
+        if outcome.timed_out {
+            return Err(git_timeout_error(
+                workspace_path,
+                args,
+                outcome.timeout_ms,
+                &outcome.stderr,
+            ));
+        }
+        if !outcome.success {
+            return Err(git_failure_error(workspace_path, args, &outcome.stderr));
+        }
+        Ok(outcome.stdout)
+    };
+    let diff = run(
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--full-index",
+            "--binary",
+            "--end-of-options",
+            base,
+            head,
+        ],
+        None,
+    )?;
+    if diff.is_empty() {
+        return Ok(None);
+    }
+    let id = run(&["patch-id", "--stable"], Some(&diff))?;
+    Ok(String::from_utf8_lossy(&id)
+        .split_whitespace()
+        .next()
+        .map(ToOwned::to_owned))
 }
 
 /// Fetch the landed commit from `origin` so it can be read locally. A
@@ -333,5 +459,41 @@ pub fn landed_candidate_facts(
         is_candidate_commit,
         parents,
         span_commits,
+    })
+}
+
+/// One required validation command's result, run exactly as the delivery
+/// validation steps run it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredValidationRun {
+    pub command: String,
+    pub passed: bool,
+    pub exit_code: i32,
+    pub timed_out: bool,
+    /// `environment` when a tool was missing, `candidate` for any other
+    /// failure, `None` when the command passed.
+    pub failure_kind: Option<String>,
+    pub output: String,
+    /// How the validation environment was resolved.
+    pub environment: serde_json::Value,
+}
+
+/// Run one required validation command in `workspace_path` with the shared
+/// validation runner: the same shell, environment, timeout and failure
+/// classification as delivery validation.
+pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    command: &str,
+) -> Result<RequiredValidationRun, OrbitError> {
+    let run = super::required_command::run_required_command(host, workspace_path, command, None)?;
+    Ok(RequiredValidationRun {
+        failure_kind: run.failure_kind().as_str().map(str::to_string),
+        environment: run.environment_record(),
+        command: run.command,
+        passed: run.passed,
+        exit_code: run.exit_code,
+        timed_out: run.timed_out,
+        output: run.output,
     })
 }

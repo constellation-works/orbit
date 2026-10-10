@@ -31,23 +31,33 @@ use chrono::Utc;
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
-    V2DispatchInput, WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
+    DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
+    FinalRecoveryApplied, RebaseRecoveryAttemptScope, ResolvedCliExecutor, RuntimeHost,
+    TaskAutomationUpdate, V2AuditWriter, V2DispatchInput, WorktreeGcTaskLookup,
+    dispatch_v2_activity, execute_deterministic_action,
 };
+use orbit_store::contracts::{ClaimCandidateRef, KeptClaimCandidate};
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskHistoryEntry,
-    TaskPriority, TaskStatus, TaskType,
+    CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
+    TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
-use orbit_types::workflow::{FailureActivityCheckpoint, JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState, PipelineState,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// Set in the isolated child that runs a test body.
 const CHILD_ENV: &str = "ORBIT_WORKTREE_LIFECYCLE_CHILD";
 /// Upper bound on one isolated test body, Git calls included.
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const BASE: &str = "agent-main";
+
+#[cfg(unix)]
+mod absorbed_candidate;
+#[cfg(unix)]
+mod declared_reclaim;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -250,7 +260,10 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
                     "hm_owner/ws: remote tool failed (execution_failed): store busy".into(),
                 ),
             );
-            // A settled task's checkout that Git no longer lists.
+            // A settled task's checkout that Git no longer lists but whose
+            // `.git` link still resolves, so `git worktree repair` could bring
+            // it back. (One whose link is gone is the remains of a failed
+            // removal, and GC reclaims it.)
             let moved = setup("jrun-claim-moved", "T-CLAIM-MOVED");
             host.set_status("T-CLAIM-MOVED", TaskStatus::Done);
             git(
@@ -259,6 +272,11 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
             );
             fs::create_dir_all(&moved.path).unwrap();
             fs::write(moved.path.join("notes.txt"), "left behind").unwrap();
+            fs::write(
+                moved.path.join(".git"),
+                format!("gitdir: {}\n", fixture.repo.join(".git").display()),
+            )
+            .unwrap();
 
             let cases = [
                 (
@@ -399,6 +417,221 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
     );
 }
 
+/// [ORB-14099] One recorded run whose `input.run_id` sanitizes to an empty
+/// string must not abort the sweep. A scoped call still classifies the run
+/// it names, and an unscoped call classifies every other worktree while the
+/// bad runs show up as failed report entries.
+#[test]
+fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
+    isolated(
+        "worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            let setup = |run_id: &str, task_id: &str, status: TaskStatus| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let input = setup_input(&[task_id], run_id);
+                let setup = action(&host, "worktree_setup", &input).expect("worktree setup");
+                host.set_status(task_id, status);
+                host.add_run(job_run(run_id, JobRunState::Success, input));
+                Checkout::from_setup(&setup)
+            };
+            let kept = setup("jrun-gc-kept", "T-GC-KEPT", TaskStatus::InProgress);
+            let reaped = setup("jrun-gc-reaped", "T-GC-REAPED", TaskStatus::Done);
+            // Setup rejects these tokens. The runs are recorded anyway, which
+            // is the state that used to poison every later sweep.
+            for (run_id, task_id, token) in [
+                ("jrun-gc-dot", "T-GC-DOT", "."),
+                ("jrun-gc-marks", "T-GC-MARKS", "???"),
+            ] {
+                let mut input = setup_input(&[task_id], run_id);
+                input["run_id"] = json!(token);
+                host.add_run(job_run(run_id, JobRunState::Failed, input));
+            }
+
+            let scoped = action(
+                &host,
+                "worktree_gc",
+                &json!({"target_run_id": "jrun-gc-kept"}),
+            )
+            .expect("a malformed sibling run must not fail a scoped sweep");
+            let scoped_reports = scoped["reports"].as_array().expect("scoped reports");
+            assert_eq!(scoped_reports.len(), 1, "{scoped:#}");
+            assert_eq!(scoped_reports[0]["run_id"], "jrun-gc-kept", "{scoped:#}");
+            assert_eq!(
+                scoped_reports[0]["action"], "skipped:task_status_ineligible",
+                "{scoped:#}"
+            );
+            assert!(
+                kept.path.exists(),
+                "the scoped sweep retains in-progress work"
+            );
+
+            let result = action(&host, "worktree_gc", &json!({})).expect("worktree gc");
+            let reports = result["reports"].as_array().expect("gc reports");
+            let report = |run_id: &str| {
+                reports
+                    .iter()
+                    .find(|report| report["run_id"] == run_id)
+                    .unwrap_or_else(|| panic!("{run_id}: no gc report in {result:#}"))
+            };
+            assert_eq!(
+                report("jrun-gc-kept")["action"],
+                "skipped:task_status_ineligible",
+                "{:#}",
+                report("jrun-gc-kept")
+            );
+            assert!(kept.path.exists(), "in-progress work stays");
+            assert_eq!(
+                report("jrun-gc-reaped")["action"],
+                "removed",
+                "{:#}",
+                report("jrun-gc-reaped")
+            );
+            assert!(
+                !reaped.path.exists(),
+                "a settled checkout is still reclaimed"
+            );
+            for run_id in ["jrun-gc-dot", "jrun-gc-marks"] {
+                let bad = report(run_id);
+                let action = bad["action"].as_str().expect("action");
+                assert!(
+                    action.starts_with("failed:")
+                        && action.contains("sanitizes to an empty string"),
+                    "ORB-14099: a run id that cannot name a directory is a failed entry, not a sweep abort: {bad:#}"
+                );
+            }
+        },
+    );
+}
+
+/// [ORB-14101] `branch_prefix` is a Git namespace, not a path. `..` and a
+/// leading `-` are refused before any checkout exists. A slash stays in the
+/// branch ref and becomes one directory component, including when
+/// `ORBIT_WORKTREE_ROOT` relocates the root. GC still matches that checkout.
+#[test]
+fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
+    isolated(
+        "worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+
+            let refuse = |prefix: &str, run_id: &str, task_id: &str| {
+                host.add_task(task_id, TaskStatus::Backlog);
+                let mut input = setup_input(&[task_id], run_id);
+                input["branch_prefix"] = json!(prefix);
+                let error = action(&host, "worktree_setup", &input)
+                    .expect_err("unsafe branch_prefix is refused");
+                match error {
+                    OrbitError::InvalidInput(message) => {
+                        assert!(
+                            message.contains("branch_prefix") && message.contains(prefix),
+                            "refusal names the prefix: {message}"
+                        );
+                    }
+                    other => panic!("refused before checkout creation, got {other}"),
+                }
+            };
+            // `../../../tmp/esc` joined under `.orbit/state/worktrees` would
+            // land at `<repo>/tmp/esc-<run>`, outside the worktree root.
+            refuse("../../../tmp/esc", "jrun-escape", "T-ESCAPE");
+            refuse("-hidden", "jrun-dash", "T-DASH");
+            refuse("///", "jrun-slashes", "T-SLASHES");
+
+            assert!(
+                host.admitted().is_empty(),
+                "a refused prefix admits no task"
+            );
+            assert!(
+                !fixture.repo.join("tmp").exists(),
+                "ORB-14101: traversal prefix must not create <repo>/tmp"
+            );
+            assert!(
+                !fixture.repo.join(".orbit").exists(),
+                "a refused prefix creates no worktree root"
+            );
+            let primary = canonical(&fixture.repo);
+            for path in registered_worktrees(&fixture.repo) {
+                assert_eq!(
+                    canonical(&path),
+                    primary,
+                    "ORB-14101: refused prefix registered an extra worktree"
+                );
+            }
+
+            let configured = fixture.root.path().join("configured-worktrees");
+            let _env = orbit_common::test_env::scoped([(
+                "ORBIT_WORKTREE_ROOT",
+                Some(path_str(&configured)),
+            )]);
+            let checkout_root = configured.join(fixture.repo.file_name().expect("repo name"));
+            let run_id = "jrun-prefix-slash";
+            host.add_task("T-PREFIX", TaskStatus::Backlog);
+            let mut input = setup_input(&["T-PREFIX"], run_id);
+            input["branch_prefix"] = json!("team/x");
+            let setup = action(&host, "worktree_setup", &input).expect("slash prefix setup");
+            let checkout = Checkout::from_setup(&setup);
+
+            assert_eq!(
+                checkout.path.parent(),
+                Some(checkout_root.as_path()),
+                "checkout is one child of the configured worktree root"
+            );
+            assert_eq!(
+                checkout.path.file_name().and_then(|name| name.to_str()),
+                Some("team-x-jrun-prefix-slash"),
+                "a slash in the prefix is a hyphen in the directory name"
+            );
+            assert!(
+                !checkout_root.join("team").exists(),
+                "the prefix must not create a nested team/ directory"
+            );
+            let canonical_root = canonical(&checkout_root);
+            let canonical_checkout = canonical(&checkout.path);
+            assert_eq!(
+                canonical_checkout.parent().map(Path::to_path_buf),
+                Some(canonical_root.clone()),
+                "canonical checkout stays under the configured root"
+            );
+            assert!(
+                registered_worktrees(&fixture.repo)
+                    .iter()
+                    .any(|path| canonical(path) == canonical_checkout),
+                "git registered the contained checkout"
+            );
+            assert!(
+                checkout.branch.starts_with("team/x/T-PREFIX-"),
+                "the branch namespace keeps the slash: {}",
+                checkout.branch
+            );
+            assert_eq!(host.admitted(), ["T-PREFIX"]);
+
+            host.set_status("T-PREFIX", TaskStatus::Done);
+            host.add_run(job_run(run_id, JobRunState::Success, input));
+            let result = action(&host, "worktree_gc", &json!({})).expect("worktree gc");
+            let reports = result["reports"].as_array().expect("gc reports");
+            let report = reports
+                .iter()
+                .find(|report| report["run_id"] == run_id)
+                .expect("gc report for the slash-prefix run");
+            assert_eq!(report["action"], "removed", "{report:#}");
+            assert_eq!(
+                Path::new(report["path"].as_str().expect("report path")),
+                checkout.path,
+                "gc resolves the sanitized directory setup created"
+            );
+            assert!(!checkout.path.exists(), "gc removes the contained checkout");
+            assert!(
+                reports
+                    .iter()
+                    .all(|report| report["action"] != "skipped:unrecognized"),
+                "a sanitized prefix is not an unrecognized nested directory: {result:#}"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------
@@ -459,6 +692,400 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
                 retained
             );
             assert_eq!(host.admitted().len(), 2);
+        },
+    );
+}
+
+/// A registered checkout whose admin `HEAD` is corrupt (a crash mid-commit)
+/// cannot report its status, so setup cannot tell dirty from clean. The edits
+/// in it are unrecoverable once the checkout is force-removed.
+#[test]
+fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits() {
+    isolated(
+        "worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-CORRUPT", TaskStatus::Backlog);
+            let input = setup_input(&["T-CORRUPT"], "jrun-corrupt");
+
+            let first = action(&host, "worktree_setup", &input).expect("first setup");
+            let checkout = Checkout::from_setup(&first);
+            fs::write(checkout.path.join("uncommitted.txt"), "agent edit\n").unwrap();
+            let admin_head = git_path(&checkout.path, "HEAD");
+            fs::write(&admin_head, "not a ref\n").unwrap();
+            assert!(
+                Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .current_dir(&checkout.path)
+                    .output()
+                    .map(|output| !output.status.success())
+                    .unwrap_or(false),
+                "fixture: status must be unreadable for the corrupt checkout"
+            );
+
+            let error = action(&host, "worktree_setup", &input)
+                .expect_err("an unreadable-status checkout is refused, not removed");
+            let message = error.to_string();
+            assert!(
+                matches!(error, OrbitError::Execution(_))
+                    && message.contains("retains work")
+                    && message.contains("status=unreadable"),
+                "refusal carries the unreadable-status evidence: {message}"
+            );
+            assert_eq!(host.admitted().len(), 1, "a refused setup admits no task");
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("uncommitted.txt")).unwrap(),
+                "agent edit\n",
+                "the uncommitted edit survives the refused setup"
+            );
+            assert_eq!(
+                fs::read_to_string(&admin_head).unwrap(),
+                "not a ref\n",
+                "the corrupt admin state is left for inspection"
+            );
+        },
+    );
+}
+
+/// `origin/main` and `main` name one local landing branch. Setup's pre-check
+/// and `merge_batch_worktree_into_base` both inspect the linked checkout that
+/// holds it, including when the primary checkout is a different dirty tree.
+#[test]
+fn local_landing_precheck_uses_the_normalized_base_checkout() {
+    isolated(
+        "local_landing_precheck_uses_the_normalized_base_checkout",
+        || {
+            let fixture = Fixture::new();
+            git(&fixture.repo, &["branch", "main"]);
+            let requested = fixture.root.path().join("landing");
+            git(
+                &fixture.repo,
+                &["worktree", "add", path_str(&requested), "main"],
+            );
+            let landing = checkout_holding(&fixture.repo, "main");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-LAND", TaskStatus::Backlog);
+            let checkouts_before = registered_worktrees(&fixture.repo);
+
+            let original = fs::read(landing.join("README.md")).unwrap();
+            fs::write(landing.join("README.md"), "uncommitted landing work\n").unwrap();
+            for (field, spelling) in [
+                ("base", "main"),
+                ("base", "origin/main"),
+                ("base_branch", "origin/main"),
+            ] {
+                let error = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input(field, spelling, "jrun-land-refuse"),
+                )
+                .expect_err("a dirty landing checkout is refused before admission");
+                assert_landing_checkout_refusal(&error, &landing, spelling);
+            }
+            assert!(
+                host.admitted().is_empty(),
+                "a refused pre-check admits no task"
+            );
+            assert_eq!(
+                registered_worktrees(&fixture.repo),
+                checkouts_before,
+                "a refused pre-check creates no worktree"
+            );
+
+            fs::write(landing.join("README.md"), &original).unwrap();
+            fs::write(fixture.repo.join("unrelated.txt"), "primary dirt\n").unwrap();
+            let mut workspace = None;
+            for (spelling, run_id) in [
+                ("main", "jrun-land-main"),
+                ("origin/main", "jrun-land-origin"),
+            ] {
+                let output = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input("base", spelling, run_id),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "base spelling {spelling} must admit when only the primary checkout is dirty: {error}"
+                    )
+                });
+                workspace = Some((
+                    run_id,
+                    PathBuf::from(output["workspace_path"].as_str().expect("workspace_path")),
+                ));
+            }
+            let (run_id, workspace) = workspace.expect("admitted checkout");
+            assert_eq!(
+                git(&fixture.repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                BASE,
+                "setup leaves the primary checkout on its own branch"
+            );
+
+            fs::write(landing.join("README.md"), "uncommitted landing work\n").unwrap();
+            for spelling in ["main", "origin/main"] {
+                let error = action(
+                    &host,
+                    "git_merge",
+                    &merge_input(run_id, spelling, &workspace),
+                )
+                .expect_err("merge refuses the same dirty landing checkout");
+                assert_landing_checkout_refusal(&error, &landing, spelling);
+            }
+
+            fs::write(landing.join("README.md"), &original).unwrap();
+            for spelling in ["main", "origin/main"] {
+                let merged = action(
+                    &host,
+                    "git_merge",
+                    &merge_input(run_id, spelling, &workspace),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "base spelling {spelling} must merge into the clean linked checkout while the primary stays dirty: {error}"
+                    )
+                });
+                assert_eq!(merged["base"], "main");
+            }
+            assert_eq!(
+                git(&landing, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                "main"
+            );
+            assert_eq!(
+                git(&fixture.repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                BASE
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("unrelated.txt")).unwrap(),
+                "primary dirt\n"
+            );
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Local delivery: operator-owned untracked files in the landing checkout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn local_landing_preserves_unrelated_untracked_files() {
+    isolated("local_landing_preserves_unrelated_untracked_files", || {
+        for linked in [false, true] {
+            let fixture = Fixture::new();
+            git(&fixture.repo, &["branch", "main"]);
+            if linked {
+                let landing = fixture.root.path().join("landing");
+                git(
+                    &fixture.repo,
+                    &["worktree", "add", path_str(&landing), "main"],
+                );
+            } else {
+                git(&fixture.repo, &["checkout", "main"]);
+            }
+            let landing = checkout_holding(&fixture.repo, "main");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-LAND", TaskStatus::Backlog);
+            let notes = ["on-call-goal.md", "operations/research/notes\n\".md"];
+            let bytes = b"operator notes\n\0\xff\r\n";
+            for note in notes {
+                let path = landing.join(note);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, bytes).unwrap();
+            }
+            let run_id = "jrun-untracked-notes";
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &landing_input("base", "main", run_id),
+            )
+            .expect("local setup accepts unrelated operator notes");
+            let checkout = Checkout::from_setup(&setup);
+            commit_tracked_record(
+                &checkout.path,
+                "operations/scripts/feature.txt",
+                "candidate\n",
+            );
+            let candidate = git(&checkout.path, &["rev-parse", "HEAD"]);
+
+            action(
+                &host,
+                "git_merge",
+                &merge_input(run_id, "main", &checkout.path),
+            )
+            .expect("local delivery lands beside unrelated operator notes");
+
+            assert_eq!(git(&landing, &["rev-parse", "HEAD"]), candidate);
+            assert_eq!(
+                fs::read(landing.join("operations/scripts/feature.txt")).unwrap(),
+                b"candidate\n"
+            );
+            for note in notes {
+                assert_eq!(
+                    fs::read(landing.join(note)).unwrap(),
+                    bytes,
+                    "operator bytes survive: {note:?}"
+                );
+            }
+            assert_eq!(
+                git(
+                    &landing,
+                    &["ls-files", "--others", "--exclude-standard", "-z"]
+                ),
+                format!("{}\0", notes.join("\0"))
+            );
+        }
+    });
+}
+
+#[test]
+fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
+    isolated(
+        "local_landing_names_only_untracked_paths_conflicting_with_the_candidate",
+        || {
+            // Exact paths, newline/quote spelling, file/directory collisions,
+            // and a path created after the merge action's initial pre-check.
+            for (incoming, untracked, at_setup, at_intent) in [
+                ("candidate.txt", "candidate.txt", true, false),
+                ("line\n\".txt", "line\n\".txt", false, false),
+                ("folder/child.txt", "folder", false, false),
+                ("folder", "folder/child.txt", false, false),
+                ("late.txt", "late.txt", false, true),
+            ] {
+                let fixture = Fixture::new();
+                let host = LifecycleHost::new(&fixture.repo);
+                host.add_task("T-LAND", TaskStatus::Backlog);
+                let operator_path = fixture.repo.join(untracked);
+                let operator_bytes = b"operator-owned\0\xff\n";
+                let write_operator = || {
+                    fs::create_dir_all(operator_path.parent().unwrap()).unwrap();
+                    fs::write(&operator_path, operator_bytes).unwrap();
+                };
+                fs::write(fixture.repo.join("unrelated.txt"), "keep me\n").unwrap();
+                if at_setup {
+                    write_operator();
+                }
+                let run_id = "jrun-untracked-conflict";
+                let setup = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input("base", BASE, run_id),
+                )
+                .expect("setup cannot yet know the candidate's paths");
+                let checkout = Checkout::from_setup(&setup);
+                commit_tracked_record(&checkout.path, incoming, "candidate\n");
+                if at_intent {
+                    *host.landing_write.lock().unwrap() =
+                        Some((operator_path.clone(), operator_bytes.to_vec()));
+                } else if !at_setup {
+                    write_operator();
+                }
+                let before = git(&fixture.repo, &["rev-parse", "HEAD"]);
+                let candidate = git(&checkout.path, &["rev-parse", "HEAD"]);
+                let error = action(
+                    &host,
+                    "git_merge",
+                    &merge_input(run_id, BASE, &checkout.path),
+                )
+                .expect_err("a conflicting operator path must refuse before merge");
+                let message = error.to_string();
+                assert!(
+                    message.contains("untracked paths conflicting with the incoming changes"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains(&format!("\n{untracked:?}\n")),
+                    "names the exact conflicting path: {message}"
+                );
+                assert!(
+                    !message.contains("unrelated.txt"),
+                    "unrelated notes are absent from the refusal: {message}"
+                );
+                assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), before);
+                assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), candidate);
+                assert_eq!(fs::read(&operator_path).unwrap(), operator_bytes);
+                assert_eq!(
+                    fs::read(fixture.repo.join("unrelated.txt")).unwrap(),
+                    b"keep me\n"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
+    isolated(
+        "local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge",
+        || {
+            for dirty_kind in ["unstaged", "staged", "unmerged"] {
+                let fixture = Fixture::new();
+                let host = LifecycleHost::new(&fixture.repo);
+                host.add_task("T-LAND", TaskStatus::Backlog);
+                let run_id = "jrun-tracked-work";
+                let setup = action(
+                    &host,
+                    "worktree_setup",
+                    &landing_input("base", BASE, run_id),
+                )
+                .expect("setup on a clean base");
+                let checkout = Checkout::from_setup(&setup);
+                commit_file(&checkout.path, "candidate.txt", "candidate\n");
+                if dirty_kind == "unmerged" {
+                    git(&fixture.repo, &["checkout", "-b", "other"]);
+                    commit_file(&fixture.repo, "README.md", "other side\n");
+                    git(&fixture.repo, &["checkout", BASE]);
+                    commit_file(&fixture.repo, "README.md", "base side\n");
+                    let merge = Command::new("git")
+                        .args(["merge", "other"])
+                        .current_dir(&fixture.repo)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        !merge.status.success(),
+                        "fixture creates an actual merge conflict"
+                    );
+                    assert!(!git(&fixture.repo, &["ls-files", "-u"]).is_empty());
+                } else {
+                    fs::write(fixture.repo.join("README.md"), "operator changes\n").unwrap();
+                    if dirty_kind == "staged" {
+                        git(&fixture.repo, &["add", "README.md"]);
+                    }
+                }
+                fs::write(fixture.repo.join("unrelated.txt"), "notes\n").unwrap();
+                let before = git(&fixture.repo, &["rev-parse", "HEAD"]);
+                let status = git(&fixture.repo, &["status", "--porcelain"]);
+                let contents = fs::read(fixture.repo.join("README.md")).unwrap();
+                let checkouts = registered_worktrees(&fixture.repo);
+                for (name, input) in [
+                    (
+                        "worktree_setup",
+                        landing_input("base", BASE, "jrun-refused-tracked"),
+                    ),
+                    ("git_merge", merge_input(run_id, BASE, &checkout.path)),
+                ] {
+                    let error = action(&host, name, &input)
+                        .expect_err("tracked/unmerged work refuses local delivery");
+                    let message = error.to_string();
+                    let expected = if dirty_kind == "unmerged" {
+                        "has unresolved merge conflicts:"
+                    } else {
+                        "must be clean before merge_batch_worktree_into_base"
+                    };
+                    assert!(
+                        message.contains(expected) && message.contains("README.md"),
+                        "{dirty_kind}: {message}"
+                    );
+                    assert!(
+                        !message.contains("unrelated.txt"),
+                        "only hazardous paths are named: {message}"
+                    );
+                    assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), before);
+                    assert_eq!(git(&fixture.repo, &["status", "--porcelain"]), status);
+                    assert_eq!(fs::read(fixture.repo.join("README.md")).unwrap(), contents);
+                    assert_eq!(registered_worktrees(&fixture.repo), checkouts);
+                    assert_eq!(host.admitted(), ["T-LAND"]);
+                }
+            }
         },
     );
 }
@@ -575,7 +1202,9 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
         || {
             let preserved = PreservedCandidate::new("feature.txt", "feature\n");
             commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
-            let command = "echo 'feature.txt is wrong' >&2; exit 3";
+            // The base has no feature.txt, so the base passes and the
+            // failure is the candidate's.
+            let command = "test ! -f feature.txt || { echo 'feature.txt is wrong' >&2; exit 3; }";
             preserved.host.set_required_commands(&[command]);
             let setup = preserved.next_setup();
 
@@ -599,6 +1228,36 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
                 "the implementer starts from the candidate"
             );
             assert_resume_recorded(&preserved, "resumed_repaired");
+        },
+    );
+}
+
+/// A candidate whose required command fails on the base exactly as on the
+/// candidate is not handed to the implementer: no repair of the candidate
+/// can make it pass, so the run resumes it unjudged and the suite decides.
+#[test]
+fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer() {
+    isolated(
+        "a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            preserved
+                .host
+                .set_required_commands(&["echo 'lint is red' >&2; exit 3"]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_unjudged", "{resumed}");
+            assert_eq!(resumed["implement"], false, "{resumed}");
+            assert!(resumed["repair"].is_null(), "{resumed}");
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(
+                fs::read_to_string(checkout.path.join("feature.txt")).unwrap(),
+                "feature\n",
+                "the candidate is preserved"
+            );
+            assert_resume_recorded(&preserved, "resumed_unjudged");
         },
     );
 }
@@ -727,6 +1386,415 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
     );
 }
 
+/// [ORB-14450] Selectors are preparation hints, not what the task means: a
+/// task-pilot or operator edit to them after a failure preserved the
+/// candidate keeps it, while a description or criteria edit still does not.
+#[test]
+fn a_selector_only_edit_keeps_the_preserved_candidate() {
+    isolated("a_selector_only_edit_keeps_the_preserved_candidate", || {
+        let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+        preserved
+            .host
+            .set_context_files(RESUME_TASK, &["file:feature.txt", "dir:docs"]);
+        let setup = preserved.next_setup();
+
+        let resumed = preserved.resume(&setup).expect("candidate_resume");
+        assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+        assert_eq!(resumed["implement"], false);
+        assert_resume_recorded(&preserved, "resumed_validated");
+
+        preserved
+            .host
+            .set_acceptance_criteria(RESUME_TASK, &["A new criterion."]);
+        preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+        let setup = preserved.next_setup_for("jrun-criteria");
+        let changed = preserved
+            .resume_for(&setup, "jrun-criteria")
+            .expect("candidate_resume");
+        assert_eq!(changed["outcome"], "fresh", "{changed}");
+        assert_eq!(changed["reason_code"], "spec_changed", "{changed}");
+    });
+}
+
+/// [ORB-14450] A run held on named external evidence ends before the
+/// failure handoff and records no checkpoint. Once the evidence receipt for
+/// that run is the task's latest decision, the next run resumes the exact
+/// commit the hold names: no implementer, and no owner validation here — the
+/// pipeline's own validation and the fresh review judge it. A selector edit
+/// since the hold does not retire it.
+#[test]
+fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
+    isolated(
+        "an_evidence_receipt_resumes_the_held_candidate_without_the_implementer",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            preserved.hold(&preserved.candidate);
+            preserved
+                .host
+                .set_context_files(RESUME_TASK, &["file:feature.txt", "dir:docs"]);
+            // A validated resume would hand this red command's candidate to
+            // the implementer.
+            preserved.host.set_required_commands(&["exit 3"]);
+            let setup = preserved.next_setup();
+
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_held", "{resumed}");
+            assert_eq!(resumed["implement"], false);
+            assert_eq!(resumed["repair"], Value::Null);
+            assert_eq!(resumed["source_run_id"], FAILED_RUN);
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            assert_eq!(resumed["source_branch"], preserved.branch.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(
+                git(&checkout.path, &["status", "--porcelain"]),
+                "?? feature.txt",
+                "the held candidate is applied as uncommitted work"
+            );
+            assert_resume_recorded(&preserved, "resumed_held");
+        },
+    );
+}
+
+/// [ORB-14450] A held candidate that is gone or retired implements fresh
+/// with a typed reason and an untouched checkout: its commit is missing, an
+/// operator discarded it, the description changed, or the receipt is not
+/// the task's latest decision.
+#[test]
+fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason() {
+    isolated(
+        "a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            let setup = preserved.next_setup();
+            let checkout = Checkout::from_setup(&setup);
+            let fresh = |code: &str| {
+                let resumed = preserved.resume(&setup).expect("candidate_resume");
+                assert_eq!(resumed["outcome"], "fresh", "{code}: {resumed}");
+                assert_eq!(resumed["implement"], true, "{code}");
+                assert_eq!(resumed["reason_code"], code, "{resumed}");
+                assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+                assert!(git(&checkout.path, &["status", "--porcelain"]).is_empty());
+            };
+
+            preserved.hold("0123456789abcdef0123456789abcdef01234567");
+            fresh("candidate_missing");
+            assert_resume_recorded_for(
+                &preserved,
+                "fresh",
+                "0123456789abcdef0123456789abcdef01234567",
+            );
+
+            preserved.hold(&preserved.candidate);
+            preserved
+                .host
+                .record_history(RESUME_TASK, discard_entry(Utc::now()));
+            fresh("candidate_discarded");
+
+            preserved.hold(&preserved.candidate);
+            preserved
+                .host
+                .set_description(RESUME_TASK, "A re-scoped task.");
+            fresh("spec_changed");
+            preserved.host.set_description(RESUME_TASK, "");
+
+            preserved.hold(&preserved.candidate);
+            preserved.host.record_history(
+                RESUME_TASK,
+                TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "human:operator".to_string(),
+                    event: "status_changed".to_string(),
+                    note: None,
+                    from_status: Some(TaskStatus::Backlog),
+                    to_status: Some(TaskStatus::Blocked),
+                },
+            );
+            fresh("no_candidate");
+        },
+    );
+}
+
+/// [ORB-14257] A claimed PR leaf resumes the candidate its owner kept from
+/// the task's last claim, handed in as `candidate`: applied onto the new
+/// base for the implementer to continue, never validated here and never
+/// written to a task history that lives on the owner. Without one, or when
+/// its changes conflict with the base, the usual outcomes apply.
+#[test]
+fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
+    isolated(
+        "a_claimed_leaf_continues_the_candidate_its_owner_kept",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            // Would refuse the candidate if validation ran here.
+            preserved.host.set_required_commands(&["exit 99"]);
+            preserved.host.clear_history(RESUME_TASK);
+            let claimed = |setup: &Value, candidate: Value| {
+                action(
+                    &preserved.host,
+                    "candidate_resume",
+                    &json!({
+                        "job_run_id": NEXT_RUN,
+                        "task_ids": [RESUME_TASK],
+                        "workspace_path": setup["workspace_path"],
+                        "base_sha": setup["base_sha"],
+                        "claimed": true,
+                        "candidate": candidate,
+                    }),
+                )
+                .expect("candidate_resume")
+            };
+            let kept = |failed_step_id: &str| {
+                json!({
+                    "branch": preserved.branch,
+                    "head_sha": preserved.candidate,
+                    "source_run_id": "jrun-earlier-claim",
+                    "failed_step_id": failed_step_id,
+                })
+            };
+
+            let setup = preserved.next_setup();
+            let resumed = claimed(&setup, kept("sync_base"));
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+            assert_eq!(resumed["repair"]["failed_step_id"], "sync_base");
+            assert_eq!(resumed["source_run_id"], "jrun-earlier-claim");
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            assert_eq!(
+                git(&checkout.path, &["status", "--porcelain"]),
+                "?? feature.txt",
+                "the kept candidate is applied as uncommitted work"
+            );
+            assert!(
+                preserved
+                    .host
+                    .history(RESUME_TASK)
+                    .iter()
+                    .all(|entry| entry.event != "candidate_resume"),
+                "a claimed leaf writes no task history"
+            );
+
+            let review = {
+                preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+                preserved.next_setup_for("jrun-claimed-review")
+            };
+            let refused = claimed(&review, kept("review_gate_settle"));
+            assert_eq!(refused["repair"]["trigger"], "review", "{refused}");
+
+            let fresh = {
+                preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+                preserved.next_setup_for("jrun-claimed-fresh")
+            };
+            let none = claimed(&fresh, Value::Null);
+            assert_eq!(none["outcome"], "fresh", "{none}");
+            assert_eq!(none["implement"], true);
+            assert!(
+                git(
+                    &Checkout::from_setup(&fresh).path,
+                    &["status", "--porcelain"]
+                )
+                .is_empty(),
+                "nothing is applied without a candidate"
+            );
+        },
+    );
+}
+
+/// [ORB-14603] A claim's leaf this machine executed itself leaves no failure
+/// handoff on its run; the owner's next run of the task continues the
+/// candidate kept from that leaf's claim, naming the claim and machine in the
+/// task's history. A candidate kept from some other run is not resurrected.
+#[test]
+fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
+    isolated(
+        "a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept",
+        || {
+            let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+            let base = commit_file(&preserved.fixture.repo, "base.txt", "v2\n");
+            preserved.host.run_states.lock().unwrap().remove(FAILED_RUN);
+            *preserved.host.machine.lock().unwrap() = Some("hm_local".to_string());
+            let kept = |source_run_id: &str| KeptClaimCandidate {
+                claim_id: "claim-1".to_string(),
+                machine_id: "hm_local".to_string(),
+                candidate: ClaimCandidateRef {
+                    branch: preserved.branch.clone(),
+                    head_sha: preserved.candidate.clone(),
+                    pull_request: None,
+                    source_run_id: Some(source_run_id.to_string()),
+                    failed_step_id: Some("sync_base".to_string()),
+                    published: false,
+                    durable_ref: None,
+                    carry_failure: None,
+                },
+                fresh: None,
+            };
+            *preserved.host.kept_claim.lock().unwrap() = Some(kept(FAILED_RUN));
+
+            let setup = preserved.next_setup();
+            let resumed = preserved.resume(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+            assert_eq!(resumed["source_machine_id"], "hm_local", "{resumed}");
+            assert_eq!(resumed["source_sha"], preserved.candidate.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            assert_eq!(
+                git(&checkout.path, &["status", "--porcelain"]),
+                "?? feature.txt"
+            );
+            assert_resume_recorded(&preserved, "resumed_repaired");
+            let note = preserved
+                .host
+                .history(RESUME_TASK)
+                .into_iter()
+                .rev()
+                .find_map(|entry| entry.note)
+                .unwrap_or_default();
+            assert!(note.contains("claim=claim-1, machine=hm_local"), "{note}");
+
+            *preserved.host.kept_claim.lock().unwrap() = Some(kept("jrun-other-leaf"));
+            preserved.host.link_run(RESUME_TASK, FAILED_RUN);
+            let stale = preserved.next_setup_for("jrun-after-stale-claim");
+            let fresh = preserved
+                .resume_for(&stale, "jrun-after-stale-claim")
+                .expect("candidate_resume");
+            assert_eq!(fresh["outcome"], "fresh", "{fresh}");
+            assert_eq!(fresh["reason_code"], "no_candidate", "{fresh}");
+        },
+    );
+}
+
+/// [ORB-14261] A repair claim's leaf re-applies the candidate the owner's
+/// stopped landing preserved onto its fresh base. The implementer always gets
+/// it: a conflict to resolve against what the base gained, or a clean apply to
+/// confirm on the moved base. Neither reads nor writes the owner's task.
+#[test]
+fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
+    isolated(
+        "a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer",
+        || {
+            let conflicting = PreservedCandidate::new("base.txt", "candidate\n");
+            let base = commit_file(&conflicting.fixture.repo, "base.txt", "v2\n");
+            let history = conflicting.host.history(RESUME_TASK).len();
+            let setup = conflicting.next_setup();
+
+            let resumed = conflicting
+                .resume_claim_repair(&setup)
+                .expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "conflict");
+            assert_eq!(resumed["repair"]["conflicting_paths"], json!(["base.txt"]));
+            assert!(
+                resumed["repair"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("conflicts with its base"),
+                "the implementer sees why the landing stopped: {resumed}"
+            );
+            assert_eq!(resumed["source_sha"], conflicting.candidate.as_str());
+            let checkout = Checkout::from_setup(&setup);
+            assert_eq!(git(&checkout.path, &["rev-parse", "HEAD"]), base);
+            let conflicted = fs::read_to_string(checkout.path.join("base.txt")).unwrap();
+            assert!(
+                conflicted.contains("<<<<<<<")
+                    && conflicted.contains("candidate")
+                    && conflicted.contains("v2"),
+                "the implementer starts from both sides: {conflicted}"
+            );
+            assert_eq!(
+                conflicting.host.history(RESUME_TASK).len(),
+                history,
+                "a claimed leaf records nothing on a task it does not own"
+            );
+
+            let clean = PreservedCandidate::new("feature.txt", "feature\n");
+            commit_file(&clean.fixture.repo, "base.txt", "v2\n");
+            let setup = clean.next_setup();
+            let resumed = clean.resume_claim_repair(&setup).expect("candidate_resume");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["implement"], true);
+            assert_eq!(resumed["repair"]["trigger"], "landing");
+            assert_eq!(
+                git(
+                    &Checkout::from_setup(&setup).path,
+                    &["status", "--porcelain"]
+                ),
+                "?? feature.txt",
+                "the candidate is applied as uncommitted work"
+            );
+
+            let present = PreservedCandidate::new("present.txt", "present\n");
+            commit_file(&present.fixture.repo, "present.txt", "present\n");
+            let setup = present.next_setup();
+            let resumed = present
+                .resume_claim_repair(&setup)
+                .expect("candidate already on the new base");
+            assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+            assert_eq!(resumed["repair"]["trigger"], "landing");
+            assert!(
+                resumed["repair"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("already present on the current base")
+            );
+            assert_eq!(
+                git(
+                    &Checkout::from_setup(&setup).path,
+                    &["status", "--porcelain"]
+                ),
+                "",
+                "already-present work leaves the base checkout clean"
+            );
+
+            let missing = action(
+                &present.host,
+                "candidate_resume",
+                &json!({
+                    "job_run_id": NEXT_RUN,
+                    "task_ids": [RESUME_TASK],
+                    "workspace_path": setup["workspace_path"],
+                    "base_sha": setup["base_sha"],
+                    "claimed": true,
+                    "claim_repair": {
+                        "repairs_claim_id": "claim-1",
+                        "handoff_id": "handoff-1",
+                        "branch": present.branch,
+                        "head_sha": "f".repeat(40),
+                        "stop_evidence": "pull request #42 conflicts with its base",
+                    },
+                }),
+            )
+            .expect_err("a repair may not silently discard an unavailable candidate");
+            assert!(
+                missing.to_string().contains("repair candidate")
+                    && missing.to_string().contains("could not be restored"),
+                "the repair failure retains its cause: {missing}"
+            );
+
+            let fresh = action(
+                &clean.host,
+                "candidate_resume",
+                &json!({
+                    "job_run_id": NEXT_RUN,
+                    "task_ids": [RESUME_TASK],
+                    "workspace_path": setup["workspace_path"],
+                    "base_sha": setup["base_sha"],
+                    "claimed": true,
+                    "claim_repair": null,
+                }),
+            )
+            .expect("a first attempt carries no repair");
+            assert_eq!(fresh["outcome"], "fresh", "{fresh}");
+            assert_eq!(fresh["repair"], Value::Null);
+        },
+    );
+}
+
 const RESUME_TASK: &str = "T-RESUME";
 const FAILED_RUN: &str = "jrun-failed";
 const NEXT_RUN: &str = "jrun-next";
@@ -801,6 +1869,62 @@ impl PreservedCandidate {
         );
     }
 
+    /// [ORB-14450] Make `FAILED_RUN` a run held on named external evidence
+    /// for `head_sha`, whose receipt is the task's latest decision: no
+    /// failure checkpoint, the task's hold artifact, and the receipt event.
+    fn hold(&self, head_sha: &str) {
+        let mut state = PipelineState::new(
+            FAILED_RUN.to_string(),
+            "task_pr_pipeline".to_string(),
+            json!({}),
+        );
+        state.pipeline = json!({"worktree": {"head_ref": self.branch}});
+        self.host
+            .run_states
+            .lock()
+            .unwrap()
+            .insert(FAILED_RUN.to_string(), state);
+        let task = self.host.get_task(RESUME_TASK).unwrap();
+        self.host.set_artifact(
+            RESUME_TASK,
+            TaskArtifact {
+                path: "review-evidence-hold.json".to_string(),
+                content: json!({
+                    "schema_version": 1,
+                    "attempt_id": "attempt-1",
+                    "lineage_key": "lineage-1",
+                    "run_id": FAILED_RUN,
+                    "candidate": {"commit": head_sha, "tree": "held-tree"},
+                    "task_meaning_digest": "meaning",
+                    "requirements": [{
+                        "kind": "native_os", "name": "macOS run",
+                        "command": "native macos", "artifact": "evidence/macos.json",
+                    }],
+                    "task_spec_digest": task.spec_digest(),
+                })
+                .to_string()
+                .into_bytes(),
+                media_type: "application/json".to_string(),
+                created_by: Some("system".to_string()),
+            },
+        );
+        self.host.clear_history(RESUME_TASK);
+        self.host.record_history(
+            RESUME_TASK,
+            TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: "review_evidence_received".to_string(),
+                note: Some(format!(
+                    "run={FAILED_RUN}; all named external checks arrived for the held \
+                     candidate; queued for fresh review."
+                )),
+                from_status: Some(TaskStatus::InProgress),
+                to_status: Some(TaskStatus::Backlog),
+            },
+        );
+    }
+
     /// The requeued task's next run sets up its checkout, linked to the
     /// failed run.
     fn next_setup(&self) -> Value {
@@ -816,6 +1940,28 @@ impl PreservedCandidate {
         .unwrap_or_else(|error| panic!("the next run's setup ({run_id}): {error}"));
         assert_eq!(setup["prior_job_run_id"], FAILED_RUN);
         setup
+    }
+
+    /// A claimed leaf's resume of the repair its claim carries.
+    fn resume_claim_repair(&self, setup: &Value) -> Result<Value, OrbitError> {
+        action(
+            &self.host,
+            "candidate_resume",
+            &json!({
+                "job_run_id": NEXT_RUN,
+                "task_ids": [RESUME_TASK],
+                "workspace_path": setup["workspace_path"],
+                "base_sha": setup["base_sha"],
+                "claimed": true,
+                "claim_repair": {
+                    "repairs_claim_id": "claim-1",
+                    "handoff_id": "handoff-1",
+                    "branch": self.branch,
+                    "head_sha": self.candidate,
+                    "stop_evidence": "pull request #42 conflicts with its base",
+                },
+            }),
+        )
     }
 
     fn resume(&self, setup: &Value) -> Result<Value, OrbitError> {
@@ -839,6 +1985,10 @@ impl PreservedCandidate {
 
 /// The task history names the outcome, the source run and the candidate SHA.
 fn assert_resume_recorded(preserved: &PreservedCandidate, outcome: &str) {
+    assert_resume_recorded_for(preserved, outcome, &preserved.candidate);
+}
+
+fn assert_resume_recorded_for(preserved: &PreservedCandidate, outcome: &str, source_sha: &str) {
     let history = preserved.host.history(RESUME_TASK);
     let entry = history
         .iter()
@@ -849,7 +1999,7 @@ fn assert_resume_recorded(preserved: &PreservedCandidate, outcome: &str) {
     for expected in [
         format!("{outcome}:"),
         format!("source_run={FAILED_RUN}"),
-        format!("source_sha={}", preserved.candidate),
+        format!("source_sha={source_sha}"),
     ] {
         assert!(note.contains(&expected), "{expected} in {note}");
     }
@@ -1019,6 +2169,144 @@ fn conflict_recovery_leaf_completes_only_its_checkpointed_rebase() {
     );
 }
 
+/// [F2026-10-041] One run recovers the same step twice. Recovery A lands the
+/// candidate on the pinned base and keeps that result when the advanced base
+/// conflicts again, so the retry refuses the moved base. The run resumes from
+/// preparation, re-pins to the advanced base, conflicts again, and recovery B
+/// completes as a new host-reserved attempt instead of colliding with A. The
+/// retry then delivers B's exact evidence and nothing older.
+#[cfg(unix)]
+#[test]
+fn a_resumed_run_recovers_the_same_step_again_as_a_new_attempt() {
+    isolated(
+        "a_resumed_run_recovers_the_same_step_again_as_a_new_attempt",
+        || {
+            let prepared = PreparedRebase::new("jrun-reattempt", "README.md", "README.md");
+            let provider = prepared.fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &provider_script("printf 'resolved\\n' > README.md"),
+            );
+            let host = prepared.host.with_provider(&provider);
+            let checkout = &prepared.checkout.path;
+
+            // The base advances with another README edit while A is pending.
+            let conflict = stopped_conflict(&prepared);
+            let advanced = commit_file(&prepared.fixture.repo, "README.md", "advanced\n");
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &prepared.prepared, &conflict),
+            )
+            .expect("recovery A completes");
+            assert!(outcome.success, "{:?}", outcome.message);
+            let head_a = prepared.head();
+            let [(_, _, recovery_a)] = host.checkpoints().try_into().unwrap();
+            assert_eq!(recovery_a["recovery_attempt"], 1);
+            assert_eq!(
+                recovery_a["base_sha"], prepared.target,
+                "A kept the pinned result"
+            );
+
+            // The pinned-base freshness refusal stands, and touches nothing.
+            let error = prepared
+                .rebase_on(&host, &prepared.prepared)
+                .expect_err("the retry refuses the moved base");
+            assert!(
+                error.to_string().contains("moved from checkpoint"),
+                "{error}"
+            );
+            assert_eq!(prepared.head(), head_a);
+            assert_eq!(git(checkout, &["status", "--porcelain"]), "");
+
+            // Same-run resume: prepare again, now against the advanced base.
+            let resumed = action(&host, "pr_prepare", &prepared.common).expect("re-prepare");
+            assert_eq!(resumed["head_sha"], head_a);
+            assert_eq!(resumed["base_sha"], advanced);
+            let OrbitError::RecoverableVcsConflict(again) = prepared
+                .rebase_on(&host, &resumed)
+                .expect_err("the advanced base conflicts again")
+            else {
+                panic!("expected a recoverable conflict");
+            };
+            let conflict = json!({
+                "operation": again.operation,
+                "original_base_sha": again.original_base_sha,
+                "target_base_sha": again.target_base_sha,
+                "conflicting_paths": again.conflicting_paths,
+            });
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                recovery_input_for(&prepared, &resumed, &conflict),
+            )
+            .expect("recovery B completes as a new attempt");
+            assert!(outcome.success, "{:?}", outcome.message);
+            let head_b = prepared.head();
+            assert_ne!(head_b, head_a);
+
+            let checkpoints = host.checkpoints();
+            let [(_, step_a, kept_a), (_, step_b, recovery_b)] = checkpoints.as_slice() else {
+                panic!("expected two recovery checkpoints, got {checkpoints:#?}");
+            };
+            assert_eq!(
+                (step_a.as_str(), step_b.as_str()),
+                ("sync_base", "sync_base")
+            );
+            assert_eq!(kept_a, &recovery_a, "A's evidence is not rewritten");
+            assert_eq!(recovery_b["recovery_attempt"], 2);
+            assert_eq!(recovery_b["head_sha_before"], head_a);
+            assert_eq!(recovery_b["base_sha"], advanced);
+            assert_eq!(recovery_b["head_sha"], head_b);
+            let scopes = host
+                .recovery_attempts()
+                .into_iter()
+                .map(|(_, _, scope)| (scope.head_sha_before, scope.target_base_sha))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                scopes,
+                vec![
+                    (prepared.candidate.clone(), prepared.target.clone()),
+                    (head_a.clone(), advanced.clone()),
+                ],
+                "each recovery reserved its own attempt for its own stopped rebase"
+            );
+
+            // A leaf replaying A's evidence cannot vouch for B's HEAD.
+            host.leaf_writes_recovery(&prepared.run_id, "sync_base", recovery_a.clone());
+            let error = prepared
+                .rebase_on(&host, &resumed)
+                .expect_err("stale evidence does not describe the recovered HEAD");
+            assert!(
+                error
+                    .to_string()
+                    .contains("no exact host-validated recovery checkpoint"),
+                "{error}"
+            );
+            assert_eq!(prepared.head(), head_b);
+            assert_eq!(git(checkout, &["status", "--porcelain"]), "");
+
+            // B's exact evidence delivers B.
+            host.leaf_writes_recovery(&prepared.run_id, "sync_base", recovery_b.clone());
+            let retried = prepared
+                .rebase_on(&host, &resumed)
+                .expect("the retry reuses recovery B");
+            assert_eq!(retried["decision"], "reused_recovery");
+            assert_eq!(retried["head_sha"], head_b);
+            assert_eq!(retried["base_sha"], advanced);
+        },
+    );
+}
+
+/// The recovery input for the stopped rebase of the handoff `preparation`
+/// describes, carrying the failed step's prepared fields.
+fn recovery_input_for(prepared: &PreparedRebase, preparation: &Value, conflict: &Value) -> Value {
+    let mut input = conflict_recovery_input(prepared, conflict);
+    input["failed_step_input"]["head_sha"] = preparation["head_sha"].clone();
+    input["failed_step_input"]["remote_sha"] = preparation["remote_sha"].clone();
+    input
+}
+
 /// A provider shell that runs `body` in the checkout and reports success.
 fn provider_script(body: &str) -> String {
     format!(
@@ -1129,6 +2417,121 @@ fn conflict_recovery_commits_companion_edits_with_the_resolution() {
                     vec!["base.txt".to_string(), "src/moved/mod.rs".to_string()],
                 )]
             );
+        },
+    );
+}
+
+/// [ORB-14332] Both commits of a two-commit candidate conflict with the
+/// advanced base. The first recovery resolves the first stop; continuing the
+/// rebase stops again on the second commit, which the host keeps instead of
+/// refusing: the resolved pick stays, nothing is certified, and the retried
+/// `git_rebase` reports the new stop pinned to the same base. A second
+/// recovery round resolves it and certifies the whole rewrite, which the
+/// retry then delivers.
+#[cfg(unix)]
+#[test]
+fn conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase() {
+    isolated(
+        "conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase",
+        || {
+            let prepared = PreparedRebase::with_commits(
+                "jrun-multi-stop",
+                &[("README.md", "candidate\n"), ("base.txt", "candidate v2\n")],
+                &[("README.md", "target\n"), ("base.txt", "target v2\n")],
+            );
+            let target = prepared.target.clone();
+            let checkout = &prepared.checkout.path;
+            let provider = prepared.fixture.root.path().join("codex");
+
+            let first = stopped_conflict(&prepared);
+            assert_eq!(first["conflicting_paths"], json!(["README.md"]));
+            write_executable(
+                &provider,
+                &provider_script("printf 'candidate and target\\n' > README.md"),
+            );
+            let host = prepared.host.with_provider(&provider);
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                conflict_recovery_input(&prepared, &first),
+            )
+            .expect("the first stop is recovered although the rebase stops again");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert!(rebase_in_progress(checkout), "stopped on the second commit");
+            assert!(
+                host.checkpoints().is_empty(),
+                "an unfinished rebase is not certified"
+            );
+            assert_eq!(
+                git(checkout, &["show", "HEAD:README.md"]),
+                "candidate and target",
+                "the first resolution is kept"
+            );
+
+            let OrbitError::RecoverableVcsConflict(second) = prepared
+                .rebase_on(&host, &prepared.prepared)
+                .expect_err("the retry reports the new stop")
+            else {
+                panic!("expected a recoverable conflict");
+            };
+            assert_eq!(second.conflicting_paths, ["base.txt"]);
+            assert_eq!(second.target_base_sha, target);
+            assert!(rebase_in_progress(checkout), "the retry touches nothing");
+            let second = json!({
+                "operation": second.operation,
+                "original_base_sha": second.original_base_sha,
+                "target_base_sha": second.target_base_sha,
+                "conflicting_paths": second.conflicting_paths,
+            });
+
+            write_executable(
+                &provider,
+                &provider_script("printf 'candidate and target v2\\n' > base.txt"),
+            );
+            let outcome = recover(
+                &host,
+                &prepared.run_id,
+                conflict_recovery_input(&prepared, &second),
+            )
+            .expect("the second stop completes the rebase");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert!(!rebase_in_progress(checkout));
+            let head = prepared.head();
+            assert_eq!(
+                git(
+                    checkout,
+                    &["rev-list", "--count", &format!("{target}..HEAD")]
+                ),
+                "2",
+                "both candidate commits sit on the pinned base"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.join("README.md")).unwrap(),
+                "candidate and target\n"
+            );
+            assert_eq!(
+                fs::read_to_string(checkout.join("base.txt")).unwrap(),
+                "candidate and target v2\n"
+            );
+            let checkpoints = host.checkpoints();
+            let [(_, step_id, checkpoint)] = checkpoints.as_slice() else {
+                panic!("expected one recovery checkpoint, got {checkpoints:#?}");
+            };
+            assert_eq!(step_id, "sync_base");
+            assert_eq!(checkpoint["head_sha"], head);
+            assert_eq!(checkpoint["head_sha_before"], prepared.candidate);
+            assert_eq!(checkpoint["base_sha"], target);
+            assert_eq!(
+                checkpoint["recovery_attempt"], 2,
+                "each round reserves its own attempt"
+            );
+
+            let retried = prepared
+                .rebase_on(&host, &prepared.prepared)
+                .expect("the retry delivers the rewrite");
+            assert_eq!(retried["decision"], "reused_recovery");
+            assert_eq!(retried["head_sha"], head);
+            assert_eq!(retried["base_sha"], target);
         },
     );
 }
@@ -1332,6 +2735,139 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     );
 }
 
+/// User Git presentation settings must not hide a second edit to tracked WIP
+/// or change the fingerprints and patches needed to detect and recover it.
+#[cfg(unix)]
+#[test]
+fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
+    isolated(
+        "user_git_diff_config_preserves_dirty_fingerprints_and_recovery",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-DIFF-CONFIG", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-DIFF-CONFIG"], "jrun-diff-config-setup"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let restore = fixture.root.path().join("restore");
+            git(
+                &fixture.repo,
+                &["worktree", "add", "--detach", path_str(&restore), "HEAD"],
+            );
+            let provider = fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &provider_script(&format!(
+                    "printf 'candidate output\\n' > README.md\nprintf 'provider primary output\\n' > '{}/README.md'",
+                    fixture.repo.display(),
+                )),
+            );
+            let host = host.with_provider(&provider);
+            let global_config = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".gitconfig");
+            let cases: &[&[(&str, &str)]] = &[
+                &[],
+                &[("diff.noprefix", "true")],
+                &[("diff.mnemonicPrefix", "true")],
+                &[("color.ui", "always")],
+                &[
+                    ("diff.noprefix", "true"),
+                    ("diff.mnemonicPrefix", "true"),
+                    ("color.ui", "always"),
+                ],
+            ];
+            let mut baseline = None;
+            for (index, settings) in cases.iter().enumerate() {
+                // This HOME belongs only to the isolated child. Each case
+                // starts without any settings from the preceding case.
+                fs::write(&global_config, super::git_fixture::FILE_ONLY_CONFIG).unwrap();
+                for (key, value) in *settings {
+                    git(&fixture.repo, &["config", "--global", key, value]);
+                    assert_eq!(
+                        git(&fixture.repo, &["config", "--global", "--get", key]),
+                        *value
+                    );
+                }
+                for (root, staged, unstaged) in [
+                    (&fixture.repo, "operator staged\n", "operator unstaged\n"),
+                    (&checkout.path, "candidate staged\n", "candidate unstaged\n"),
+                ] {
+                    fs::write(root.join("README.md"), staged).unwrap();
+                    git(root, &["add", "README.md"]);
+                    fs::write(root.join("README.md"), unstaged).unwrap();
+                }
+                let run_id = format!("jrun-diff-config-{index}");
+                let blobs = TempDir::new().unwrap();
+                let sink = Arc::new(InMemorySink::new(blobs.path()));
+                let audit = Arc::new(V2AuditWriter::new(
+                    &run_id,
+                    "codex:test-model",
+                    sink.clone(),
+                ));
+                let error = dispatch_audited_linked_activity(
+                    &host,
+                    "agent_implement",
+                    &run_id,
+                    "T-DIFF-CONFIG",
+                    &checkout.path,
+                    audit,
+                )
+                .expect_err(&format!(
+                    "{settings:?}: a second primary WIP edit must fail the boundary under user Git config",
+                ));
+                let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+                assert_eq!(diagnostic["primary_changed_paths"], json!(["README.md"]));
+                let fingerprints: Value = serde_json::from_slice(
+                    &sink
+                        .blob_store()
+                        .read(diagnostic["fingerprints_blob_ref"].as_str().unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let before = &fingerprints["primary_before"];
+                let after = &fingerprints["primary_after"];
+                assert_ne!(
+                    before["tracked_patch_sha256"], after["tracked_patch_sha256"],
+                    "{settings:?}: second edit changes the fingerprint"
+                );
+                let before_path = &before["path_states"]["README.md"];
+                let after_path = &after["path_states"]["README.md"];
+                assert!(before_path["staged_patch_sha256"].is_string());
+                assert!(before_path["worktree_patch_sha256"].is_string());
+                assert_ne!(
+                    before_path["worktree_patch_sha256"],
+                    after_path["worktree_patch_sha256"]
+                );
+
+                let patch_path =
+                    Path::new(diagnostic["recovery"]["tracked_patch"].as_str().unwrap());
+                let patch = fs::read(patch_path).expect("durable recovery patch");
+                if let Some((expected_fingerprints, expected_patch)) = &baseline {
+                    assert_eq!(
+                        &fingerprints, expected_fingerprints,
+                        "{settings:?}: full fingerprints match clean Git config"
+                    );
+                    assert_eq!(
+                        &patch, expected_patch,
+                        "{settings:?}: recovery bytes match clean Git config"
+                    );
+                } else {
+                    baseline = Some((fingerprints, patch));
+                }
+                git(&restore, &["apply", "--binary", path_str(patch_path)]);
+                assert_eq!(
+                    fs::read_to_string(restore.join("README.md")).unwrap(),
+                    "candidate output\n"
+                );
+                fs::write(restore.join("README.md"), "base\n").unwrap();
+            }
+        },
+    );
+}
+
 /// Record-store dirt on a path the run also changed is still drift. The
 /// `.orbit/` prefix alone must not excuse an intersection with the candidate.
 #[cfg(unix)]
@@ -1408,13 +2944,14 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
             let primary_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
             let ready = fixture.root.path().join("record-ready");
             let go = fixture.root.path().join("record-go");
+            orbit_common::test_env::create_fixture_fifo(&go).unwrap();
             let primary_record = fixture.repo.join(record);
 
             let provider = fixture.root.path().join("codex");
             write_executable(
                 &provider,
                 &format!(
-                    "#!/bin/sh\nset -eu\ncat > /dev/null\n: > '{}'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                    "#!/bin/sh\nset -eu\ncat > /dev/null\n: > '{}'\nread -r _ < '{}'\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
                     ready.display(),
                     go.display(),
                 ),
@@ -1430,7 +2967,11 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
                     thread::sleep(Duration::from_millis(20));
                 }
                 fs::write(&primary_record, "name: nightly\nenabled: true\n").unwrap();
-                fs::write(&go, "go\n").unwrap();
+                orbit_common::test_env::release_fixture_fifo(
+                    &go,
+                    Instant::now() + Duration::from_secs(20),
+                )
+                .unwrap();
             });
 
             let outcome =
@@ -1451,6 +2992,364 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
             assert_eq!(
                 fs::read_to_string(checkout.path.join("candidate.txt")).unwrap(),
                 "candidate\n"
+            );
+        },
+    );
+}
+
+/// [ORB-14085] An operator edit to the primary between two dispatches of one
+/// run is not provider drift: the second dispatch must capture a fresh "before"
+/// instead of replaying the clean snapshot of the first. Unstaged edits and new
+/// untracked files change neither HEAD nor the index mtime, so no cache key can
+/// notice them.
+#[cfg(unix)]
+#[test]
+fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
+    isolated(
+        "primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift",
+        || {
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-REDISPATCH", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-REDISPATCH"], "jrun-redispatch"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+
+            let provider = fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                "#!/bin/sh\nset -eu\ncat > /dev/null\nprintf 'candidate\\n' > candidate.txt\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\n",
+            );
+            let host = host.with_provider(&provider);
+
+            let first =
+                dispatch_linked_provider(&host, "jrun-redispatch", "T-REDISPATCH", &checkout.path)
+                    .expect("first dispatch");
+            assert!(first.success, "{:?}", first.message);
+
+            fs::write(fixture.repo.join("README.md"), "operator edit\n").unwrap();
+            fs::write(fixture.repo.join("operator-notes.txt"), "scratch\n").unwrap();
+
+            let second =
+                dispatch_linked_provider(&host, "jrun-redispatch", "T-REDISPATCH", &checkout.path)
+                    .expect("a primary dirtied between dispatches is not provider drift");
+            assert!(second.success, "{:?}", second.message);
+            assert_eq!(
+                fs::read_to_string(fixture.repo.join("README.md")).unwrap(),
+                "operator edit\n"
+            );
+        },
+    );
+}
+
+/// [ORB-14084] `git status --untracked-files=all` lists a nested repository as
+/// one directory, and `git hash-object` cannot hash it. Both checkouts must
+/// still fingerprint — committed repos by HEAD, an unborn repo as
+/// `opaque-directory` — so dispatch proceeds, an agent-created clone is an
+/// ordinary attributed edit, and a real boundary failure still writes recovery
+/// that includes the directory.
+#[cfg(unix)]
+#[test]
+fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
+    isolated(
+        "untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree",
+        || {
+            fn commit_nested(parent: &Path, relative: &str, body: &str) -> String {
+                let dir = parent.join(relative);
+                fs::create_dir_all(&dir).unwrap();
+                git(&dir, &["init"]);
+                git(&dir, &["config", "user.name", "Orbit Test"]);
+                git(
+                    &dir,
+                    &["config", "user.email", "orbit-test@example.invalid"],
+                );
+                fs::write(dir.join("lib.txt"), body).unwrap();
+                git(&dir, &["add", "lib.txt"]);
+                git(&dir, &["commit", "-m", "nested"]);
+                git(&dir, &["rev-parse", "HEAD"])
+            }
+
+            fn seed_unborn(parent: &Path, relative: &str) {
+                let dir = parent.join(relative);
+                fs::create_dir_all(&dir).unwrap();
+                git(&dir, &["init"]);
+            }
+
+            fn identity_at<'a>(fingerprint: &'a Value, relative: &str) -> (&'a str, &'a str) {
+                let entries = fingerprint["untracked_content"]
+                    .as_object()
+                    .unwrap_or_else(|| panic!("untracked_content missing: {fingerprint}"));
+                let mut matches = entries
+                    .iter()
+                    .filter(|(path, _)| path.trim_end_matches('/') == relative);
+                let Some((path, value)) = matches.next() else {
+                    panic!(
+                        "{relative} missing from {}",
+                        fingerprint["untracked_content"]
+                    );
+                };
+                assert!(
+                    matches.next().is_none(),
+                    "{relative} matched more than one untracked path"
+                );
+                (
+                    path.as_str(),
+                    value
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{path} identity is not a string")),
+                )
+            }
+
+            let fixture = Fixture::new();
+            fs::write(fixture.repo.join("notes.txt"), "note\n").unwrap();
+            let primary_head = commit_nested(&fixture.repo, "vendor/somelib", "lib\n");
+            seed_unborn(&fixture.repo, "vendor/unborn");
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-NESTED", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-NESTED"], "jrun-nested-setup"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let assigned_head = commit_nested(&checkout.path, "vendor/otherlib", "other\n");
+
+            let provider = fixture.root.path().join("codex");
+            write_executable(&provider, &provider_script(""));
+            let host = host.with_provider(&provider);
+            let outcome =
+                dispatch_linked_provider(&host, "jrun-nested-stable", "T-NESTED", &checkout.path)
+                    .expect("a nested repository must not fail the checkout snapshot");
+            assert!(
+                outcome.success,
+                "dispatch proceeds with nested repos in both checkouts: {:?}",
+                outcome.message
+            );
+            assert!(
+                host.widenings().is_empty(),
+                "a nested repo already in the checkout is not a new agent edit: {:?}",
+                host.widenings()
+            );
+
+            write_executable(
+                &provider,
+                &provider_script(
+                    "git init -q vendor/fresh\n\
+                     git -C vendor/fresh config user.name 'Orbit Test'\n\
+                     git -C vendor/fresh config user.email orbit-test@example.invalid\n\
+                     printf 'fresh\\n' > vendor/fresh/lib.txt\n\
+                     git -C vendor/fresh add lib.txt\n\
+                     git -C vendor/fresh commit -qm fresh\n",
+                ),
+            );
+            let outcome =
+                dispatch_linked_provider(&host, "jrun-nested-created", "T-NESTED", &checkout.path)
+                    .expect("an assigned clone must not fail verify");
+            assert!(
+                outcome.success,
+                "an agent-created nested repo dispatches: {:?}",
+                outcome.message
+            );
+            let widenings = host.widenings();
+            assert_eq!(widenings.len(), 1, "{widenings:?}");
+            let (task_id, step, activity, paths) = &widenings[0];
+            assert_eq!(task_id, "T-NESTED");
+            assert_eq!(*step, ContextWideningStep::Implement);
+            assert_eq!(activity, "agent_implement");
+            assert_eq!(
+                paths
+                    .iter()
+                    .map(|path| path.trim_end_matches('/'))
+                    .collect::<Vec<_>>(),
+                vec!["vendor/fresh"],
+                "the new nested repository is the attributed path"
+            );
+            let fresh_head = git(&checkout.path.join("vendor/fresh"), &["rev-parse", "HEAD"]);
+
+            let primary = fixture.repo.display().to_string();
+            write_executable(
+                &provider,
+                &provider_script(&format!(
+                    "printf 'primary drift\\n' > '{primary}/README.md'\n"
+                )),
+            );
+            let blobs = TempDir::new().unwrap();
+            let sink = Arc::new(InMemorySink::new(blobs.path()));
+            let run_id = "jrun-nested-drift";
+            let audit = Arc::new(V2AuditWriter::new(run_id, "codex:test-model", sink.clone()));
+            let error = dispatch_audited_linked_activity(
+                &host,
+                "agent_implement",
+                run_id,
+                "T-NESTED",
+                &checkout.path,
+                audit,
+            )
+            .expect_err("primary drift beside a nested repo is still a boundary failure");
+            let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+            assert!(
+                error.is_non_retryable(),
+                "nested-repo drift stays a non-retryable integrity failure"
+            );
+            assert!(
+                diagnostic["recovery"].get("preservation_error").is_none(),
+                "recovery must copy the nested directory: {diagnostic}"
+            );
+            assert_eq!(diagnostic["primary_dirt_paths"], json!(["README.md"]));
+
+            let fingerprints: Value = serde_json::from_slice(
+                &sink
+                    .blob_store()
+                    .read(diagnostic["fingerprints_blob_ref"].as_str().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            for side in ["primary_before", "primary_after"] {
+                let fingerprint = &fingerprints[side];
+                let (path, identity) = identity_at(fingerprint, "vendor/somelib");
+                assert_eq!(identity, format!("git-head:{primary_head}"), "{side}");
+                assert_eq!(
+                    fingerprint["path_states"][path]["untracked_content_sha256"], identity,
+                    "{side}"
+                );
+                let (path, identity) = identity_at(fingerprint, "vendor/unborn");
+                assert_eq!(identity, "opaque-directory", "{side}");
+                assert_eq!(
+                    fingerprint["path_states"][path]["untracked_content_sha256"], identity,
+                    "{side}"
+                );
+                let notes = fingerprint["untracked_content"]["notes.txt"]
+                    .as_str()
+                    .expect("ordinary untracked file");
+                assert!(
+                    notes.starts_with("git-blob:"),
+                    "{side}: file hashing still produces a blob identity, got {notes}"
+                );
+            }
+            assert_eq!(
+                fingerprints["primary_before"]["untracked_content"]["notes.txt"],
+                fingerprints["primary_after"]["untracked_content"]["notes.txt"]
+            );
+            for side in ["assigned_before", "assigned_after"] {
+                let fingerprint = &fingerprints[side];
+                let (_, identity) = identity_at(fingerprint, "vendor/otherlib");
+                assert_eq!(identity, format!("git-head:{assigned_head}"), "{side}");
+                let (_, identity) = identity_at(fingerprint, "vendor/fresh");
+                assert_eq!(identity, format!("git-head:{fresh_head}"), "{side}");
+            }
+
+            let payload = PathBuf::from(
+                diagnostic["recovery"]["untracked_payload"]
+                    .as_str()
+                    .expect("recovery names the untracked payload"),
+            );
+            assert_eq!(
+                fs::read_to_string(payload.join("vendor/otherlib/lib.txt")).unwrap(),
+                "other\n",
+                "recovery copies a nested repository as a tree"
+            );
+            assert_eq!(
+                fs::read_to_string(payload.join("vendor/fresh/lib.txt")).unwrap(),
+                "fresh\n"
+            );
+            assert!(
+                payload.join("vendor/otherlib/.git").is_dir(),
+                "the nested git dir is part of the preserved tree"
+            );
+        },
+    );
+}
+
+/// Every dirty integrity failure in one run preserves its own current
+/// content, and the recovery store stays bounded: old attempts are pruned,
+/// the newest never is.
+#[cfg(unix)]
+#[test]
+fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts() {
+    isolated(
+        "repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts",
+        || {
+            const FAILURES: usize = 8;
+            let fixture = Fixture::new();
+            let host = LifecycleHost::new(&fixture.repo);
+            host.add_task("T-REPEAT", TaskStatus::Backlog);
+            let setup = action(
+                &host,
+                "worktree_setup",
+                &setup_input(&["T-REPEAT"], "jrun-repeat-setup"),
+            )
+            .expect("worktree setup");
+            let checkout = Checkout::from_setup(&setup);
+            let provider = fixture.root.path().join("codex");
+            let primary = fixture.repo.display().to_string();
+            write_executable(
+                &provider,
+                &provider_script(&format!(
+                    "printf 'primary drift\\n' > '{primary}/README.md'\n"
+                )),
+            );
+            let host = host.with_provider(&provider);
+
+            let mut roots = Vec::new();
+            for failure in 1..=FAILURES {
+                git(&fixture.repo, &["checkout", "--", "README.md"]);
+                fs::write(
+                    checkout.path.join(format!("edit-{failure}.txt")),
+                    format!("edit {failure}\n"),
+                )
+                .unwrap();
+                let error = dispatch_audited_linked_activity(
+                    &host,
+                    "agent_implement",
+                    "jrun-repeat",
+                    "T-REPEAT",
+                    &checkout.path,
+                    Arc::new(V2AuditWriter::new(
+                        "jrun-repeat",
+                        "codex:test-model",
+                        Arc::new(InMemorySink::new(fixture.root.path())),
+                    )),
+                )
+                .expect_err("primary drift is a boundary failure");
+                let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+                let recovery = &diagnostic["recovery"];
+                assert!(
+                    recovery.get("preservation_error").is_none(),
+                    "failure {failure}: {diagnostic}"
+                );
+                let root = PathBuf::from(recovery["root"].as_str().expect("recovery root"));
+                let payload = PathBuf::from(recovery["untracked_payload"].as_str().unwrap());
+                assert_eq!(
+                    fs::read_to_string(payload.join(format!("edit-{failure}.txt"))).unwrap(),
+                    format!("edit {failure}\n"),
+                    "failure {failure} must preserve the edits present at that failure"
+                );
+                assert!(
+                    !roots.contains(&root),
+                    "failure {failure} reused an earlier payload: {}",
+                    root.display()
+                );
+                roots.push(root);
+            }
+
+            let run_dir = roots[0].parent().unwrap();
+            let kept = fs::read_dir(run_dir).unwrap().count();
+            assert!(
+                kept < FAILURES,
+                "recovery payloads of one run must be bounded, found {kept}"
+            );
+            assert!(
+                roots.last().unwrap().is_dir(),
+                "the newest payload is never pruned"
+            );
+            assert!(
+                !roots[0].exists(),
+                "the oldest payload is pruned past the retention bound"
             );
         },
     );
@@ -1520,6 +3419,18 @@ fn dispatch_linked_activity(
         "codex:test-model",
         Arc::new(InMemorySink::new(blobs.path().to_path_buf())),
     ));
+    dispatch_audited_linked_activity(host, activity_name, run_id, task_id, workspace, audit)
+}
+
+/// Keep the caller's audit sink available to inspect full boundary evidence.
+fn dispatch_audited_linked_activity(
+    host: &LifecycleHost,
+    activity_name: &str,
+    run_id: &str,
+    task_id: &str,
+    workspace: &Path,
+    audit: Arc<V2AuditWriter>,
+) -> Result<orbit_engine::DispatchOutcome, DispatchError> {
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "Edit the assigned checkout.".to_string(),
@@ -1582,7 +3493,7 @@ impl Fixture {
         let root = TempDir::new().unwrap();
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init"]);
+        super::git_fixture::init(&repo);
         git(&repo, &["checkout", "-b", BASE]);
         git(&repo, &["config", "user.name", "Orbit Test"]);
         git(
@@ -1635,6 +3546,16 @@ struct PreparedRebase {
 
 impl PreparedRebase {
     fn new(run_id: &str, candidate_file: &str, base_file: &str) -> Self {
+        Self::with_commits(
+            run_id,
+            &[(candidate_file, "candidate\n")],
+            &[(base_file, "target\n")],
+        )
+    }
+
+    /// A candidate of one commit per `candidate` file write, prepared against
+    /// a base advanced by one commit per `base` file write.
+    fn with_commits(run_id: &str, candidate: &[(&str, &str)], base: &[(&str, &str)]) -> Self {
         let fixture = Fixture::new();
         let host = LifecycleHost::new(&fixture.repo);
         host.add_task("T-REBASE", TaskStatus::Backlog);
@@ -1642,8 +3563,16 @@ impl PreparedRebase {
             .expect("worktree setup");
         let checkout = Checkout::from_setup(&setup);
         let base_sha = setup["base_sha"].as_str().unwrap().to_string();
-        let candidate = commit_file(&checkout.path, candidate_file, "candidate\n");
-        let target = commit_file(&fixture.repo, base_file, "target\n");
+        let commit_all = |repo: &Path, writes: &[(&str, &str)]| {
+            writes
+                .iter()
+                .fold(None, |_, (file, contents)| {
+                    Some(commit_file(repo, file, contents))
+                })
+                .expect("at least one commit")
+        };
+        let candidate = commit_all(&checkout.path, candidate);
+        let target = commit_all(&fixture.repo, base);
         let common = json!({
             "workspace_path": checkout.path,
             "job_run_id": run_id,
@@ -1666,6 +3595,11 @@ impl PreparedRebase {
     }
 
     fn rebase(&self) -> Result<Value, OrbitError> {
+        self.rebase_on(&self.host, &self.prepared)
+    }
+
+    /// Run `git_rebase` through `host` for the handoff `preparation` describes.
+    fn rebase_on(&self, host: &LifecycleHost, preparation: &Value) -> Result<Value, OrbitError> {
         let mut input = self.common.clone();
         for field in [
             "head",
@@ -1677,9 +3611,9 @@ impl PreparedRebase {
             "commits_behind",
             "sync_required",
         ] {
-            input[field] = self.prepared[field].clone();
+            input[field] = preparation[field].clone();
         }
-        action(&self.host, "git_rebase", &input)
+        action(host, "git_rebase", &input)
     }
 
     fn head(&self) -> String {
@@ -1750,6 +3684,7 @@ fn task(id: &str, status: TaskStatus) -> Task {
         relations: Vec::new(),
         job_run_id: None,
         crew: None,
+        crew_source: None,
         orchestrator: None,
         created_at: now,
         updated_at: now,
@@ -1760,12 +3695,16 @@ fn task(id: &str, status: TaskStatus) -> Task {
 /// read through, kept in memory.
 #[derive(Default)]
 struct LifecycleHost {
+    reclaim_patterns: Option<Vec<String>>,
     repo: PathBuf,
     provider: Option<PathBuf>,
     tasks: Mutex<BTreeMap<String, Task>>,
     runs: Mutex<Vec<JobRun>>,
     admitted: Mutex<Vec<String>>,
     checkpoints: Mutex<Vec<(String, String, Value)>>,
+    /// Admitted conflict recoveries, as (run, step, scope), in reservation
+    /// order. The attempt is a recovery's 1-based position for its run/step.
+    recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
     /// A replica owner's answer per task, overriding the local task store.
     owner_answers: Mutex<BTreeMap<String, WorktreeGcTaskLookup>>,
     /// Claimed runs whose claim is settled, with the settlement's account.
@@ -1780,6 +3719,22 @@ struct LifecycleHost {
     history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
     /// `workflow.required_validation_commands`.
     required_commands: Mutex<Vec<String>>,
+    /// Task artifacts by task id.
+    artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
+    /// This host's machine identity.
+    machine: Mutex<Option<String>>,
+    /// The candidate the owner kept from the task's last claim.
+    kept_claim: Mutex<Option<KeptClaimCandidate>>,
+    /// Deterministically model an operator write immediately before landing.
+    landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
+    /// Scripted answers of host-run deterministic actions, by action name.
+    stubs: Mutex<BTreeMap<String, Result<Value, String>>>,
+    /// Every stubbed action call, as (action, input), in order.
+    stub_calls: Mutex<Vec<(String, Value)>>,
+    /// Final recovery admissions requested, in order.
+    final_recovery_admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
+    /// Final recovery decisions handed to the host, in order.
+    final_recovery_applications: Mutex<Vec<FinalRecoveryApplication>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -1851,12 +3806,54 @@ impl LifecycleHost {
         self.checkpoints.lock().unwrap().clone()
     }
 
+    fn recovery_attempts(&self) -> Vec<(String, String, RebaseRecoveryAttemptScope)> {
+        self.recovery_attempts.lock().unwrap().clone()
+    }
+
+    /// Overwrite the run store's copy of `step_id`'s recovery, as a leaf
+    /// holding the store's modify grant can.
+    fn leaf_writes_recovery(&self, run_id: &str, step_id: &str, checkpoint: Value) {
+        self.run_states
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .unwrap()
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), checkpoint);
+    }
+
     fn widenings(&self) -> Vec<Widening> {
         self.widenings.lock().unwrap().clone()
     }
 
     fn set_description(&self, id: &str, description: &str) {
         self.tasks.lock().unwrap().get_mut(id).unwrap().description = description.to_string();
+    }
+
+    fn set_acceptance_criteria(&self, id: &str, criteria: &[&str]) {
+        self.tasks
+            .lock()
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .acceptance_criteria = criteria.iter().map(ToString::to_string).collect();
+    }
+
+    fn set_context_files(&self, id: &str, selectors: &[&str]) {
+        self.tasks
+            .lock()
+            .unwrap()
+            .get_mut(id)
+            .unwrap()
+            .context_files = selectors.iter().map(ToString::to_string).collect();
+    }
+
+    /// Store `artifact` on `task_id`, replacing one at the same path.
+    fn set_artifact(&self, task_id: &str, artifact: TaskArtifact) {
+        let mut artifacts = self.artifacts.lock().unwrap();
+        let stored = artifacts.entry(task_id.to_string()).or_default();
+        stored.retain(|existing| existing.path != artifact.path);
+        stored.push(artifact);
     }
 
     fn set_required_commands(&self, commands: &[&str]) {
@@ -1906,6 +3903,15 @@ impl LifecycleHost {
 }
 
 impl RuntimeHost for LifecycleHost {
+    fn record_direct_landing_intent(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        if let Some((path, bytes)) = self.landing_write.lock().unwrap().take() {
+            fs::write(path, bytes).unwrap();
+        }
+        Ok(())
+    }
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.tasks
             .lock()
@@ -1969,6 +3975,16 @@ impl RuntimeHost for LifecycleHost {
         Ok(self.history(task_id))
     }
 
+    fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+        Ok(self
+            .artifacts
+            .lock()
+            .unwrap()
+            .get(task_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         Ok(self
             .runs
@@ -1987,8 +4003,25 @@ impl RuntimeHost for LifecycleHost {
         self.required_commands.lock().unwrap().clone()
     }
 
+    fn local_machine_id(&self) -> Option<String> {
+        self.machine.lock().unwrap().clone()
+    }
+
+    fn kept_claim_candidate(
+        &self,
+        _task_id: &str,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        Ok(self.kept_claim.lock().unwrap().clone())
+    }
+
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
+    }
+
+    fn worktree_reclaim_patterns(&self) -> Vec<String> {
+        self.reclaim_patterns
+            .clone()
+            .unwrap_or_else(|| vec!["target".into()])
     }
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
@@ -2040,6 +4073,22 @@ impl RuntimeHost for LifecycleHost {
         Ok(paths.iter().map(|path| format!("file:{path}")).collect())
     }
 
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        let mut attempts = self.recovery_attempts.lock().unwrap();
+        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
+        Ok(attempts
+            .iter()
+            .filter(|(run, step, _)| run == run_id && step == step_id)
+            .count() as u64)
+    }
+
+    /// Records the certified completion, and copies it into the run store the
+    /// `git_rebase` retry reads, as the runtime does.
     fn checkpoint_rebase_recovery(
         &self,
         run_id: &str,
@@ -2051,7 +4100,38 @@ impl RuntimeHost for LifecycleHost {
             step_id.to_string(),
             output.clone(),
         ));
+        self.run_states
+            .lock()
+            .unwrap()
+            .entry(run_id.to_string())
+            .or_insert_with(|| {
+                PipelineState::new(
+                    run_id.to_string(),
+                    "task_pr_pipeline".to_string(),
+                    json!({}),
+                )
+            })
+            .rebase_recovery_checkpoints
+            .insert(step_id.to_string(), output.clone());
         Ok(())
+    }
+
+    /// Only the newest completion recorded for a run's step vouches for it,
+    /// matching the runtime's recovery authority.
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .checkpoints
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(run, step, _)| run == run_id && step == step_id)
+            .is_some_and(|(_, _, certified)| certified == checkpoint))
     }
 
     fn validate_step_recovery_mutation(
@@ -2068,12 +4148,72 @@ impl RuntimeHost for LifecycleHost {
         &self,
         action: &str,
         _config: &Value,
-        _input: &Value,
+        input: &Value,
         _tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            action.to_string(),
-        ))
+        let Some(reply) = self.stubs.lock().unwrap().get(action).cloned() else {
+            return Err(DispatchError::DeterministicActionNotRegistered(
+                action.to_string(),
+            ));
+        };
+        self.stub_calls
+            .lock()
+            .unwrap()
+            .push((action.to_string(), input.clone()));
+        reply.map_err(|message| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message,
+        })
+    }
+
+    /// Conflict recovery dispatched by a job runs on the system route, whose
+    /// crew keeps the activity's inline provider settings.
+    fn system_crew_for_dispatch(&self) -> Option<String> {
+        Some("system".to_string())
+    }
+
+    fn agent_crew_config_for_input(
+        &self,
+        _input: &Value,
+    ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
+        Ok(None)
+    }
+
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    fn admit_final_recovery(
+        &self,
+        _run_id: &str,
+        request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError> {
+        self.final_recovery_admissions
+            .lock()
+            .unwrap()
+            .push(request.clone());
+        Ok(FinalRecoveryAdmission::Admitted)
+    }
+
+    /// Settles every decision but `escalate`, leaving the task as it is: the
+    /// runtime's applier, not this host, owns the lifecycle change.
+    fn apply_final_recovery(
+        &self,
+        _run_id: &str,
+        application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError> {
+        self.final_recovery_applications
+            .lock()
+            .unwrap()
+            .push(application.clone());
+        Ok(match &application.decision {
+            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
+                outcome: "blocked for a human".to_string(),
+            },
+            other => FinalRecoveryApplied::Settled {
+                outcome: other.kind().to_string(),
+            },
+        })
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
@@ -2099,6 +4239,70 @@ impl RuntimeHost for LifecycleHost {
             ..orbit_tools::ToolContext::default()
         }
     }
+}
+
+fn assert_landing_checkout_refusal(error: &OrbitError, landing: &Path, spelling: &str) {
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::Execution(_)),
+        "base spelling {spelling} should refuse at the landing checkout, got {error:?}"
+    );
+    assert!(
+        message.contains("base branch checkout"),
+        "base spelling {spelling} names the landing-checkout check: {message}"
+    );
+    assert!(
+        message.contains(&landing.display().to_string()),
+        "base spelling {spelling} inspects the checkout holding main ({}): {message}",
+        landing.display()
+    );
+    assert!(
+        message.contains("README.md")
+            && message.contains("must be clean before merge_batch_worktree_into_base"),
+        "base spelling {spelling} reports that checkout's dirty path: {message}"
+    );
+    assert!(
+        !message.contains("unrelated.txt"),
+        "base spelling {spelling} leaves the unrelated primary checkout out of the refusal: {message}"
+    );
+}
+
+fn checkout_holding(repo: &Path, branch: &str) -> PathBuf {
+    let listing = git(repo, &["worktree", "list", "--porcelain"]);
+    let expected = format!("refs/heads/{branch}");
+    let mut current = None;
+    for line in listing.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(PathBuf::from(path));
+        } else if line.strip_prefix("branch ") == Some(expected.as_str()) {
+            return current.unwrap_or_else(|| panic!("worktree path missing for {branch}"));
+        }
+    }
+    panic!("no checkout holds {branch}:\n{listing}");
+}
+
+/// The dispatcher injects `run_id` beside the pipeline's `job_run_id`
+/// before `git_merge` runs. Both name this run.
+fn merge_input(run_id: &str, spelling: &str, workspace: &Path) -> Value {
+    json!({
+        "run_id": run_id,
+        "job_run_id": run_id,
+        "base": spelling,
+        "base_sync": "local",
+        "strategy": "fast_forward",
+        "workspace_path": workspace,
+    })
+}
+
+fn landing_input(field: &str, spelling: &str, run_id: &str) -> Value {
+    json!({
+        "task_ids": ["T-LAND"],
+        "run_id": run_id,
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+        "landing_mode": "local",
+        field: spelling,
+    })
 }
 
 fn assert_stale_refusal(error: &OrbitError, branch: &str, tip: &str, base: &str) {
@@ -2180,19 +4384,7 @@ fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> bool {
 }
 
 fn git(current_dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(current_dir)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {} failed in {}:\n{}",
-        args.join(" "),
-        current_dir.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    super::git_fixture::run(current_dir, args)
 }
 
 #[cfg(unix)]
@@ -2216,6 +4408,11 @@ fn path_str(path: &Path) -> &str {
 /// Run `body` in a copy of this test binary that sees only the environment
 /// the fixture sets, and fail if it fails or outlives [`CHILD_DEADLINE`].
 fn isolated(test: &str, body: impl FnOnce()) {
+    isolated_in(module_path!(), test, body);
+}
+
+/// [`isolated`] for a test defined in `module`, a submodule of this one.
+fn isolated_in(module: &str, test: &str, body: impl FnOnce()) {
     if std::env::var_os(CHILD_ENV).is_some() {
         body();
         return;
@@ -2231,7 +4428,7 @@ fn isolated(test: &str, body: impl FnOnce()) {
     // libtest names a test by its module path below the crate root.
     let qualified = format!(
         "{}::{test}",
-        module_path!().split_once("::").expect("test module").1
+        module.split_once("::").expect("test module").1
     );
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
@@ -2245,6 +4442,7 @@ fn isolated(test: &str, body: impl FnOnce()) {
             command.env_remove(name.as_ref());
         }
     }
+    super::git_fixture::configure_child(&mut command, &home, sandbox.path());
     command
         .env(CHILD_ENV, "1")
         .env("HOME", &home)

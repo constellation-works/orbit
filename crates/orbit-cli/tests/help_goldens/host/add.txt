@@ -1,0 +1,39 @@
+Register a remote host, reading its identity from the host over SSH
+
+Usage: orbit host add [OPTIONS] <SSH_TARGET>
+
+Arguments:
+  <SSH_TARGET>
+          SSH alias or user@host that reaches the remote host
+
+Options:
+      --name <NAME>
+          Name for the host (defaults to the remote's own machine.name)
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  orbit host add dk-server-2
+  orbit host add daniel@10.0.0.7 --name build-box
+
+With only mcp-destinations.toml, this migrates every legacy host to hosts.toml. Adding a host already in the legacy file succeeds and reports the migration, preserving its SSH target and migrated name (--name applies only to a new host). Every retained legacy host must answer. A host already in hosts.toml still refuses with host_exists.

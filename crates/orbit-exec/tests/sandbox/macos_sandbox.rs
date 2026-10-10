@@ -4,9 +4,10 @@
 //! A child shell runs under a profile compiled by
 //! [`compile_macos_sandbox_profile`] with the agent mask appended by
 //! [`append_macos_subpath_mask`], exactly as the spawn path builds it, and
-//! reports which reads, listings and writes the kernel let through.
+//! reports which reads, listings, writes and renames the kernel let through.
 //!
-//! A host where `sandbox-exec` cannot apply a profile skips visibly. The macOS
+//! A nested sandbox apply refusal (exit 71 with `sandbox_apply`) skips visibly.
+//! Other probe failures fail the test. The macOS
 //! CI leg sets `ORBIT_REQUIRE_SANDBOX_EXEC=1`, which turns that skip into a
 //! failure (STD-04 §R8).
 
@@ -19,21 +20,18 @@ use std::time::Duration;
 
 use orbit_exec::{
     MacosSandboxSpawnRequest, append_macos_subpath_mask, compile_macos_sandbox_profile,
-    sandbox_exec_available, spawn_under_macos_sandbox,
+    macos_sandbox_test_guard, spawn_under_macos_sandbox,
 };
 use orbit_types::policy::ResolvedFsProfile;
 use wait_timeout::ChildExt;
 
-const REQUIRE_ENV: &str = "ORBIT_REQUIRE_SANDBOX_EXEC";
 const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
 fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
-    if let Err(reason) = sandbox_exec_can_apply() {
-        if std::env::var(REQUIRE_ENV).as_deref() == Ok("1") {
-            panic!("{REQUIRE_ENV}=1 but sandbox-exec cannot apply a profile here: {reason}");
-        }
-        println!("SKIP: sandbox-exec cannot apply a profile on this host: {reason}");
+    if !macos_sandbox_test_guard(
+        "sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root",
+    ) {
         return;
     }
 
@@ -132,11 +130,7 @@ probe write-root ': > "$WRITE_ROOT/written"'
 /// original absent-root deny dynamically, rather than silently dropping it.
 #[test]
 fn sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots() {
-    if let Err(reason) = sandbox_exec_can_apply() {
-        if std::env::var(REQUIRE_ENV).as_deref() == Ok("1") {
-            panic!("{REQUIRE_ENV}=1 but sandbox-exec cannot apply a profile here: {reason}");
-        }
-        println!("SKIP: sandbox-exec cannot apply a profile on this host: {reason}");
+    if !macos_sandbox_test_guard("sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots") {
         return;
     }
 
@@ -223,34 +217,100 @@ deny sh -c 'printf created > "$1/created.txt"' sh "$DENIED"
     }
 }
 
-/// `Ok` when `sandbox-exec` runs a permissive profile; otherwise the reason it
-/// cannot, for the skip message.
-fn sandbox_exec_can_apply() -> Result<(), String> {
-    if !sandbox_exec_available() {
-        return Err("/usr/bin/sandbox-exec is not available".to_string());
+/// Seatbelt checks a rename against the moved entry only, and a glob deny is a
+/// pathname regex rooted at the workspace. A directory holding an existing
+/// match must not move to host scratch, which every profile may write and
+/// where the match leaves the regex, to be changed or read there and moved
+/// back.
+#[test]
+fn sandbox_exec_keeps_existing_glob_deny_matches_inside_the_workspace() {
+    if !macos_sandbox_test_guard(
+        "sandbox_exec_keeps_existing_glob_deny_matches_inside_the_workspace",
+    ) {
+        return;
     }
+
+    let fixture = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
+    let workspace = fixture.path().canonicalize().expect("canonical workspace");
+    let away = tempfile::Builder::new()
+        .prefix("orbit-glob-escape-")
+        .tempdir_in("/private/tmp")
+        .expect("host scratch");
+    for dir in ["nested/app", "config/keys", "plain"] {
+        std::fs::create_dir_all(workspace.join(dir)).expect("fixture dir");
+    }
+    let env_file = workspace.join("nested/app/.env");
+    std::fs::write(&env_file, "TOKEN=1\n").expect(".env");
+    std::fs::write(workspace.join("config/keys/api.secret"), "SECRET").expect("secret");
+
+    // `.env` is denied for writes and reads, as in the default policy.
+    // `*.secret` is denied for reads only, so its own pins must stop a move.
+    let ws = workspace.display();
+    let profile = ResolvedFsProfile {
+        name: "implementer".to_string(),
+        read: vec![format!("{ws}/**"), format!("!{ws}/**/*.secret")],
+        modify: vec![format!("{ws}/**"), format!("!{ws}/**/.env")],
+    };
+    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+
+    let script = r#"
+probe() { if (eval "$2") >/dev/null 2>&1; then echo "$1:allowed"; else echo "$1:denied"; fi; }
+probe append-env 'printf x >> "$WS/nested/app/.env"'
+probe move-env-parent 'mv "$WS/nested/app" "$AWAY/app" && printf x >> "$AWAY/app/.env"'
+probe move-env-grandparent 'mv "$WS/nested" "$AWAY/nested" && printf x >> "$AWAY/nested/app/.env"'
+probe read-secret 'cat "$WS/config/keys/api.secret"'
+probe move-secret-parent 'mv "$WS/config/keys" "$AWAY/keys" && cat "$AWAY/keys/api.secret"'
+probe move-secret-grandparent 'mv "$WS/config" "$AWAY/config" && cat "$AWAY/config/keys/api.secret"'
+probe write-beside-env 'printf ok > "$WS/nested/app/notes.txt"'
+probe move-unmatched 'mv "$WS/plain" "$WS/plain-moved"'
+"#;
+    let env = [
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("WS".to_string(), workspace.display().to_string()),
+        ("AWAY".to_string(), away.path().display().to_string()),
+    ];
     let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
-        profile_text: "(version 1)\n(allow default)\n",
-        program: "/usr/bin/true",
-        args: &[],
-        env: &[],
-        cwd: None,
+        profile_text: &profile_text,
+        program: "/bin/sh",
+        args: &["-c".to_string(), script.to_string()],
+        env: &env,
+        cwd: Some(&workspace),
         stdin: Stdio::null(),
-        stdout: Stdio::null(),
+        stdout: Stdio::piped(),
         stderr: Stdio::piped(),
         inherited_fds: &[],
     })
-    .map_err(|error| error.to_string())?;
-    let mut guard = ChildGuard(child);
-    match guard
-        .0
-        .wait_timeout(CHILD_DEADLINE)
-        .map_err(|error| error.to_string())?
-    {
-        Some(status) if status.success() => Ok(()),
-        Some(status) => Err(format!("a permissive profile exited with {status}")),
-        None => Err(format!("a permissive profile ran past {CHILD_DEADLINE:?}")),
-    }
+    .expect("spawn under sandbox-exec");
+    let (stdout, stderr) = wait_bounded(child);
+
+    let expected = [
+        "append-env:denied",
+        "move-env-parent:denied",
+        "move-env-grandparent:denied",
+        "read-secret:denied",
+        "move-secret-parent:denied",
+        "move-secret-grandparent:denied",
+        "write-beside-env:allowed",
+        "move-unmatched:allowed",
+    ];
+    let reported: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        reported, expected,
+        "kernel verdicts under the compiled profile\nstderr:\n{stderr}\nprofile:\n{profile_text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&env_file).expect(".env after"),
+        "TOKEN=1\n",
+        "the denied `.env` must be unchanged"
+    );
+    let moved: Vec<_> = std::fs::read_dir(away.path())
+        .expect("list host scratch")
+        .map(|entry| entry.expect("scratch entry").file_name())
+        .collect();
+    assert!(
+        moved.is_empty(),
+        "nothing may leave the workspace: {moved:?}"
+    );
 }
 
 /// Wait for the sandboxed child within [`CHILD_DEADLINE`], then collect its

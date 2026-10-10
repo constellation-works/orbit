@@ -23,15 +23,19 @@ pub(super) const BUNDLES_DIR: &str = "bundles";
 pub(super) const MANIFEST_ENTRY: &str = "manifest.json";
 
 /// Pack `manifest_json` plus each `(task_id, canonical_dir)` bundle tree into a
-/// tar.zst archive at `out_path`.
+/// tar.zst archive at `out_path`. Replace the destination only after the staged
+/// archive is complete and synced; errors drop the staging file.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "task export creates user-selected backup directories, outside Orbit state"
+)]
 pub(super) fn write_archive(
     out_path: &Path,
     manifest_json: &[u8],
     bundle_dirs: &[(String, PathBuf)],
 ) -> Result<(), OrbitError> {
-    // Fail before opening or truncating the destination when an interrupted
-    // writer left recovery evidence behind. Recheck while packing below to
-    // cover a writer that starts after this preflight.
+    // Fail before staging when an interrupted writer left recovery evidence
+    // behind. Recheck while packing to cover a writer starting after preflight.
     for (task_id, dir) in bundle_dirs {
         with_shared_file_lock(&bundle_lock_target(dir), "task migration export", || {
             if !dir.is_dir() {
@@ -45,19 +49,35 @@ pub(super) fn write_archive(
         })?;
     }
 
-    if let Some(parent) = out_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|e| OrbitError::Io(e.to_string()))?;
+    let parent = out_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(map_io("create archive directory"))?;
+    // A sibling keeps the final replacement on the same filesystem. Keep the
+    // guard outside the encoder so every packing/finalization error cleans up.
+    let mut staged = tempfile::Builder::new()
+        .prefix(".orbit-task-export-")
+        .tempfile_in(parent)
+        .map_err(|e| {
+            OrbitError::Io(format!(
+                "failed to stage archive '{}': {e}",
+                out_path.display()
+            ))
+        })?;
+    // Retain access permissions when replacing a regular backup. New archives
+    // keep the temporary file's private defaults; never follow an output link.
+    match std::fs::symlink_metadata(out_path) {
+        Ok(metadata) if metadata.is_file() => staged
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .map_err(map_io("preserve archive permissions"))?,
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(map_io("inspect archive destination")(error)),
     }
-    let file = File::create(out_path).map_err(|e| {
-        OrbitError::Io(format!(
-            "failed to create archive '{}': {e}",
-            out_path.display()
-        ))
-    })?;
-    let encoder =
-        zstd::stream::write::Encoder::new(file, ZSTD_LEVEL).map_err(map_io("zstd encoder"))?;
+    let encoder = zstd::stream::write::Encoder::new(staged.as_file_mut(), ZSTD_LEVEL)
+        .map_err(map_io("zstd encoder"))?;
     let mut builder = tar::Builder::new(encoder);
     // A link that appears after the check above is archived as a link, which
     // import refuses, and never as a copy of its target.
@@ -74,6 +94,9 @@ pub(super) fn write_archive(
     builder
         .append_data(&mut header, MANIFEST_ENTRY, manifest_json)
         .map_err(map_io("write manifest entry"))?;
+
+    #[cfg(test)]
+    super::tests::archive::after_manifest();
 
     for (task_id, dir) in bundle_dirs {
         let arcname = format!("{BUNDLES_DIR}/{task_id}");
@@ -92,6 +115,17 @@ pub(super) fn write_archive(
 
     let encoder = builder.into_inner().map_err(map_io("finalize tar"))?;
     encoder.finish().map_err(map_io("finalize zstd"))?;
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(map_io("sync archive"))?;
+    staged.persist(out_path).map_err(|e| {
+        OrbitError::Io(format!(
+            "failed to replace archive '{}': {}",
+            out_path.display(),
+            e.error
+        ))
+    })?;
     Ok(())
 }
 

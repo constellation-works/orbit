@@ -1,0 +1,40 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: review_reconciliation_settle
+spec:
+  type: deterministic
+  description: >
+    Records the reviewer's report, re-observes the reconciliation's binding,
+    and settles one outcome: accepted when the review accepted and every
+    required command passed; awaiting an operator disposition when every
+    failure also fails at the base; refused otherwise, with the next step.
+    Findings and head-only failures become one follow-up task. The outcome is
+    commented on the task and audited.
+  input_schema_json:
+    type: object
+    required: [task_id, reconciliation_id]
+    properties:
+      task_id:
+        type: string
+        minLength: 1
+      reconciliation_id:
+        type: string
+        minLength: 1
+      # The review step's output; its envelope result carries `report`.
+      review:
+        type: [object, "null"]
+  output_schema_json:
+    type: object
+    required: [reconciliation_id]
+    properties:
+      reconciliation_id:
+        type: string
+      outcome:
+        type: [object, "null"]
+      validation_complete:
+        type: boolean
+      follow_up_task_id:
+        type: [string, "null"]
+  action: review_reconciliation_settle
+  config: {}

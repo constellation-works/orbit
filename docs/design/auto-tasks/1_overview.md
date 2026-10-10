@@ -2,7 +2,7 @@
 title: Auto-tasks — Overview
 owner: claude
 last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -47,13 +47,16 @@ becomes just the first definition.
   mints one make-up task, not one per slot. Cadence is per-definition data, not
   a knob in the identity `config.yaml` ([L-0014] keeps runtime config out of
   `config.yaml`).
-- **Cursor** — per-definition last-fired state, host-local at
-  `<orbit_dir>/state/auto-tasks.json`, so the definition YAML is never
-  churned by a scheduler fire.
+- **Time cursor** — per-definition last-fired state for cron and interval
+  schedules, host-local at `<orbit_dir>/state/auto-tasks.json`, so the
+  definition YAML is never churned by a scheduler fire. Delivery-trigger
+  definitions use durable Automation checkpoints, batches and receipts in the
+  host SQLite store instead.
 - **Scheduler** — the host clock tick calls the evaluator directly after routine
-  evaluation. No job run is created; fire evidence is the minted task, the cursor,
-  and the tick report row. Auto-tasks are shown on the Operations auto-task panel,
-  not on the routines surface.
+  evaluation. Scheduling an auto-task creates no job run; fire evidence is the
+  minted task and tick report, with time cursors for cron/interval definitions
+  and durable batch/receipt state for delivery-trigger definitions. Auto-tasks
+  are shown on the Operations auto-task panel, not on the routines surface.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
@@ -77,19 +80,19 @@ becomes just the first definition.
 | Concern | File | Task |
 |---|---|---|
 | Definition schema | `crates/orbit-types/src/workflow/auto_task/definition.rs` | ORB-10149 |
-| Discovery (fail-closed) | `crates/orbit-core/src/application/auto_tasks/loader.rs` | ORB-10149 |
-| Due-math + catch-up | `crates/orbit-core/src/application/auto_tasks/schedule.rs` | ORB-10149 |
+| Discovery (fail-closed) | `crates/orbit-automation/src/auto_tasks/loader.rs` | ORB-10149 |
+| Due-math + catch-up | `crates/orbit-automation/src/auto_tasks/schedule.rs` | ORB-10149 |
 | Host-local cursor | `crates/orbit-core/src/application/auto_tasks/state.rs` | ORB-10149 |
 | Scheduler pass | `crates/orbit-core/src/application/auto_tasks/scheduler.rs` | ORB-10149 |
 | CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |
 | Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
-| Deterministic action (slated for retirement) | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
-| Seeded assets (scheduler routine/job/activity slated for retirement) | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
+| Operator settings over bundled bodies, fork migration | `crates/orbit-automation/src/auto_tasks/settings.rs`, `crates/orbit-core/src/application/auto_tasks/settings.rs` | ORB-14909 |
+| Retired scheduler routine migration template | `crates/orbit-core/assets/routines/retired/auto_task_scheduler.yaml` | ORB-12237 |
 | Default auto-task catalog | `crates/orbit-core/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
 
 ## Embedded default catalog
 
-These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These nine YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -109,31 +112,66 @@ definition of the same name.
   cursor task.
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
-  commit, partitions the tree into areas of roughly 90k lines along crate and
-  module boundaries, and files one area-review chore per area tagged
+  commit, measures tracked text at that SHA, and splits directories or file
+  sets into areas of at most 25,000 lines. Its `review-areas.json` artifact
+  records the inventories, counts and exclusions. It files one area-review
+  chore per bounded area tagged
   `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
-  complexity or below with no pinned crew. Area reviewers read the whole area
-  at that commit and file findings as `bug`s tagged `code-review` +
-  `full-code-review`.
-- `doc-duties` — disabled-by-default daily validation of the oldest tracked
-  documentation. Existing `last_validated` dates take precedence; documents
-  without the key use git last-touched dates and completed task summaries for
-  rotation, without gaining frontmatter solely for this task.
+  complexity or below with no pinned crew. Area reviewers read every partition
+  of at most 10,000 lines in full, recording file/range coverage and findings
+  in `read-progress.json`; resumed and re-crewed runs continue from that
+  artifact. Parallel reading is used when the crew and execution rules permit
+  it. Incomplete coverage reports `review_incomplete` with uncovered partitions
+  in the artifact and task comment. Findings are `bug`s tagged `code-review` +
+  `full-code-review`, with source-file and matching test context selectors.
+- `doc-duties` — disabled-by-default daily validation of the
+  least-recently-attempted tracked documentation. Each run attaches a
+  `doc-duties-ledger.json` artifact with an outcome (`clean`, `fixed`,
+  `partial`, `skipped`) and attempt date per selected document. Each ledger
+  also carries a cumulative `state` map holding every path's two latest
+  attempts, rewritten in full every run. The next run starts from the newest
+  readable ledger's `state` (read through the artifact tools, never from
+  summary prose); ledgers from before `state` existed are layered in from the
+  60-run history window. Retention therefore does not depend on how many
+  completed tasks the window covers: a bounded window alone would forget old
+  attempts and starve later documents. Rotation orders by the latest attempt,
+  then an existing `last_validated` date, then the git last-touched date, so a
+  skipped document moves to the back instead of heading every batch. A document
+  whose two latest attempts were `skipped` or `partial` is held back, even after
+  those attempts leave the window, and reported as needing its own task.
+  `last_validated` advances only on `clean`/`fixed`, and no frontmatter is added
+  solely for this task. Its template reserves `dir:.` for root and
+  workspace-specific documentation and does not carry `no-diff-expected`, since
+  verified drift corrections produce diffs. Clean batches use validated no-diff
+  evidence.
 - `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
   own run evidence (failed and interrupted runs, step failures, worker logs)
-  since the previous scan's `run-failure-cursor.json` artifact. Failures
-  sharing a normalized signature at least 3 times across at least 2 runs are
-  filed as one redacted friction or proposed task per pattern unless an
-  existing task or friction already tracks it. The scan never mutates run
-  state — its run reads pass `--no-reconcile`, so an orphaned run it lists is
-  not finalized — and a window with no new pattern is a successful no-op.
+  since the previous scan's `run-failure-cursor.json` artifact. On an owner it
+  also reads the failure and release settlements followers' claimed leaves
+  sent, through `orbit run settlements --no-reconcile`, since those leaves
+  never enter the owner's run history; a pattern seen on two hosts is one
+  pattern. Parents that fail `pipeline_success_guard` fold into their child by
+  `orbit run show`'s `root_cause`, and a parent of a `held` child is no
+  failure. Review refusals are clustered by escalation category (`base_red`,
+  `external_evidence`, `report_revision`, `scope_or_criteria`, `timeout`,
+  `other`). A cluster is a pattern at 3 occurrences across 2 runs, or as a
+  single occurrence when a deterministic Orbit action or tool limit blocked a
+  task and would recur. Unless an existing task or friction already tracks
+  it, each pattern's mechanism is verified in code and filed as one redacted
+  `proposed` fix task tagged `run-failure-patterns` and `no-auto-approve`; a
+  friction replaces the task only when no cause can be established. The scan
+  never mutates run state — its run and settlement reads pass
+  `--no-reconcile`, so an orphaned run it lists is not finalized — and a
+  window with no new pattern is a successful no-op.
 - `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
   status or dispatching work.
 - `delivery-code-review` — disabled-by-default review of newly landed
-  deliveries. `operation.review_policy = after-landing` enables it without a
-  toggle. The former `delivery-qa` default is retired and is not seeded;
+  deliveries. Its `enabled` flag is the after-landing review switch
+  [ORB-13992]; the deprecated `operation.review_policy = after-landing`
+  enables a copy no operator has configured, which `list` and `show` report
+  as `effective_enabled`. The former `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` and `qa-full-sweep`.
 
 ## Workspace-authored definitions in this repo
@@ -166,6 +204,9 @@ encode this repository's branches and gates. Re-init preserves them:
   shipped definition's canonical `code-review` name.
 - ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
   mines unfiled recurring run failures.
+- ORB-14439 — `run-failure-patterns` files proposed fix tasks, reads follower
+  leaf settlements, folds cascades by `root_cause`, splits review refusals by
+  escalation category, and files blocking one-offs.
 - ORB-12932 — Added the disabled weekly, report-only `backlog-hygiene` default.
 - ORB-13636 — Added the disabled `full-code-review` coordinator default and
   keyed the `code-review` cursor selector on its provenance tag after

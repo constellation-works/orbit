@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use orbit_common::OrbitError;
-use orbit_search::{SOURCE_KIND_TASK, bm25_page};
+use orbit_search::{SOURCE_KIND_TASK, bm25_or_page, bm25_page};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
@@ -9,6 +9,9 @@ use crate::application::task::TaskListFilter;
 use super::convert::{fill_task_record_fields, lexical_task_hit};
 use super::filters::{SearchStatusFilters, resolve_task_statuses, task_has_all_tags};
 use super::{GlobalSearchHit, GlobalSearchParams, task_selectors_contain_path};
+
+/// Ranked any-term chunks read per requested result by the partial-match fill.
+const OR_SCAN_CHUNKS_PER_RESULT: usize = 20;
 
 /// The read-only inputs shared by each search-kind branch.
 #[derive(Clone, Copy)]
@@ -107,6 +110,14 @@ impl OrbitRuntime {
     /// behind the BM25 hits [DANI-10445]. Without task chunks the bundle
     /// matcher is the only source. Neither source opens artifact payloads.
     ///
+    /// When fewer than `limit` full matches survive, append any-term indexed
+    /// hits ordered by the best chunk's matched-term count, then BM25. Partial
+    /// labels report that chunk's count; bundle-only fields stay substring-based.
+    /// This fill reads one window of [`OR_SCAN_CHUNKS_PER_RESULT`] chunks per
+    /// requested result, so a selective filter over common terms costs one
+    /// query and a bounded number of hydrations; partial hits ranked past the
+    /// window are not offered.
+    ///
     /// Only tasks `accepts` admits count toward the candidate budget, so a
     /// status, tag or path filter cannot starve the page when the best
     /// lexical matches are all filtered out: BM25 is read in bounded pages,
@@ -143,7 +154,7 @@ impl OrbitRuntime {
                     if !seen.insert(hit.source_id.clone()) {
                         continue;
                     }
-                    if let Ok(task) = self.get_task(&hit.source_id)
+                    if let Some(task) = self.lexical_hit_task(&hit.source_id)
                         && accepts(&task)
                     {
                         candidates.push((lexical_task_hit(&task), task));
@@ -164,7 +175,7 @@ impl OrbitRuntime {
         // judged from envelopes, so neither costs a bundle read, and the scan
         // stops as soon as the budget is full.
         if candidates.len() < candidate_limit {
-            let seen = RefCell::new(seen);
+            let seen = RefCell::new(&mut seen);
             self.search_tasks_visit(
                 query,
                 &[],
@@ -177,6 +188,52 @@ impl OrbitRuntime {
                 },
             )?;
         }
+        // Full FTS and bundle matches retain priority. Only a short page
+        // needs the broader pass, and single-term queries cannot be partial.
+        let term_count = query.split_whitespace().count();
+        if candidates.len() < limit
+            && term_count > 1
+            && let Ok(index) = self.stores().lexical_index().store()
+            && index.has_source_kind(SOURCE_KIND_TASK)?
+        {
+            // One bounded query: the any-term ranking sorts its whole match
+            // set on every execution, so paging it with OFFSET would re-sort
+            // that set once per page whenever `accepts` rejects most hits.
+            let scan = limit.saturating_mul(OR_SCAN_CHUNKS_PER_RESULT);
+            for hit in bm25_or_page(index, query, Some(SOURCE_KIND_TASK), None, 0, scan)? {
+                if !seen.insert(hit.source_id.clone()) {
+                    continue;
+                }
+                if let Some(task) = self.lexical_hit_task(&hit.source_id)
+                    && accepts(&task)
+                {
+                    let mut result = lexical_task_hit(&task);
+                    result.matched_by = Some(vec![
+                        "partial".into(),
+                        format!("terms:{}/{term_count}", hit.matched_terms),
+                    ]);
+                    candidates.push((result, task));
+                    if candidates.len() == limit {
+                        return Ok(candidates);
+                    }
+                }
+            }
+        }
         Ok(candidates)
+    }
+
+    /// Hydrate one BM25 hit for its summary and the filters. The listing read
+    /// parses the task documents without opening artifact payloads, which the
+    /// canonical read would hash for every hit [ORB-14595]; a bundle a
+    /// concurrent writer holds, or one that cannot be read, drops the hit as
+    /// an unreadable task always has. A worker reads through its owner.
+    fn lexical_hit_task(&self, id: &str) -> Option<orbit_types::task::Task> {
+        if self.worker_invocation().is_some() {
+            return self.get_task(id).ok();
+        }
+        self.get_listed_task_row(id)
+            .ok()
+            .flatten()
+            .map(|row| row.task)
     }
 }

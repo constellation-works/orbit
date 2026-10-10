@@ -22,16 +22,16 @@ use clap::ValueEnum;
 
 /// The value of the global `--format` argument, and of `ORBIT_FORMAT`.
 ///
-/// `auto` is a request to decide from the sink; the other three name a
-/// rendering directly. There is deliberately no `plain` variant — plain is a
-/// rendering of `table` for a non-terminal sink, not a mode a caller can ask
-/// for (spec §2).
+/// `auto` is a request to decide from the sink; the other values name a
+/// rendering directly. `plain` selects the untruncated piped form on any sink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum FormatArg {
     /// Decide from the sink: a table on a terminal, plain text otherwise.
     Auto,
     /// Aligned columns with a header.
     Table,
+    /// Untruncated text with tab-separated fields and no header.
+    Plain,
     /// A single JSON document.
     Json,
     /// One complete JSON document per line.
@@ -103,7 +103,7 @@ impl OutputSink {
     ///
     /// Called exactly once, from `main`. `requested` is the global `--format`
     /// value, absent when the flag was not passed; `legacy_json` is whether the
-    /// invoked subcommand's own `--json`/`--ops` boolean was set (mode
+    /// global `--json` or command-local `--ops` boolean was set (mode
     /// precedence rung 2, migration step 2).
     pub fn from_process(requested: Option<FormatArg>, legacy_json: bool) -> Self {
         let is_tty = std::io::stdout().is_terminal();
@@ -122,8 +122,8 @@ impl OutputSink {
     /// Resolve a sink from explicit inputs.
     ///
     /// `terminal_width` is what querying the terminal reported, or `None` when
-    /// there is nothing to query. `legacy_json` is the per-command `--json`
-    /// boolean (mode precedence rung 2).
+    /// there is nothing to query. `legacy_json` selects the global `--json` or command-local
+    /// `--ops` compatibility rung (mode precedence rung 2).
     ///
     /// Tests must construct sinks through here rather than through
     /// [`OutputSink::from_process`]: `make ci` runs without a TTY, so a test
@@ -136,11 +136,12 @@ impl OutputSink {
         requested: Option<FormatArg>,
         legacy_json: bool,
     ) -> Self {
+        let mode = resolve_mode(is_tty, env, requested, legacy_json);
         Self {
             is_tty,
             width: resolve_width(is_tty, env, terminal_width),
-            color_allowed: resolve_color(is_tty, env),
-            mode: resolve_mode(is_tty, env, requested, legacy_json),
+            color_allowed: mode != OutputMode::Plain && resolve_color(is_tty, env),
+            mode,
             explicit_table: requested == Some(FormatArg::Table),
             legacy_json,
         }
@@ -187,10 +188,10 @@ impl OutputSink {
     /// Whether JSON should be pretty-printed.
     ///
     /// Spec §3 says "only when `is_tty`", and that is what `--format json`
-    /// does. The legacy per-command `--json` rung is pinned to pretty
+    /// does. The global `--json` rung is pinned to pretty
     /// regardless: every one of those branches called
     /// `output::json::print_pretty` unconditionally before the conversion, and
-    /// ADR-0306 requires byte-identity for existing `--json` invocations. The
+    /// existing `--json` invocations must remain byte-identical. The
     /// two rungs therefore differ deliberately — `--json | jq` keeps the bytes
     /// it has always had, and `--format json` gets the spec's shape.
     pub fn pretty_json(&self) -> bool {
@@ -297,7 +298,7 @@ fn resolve_mode(
     if let Some(format) = requested {
         return render_as(format, is_tty);
     }
-    // 2. `--json` (per-command legacy alias).
+    // 2. Global `--json` shorthand or command-local `--ops`.
     if legacy_json {
         return OutputMode::Json;
     }
@@ -321,6 +322,7 @@ fn render_as(format: FormatArg, is_tty: bool) -> OutputMode {
         FormatArg::Auto if is_tty => OutputMode::Table,
         FormatArg::Auto => OutputMode::Plain,
         FormatArg::Table => OutputMode::Table,
+        FormatArg::Plain => OutputMode::Plain,
         FormatArg::Json => OutputMode::Json,
         FormatArg::Ndjson => OutputMode::Ndjson,
     }

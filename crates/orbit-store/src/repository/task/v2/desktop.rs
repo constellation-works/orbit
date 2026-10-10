@@ -17,6 +17,28 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(sha256_hex(&bytes))
 }
+/// Why an active claim refuses desktop writes, and the supported way out: a
+/// claim-scoped mutation, never a status change.
+fn active_claim_reason(phase: crate::contracts::ExecutionClaimPhase) -> &'static str {
+    match phase {
+        crate::contracts::ExecutionClaimPhase::HandedOff => {
+            "active execution claim requires a claim-scoped mutation: its handoff awaits the \
+             owner's completion authority; land it through that authority, or revoke the \
+             handoff and recover the claim from the owner's operator console"
+        }
+        crate::contracts::ExecutionClaimPhase::RepairPending => {
+            "active execution claim requires a claim-scoped mutation: its landing stopped on \
+             its base and an automatic repair is pending; let the repair re-hand it off, or \
+             recover the claim from the owner's operator console"
+        }
+        _ => {
+            "active execution claim requires a claim-scoped mutation: its run is still \
+             executing; wait for it to settle, or recover the claim from the owner's operator \
+             console"
+        }
+    }
+}
+
 impl TaskV2Store {
     pub(crate) fn read_desktop_task(
         &self,
@@ -50,14 +72,12 @@ impl TaskV2Store {
             Some("task storage is read-only".into())
         } else if let Some(boundary) = &self.coordination {
             match boundary.inspect_execution_claims() {
-                Ok(claims)
-                    if claims.iter().any(|claim| {
+                Ok(claims) => claims
+                    .iter()
+                    .find(|claim| {
                         claim.claim.task_id == id && claim.claim.phase.protects_footprint()
-                    }) =>
-                {
-                    Some("active execution claim requires a claim-scoped mutation".into())
-                }
-                Ok(_) => None,
+                    })
+                    .map(|claim| active_claim_reason(claim.claim.phase).into()),
                 Err(error) => Some(error.to_string()),
             }
         } else {
@@ -132,12 +152,13 @@ impl TaskV2Store {
             }
             if let Some(v) = &p.fields.crew {
                 b.envelope.crew = (!v.is_empty()).then(|| v.clone());
+                b.envelope.crew_source = b.envelope.crew.as_ref().map(|_| "explicit".to_string());
+            }
+            if let Some(source) = &p.crew_source {
+                b.envelope.crew_source = source.clone();
             }
             if let Some(v) = p.status {
                 b.envelope.status = v;
-            }
-            if let Some(boundary) = &self.coordination {
-                boundary.guard_ordinary_footprint(b.envelope.status, &b.envelope.context_files)?;
             }
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             if let Some(v) = &p.fields.description {
@@ -180,20 +201,27 @@ impl TaskV2Store {
                 self.bundle_store.append_event(id, &approval)?;
                 b.events.push(approval);
             }
-            self.bundle_store.append_event(
-                id,
-                &TaskEventRowV2 {
-                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                    event_id: next_event_id(&b.events),
-                    at: now,
-                    by: p.actor.clone(),
-                    event_type: "desktop_mutation".into(),
-                    note: Some(receipt),
-                    from_status: (!approval && old_status != b.envelope.status)
-                        .then_some(old_status),
-                    to_status: (!approval && old_status != b.envelope.status)
-                        .then_some(b.envelope.status),
-                },
+            let event = TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: next_event_id(&b.events),
+                at: now,
+                by: p.actor.clone(),
+                event_type: "desktop_mutation".into(),
+                note: Some(receipt),
+                from_status: (!approval && old_status != b.envelope.status).then_some(old_status),
+                to_status: (!approval && old_status != b.envelope.status)
+                    .then_some(b.envelope.status),
+            };
+            self.bundle_store.append_event(id, &event)?;
+            b.events.push(event);
+            let context_files = b.envelope.context_files.clone();
+            append_creation_grant(
+                &self.bundle_store,
+                &mut b,
+                &context_files,
+                &[],
+                &p.actor,
+                now,
             )?;
             b.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;

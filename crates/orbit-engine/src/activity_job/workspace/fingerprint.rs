@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -13,8 +13,11 @@ use super::super::dispatcher::DispatchError;
 
 /// Exact, read-only identity of the Git state that an agent invocation can
 /// observe or mutate. Large byte streams are represented by domain-separated
-/// SHA-256 identities; untracked files retain one content identity per path so
-/// diagnostics can name the primary-checkout delta without staging it.
+/// SHA-256 identities; each untracked path retains one content identity so
+/// diagnostics can name the primary-checkout delta without staging it. A file
+/// is `git-blob:<oid>`. A directory — the shape `git status` uses for an
+/// untracked nested repository — is `git-head:<oid>` when that repository has
+/// a HEAD, or `opaque-directory` when it does not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GitWorktreeFingerprint {
     pub(crate) head: String,
@@ -38,16 +41,21 @@ pub(crate) struct GitPathState {
     pub(crate) untracked_content_sha256: Option<String>,
 }
 
-const DIFF_IDENTITY_FLAGS: [&str; 5] = [
+// Fingerprint parsing and recovery patches require uncolored a/ and b/
+// paths regardless of the user's Git presentation settings.
+pub(super) const DIFF_IDENTITY_FLAGS: [&str; 8] = [
     "--binary",
     "--full-index",
     "--no-ext-diff",
     "--no-textconv",
     "--no-renames",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct PrimaryBeforeCacheKey {
+struct PrimaryBeforeKey {
     run_id: String,
     root: PathBuf,
     head: String,
@@ -56,23 +64,21 @@ struct PrimaryBeforeCacheKey {
 
 type PrimaryBeforeCell = OnceLock<Result<GitWorktreeFingerprint, DispatchError>>;
 
-#[derive(Default)]
-struct PrimaryBeforeCache {
-    entries: BTreeMap<PrimaryBeforeCacheKey, Arc<PrimaryBeforeCell>>,
-    recent_runs: VecDeque<String>,
-}
+// Agent fan-out invokes this module concurrently. Per-key OnceLocks make
+// overlapping captures share one snapshot, and each entry is removed as soon as
+// its capture finishes. Nothing outlives the capture: `GIT_OPTIONAL_LOCKS=0`
+// keeps `git status` from refreshing the index, so unstaged edits and new
+// untracked files change neither HEAD nor the index mtime, and a retained
+// snapshot would hand a later dispatch a stale "before". A failed capture is
+// dropped the same way, so the next dispatch retries.
+static PRIMARY_BEFORE_IN_FLIGHT: LazyLock<
+    Mutex<BTreeMap<PrimaryBeforeKey, Arc<PrimaryBeforeCell>>>,
+> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-const PRIMARY_BEFORE_CACHE_RUN_LIMIT: usize = 128;
-
-// Agent fan-out invokes this module concurrently. Per-key OnceLocks ensure a
-// shared primary snapshot is produced once, while the run LRU bounds daemon
-// memory after completed runs no longer have an explicit owner here.
-static PRIMARY_BEFORE_CACHE: LazyLock<Mutex<PrimaryBeforeCache>> =
-    LazyLock::new(|| Mutex::new(PrimaryBeforeCache::default()));
-
-/// Reuse a primary checkout's pre-provider snapshot within one run while HEAD
-/// and the index mtime remain stable. If the index cannot be identified, fall
-/// back to an uncached fingerprint rather than weakening invalidation.
+/// Capture a primary checkout's pre-provider snapshot, sharing the result with
+/// captures of the same run, HEAD and index that overlap in time. A capture that
+/// starts after another finished always reads Git again. If the index cannot be
+/// identified, fall back to an unshared fingerprint.
 pub(crate) fn cached_primary_before_fingerprint(
     run_id: &str,
     root: &Path,
@@ -81,36 +87,31 @@ pub(crate) fn cached_primary_before_fingerprint(
     let Some(index_mtime) = git_index_mtime(root) else {
         return git_fingerprint_with_head(root, head);
     };
-    let key = PrimaryBeforeCacheKey {
+    let key = PrimaryBeforeKey {
         run_id: run_id.to_string(),
         root: root.to_path_buf(),
         head: head.clone(),
         index_mtime,
     };
     let cell = {
-        let mut cache = match PRIMARY_BEFORE_CACHE.lock() {
-            Ok(cache) => cache,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if let Some(position) = cache.recent_runs.iter().position(|cached| cached == run_id) {
-            cache.recent_runs.remove(position);
-        }
-        cache.recent_runs.push_back(run_id.to_string());
-        if let Some(cell) = cache.entries.get(&key) {
-            Arc::clone(cell)
-        } else {
-            while cache.recent_runs.len() > PRIMARY_BEFORE_CACHE_RUN_LIMIT {
-                if let Some(expired) = cache.recent_runs.pop_front() {
-                    cache.entries.retain(|key, _| key.run_id != expired);
-                }
-            }
-            let cell = Arc::new(OnceLock::new());
-            cache.entries.insert(key, Arc::clone(&cell));
-            cell
-        }
+        let mut in_flight = PRIMARY_BEFORE_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(in_flight.entry(key.clone()).or_default())
     };
-    cell.get_or_init(|| git_fingerprint_with_head(root, head))
-        .clone()
+    let outcome = cell
+        .get_or_init(|| git_fingerprint_with_head(root, head))
+        .clone();
+    let mut in_flight = PRIMARY_BEFORE_IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if in_flight
+        .get(&key)
+        .is_some_and(|current| Arc::ptr_eq(current, &cell))
+    {
+        in_flight.remove(&key);
+    }
+    outcome
 }
 
 fn git_index_mtime(root: &Path) -> Option<SystemTime> {
@@ -230,6 +231,7 @@ fn untracked_file_identity(root: &Path, path: &str) -> Result<Option<String>, Di
     match untracked_path_kind(root, path)? {
         UntrackedPathKind::Missing => Ok(None),
         UntrackedPathKind::Symlink => untracked_symlink_identity(root, path),
+        UntrackedPathKind::Directory => untracked_directory_identity(root, path),
         UntrackedPathKind::File => untracked_regular_file_identity(root, path),
     }
 }
@@ -290,7 +292,7 @@ fn git_diff_bytes_for_paths(
     extra: &[&str],
     paths: &[String],
 ) -> Result<Vec<u8>, DispatchError> {
-    let mut args = Vec::with_capacity(8 + extra.len() + paths.len());
+    let mut args = Vec::with_capacity(2 + DIFF_IDENTITY_FLAGS.len() + extra.len() + paths.len());
     args.push("diff");
     args.extend(DIFF_IDENTITY_FLAGS);
     args.extend(extra.iter().copied());
@@ -429,7 +431,7 @@ fn split_combined_diff(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     patches
 }
 
-fn diff_chunks(bytes: &[u8]) -> Vec<&[u8]> {
+pub(super) fn diff_chunks(bytes: &[u8]) -> Vec<&[u8]> {
     let starts = diff_chunk_starts(bytes);
     if starts.is_empty() {
         return Vec::new();
@@ -442,27 +444,31 @@ fn diff_chunks(bytes: &[u8]) -> Vec<&[u8]> {
     chunks
 }
 
-fn diff_chunk_starts(bytes: &[u8]) -> Vec<usize> {
+fn is_diff_chunk_start(bytes: &[u8]) -> bool {
     const MARKERS: [&[u8]; 3] = [b"diff --git ", b"diff --cc ", b"diff --combined "];
+    MARKERS.iter().any(|marker| bytes.starts_with(marker))
+}
+
+pub(super) fn diff_chunk_starts(bytes: &[u8]) -> Vec<usize> {
+    const PREFIX: &[u8] = b"\ndiff ";
     let mut starts = Vec::new();
+    if is_diff_chunk_start(bytes) {
+        starts.push(0);
+    }
     let mut search_from = 0;
-    while search_from < bytes.len() {
+    while search_from + PREFIX.len() <= bytes.len() {
         let rest = &bytes[search_from..];
-        let next = MARKERS
-            .iter()
-            .filter_map(|marker| {
-                rest.windows(marker.len())
-                    .position(|window| window == *marker)
-            })
-            .min();
-        let Some(relative) = next else {
+        let Some(pos) = rest
+            .windows(PREFIX.len())
+            .position(|window| window == PREFIX)
+        else {
             break;
         };
-        let absolute = search_from + relative;
-        if absolute == 0 || bytes[absolute - 1] == b'\n' {
-            starts.push(absolute);
+        let candidate = search_from + pos + 1;
+        if is_diff_chunk_start(&bytes[candidate..]) {
+            starts.push(candidate);
         }
-        search_from = absolute + 1;
+        search_from = candidate;
     }
     starts
 }
@@ -572,21 +578,112 @@ fn unescape_git_escape(bytes: &[u8]) -> Option<(u8, &[u8])> {
 enum UntrackedPathKind {
     Missing,
     Symlink,
+    Directory,
     File,
 }
+
+/// Stable identity for an untracked directory that is not a repository with a
+/// resolved HEAD. An unborn nested repository and a directory Git listed
+/// without its own toplevel share this marker, so two snapshots of the same
+/// directory still match.
+const OPAQUE_DIRECTORY_IDENTITY: &str = "opaque-directory";
 
 fn untracked_path_kind(root: &Path, path: &str) -> Result<UntrackedPathKind, DispatchError> {
     match fs::symlink_metadata(root.join(path)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(UntrackedPathKind::Missing)
         }
-        Err(error) => Err(DispatchError::CliInvocationPermanent(format!(
-            "snapshot Git state in '{}': inspect untracked path '{}': {error}",
-            root.display(),
-            path
-        ))),
+        Err(error) => Err(untracked_inspect_error(root, path, &error)),
         Ok(metadata) if metadata.file_type().is_symlink() => Ok(UntrackedPathKind::Symlink),
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(UntrackedPathKind::Directory),
         Ok(_) => Ok(UntrackedPathKind::File),
+    }
+}
+
+fn untracked_inspect_error(root: &Path, path: &str, error: &std::io::Error) -> DispatchError {
+    DispatchError::CliInvocationPermanent(format!(
+        "snapshot Git state in '{}': inspect untracked path '{}': {error}",
+        root.display(),
+        path
+    ))
+}
+
+/// Identity of one untracked directory.
+///
+/// `git status --untracked-files=all` still reports a nested repository as a
+/// single directory, and `git hash-object` fails on it (`Unable to hash`).
+/// When `rev-parse --show-toplevel` names this directory, the identity is its
+/// HEAD. Git walks up to the parent checkout when the directory is not its
+/// own repository, so a mismatched toplevel must not borrow the parent HEAD.
+/// No resolved HEAD — an unborn repository, dubious ownership, or a directory
+/// that is not a repository — is [`OPAQUE_DIRECTORY_IDENTITY`]. A path that
+/// disappears between status and this read is omitted, matching files.
+fn untracked_directory_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+    let directory = root.join(path);
+    match fs::symlink_metadata(&directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(untracked_inspect_error(root, path, &error)),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return untracked_symlink_identity(root, path);
+        }
+        Ok(metadata) if !metadata.file_type().is_dir() => {
+            return untracked_regular_file_identity(root, path);
+        }
+        Ok(_) => {}
+    }
+
+    // `-C` consumes the next argument, so a path that itself starts with `-`
+    // has to be anchored or Git treats it as an option.
+    let cd = if path.starts_with('-') {
+        format!("./{path}")
+    } else {
+        path.to_string()
+    };
+    let toplevel = git_output_raw(root, &["-C", &cd, "rev-parse", "--show-toplevel"])?;
+    let nested_root =
+        toplevel.success && directory_is_reported_toplevel(&directory, &toplevel.stdout);
+    if !nested_root {
+        return missing_or_opaque(root, path, &directory);
+    }
+    let head = git_output_raw(root, &["-C", &cd, "rev-parse", "--verify", "HEAD"])?;
+    if head.success
+        && let Some(oid) = git_oid(&head.stdout)
+    {
+        return Ok(Some(format!("git-head:{oid}")));
+    }
+    missing_or_opaque(root, path, &directory)
+}
+
+fn directory_is_reported_toplevel(directory: &Path, stdout: &[u8]) -> bool {
+    let reported = String::from_utf8_lossy(stdout);
+    let reported = reported.trim();
+    if reported.is_empty() {
+        return false;
+    }
+    match (directory.canonicalize(), Path::new(reported).canonicalize()) {
+        (Ok(directory), Ok(reported)) => directory == reported,
+        _ => false,
+    }
+}
+
+fn git_oid(stdout: &[u8]) -> Option<&str> {
+    let text = std::str::from_utf8(stdout).ok()?.trim();
+    if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+fn missing_or_opaque(
+    root: &Path,
+    path: &str,
+    directory: &Path,
+) -> Result<Option<String>, DispatchError> {
+    match fs::symlink_metadata(directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(untracked_inspect_error(root, path, &error)),
+        Ok(_) => Ok(Some(OPAQUE_DIRECTORY_IDENTITY.to_string())),
     }
 }
 
@@ -661,7 +758,10 @@ fn untracked_content_identities(
     for path in paths {
         match untracked_path_kind(root, path)? {
             UntrackedPathKind::Missing => {}
-            UntrackedPathKind::Symlink => record_per_path(path)?,
+            // Directories are never blob inputs. `hash-object --stdin-paths`
+            // fails the whole batch with "Unable to hash" when one path is a
+            // nested repository.
+            UntrackedPathKind::Symlink | UntrackedPathKind::Directory => record_per_path(path)?,
             UntrackedPathKind::File if path.contains('\n') || path.starts_with('"') => {
                 record_per_path(path)?
             }

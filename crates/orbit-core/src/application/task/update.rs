@@ -1,11 +1,15 @@
 use orbit_common::OrbitError;
+use orbit_common::governance::authorization::agent_context_declared;
+use orbit_common::security::redaction::redact_all;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus, is_valid_orb_task_id,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus,
+    canonical_artifact_path, is_system_identity_tag, is_valid_orb_task_id,
     normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
 };
+use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
@@ -51,6 +55,16 @@ struct TaskUpdateContext {
     expected_status: Option<TaskStatus>,
     status_authority: StatusAuthority,
     calling_run_id: Option<String>,
+    /// Trusted entrypoint authority; task/tool input cannot populate it.
+    operator_decision_authority: bool,
+    /// Orbit's own deterministic writer: artifacts record
+    /// [`ArtifactWriter::System`]. Only `update_task_as_system` sets it.
+    system_writer: bool,
+    /// A move into `in-progress` by a caller that is not a trusted operator
+    /// starts work, so it is written as a `started` event and the store runs
+    /// the execution-claim footprint guard, as the tool surface does. Only the
+    /// attributed CLI entry point sets it.
+    guard_work_start: bool,
 }
 
 /// A locked write's result plus what the after-lock side effects need: the
@@ -63,9 +77,11 @@ struct LockedTaskUpdate {
 
 pub(super) struct ValidatedTaskFieldEdits {
     pub(super) params: TaskUpdateParams,
-    /// Set when this write cleared the crew and the pools chose a replacement;
+    /// Set when this write assigned a crew explicitly or drew a replacement;
     /// the caller includes the draw source in the change history [ORB-12717].
     pub(super) crew_assignment: Option<CreationCrewAssignment>,
+    pub(super) crew_source: Option<Option<String>>,
+    pub(super) crew_redraw_history: Option<TaskHistoryEntry>,
 }
 
 impl OrbitRuntime {
@@ -94,9 +110,13 @@ impl OrbitRuntime {
             id,
             params,
             TaskUpdateContext {
+                operator_decision_authority: agent.is_none()
+                    && model.is_none()
+                    && self.actor().kind == crate::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Lifecycle,
+                guard_work_start: true,
                 ..Default::default()
             },
         )
@@ -117,6 +137,7 @@ impl OrbitRuntime {
             params,
             TaskUpdateContext {
                 actor_override: Some(actor_label),
+                operator_decision_authority: true,
                 status_authority: StatusAuthority::Lifecycle,
                 ..Default::default()
             },
@@ -143,6 +164,9 @@ impl OrbitRuntime {
             id,
             params,
             TaskUpdateContext {
+                operator_decision_authority: agent.is_none()
+                    && model.is_none()
+                    && self.actor().kind == crate::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Forced,
@@ -168,6 +192,7 @@ impl OrbitRuntime {
                 actor_override: Some(SYSTEM_ACTOR_LABEL.to_string()),
                 artifact_owner: owner,
                 status_authority: StatusAuthority::Lifecycle,
+                system_writer: true,
                 ..Default::default()
             },
         )
@@ -270,9 +295,7 @@ impl OrbitRuntime {
 
         // Cascading friction/task resolution touches *other* records, so it
         // stays outside this task's lock.
-        if updated.status == TaskStatus::Done {
-            self.record_resolves_side_effects(&updated)?;
-        }
+        self.record_resolves_side_effects(previous_status, &updated);
         // So does the forge round trip that closes the task's PRs.
         self.close_task_prs_after_transition(previous_status, &updated, status_note.as_deref());
         Ok(updated)
@@ -293,12 +316,37 @@ impl OrbitRuntime {
             expected_status,
             status_authority,
             calling_run_id,
+            operator_decision_authority,
+            system_writer,
+            guard_work_start,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
             Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
+        // Gate records are certificates and authority, not agent claims.
+        // Only the trusted system entry point may write them; an actor label
+        // or artifact/tool field cannot opt into that authority. Normalize
+        // before checking exactly the key the store will persist.
+        for artifact in &mut params.upsert_artifacts {
+            artifact.path = canonical_artifact_path(&artifact.path)?;
+            if !system_writer && is_reserved_review_artifact(&artifact.path) {
+                if artifact.path != REVIEW_REPORT_ARTIFACT {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{} is reserved for the review gate's system writer",
+                        artifact.path
+                    )));
+                }
+                // The report is the live reviewer's schema-checked claim;
+                // the store retains revisions and settlement certifies it.
+                ReviewReport::parse_attachment(&artifact.content).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
+                    ))
+                })?;
+            }
+        }
         if let Some(expected_status) = expected_status
             && task.status != expected_status
         {
@@ -322,7 +370,7 @@ impl OrbitRuntime {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+            .map(redact_all);
         if status_note.is_some() && requested_status.is_none() {
             return Err(OrbitError::InvalidInput(
                 "`note` requires a status change; use `comment` for free-form discussion"
@@ -341,6 +389,8 @@ impl OrbitRuntime {
         }
         let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
         let crew_assignment = validated.crew_assignment;
+        let crew_source = validated.crew_source;
+        let crew_redraw_history = validated.crew_redraw_history;
         params = validated.params;
 
         let actor = self.actor().clone();
@@ -377,11 +427,37 @@ impl OrbitRuntime {
             .map(|value| value.as_deref())
             .filter(|replacement| task.source_task_id() != *replacement);
 
+        let operator_write = operator_decision_authority
+            && canonical_agent.is_none()
+            && canonical_model.is_none()
+            && !super::helpers::is_automation_actor(&effective_label);
+        // [ORB-14530] Review evidence counts only from a trusted writer class,
+        // so it is stamped from the entry point, never from a label. A process
+        // that declares an agent envelope or a managed run is never an operator.
+        let artifact_writer = if system_writer {
+            Some(ArtifactWriter::System)
+        } else if operator_write && !agent_context_declared() {
+            Some(ArtifactWriter::Operator)
+        } else {
+            None
+        };
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
-        if let Some(replacement) = params.crew.as_ref()
-            && replacement.as_deref() != task.crew.as_deref()
+        if operator_write
+            && let Some(resolution) =
+                self.pilot_hold_resolution(&task, &params, &effective_label)?
+        {
+            append_history.push(resolution);
+        }
+        if let Some(history) = crew_redraw_history {
+            append_history.push(history);
+        } else if let Some(replacement) = params.crew.as_ref()
+            && (replacement.as_deref() != task.crew.as_deref()
+                || crew_source
+                    .as_ref()
+                    .is_some_and(|source| *source != task.crew_source))
         {
             let source = match &crew_assignment {
+                Some(assignment) if assignment.source == "explicit" => "explicit name".to_string(),
                 Some(assignment) => format!("pool draw ({})", assignment.source),
                 None if replacement.is_none() => "pool draw (no crew available)".to_string(),
                 None => "explicit name".to_string(),
@@ -436,17 +512,32 @@ impl OrbitRuntime {
         }
         // A forced transition is still a transition: naming it in history is
         // what separates a human override from a governed lifecycle move.
-        let status_event = (status_authority == StatusAuthority::Forced
-            && requested_status.is_some())
-        .then(|| FORCED_STATUS_EVENT.to_string());
+        let status_event =
+            if status_authority == StatusAuthority::Forced && requested_status.is_some() {
+                Some(FORCED_STATUS_EVENT.to_string())
+            } else if guard_work_start
+                && requested_status == Some(TaskStatus::InProgress)
+                && !(operator_write && !agent_context_declared())
+            {
+                // An agent or managed-run shell moving a task into `in-progress`
+                // starts work. Only a trusted operator's move (including the
+                // rescue close of a blocked task) is exempt from the footprint
+                // guard the store runs for a work-starting event.
+                Some("started".to_string())
+            } else {
+                None
+            };
+        let evidence_attached = !params.upsert_artifacts.is_empty();
         let previous_status = task.status;
         let written_note = status_note.clone();
-        let updated = self.with_mutation(|| {
+        let mut updated = self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 id,
                 TaskRecordUpdateParams {
                     artifact_owner_run_id: artifact_owner.clone(),
+                    artifact_writer,
                     actor: effective_label.clone(),
+                    crew_source: crew_source.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),
                     status_event: status_event.clone(),
@@ -471,11 +562,48 @@ impl OrbitRuntime {
             Ok((updated.clone(), event))
         })?;
 
+        if evidence_attached {
+            crate::application::review::evidence::resume_evidence_hold(self, id)?;
+            updated = self.get_task(id)?;
+        }
         Ok(LockedTaskUpdate {
             task: updated,
             previous_status,
             status_note: written_note,
         })
+    }
+
+    /// Re-check, under the task lock, the creation intent an operator
+    /// surface's screening derived before the write: every newly authorized
+    /// selector is part of the written scope, and a grant the screening
+    /// relied on is still the task's grant. A concurrent write that revoked
+    /// or replaced it makes this write fail instead of storing a missing
+    /// target with no authorization behind it.
+    fn ensure_context_creation_current(
+        &self,
+        task: &Task,
+        creation: &super::ContextCreationAuthorization,
+        context_files: &[String],
+    ) -> Result<(), OrbitError> {
+        if let Some(outside) = creation
+            .authorize
+            .iter()
+            .find(|selector| !context_files.contains(selector))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "creation authorization for `{outside}` does not match a selector this write stores"
+            )));
+        }
+        if let Some(relied_on) = &creation.relied_on
+            && self.context_creation_state(task)?.identity().as_ref() != Some(relied_on)
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "task '{}' context creation authorization changed during this write; \
+                 re-read the task and retry",
+                task.id
+            )));
+        }
+        Ok(())
     }
 
     /// Apply the validation and canonicalization shared by ordinary updates
@@ -486,13 +614,35 @@ impl OrbitRuntime {
         task: &Task,
         mut params: TaskUpdateParams,
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
+        // Both ordinary updates and guarded starts reach this application
+        // boundary, including CLI/dashboard callers that bypass tool-host
+        // sanitization. Scrub prose before it enters a bundle or write journal.
+        for value in [
+            &mut params.title,
+            &mut params.description,
+            &mut params.plan,
+            &mut params.execution_summary,
+            &mut params.comment,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *value = redact_all(value);
+        }
+        if let Some(criteria) = &mut params.acceptance_criteria {
+            for criterion in criteria {
+                *criterion = redact_all(criterion);
+            }
+        }
         let context_root = context_workspace_root(&self.paths().repo_root, None);
         if let Some(candidates) = params.context_files.take() {
-            params.context_files = Some(normalize_context_files_for_write(
-                candidates,
-                &context_root,
-            )?);
+            let candidates = normalize_context_files_for_write(candidates, &context_root)?;
+            self.ensure_context_creation_current(task, &params.context_creation, &candidates)?;
+            params.context_files = Some(candidates);
         } else {
+            // Creation intent describes a replacement scope; without one there
+            // is nothing it could authorize.
+            params.context_creation = Default::default();
             // An unrelated edit re-canonicalizes what is already stored and
             // writes the result back only when every declaration survived and
             // the canonical form differs. It never drops one: a selector whose
@@ -522,13 +672,27 @@ impl OrbitRuntime {
         if let Some(tags) = params.tags.take() {
             let tags = normalize_task_tags(tags);
             validate_os_tags(&tags)?;
+            if !params.allow_drop_system_tags {
+                for existing in &task.tags {
+                    if is_system_identity_tag(existing) {
+                        let normalized_existing = existing.trim().to_ascii_lowercase();
+                        if !tags.iter().any(|t| t == &normalized_existing) {
+                            return Err(OrbitError::SystemIdentityTagDropped {
+                                tag: existing.clone(),
+                            });
+                        }
+                    }
+                }
+            }
             params.tags = Some(tags);
         }
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
         // decide again for the complexity this write leaves the task with —
         // a re-queue after a provider failure lands on a fresh draw instead of
-        // on nothing. Editing the complexity alone never re-routes.
+        // on nothing. A pool assignment from another tier or a default fallback
+        // is redrawn when complexity changes too.
         let mut crew_assignment = None;
+        let mut crew_redraw_history = None;
         if let Some(crew) = &mut params.crew {
             *crew = self.canonical_crew_name(crew.as_deref())?;
             if crew.is_none() {
@@ -543,6 +707,26 @@ impl OrbitRuntime {
             } else {
                 // An explicit update must not pin a disabled crew onto a task.
                 self.resolve_crew_for_task(None, crew.as_deref())?;
+                crew_assignment = crew.as_ref().map(|crew| CreationCrewAssignment {
+                    crew: crew.clone(),
+                    source: "explicit".to_string(),
+                });
+            }
+        }
+        let mut crew_source = params.crew.as_ref().map(|_| {
+            crew_assignment
+                .as_ref()
+                .map(|assignment| assignment.source.clone())
+        });
+        if params.crew.is_none()
+            && let Some(complexity) = params.complexity
+            && Some(complexity) != task.complexity
+        {
+            let mut rerated = task.clone();
+            crew_redraw_history = self.rerate_task_crew(&mut rerated, Some(complexity))?;
+            if crew_redraw_history.is_some() {
+                params.crew = Some(rerated.crew);
+                crew_source = Some(rerated.crew_source);
             }
         }
         if let Some(orchestrator) = &mut params.orchestrator {
@@ -565,6 +749,8 @@ impl OrbitRuntime {
         Ok(ValidatedTaskFieldEdits {
             params,
             crew_assignment,
+            crew_source,
+            crew_redraw_history,
         })
     }
 }

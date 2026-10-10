@@ -23,6 +23,17 @@ pub enum LandlockGrant {
     WriteTree,
     /// Read, write, and truncate one existing file.
     WriteFile,
+    /// Modify anything beneath a directory, with no read right.
+    ///
+    /// A [`Self::WriteTree`] on a directory also makes everything beneath it
+    /// readable. Where that directory is at or above a read deny or a caller
+    /// read exclusion, the overlapping rules carry this grant instead, so
+    /// the excluded subtree stays writable and is not readable. Landlock
+    /// cannot take the write rights back from a descendant once an ancestor
+    /// has them.
+    WriteOnlyTree,
+    /// Write and truncate one existing file, with no read right.
+    WriteOnlyFile,
 }
 
 /// One compiled Landlock rule: a path and what the child may do beneath it.
@@ -68,20 +79,36 @@ impl LandlockPathGrant {
         }
     }
 
+    pub(super) fn write_only_tree(path: PathBuf) -> Self {
+        Self {
+            path,
+            grant: LandlockGrant::WriteOnlyTree,
+        }
+    }
+
+    pub(super) fn write_only_file(path: PathBuf) -> Self {
+        Self {
+            path,
+            grant: LandlockGrant::WriteOnlyFile,
+        }
+    }
+
     /// Whether this grant alone lets the child open `path` for reading.
     pub fn reads(&self, path: &Path) -> bool {
         match self.grant {
             LandlockGrant::ReadTree | LandlockGrant::WriteTree => path.starts_with(&self.path),
             LandlockGrant::ReadFile | LandlockGrant::WriteFile => path == self.path,
-            LandlockGrant::ListOnly => false,
+            LandlockGrant::ListOnly
+            | LandlockGrant::WriteOnlyTree
+            | LandlockGrant::WriteOnlyFile => false,
         }
     }
 
     /// Whether this grant alone lets the child modify `path`.
     pub fn writes(&self, path: &Path) -> bool {
         match self.grant {
-            LandlockGrant::WriteTree => path.starts_with(&self.path),
-            LandlockGrant::WriteFile => path == self.path,
+            LandlockGrant::WriteTree | LandlockGrant::WriteOnlyTree => path.starts_with(&self.path),
+            LandlockGrant::WriteFile | LandlockGrant::WriteOnlyFile => path == self.path,
             LandlockGrant::ReadTree | LandlockGrant::ReadFile | LandlockGrant::ListOnly => false,
         }
     }

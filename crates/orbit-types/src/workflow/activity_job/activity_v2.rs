@@ -5,6 +5,8 @@ use crate::identity::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::workflow::RetiredBackendError;
+
 /// v2 activity definition. Corresponds to the v2 YAML asset shape:
 /// ```yaml
 /// schemaVersion: 2
@@ -170,12 +172,12 @@ pub const RETIRED_BACKEND_MIGRATION: &str = "agent execution runs through the CL
 
 /// Validate one retired `backend` value. `Ok(())` for `cli`; the migration
 /// error for anything else, including the removed `http` and `auto`.
-pub fn check_retired_backend_value(raw: &str) -> Result<(), String> {
+pub fn check_retired_backend_value(raw: &str) -> Result<(), RetiredBackendError> {
     match raw.trim() {
         "cli" => Ok(()),
-        other => Err(format!(
-            "`backend: {other}` is no longer supported: {RETIRED_BACKEND_MIGRATION}"
-        )),
+        other => Err(RetiredBackendError {
+            value: other.to_string(),
+        }),
     }
 }
 

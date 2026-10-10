@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Directional application operations, runtime mechanisms, adapters,
 //! bootstrap, and composition.
 //!
@@ -44,6 +39,10 @@
 //! orbit-common, orbit-store, orbit-policy, orbit-tools, orbit-search, orbit-engine
 //! → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
 
+// A bare `cargo test` from a managed-run shell must match one from a clean shell.
+#[cfg(test)]
+orbit_common::isolate_test_process!();
+
 pub mod adapter;
 pub mod application;
 pub mod bootstrap;
@@ -71,16 +70,39 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
+    /// The review ledger requests that admit an attempt and record its
+    /// reviewer's start and end, as the before-PR gate writes them, for tests
+    /// that drive a reviewer without running the whole delivery pipeline.
+    pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+
+    use crate::application::routines::{
+        RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
+    };
+
+    /// One clock tick against an explicit global root at `now`, so a test can
+    /// make a routine slot or an auto-task interval due.
+    pub fn run_sweep_at(
+        global_root: &std::path::Path,
+        options: SweepOptions,
+        local_machine: RoutineMachineIdentity,
+        workspace_provider: &dyn RoutineWorkspaceProvider,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<SweepOutcome, crate::OrbitError> {
+        crate::application::routines::sweep::run_sweep_at_with_providers_at(
+            global_root,
+            options,
+            local_machine,
+            workspace_provider,
+            crate::runtime::host_signal::default_host_signal_probe().as_ref(),
+            now,
+        )
+    }
 }
 
 // Store metric/scoreboard projections consumed by the dashboard's JSON API.
 pub use orbit_store::scoreboard_summary;
 pub use orbit_store::skill_store as skill_catalog;
-pub use orbit_store::{
-    ActivityInvocationMetrics, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    TaskInvocationMetrics, ToolInvocationMetrics,
-};
-pub use orbit_tools::prepare_remote_task_artifact_put;
+pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::distributed::{
@@ -95,19 +117,18 @@ pub use application::routines::seed::{
 };
 pub use application::search::{GlobalSearchHit, GlobalSearchKind, GlobalSearchParams};
 pub use application::task::LockContentionReport;
-pub use application::workflow::{
-    CompletionPolicy, ShipMode, build_ship_input, find_workflow, resolved_ship_mode,
-};
+pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
-    reconcile_workspace_managed_artifacts,
+    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
 pub use context::ActorIdentity;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
 pub use application::auto_tasks::{
-    AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskDeleteReport, AutoTaskUpdateParams,
+    AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskDeleteReport, AutoTaskTemplatePatch,
+    AutoTaskUpdateParams,
 };
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
@@ -129,12 +150,11 @@ pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
 // the dashboard's incident, audit-summary, and scoreboard surfaces.
 pub use orbit_store::{
-    FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
-    is_failure_only_diagnostic_surface,
+    DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident, FailureIncidentQuery,
+    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
+    PropagationLink, is_failure_only_diagnostic_surface,
 };
 // Routine fire records surfaced by the dashboard's routine-health JSON API.
 pub use orbit_store::{RoutineFireRecord, RoutineFireState};
-pub use runtime::engine::{OrchestratorInvocationMetrics, OrchestratorMetricsBucketKind};
 pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
 pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

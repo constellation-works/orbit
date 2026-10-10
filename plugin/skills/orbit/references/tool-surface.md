@@ -7,6 +7,8 @@ without requiring an Orbit source checkout.
 
 ## Select the store before reading or writing
 
+For a single task addressed by ID, use the prefix-routing rules below. For
+workspace-scoped calls, select the store explicitly.
 In a managed activity, use the injected task and inherited workspace binding;
 its allowlist may omit `orbit.workspace.list`. For an unbound MCP session, call
 `orbit_workspace_list({})` on the configured connection first. For CLI-only use,
@@ -19,17 +21,91 @@ capabilities where returned.
   The server can also resolve registered names and paths, but IDs avoid
   ambiguity. An explicit selector overrides its session binding.
 - Federated server: copy the returned `selector` exactly, including its
-  `hm_…/ws_…` qualification. Bare names, bare IDs, and local paths cannot route
-  federated calls. The mux is deliberately not bound to one workspace.
+  `hm_…/ws_…` qualification for workspace-scoped calls. Bare workspace names,
+  bare workspace IDs, and local paths cannot route federated calls. Single-task
+  calls without a selector route by task prefix. The mux is deliberately not
+  bound to one workspace.
 - A direct session can bind through `orbit mcp serve --workspace <selector>`
-  or initialize metadata. An unbound session requires a per-call selector;
-  server cwd never chooses the workspace.
+  or initialize metadata. An unbound session requires a per-call selector for
+  workspace-scoped calls; server cwd never chooses the workspace.
 - A managed child inherits trusted workspace and run identity from its envelope.
   Do not replace those with a root or registry from another checkout.
 
 If a host is unavailable, report that fact. Reading a publication is explicitly
 labelled snapshot access, not a substitute for live task state. Never create
 records in a second store merely to get past a connection error.
+
+## Task IDs and host selection
+
+Register a remote with `orbit host add <ssh-target>` and inspect `orbit host
+list`. On the CLI and federated MCP, a single-task call without an explicit
+workspace goes to the host its task prefix names: the local prefix runs here,
+a registered remote prefix goes there, and an unknown prefix fails closed.
+Show or update another host's task directly, without SSH or `--workspace`:
+
+```bash
+orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","comment":"<progress>","model":"<agent-family>"}'
+```
+
+The ID-routed tools are `orbit.task.show`, `update`, `reject`, `delete`,
+`artifact.get`, `artifact.put`, `review_reset` and `reconcile_review` (each
+under `orbit.task.`). Routing applies only where that tool is advertised and
+authorized. `orbit.task.add`, `list`, `eligible`, `lint`, `pull` and `locks*`
+keep workspace selection; search, friction and workflow-run tools do not route
+by task prefix. There is no fan-out search across hosts. Direct local/remote
+MCP servers and `mcp listen` do not relay: an ID-only call for a registered
+remote prefix returns `task_prefix_remote`.
+
+An explicit `workspace` or CLI `--workspace` wins over the prefix: a read can
+address that store's mirror, while a write must still pass its sole-writer
+check. An explicit CLI root also selects a store. Routing never falls back to
+a mirror when a host is down. Claimed workers retain their owner binding and
+cannot use `--host` to replace it.
+
+For workspace-scoped CLI tool calls, name a host and a workspace as that host
+lists it:
+
+```bash
+orbit tool run orbit.task.list --host <name> --workspace <workspace-name-or-ws_id> --input '{"model":"<agent-family>"}'
+```
+
+`--host` accepts an exact registered host name or `machine_id`. Orbit reads
+that host's live workspace list, matches the name or `ws_*` ID, and copies
+its selector; never build a selector by concatenation. The flag is accepted
+on `orbit tool run` and, with `--workspace`, on `orbit task show`, `update`,
+`artifact put|get`, `review-reset` and `reconcile-review` subcommands. Put it
+after the task subcommand. Agents keep writes on registered tools for
+attribution. Remote creation also uses `orbit tool run orbit.task.add` with
+`--host` and `--workspace`; human `task add` and `task list` are host-local.
+Other host-local commands, including `workspace`, `config`, `doctor`,
+`run show/history/logs` and `update`, reject the routing flag. Their diagnostic
+names the command to run on that host over SSH.
+
+On a replica, `orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id>`
+uses the same live selector resolution. Without `--host`, `--pull` requires
+the full host-qualified selector copied from discovery. Pulling from the local
+host is refused; use plain `orbit run auto` for a local backlog. Starting a
+drain still requires operator authorization.
+
+### Routing failures and remedies
+
+| Code | Remedy |
+|---|---|
+| `unknown_task_prefix` | Check `orbit host list`, then register the task's host with `orbit host add <ssh-target>`. Legacy rows have no prefix until migrated. |
+| `task_prefix_remote` | Use federated MCP or the CLI's ID route, or connect directly to the named host and select its workspace. A direct MCP server does not relay. |
+| `unknown_host` | Copy the exact name or machine ID from `orbit host list`; register a missing host or migrate its legacy row with `orbit host add`. |
+| `owner_unreachable` | Restore SSH and the task host's Orbit process. If the error names a local mirror, select it explicitly for a labelled snapshot read. |
+| `unreachable_destination` | Check that the registered SSH target logs in without a prompt and has `orbit` on PATH, then retry discovery. |
+| `stale_route` | Select a workspace the host's live list reports; repair its registration on that host if it should exist. |
+| `unknown_selector` | For an ambiguous name, use the host's exact `ws_*` ID. For bare `--pull`, supply `--host` or the full discovered selector. |
+| `outcome_unknown` | The call was dispatched but its reply was lost. Inspect live state or the operation's receipt before retrying a write; do not mint a replacement request key. |
+| `tool_not_on_this_host` | Discover the destination's tool catalog and use a supported operation or deploy the required matching build. |
+| `capability_refused` | Follow the named authority/owner restriction. A replica or local-host pull is not an owner route; routing grants no extra capability. |
+| `protocol_skew` | Deploy matching Orbit builds and restart long-lived processes on both endpoints before a new pull drain. |
+
+Registration errors, the doctor's `hosts` row and the one-release legacy-file
+migration are in [remote-access.md](../../orbit-setup/references/remote-access.md).
 
 ## Capability map
 
@@ -42,9 +118,11 @@ records in a second store merely to get past a connection error.
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
-| Observe/resume workflows | `orbit_workflow_run_show/list/resume`; resize a live auto drain with operator-only `orbit_workflow_auto` `action: "resize"` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; job replay/resume |
+| Observe/resume workflows | `orbit_workflow_run_show/list/resume`; resize a live auto drain with operator-only `orbit_workflow_auto` `action: "resize"`; its `start` takes `approve_proposed: true` for the same per-pass approval as `run auto --approve-proposed`, which never approves a task tagged `no-auto-approve` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; job replay/resume |
 | Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. Full run details stay on operator-only `orbit_workflow_run_show` |
 | Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are CLI-only (`orbit auto-task`) |
+| Routine enablement | `orbit_routine_control` with `action: "list"` or `"toggle"`; operator authority and explicit `workspace` required | `orbit routine list/show` reads definitions and state. MCP toggle needs the observed `expected_enabled` and `target` plus desired `enabled`; after a lost reply, observe state before retrying. `orbit routine pause/resume` controls the separate host-local pause. |
+| Review recovery | `orbit_task_reconcile_review` (`inspect`, `submit`, `status`, `accept_baseline`) and `orbit_task_review_reset`; operator-only and unavailable to managed runs | `orbit task reconcile-review` and `orbit task review-reset`. Reconciliation judges a recovered delivery's changed merged head; reset closes an open attempt and renews one selected lineage budget with a reason, preserving history. Inspect authoritative state after a lost reply. |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |

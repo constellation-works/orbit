@@ -36,10 +36,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use orbit_engine::activity_job::load_job_asset;
-use orbit_types::workflow::JobV2;
 use orbit_types::workflow::activity_job::{
     TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host, validate_job_retired_sessions,
 };
+use orbit_types::workflow::{JobV2, run_input_declares_review_reconciliation};
 
 use crate::OrbitRuntime;
 use crate::application::job::exec::V2RunFinalizationOptions;
@@ -61,7 +61,10 @@ mod worker;
 pub(crate) use admission::input_hash;
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
-pub use wait::{PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_success};
+pub use wait::{
+    PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_held,
+    pipeline_wait_status_is_success,
+};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
@@ -71,6 +74,7 @@ pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
 #[cfg(all(test, unix))]
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
+pub(crate) use worker::supervisor::WorkerLaunchError;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineInvokeResult {
@@ -110,6 +114,14 @@ pub(crate) const ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE: &str =
 /// Shared by every entry point that accepts caller-shaped run input so the
 /// refusal reads identically whether it came from `orbit run job`, a direct
 /// YAML path, a resume, or a tool call.
+pub(crate) fn reserved_reconciliation_key_error(job_name: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "run input for job '{job_name}' set the reserved `{}` field; a review reconciliation \
+         run is admitted only by `orbit task reconcile-review submit`",
+        orbit_types::workflow::REVIEW_RECONCILIATION_ADMISSION_KEY
+    ))
+}
+
 pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field; \

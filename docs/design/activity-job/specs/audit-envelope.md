@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: V2 Audit Envelope"
 tags: ["activity-job"]
-last_validated: 2026-09-13
+last_validated: 2026-10-06
 ---
 
 # Spec: V2 Audit Envelope

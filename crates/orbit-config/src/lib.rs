@@ -52,8 +52,9 @@
 //!   source provenance.
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
-//! - `operation` — typed `[operation]` review preferences and their layered
-//!   resolution [ORB-11333].
+//! - `operation` — typed review preferences (`[review]` and
+//!   `operation.review_crew`), their layered resolution and the translation
+//!   of deprecated review keys [ORB-11333] [ORB-13992].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views, assembled in
 //!   `resolved/config.rs` with crew admission, compatibility checks and environment
 //!   projection in sibling named modules.
@@ -69,6 +70,8 @@ mod operation;
 mod persistence;
 mod plugin_enablement;
 mod plugins;
+mod provider_limit;
+mod provider_limit_budget;
 mod raw;
 mod registry;
 mod resolved;
@@ -91,16 +94,23 @@ pub use layering::{
     load_effective_config,
 };
 pub use memory_limit::{MemoryLimit, MemoryUnit};
-pub use operation::{OPERATION_POLICY_VERSION, OperationPolicy, ReviewPolicy};
+pub use operation::{
+    OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
+    REVIEW_BEFORE_PR_KEY, REVIEW_MINUTES_KEY,
+};
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
     load_workspace_plugin_enablement, plugin_enablement_key, workspace_config_sets_policy,
 };
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
+pub use provider_limit::{
+    DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
+};
+pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, MachineSettings,
-    ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key, config_key_options,
-    describe as describe_config_key,
+    ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
+    admit_settable_config_key, config_key_options, describe as describe_config_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, ResolvedConfig, disabled_crew_message,

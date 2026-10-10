@@ -54,7 +54,8 @@ pub fn write_token_scoreboard(
             ]
         });
 
-        fs::create_dir_all(scoreboard_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        orbit_common::fs::io::create_private_dir_all(scoreboard_dir)
+            .map_err(|e| OrbitError::Io(e.to_string()))?;
         let raw = serde_json::to_string_pretty(&payload)
             .map_err(|e| OrbitError::Store(format!("serialize tokens.json: {e}")))?;
         write_atomic(&path, &format!("{raw}\n")).map_err(OrbitError::from)?;

@@ -40,10 +40,23 @@ On Linux, inspect the user service and its recent journal:
 ```bash
 systemctl --user status orbit-sweep.timer orbit-sweep.service --no-pager
 systemctl --user cat orbit-sweep.service
+systemctl --user show orbit-sweep.service -p ActiveState -p Result \
+  -p ExecMainStartTimestampMonotonic -p TimeoutStartUSec -p KillMode
 journalctl --user -u orbit-sweep.service --since '1 hour ago' --no-pager -o short-iso
 journalctl --user -u orbit-sweep.service --since '1 hour ago' --no-pager -o short-iso \
   | rg -n -C 4 'WARN|ERROR|failed|panic|No such file'
 ```
+
+`orbit clock status` and the doctor's `clock-unit` row flag a tick still running
+after its five-minute budget, a failed service start, or missing recovery
+settings. An exhausted cooperative budget exits nonzero and names deferred
+workspaces in the tick report (`deadline_exceeded`, `skipped_workspaces` in
+JSON). A synchronous operation that never returns hits systemd's ten-minute
+startup timeout, which kills the service group and lets the timer recover.
+The service should report a finite `TimeoutStartUSec` and `KillMode=mixed`;
+`orbit clock repair` rewrites older units and preserves a paused clock.
+Fetch timeouts kill the command's process group, including `git-remote-http`,
+and lock waits consume the source pass's 30-second budget.
 
 On macOS, the clock installer redirects sweep stdout/stderr to a file:
 
@@ -126,12 +139,22 @@ scope; the dashboard, the sweep clock, SSH, and sibling runs keep working.
 Scope launches explicitly carry the launching process's allow-listed child
 variables (including `PATH`), plus deliberate worker environment edits, through
 `systemd-run --setenv`. Required validation runs `/bin/sh` with a cleared,
-allow-listed environment; it does not load a login profile. Keep `rg`, `cargo`,
-and other required tools on the launching service's `PATH`. Failed validation
+allow-listed environment. By default Orbit resolves its `PATH` and allowed
+toolchain variables from the owner's interactive login shell, falling back to
+a non-interactive login shell when that probe fails. Each probe is bounded to
+10 seconds and cached for two minutes. Keep `rg`, `cargo`,
+and other required tools on that resolved `PATH`. Failed validation
 logs include `Required validation PATH=…`, including failures from nested build
 scripts. Compare that value with the service's `Environment=PATH=…` when a tool
 cannot be found. Restart the launching service between runs after changing its
 environment, then confirm a new box delivery passes `candidate_validate`.
+
+The config schema exposes `workflow.validation_env.login_shell` to disable
+shell probing and `workflow.validation_env.interactive` to select only the
+non-interactive probe. `workflow.validation_env.path` adds explicit PATH entries
+(leading `~/` expands to the owner's home); `workflow.validation_env.path_mode`
+is `prepend` by default or `replace` to use only those entries. Only allow-listed
+toolchain variables cross the probe; it does not copy the shell's environment.
 
 The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 
@@ -199,7 +222,7 @@ Restarts: a contained worker lives outside the `orbit-web.service` and
 uncontained worker keeps the existing guarantee: it runs in its own `setsid`
 session and the sweep unit uses `KillMode=process`. Stopping a worker scope
 (`systemctl --user stop orbit-worker-….scope`) kills that run; use
-`orbit run cancel` instead.
+`orbit run cancel <run-id> --confirm` instead.
 
 ## Archive-Pruning Warning
 

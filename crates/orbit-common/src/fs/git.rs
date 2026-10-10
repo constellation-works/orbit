@@ -4,6 +4,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::OrbitError;
+use crate::process::run_bounded_capped;
 
 use super::io::with_exclusive_file_lock;
 
@@ -21,6 +22,57 @@ pub const GIT_FETCH_LOCK_NAME: &str = "orbit-git-fetch";
 pub const GIT_FETCH_CAS_ATTEMPTS: u32 = 3;
 
 const GIT_FETCH_CAS_RETRY_DELAY: Duration = Duration::from_millis(20);
+
+/// Deadline [`run_git`] gives a local command. Local plumbing on Orbit's own
+/// repository finishes in milliseconds, so only a wedged process reaches it.
+/// It stays below [`GIT_REMOTE_TIMEOUT`]: a network command always gets the
+/// longer bound.
+pub const GIT_LOCAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Deadline for a command that materializes or deletes a whole checkout
+/// (`worktree add`, `worktree remove`, `checkout`), as the engine gives
+/// `worktree add`.
+pub const GIT_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Deadline for a bulk object copy into an empty repository: the full-ancestry
+/// fetch that seeds a source-inspection slot. A cold copy of Orbit's own
+/// history took about 2 s on an idle 32-core host. The same copy overran
+/// [`GIT_LOCAL_TIMEOUT`] under drain load, so this bound sits far above the
+/// idle time and still caps how long a wedged copy can hold its slot.
+pub const GIT_BULK_COPY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Deadline for a command that talks to a remote (`fetch`, `ls-remote`,
+/// `push`, `clone`). A single-branch fetch from the forge takes well under a
+/// second. A fetch usually runs under [`with_git_fetch_lock`], whose waiters
+/// give up after [`DEFAULT_FILE_LOCK_TIMEOUT`](super::file_lock::DEFAULT_FILE_LOCK_TIMEOUT),
+/// so a stalled holder is killed while the next caller is still waiting.
+pub const GIT_REMOTE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Longest any one holder keeps the [`with_git_fetch_lock`] lock. Waiters give
+/// up after [`DEFAULT_FILE_LOCK_TIMEOUT`](super::file_lock::DEFAULT_FILE_LOCK_TIMEOUT),
+/// so a holder that outlasts them turns one stalled fetch into a lock timeout
+/// for every other caller. A holder with several attempts (delivery
+/// `fetch_remote_base`) spends this as one total across its attempts and
+/// backoff; the limit leaves a margin below the waiters' wait for the
+/// supervisor to kill the last child. We bound the holder rather than widen
+/// the waiters' wait: a waiter blocked for minutes behind a stalled network
+/// call is a worse failure than the holder giving up early and retrying later.
+pub const GIT_FETCH_LOCK_HOLD_LIMIT: Duration = Duration::from_secs(25);
+
+// Pin the holder/waiter relationship: a change to either side that breaks it
+// fails the build instead of reappearing as lock timeouts under a stalled fetch.
+const _: () = assert!(
+    GIT_REMOTE_TIMEOUT.as_millis() <= GIT_FETCH_LOCK_HOLD_LIMIT.as_millis(),
+    "a single-fetch holder must fit within the fetch-lock hold limit"
+);
+const _: () = assert!(
+    GIT_FETCH_LOCK_HOLD_LIMIT.as_millis() < super::file_lock::DEFAULT_FILE_LOCK_TIMEOUT.as_millis(),
+    "the fetch-lock hold limit must stay below the wait of every fetch-lock waiter"
+);
+
+/// Bytes [`run_git`] keeps of each output stream. Callers parse ref lists,
+/// commit headers and worktree lists, all far smaller.
+pub const GIT_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentBranchStatus {
@@ -322,21 +374,46 @@ fn is_admitted_config_override(setting: &str) -> bool {
         })
 }
 
-/// Run `git` with `args` in `workspace_path`. An argv the admission above
-/// refuses fails with [`OrbitError::InvalidInput`] before any process starts.
+/// Run `git` with `args` in `workspace_path` within [`GIT_LOCAL_TIMEOUT`].
+/// An argv the admission above refuses fails with [`OrbitError::InvalidInput`]
+/// before any process starts. A network or whole-checkout command passes its
+/// own deadline through [`run_git_within`].
 pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput, OrbitError> {
+    run_git_within(workspace_path, args, GIT_LOCAL_TIMEOUT)
+}
+
+/// [`run_git`] with an explicit `deadline`.
+///
+/// Git runs in its own process group with [`GIT_OUTPUT_LIMIT`] of each stream
+/// kept, and never prompts on a terminal. When `deadline` elapses the group is
+/// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
+/// the workspace: a timeout is never an exit status, so a caller cannot read
+/// it as Git's answer.
+pub fn run_git_within(
+    workspace_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<GitCommandOutput, OrbitError> {
     let admitted = admitted_git_args(args)?;
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(&admitted)
         .current_dir(workspace_path)
-        .output()
-        .map_err(|error| {
-            OrbitError::Execution(format!(
-                "failed to run `git {}` in '{}': {error}",
-                args.join(" "),
-                workspace_path.display()
-            ))
-        })?;
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let output =
+        run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
+            |error| match error {
+                OrbitError::ProcessTimeout { timeout_ms, .. } => OrbitError::ProcessTimeout {
+                    timeout_ms,
+                    detail: format!("`git {}` in '{}'", args.join(" "), workspace_path.display()),
+                },
+                other => OrbitError::Execution(format!(
+                    "failed to run `git {}` in '{}': {other}",
+                    args.join(" "),
+                    workspace_path.display()
+                )),
+            },
+        )?;
 
     Ok(GitCommandOutput {
         success: output.status.success(),

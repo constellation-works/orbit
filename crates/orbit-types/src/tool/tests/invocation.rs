@@ -36,7 +36,10 @@ fn arguments_cannot_erase_or_replace_bound_identity() {
 
 #[test]
 fn ordinary_session_json_cannot_introduce_worker_authority() {
-    let session: crate::tool::ToolSessionContext =
-        serde_json::from_value(serde_json::json!({"worker_invocation": binding()})).unwrap();
+    let session: crate::tool::ToolSessionContext = serde_json::from_value(
+        serde_json::json!({"worker_invocation": binding(), "worker_host_call": true}),
+    )
+    .unwrap();
     assert!(session.worker_invocation.is_none());
+    assert!(!session.worker_host_call);
 }

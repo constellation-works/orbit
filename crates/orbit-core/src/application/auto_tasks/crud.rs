@@ -9,6 +9,11 @@
 //! Disabling is a `toggle`; removal is the separate audited delete in
 //! [`super::delete`].
 //!
+//! Reads return the effective definition: the YAML body with its operator
+//! settings applied ([`super::settings`]). On a shipped default whose body is
+//! still managed, `update` and `toggle` write only the settings table when
+//! the change is limited to settings fields; a body edit forks the file.
+//!
 //! `mint` (CLI-only by design — see `docs/design/mcp-bridge/2_design.md`)
 //! rides here too: it mints a task from a definition on demand by reusing the
 //! scheduler's mint path, so there is exactly one template→task mapping.
@@ -18,9 +23,12 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use orbit_automation::auto_tasks::settings::load_settings_table;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
-use orbit_types::task::{Task, normalize_required_tools};
+use orbit_types::task::{
+    Task, TaskComplexity, TaskPriority, TaskStatus, TaskType, normalize_required_tools,
+};
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
     is_valid_auto_task_name,
@@ -52,8 +60,85 @@ pub struct AutoTaskUpdateParams {
     pub description: Option<String>,
     pub schedule: Option<AutoTaskSchedule>,
     pub dedupe: Option<DedupePolicy>,
-    pub template: Option<AutoTaskTemplate>,
+    pub template: Option<AutoTaskTemplatePatch>,
     pub enabled: Option<bool>,
+}
+
+/// Present-field template patch, merged with the latest definition under the
+/// cursor lock. Absent fields are unchanged; present collections replace them.
+#[derive(Debug, Clone, Default)]
+pub struct AutoTaskTemplatePatch {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub acceptance_criteria: Option<Vec<String>>,
+    pub task_type: Option<TaskType>,
+    pub tags: Option<Vec<String>>,
+    pub required_tools: Option<Vec<String>>,
+    pub context_files: Option<Vec<String>>,
+    pub priority: Option<TaskPriority>,
+    /// `Some(None)` clears the assessment; `None` leaves it unchanged.
+    pub complexity: Option<Option<TaskComplexity>>,
+    /// `Some(None)` clears the override; `None` leaves it unchanged.
+    pub crew: Option<Option<String>>,
+    pub status: Option<TaskStatus>,
+}
+
+impl AutoTaskTemplatePatch {
+    fn apply(self, template: &mut AutoTaskTemplate) {
+        if let Some(title) = self.title {
+            template.title = title;
+        }
+        if let Some(description) = self.description {
+            template.description = description;
+        }
+        if let Some(acceptance_criteria) = self.acceptance_criteria {
+            template.acceptance_criteria = acceptance_criteria;
+        }
+        if let Some(task_type) = self.task_type {
+            template.task_type = task_type;
+        }
+        if let Some(tags) = self.tags {
+            template.tags = tags;
+        }
+        if let Some(required_tools) = self.required_tools {
+            template.required_tools = normalize_required_tools(required_tools);
+        }
+        if let Some(context_files) = self.context_files {
+            template.context_files = context_files;
+        }
+        if let Some(priority) = self.priority {
+            template.priority = priority;
+        }
+        if let Some(complexity) = self.complexity {
+            template.complexity = complexity;
+        }
+        if let Some(crew) = self.crew {
+            template.crew = crew;
+        }
+        if let Some(status) = self.status {
+            template.status = status;
+        }
+    }
+}
+
+/// A full template names every field, retaining whole-template replacement
+/// semantics for registry-tool callers, including clearing optional fields.
+impl From<AutoTaskTemplate> for AutoTaskTemplatePatch {
+    fn from(template: AutoTaskTemplate) -> Self {
+        Self {
+            title: Some(template.title),
+            description: Some(template.description),
+            acceptance_criteria: Some(template.acceptance_criteria),
+            task_type: Some(template.task_type),
+            tags: Some(template.tags),
+            required_tools: Some(template.required_tools),
+            context_files: Some(template.context_files),
+            priority: Some(template.priority),
+            complexity: Some(template.complexity),
+            crew: Some(template.crew),
+            status: Some(template.status),
+        }
+    }
 }
 
 /// A lookup may name only one definition stem. Absolute paths, `..`, and
@@ -96,6 +181,7 @@ impl OrbitRuntime {
         &self,
         mut params: AutoTaskAddParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         reject_retired_delivery_coverage(&params.schedule)?;
         params.template.required_tools = normalize_required_tools(params.template.required_tools);
         let now = chrono::Utc::now().to_rfc3339();
@@ -132,6 +218,7 @@ impl OrbitRuntime {
             )));
         }
         self.write_auto_task(&definition)?;
+        self.drop_auto_task_settings(&definition.name)?;
         Ok(definition)
     }
 
@@ -178,7 +265,8 @@ impl OrbitRuntime {
             .collect())
     }
 
-    /// Show one definition by name, or `None` if no regular in-scope file exists.
+    /// Show one effective definition by name, or `None` if no regular
+    /// in-scope file exists.
     ///
     /// Absolute paths, parent-directory traversal, and any other name that is
     /// not a single definition stem are rejected before the filesystem is
@@ -190,9 +278,14 @@ impl OrbitRuntime {
         };
         let raw = std::fs::read_to_string(&path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-        Ok(Some(orbit_common::protocol::yaml::parse_auto_task_yaml(
-            &raw,
-        )?))
+        let mut definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&raw)?;
+        let settings = load_settings_table(&auto_tasks_dir(&self.paths().local_dir))
+            .map_err(|error| OrbitError::InvalidInput(format!("auto-task '{name}': {error}")))?;
+        if let Some(entry) = settings.get(&definition.name) {
+            entry.apply(&mut definition);
+            definition.validate()?;
+        }
+        Ok(Some(definition))
     }
 
     /// Apply a present-field patch to a definition.
@@ -201,6 +294,7 @@ impl OrbitRuntime {
         name: &str,
         params: AutoTaskUpdateParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         if let Some(request) = &params.waive_batch {
             let definition = self.require_validated_auto_task(name)?;
             if params.description.is_some()
@@ -240,14 +334,30 @@ impl OrbitRuntime {
             if let Some(dedupe) = params.dedupe {
                 definition.dedupe = dedupe;
             }
-            if let Some(mut template) = params.template {
-                template.required_tools = normalize_required_tools(template.required_tools);
-                definition.template = template;
+            if let Some(template) = params.template {
+                template.apply(&mut definition.template);
             }
             if let Some(enabled) = params.enabled {
                 definition.enabled = enabled;
             }
         })
+    }
+
+    /// Required-tool warnings for a definition that an update just returned.
+    ///
+    /// A waiver is persisted before this check runs, so on the waive path a
+    /// tool problem is reported as a warning: the waiver stands and the command
+    /// must not fail on it.
+    pub fn auto_task_update_tool_warnings(
+        &self,
+        definition: &AutoTaskDefinition,
+        waived: bool,
+    ) -> Result<Vec<String>, OrbitError> {
+        match self.validate_required_tools(&definition.template.required_tools) {
+            Ok(warnings) => Ok(warnings),
+            Err(error) if waived => Ok(vec![error.to_string()]),
+            Err(error) => Err(error),
+        }
     }
 
     /// Enable or disable a definition (the kill-switch). Disabling pauses an
@@ -257,6 +367,7 @@ impl OrbitRuntime {
         name: &str,
         enabled: bool,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         self.edit_auto_task(name, |definition| definition.enabled = enabled)
     }
 
@@ -267,6 +378,7 @@ impl OrbitRuntime {
         expected: bool,
         enabled: bool,
     ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         self.try_edit_auto_task(name, |definition| {
             if definition.enabled != expected {
                 return Err(OrbitError::InvalidInput(
@@ -292,7 +404,7 @@ impl OrbitRuntime {
     /// the file before a task exists, and a mint that wins admission is an
     /// open task by the time a non-force delete checks. Admission does not load
     /// or save the cursor, so its bytes stay identical. Because it reuses the
-    /// scheduler's [`mint_task`], the result is field-for-field identical to a fired
+    /// scheduler's `mint_task`, the result is field-for-field identical to a fired
     /// instance, provenance tag and `system_created` marker included; that also
     /// means an open manually minted instance is visible to `skip_if_open` dedupe on
     /// the next pass, exactly as a fired one would be.
@@ -301,6 +413,7 @@ impl OrbitRuntime {
     /// Escaped lookups fail the same way, before a task is created: mint loads
     /// the definition only through [`Self::auto_task_show`].
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
         // Fail closed before admission. This copy is not mint authority: a
         // concurrent delete can remove the file before the lock is held.
         let preloaded = self.require_auto_task(name)?;
@@ -475,8 +588,9 @@ impl OrbitRuntime {
             definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
-            self.write_auto_task(&definition)?;
-            Ok(definition)
+            self.persist_auto_task_edit(&definition)?;
+            // Settings re-apply over the body on load; return what loads.
+            self.require_validated_auto_task(name)
         })
     }
 
@@ -493,7 +607,10 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    fn write_auto_task(&self, definition: &AutoTaskDefinition) -> Result<(), OrbitError> {
+    pub(super) fn write_auto_task(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<(), OrbitError> {
         // The runtime has already selected the definition root. A managed
         // tool call reaches this method only in the registered owner host.
         let path = definition_path(&self.paths().local_dir, &definition.name);

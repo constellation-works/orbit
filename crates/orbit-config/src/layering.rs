@@ -22,8 +22,11 @@
 //!   only plugin toggles does not count as a distinct workspace file for the
 //!   replace-only keys.
 //!
-//! The `[operation]` review keys are resolved per layer by [`crate::operation`]
-//! rather than from the merged document, so their provenance is exact.
+//! The review keys are resolved per layer by [`crate::operation`] rather than
+//! from the merged document, so their provenance is exact. Each document's
+//! deprecated review keys are translated to their `[review]` spelling as it
+//! is parsed, so the merge, the snapshot and `orbit config get` all see the
+//! translated value.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -34,7 +37,9 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::crew_pools::reject_unpoolable_crew_names_in_document;
-use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
+use crate::operation::{
+    OperationLayer, OperationLayerSource, OperationPolicy, translate_legacy_review_keys,
+};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
@@ -259,7 +264,7 @@ pub(crate) struct LoadedResolvedConfig {
 pub(crate) fn load_layered_resolved(
     roots: &ConfigRoots,
 ) -> Result<LoadedResolvedConfig, OrbitError> {
-    load_layered_resolved_with_workspace(roots, None)
+    load_layered_resolved_with_staged(roots, None, None)
 }
 
 /// Admit an in-memory workspace edit against the current global layer before
@@ -271,19 +276,83 @@ pub(crate) fn validate_staged_workspace_document(
     raw: &str,
 ) -> Result<ResolvedConfig, OrbitError> {
     if !roots.has_workspace_layer() {
-        return Err(OrbitError::InvalidInput(
-            "workspace validation requires a distinct workspace root".to_string(),
-        ));
+        return Err(OrbitError::InvalidInput(format!(
+            "`--root` or `ORBIT_ROOT` pins one config root for both layers, so there is no \
+             workspace config layer; rerun with `--global` to edit '{}'",
+            redact_home_dir(&roots.global().join("config.toml").display().to_string())
+        )));
     }
-    load_layered_resolved_with_workspace(roots, Some((workspace_path, raw)))
+    load_layered_resolved_with_staged(roots, None, Some((workspace_path, raw)))
         .map(|loaded| loaded.resolved)
 }
 
-fn load_layered_resolved_with_workspace(
+/// Admit an in-memory global edit against the workspace layer it would be
+/// read with, through the same layered load a runtime performs. Every
+/// admission rule that spans both layers applies (both review layers on,
+/// resource-throttle resume against high, crews a workspace pool or
+/// `default_crew` names). Without this a global edit that is valid alone saves
+/// cleanly and leaves that workspace's config unloadable, including for the
+/// `config set` that would repair it.
+pub(crate) fn validate_staged_global_document(
     roots: &ConfigRoots,
+    global_path: &Path,
+    raw: &str,
+) -> Result<(), OrbitError> {
+    if !roots.has_workspace_layer() {
+        return Ok(());
+    }
+    load_layered_resolved_with_staged(roots, Some((global_path, raw)), None).map(|_| ())
+}
+
+/// Resolve workspace file values with only crew definitions inherited from
+/// global. Other global settings must not appear in a scoped file snapshot.
+pub(crate) fn resolve_workspace_file_document(
+    global_path: &Path,
+    global_raw: &str,
+    workspace_path: &Path,
+    raw: &str,
+) -> Result<ResolvedConfig, OrbitError> {
+    let workspace = parse_config_document(workspace_path, raw)?;
+    reject_workspace_machine_table(&workspace.value, workspace_path)?;
+    let global = parse_config_document(global_path, global_raw)?;
+    for document in [&global, &workspace] {
+        reject_unpoolable_crew_names_in_document(&document.value, &document.path)?;
+    }
+
+    let mut table = toml::map::Map::new();
+    if let Some(crews) = global.value.get("crews") {
+        table.insert("crews".to_string(), crews.clone());
+    }
+    let mut scoped = toml::Value::Table(table);
+    // The normal recursive merge preserves global fields when the workspace
+    // overrides only part of a crew definition.
+    merge_tables(&mut scoped, &workspace.value);
+    warn_compatibility_keys(&workspace.value, workspace_path);
+    let crew_field_path = |crew: &str, field: &str| {
+        source_for_crew_field(crew, field, Some(&global), Some(&workspace))
+            .path
+            .unwrap_or_else(|| workspace_path.to_path_buf())
+    };
+    ResolvedConfig::from_scoped_value(
+        scoped,
+        workspace_path,
+        &crew_field_path,
+        PersistenceConfig::default_for_data_root(workspace_path.parent().unwrap_or(workspace_path)),
+    )
+}
+
+/// The layered load, with an in-memory global or workspace document standing
+/// in for the file it will be written to.
+fn load_layered_resolved_with_staged(
+    roots: &ConfigRoots,
+    staged_global: Option<(&Path, &str)>,
     staged_workspace: Option<(&Path, &str)>,
 ) -> Result<LoadedResolvedConfig, OrbitError> {
-    let global = read_config_document(&roots.global().join("config.toml"))?;
+    let global = if let Some((path, raw)) = staged_global {
+        Some(parse_config_document(path, raw)?)
+    } else {
+        read_config_document(&roots.global().join("config.toml"))?
+    };
     if let Some(global_document) = &global {
         reject_global_plugin_enablement(&global_document.value, &global_document.path)?;
     }
@@ -357,7 +426,15 @@ fn load_layered_resolved_with_workspace(
         .or(global.as_ref())
         .map(|document| document.path.as_path())
         .unwrap_or_else(|| Path::new("<built-in defaults>"));
-    let mut resolved = ResolvedConfig::from_layered_value(merged, config_path, persistence)?;
+    // The merged document has lost which layer set each crew field, so the
+    // ignored-field records ask the layers directly, as `config show` does.
+    let crew_field_path = |crew: &str, field: &str| {
+        source_for_crew_field(crew, field, global.as_ref(), workspace.as_ref())
+            .path
+            .unwrap_or_else(|| config_path.to_path_buf())
+    };
+    let mut resolved =
+        ResolvedConfig::from_layered_value(merged, config_path, &crew_field_path, persistence)?;
     for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
         warn_compatibility_keys(&document.value, &document.path);
     }
@@ -370,8 +447,8 @@ fn load_layered_resolved_with_workspace(
     })
 }
 
-/// Resolve the `[operation]` review preferences from the exact layers rather
-/// than the merged document, so each field records the layer that set it.
+/// Resolve the review preferences from the exact layers rather than the
+/// merged document, so each field records the layer that set it.
 fn resolve_operation_layers(
     global: Option<&ConfigDocument>,
     workspace: Option<&ConfigDocument>,
@@ -384,10 +461,12 @@ fn resolve_operation_layers(
         .map(|document| OperationLayer::from_document(&document.value, &document.path))
         .transpose()?
         .unwrap_or_default();
-    Ok(OperationPolicy::resolve(&[
+    let policy = OperationPolicy::resolve(&[
         (OperationLayerSource::Global, &global_layer),
         (OperationLayerSource::Workspace, &workspace_layer),
-    ]))
+    ]);
+    policy.ensure_one_review_layer()?;
+    Ok(policy)
 }
 
 /// Refuse a `[machine]` table in a workspace `config.toml`.
@@ -426,12 +505,21 @@ fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>, OrbitErro
 }
 
 fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, OrbitError> {
-    let value = toml::from_str(raw).map_err(|err| {
+    let mut value = toml::from_str(raw).map_err(|err| {
         OrbitError::InvalidInput(format!(
             "invalid runtime config '{}': {err}",
             redact_home_dir(&path.display().to_string())
         ))
     })?;
+    translate_legacy_review_keys(&mut value, path)?;
+    if let Some(patterns) =
+        crate::registry::read_optional::<Vec<String>>(&value, "worktree.reclaim", path)?
+    {
+        for pattern in patterns {
+            orbit_common::fs::path_glob::RelativePathGlob::new(&pattern)
+                .map_err(|error| OrbitError::InvalidInput(format!("worktree.reclaim: {error}")))?;
+        }
+    }
     Ok(ConfigDocument {
         path: path.to_path_buf(),
         value,
@@ -478,7 +566,7 @@ fn crew_entry<'a>(
         .as_table()
 }
 
-fn set_value_at_path(document: &mut toml::Value, key: &str, value: toml::Value) {
+pub(crate) fn set_value_at_path(document: &mut toml::Value, key: &str, value: toml::Value) {
     let segments = key.split('.').collect::<Vec<_>>();
     let Some((last, ancestors)) = segments.split_last() else {
         return;

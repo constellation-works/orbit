@@ -23,6 +23,7 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         model_pair_override: None,
         model_flag: None,
         timeout_seconds: None,
+        auth_probe: None,
         env: Default::default(),
         sandbox: None,
         allow_fallback: false,
@@ -108,6 +109,38 @@ fn seed_default_executors_heals_leftover_macos_sandbox_on_linux() {
         Some(ExecutorSandboxKind::LinuxBwrap),
         "leftover macos-sandbox-exec must become linux-bwrap"
     );
+}
+
+/// [ORB-14342] The shipped local-shell default has no sandbox. Re-seeding an
+/// operator-sandboxed install must preserve its fail-closed setting, even on
+/// a host where that backend is unavailable.
+#[test]
+fn seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform() {
+    for (target_os, sandbox) in [
+        (LINUX, ExecutorSandboxKind::MacosSandboxExec),
+        ("macos", ExecutorSandboxKind::LinuxBwrap),
+        ("windows", ExecutorSandboxKind::MacosSandboxExec),
+        ("windows", ExecutorSandboxKind::LinuxBwrap),
+    ] {
+        let store = InMemoryExecutorStore::default();
+        let mut installed = base_def("local-shell", ExecutorType::LocalShell);
+        installed.sandbox = Some(sandbox);
+        store
+            .upsert_executor_def(&installed)
+            .expect("seed operator-sandboxed local-shell");
+
+        seed_default_executors_for_platform(&store, false, target_os).expect("seed defaults");
+
+        assert_eq!(
+            store
+                .get_executor_def("local-shell")
+                .expect("get")
+                .expect("local-shell present")
+                .sandbox,
+            Some(sandbox),
+            "[ORB-14342] reseeding must not remove the operator's {sandbox} sandbox on {target_os}"
+        );
+    }
 }
 
 #[test]

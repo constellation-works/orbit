@@ -27,19 +27,27 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-store` | stable | common, types |
 | `orbit-registry` | internal | common, config, types |
 | `orbit-tools` | internal | common, exec, policy, types |
-| `orbit-agent` | internal | common, tools, types |
+| `orbit-agent` | internal | common, types |
 | `orbit-automation` | internal | common, store, types |
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
 | `orbit-mcp` | internal | common, registry, tools, types |
-| `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types |
-| `orbit-cmd` | internal | common, config, core, engine, mcp, registry, store, tools, types |
-| `orbit-web` | internal | cmd, common, core, registry, types |
+| `orbit-core` | internal | automation, common, config, engine, exec, policy, search, store, tools, types (dev: core) |
+| `orbit-cmd` | internal | common, config, core, mcp, registry, store, tools, types |
+| `orbit-web` | internal | cmd, common, core, registry, types (dev: store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 
 Core exposes Exec's shared Bubblewrap capability probe to CLI onboarding and
 diagnostics. The CLI's dev-only edges to Engine, Exec and Tools support the real
 sandbox broker integration test, which pairs the host runtime with the built
 CLI and MCP transport.
+
+The dashboard's dev-only Store edge seeds workspace claims directly in isolated
+HTTP fixtures, so replay admission can be exercised without routing fixture
+setup through an agent tool surface.
+
+Core's dev-only edge to itself enables its `test-support` feature for its own
+integration tests, which substitute the detached pipeline worker and execute
+submitted runs in-process.
 
 The `orbit-core` → `orbit-exec` edge supports the Linux host probe and sandbox
 regression tests. The dependency-direction guard
@@ -49,6 +57,9 @@ in member manifests with `workspace = true`.
 ### Foundation and kernel
 
 - **orbit-types** holds shared serde contracts, pure constructors, and narrow domain errors, organized as domain modules (`identity`, `workspace`, `task`, `workflow`, …). It does no I/O of any kind. Its serde shapes are persisted contracts.
+  The review contract also owns the canonical `review-*` artifact namespace
+  classifier shared by Core's task update path, claimed-worker broker and
+  external-evidence guards, and the live-report validator used by tools and Core.
 - **orbit-common** holds `OrbitError` and the shared mechanisms: filesystem and path helpers, process support, storage, UTF-8-safe text bounds, protocol and YAML codecs, observability, and security. Security covers the release signing keys and verification used by `orbit update`, redaction, and `security::child_env`, the single allowlist builder for agent-subprocess environments. Operation registries live here so every surface can read them. The matching handlers live in `orbit-core`.
 - **orbit-policy** resolves `FsProfile` and evaluates `denyRead` and `denyModify` rules.
 - **orbit-exec** provides process, sandbox, and supervision primitives for commands run under an `FsProfile`.
@@ -57,11 +68,11 @@ in member manifests with `workspace = true`.
 
 - **orbit-config** owns `config.toml`. That covers the key registry, global-over-workspace layering (security keys replace rather than merge, and `[machine]` is global-only), provenance for `orbit config show`, resolved views, and comment-preserving atomic edits through `ConfigStore`. Callers pass explicit roots, so the crate never discovers the cwd or `$HOME`. It does not depend on `orbit-engine`; Core translates PR settings at composition time.
 - **orbit-search** runs lexical retrieval. It owns the SQLite chunk and FTS5 schema, chunking, task-field extraction, and BM25 ranking. Core projects task records into it. The index file keeps its `semantic.db` name so persisted paths stay compatible.
-- **orbit-registry** owns this machine's `[machine]` identity, the workspace catalog, checkout bindings, and task-publication bindings, each persisted atomically. It has no shared database and no runtime execution.
+- **orbit-registry** owns this machine's `[machine]` identity, the workspace catalog, checkout bindings, task-publication bindings, and the operator's registered remote hosts (`hosts.toml`), each persisted atomically. It has no shared database and no runtime execution.
 - **orbit-store** handles persistence. See [orbit-store internals](#orbit-store-internals) below.
 - **orbit-tools** holds the tool registry and the built-in fs, exec, and Orbit tool definitions. It resolves a plugin source to its plugin root (the source's `.orbit-plugin/` directory, the only tree installed) and loads and runs `plugin.yaml` v2 plugins through an `exec` backend (one confined process per call) or an `mcp` backend (a stdio server per caller context). Both backends run under the operator's granted sandbox profile. Plugin lifecycle (install, enable, grants, `.orbit/plugins.yaml`) belongs to Core. This crate is also the only owner of the `gh` CLI contract.
-- **orbit-agent** provides one `AgentRuntime` per provider CLI (claude, codex, copilot, cursor, gemini, antigravity, grok, pi, and others). It also contains a standalone HTTP agent-loop SDK, which Orbit's own job execution does not use.
-- **orbit-engine** executes activities and jobs: template rendering, retries, subprocess and tool-aware automation, and the CLI agent runner. It references `orbit-agent` directly, so Core stays free of agent types. It also owns candidate identity, reviewer repair commits, and the reviewed-head rechecks in `pr_open` and `pr_complete`.
+- **orbit-agent** provides one `AgentRuntime` per provider CLI (claude, codex, copilot, cursor, gemini, antigravity, grok, pi, and others). It retains the audit types and redacted blob sinks that the engine persists, including historical event variants.
+- **orbit-engine** executes activities and jobs: template rendering, retries, subprocess and tool-aware automation, and the CLI agent runner. It references `orbit-agent` directly, so Core stays free of agent types. It also owns candidate identity, reviewer repair commits, and the reviewed-head rechecks in `pr_open` and `pr_complete`. Host-side CI evidence collection lives here too, with the normalized CI error signature (`ci_log_signature`) that its reproduction check and Core's CI failure filing share.
 - **orbit-automation** is the scheduling domain for routines and auto-tasks. It covers definition validation, due evaluation, overlap and retry, coverage acceptance, and state-triggered consumers. Its `review` module owns the before-PR coverage rules. It never depends on Core or Engine and has no loop or store of its own. Store owns cursors, claims, and receipts.
 
 ### Application and surfaces
@@ -72,9 +83,9 @@ in member manifests with `workspace = true`.
   - `config` projects `orbit-config` as structured data for the dashboard. Writes go through the same `ConfigStore`.
   - `task/desktop` separates bounded snapshot projections, authorization and completion checks, idempotent writes, review evidence and PR-head observation. Shared input validation lives in `validation`; its sibling `tests` directory preserves isolated mutable fixtures.
   - `search` keeps its public contracts and exports at the module root. `runtime` coordinates workspace queries, `candidates` owns filtered task retrieval and BM25 paging, `friction` builds friction results, and `merge` combines branches. Conversion, filters, federation and path matching keep their existing modules.
-- **orbit-cmd** composes the application for the CLI and web. It joins Core to Registry and holds command groups, runtime assembly, routines, and managed-worker transports. `update` is the one group that composes outward: it handles release download, integrity checks, binary replacement, and post-install convergence.
-- **orbit-mcp** implements the MCP transport over `rmcp`: stdio and TCP transports, tool discovery, per-call traces, the SSH stdio proxy, and the federated mux, which routes host-qualified `hm_*/ws_*` selectors and fails closed. Core owns validation and auditing.
-- **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel.
+- **orbit-cmd** composes the application for the CLI and web. It joins Core to Registry and holds command groups, runtime assembly, routines, and managed-worker transports. Its `hosts` group backs `orbit host` and the doctor `hosts` row, joining the Registry's host file to the MCP crate's federated identity probe. Its `doctor` group holds the read-only `orbit doctor` report that both the CLI and the dashboard's Health › Doctor panel run, and `mcp_clients` holds the MCP client config-path table that `orbit mcp init` writes and the doctor `mcp-registration` row reads. `update` is the one group that composes outward: it handles release download, integrity checks, binary replacement, and post-install convergence.
+- **orbit-mcp** implements the MCP transport over `rmcp`: stdio and TCP transports, tool discovery, per-call traces, the SSH stdio proxy, and the federated mux, which routes host-qualified `hm_*/ws_*` selectors to the registered hosts and fails closed. Core owns validation and auditing.
+- **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel and `/api/on/<host>`, which forwards to a registered host's own dashboard over an on-demand SSH tunnel.
 - **orbit-cli** is the clap entry point and client configuration. It assembles MCP, Registry, Web, and Core. The accepting machine always resolves its own state and dispatches through Core.
 
 ## orbit-store internals
@@ -99,6 +110,9 @@ flowchart BT
 ```
 
 - **`contracts`** holds every consumer-visible trait and DTO. Application code uses only these.
+  The distributed pull preflight fingerprints a JSON schema derived with
+  Schemars from the actual admission request and nested Types contracts. The
+  tool adapter also derives its accepted request fields from that schema.
 - **`driver/file`** and **`driver/sqlite`** are private, implement one technology each, and never import each other. Shared atomic-write, lock, path-safety, and YAML code lives in `fs`.
 - **`repository`** enforces invariants that span drivers. A task write, for example, is a canonical bundle plus registry rows. Task and reservation changes commit through one boundary ([pattern](docs/design-patterns/task_commit_boundary.md)).
 - **`workflow`** holds the explicit import, export, reindex, repair, publication, and layout-upgrade operations. Nothing imports implicitly on open.
@@ -112,6 +126,16 @@ per-job creation index in bounded groups and hydrates steps in batches, so a
 catalog refresh does not issue separate run and step queries for each job or
 decode older run history. Empty catalogs require no run-store reads.
 
+Task delivery observations without a named run prefilter candidate runs in
+SQLite by exact membership in the submitted `input.task_ids` array or equality
+with a text top-level `input.task_id`. The runtime then re-checks the
+`input.task_ids` array before accepting a candidate and skips jobs that do not
+hold task delivery. Candidates remain ordered by creation time, newest first.
+This avoids decoding unrelated workspace history without imposing a history
+cap that could hide an older delivery. The JSON predicate still scans workspace
+rows; candidate input hydration scales with the task's matching run history,
+while SQL filtering scales with workspace history.
+
 ## Stability tiers
 
 Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.toml`. [`scripts/check-stability.sh`](scripts/check-stability.sh) fails if the marker is missing or invalid. There is no automated API diff; the tier signals refactor scope to reviewers.
@@ -123,6 +147,14 @@ Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.t
 ## Scoping rules
 
 Orbit has two roots: global `~/.orbit/` and the workspace `.orbit/`.
+
+Registered repositories may share one explicit data root. In that mode the
+selected logical workspace binding scopes runtime identity, tasks, job runs,
+friction, default v2 audit/recovery reads, reservations and workspace claims;
+the root's single compatibility `config.yaml` cannot identify every repository.
+Ordinary checkout roots keep their persisted partition identity, which can
+differ from the logical catalog ID. Opening a root without a selected binding
+retains the compatibility config identity.
 
 | Artifact | Strategy | Notes |
 |---|---|---|

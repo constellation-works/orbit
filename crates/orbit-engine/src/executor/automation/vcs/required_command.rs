@@ -17,28 +17,50 @@
 //! [`VALIDATION_ENVIRONMENT_MARKER`] with the PATH and the missing tool, so
 //! recovery, the failure handoff and claim settlement treat it as the host's
 //! problem rather than the code's.
+//!
+//! Captured output keeps a head and a tail of each stream. A long stdout
+//! cannot drop the stderr failure before that classification, and the end of
+//! the recorded text still holds it.
+//!
+//! A command may also say what it ran [ORB-15131]. Every run gets
+//! [`VALIDATION_SUMMARY_ENV`], naming a fresh file outside the checkout; a
+//! command that writes a [`ValidationSummary`] there reports the selection it
+//! tested and how many tests executed. A run given a selection gets it in
+//! [`VALIDATION_SELECTION_ENV`] and must test exactly that, so a base rerun
+//! of a diff-selecting command (`make ci-test-affected`) tests what the
+//! candidate run tested rather than the base's own, empty, diff.
 
 use std::path::Path;
 use std::sync::OnceLock;
 
 use orbit_common::OrbitError;
-use orbit_common::text::floor_char_boundary;
+use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, ValidationEnvironment, program_on_path,
     run_process,
 };
-use orbit_types::workflow::VALIDATION_ENVIRONMENT_MARKER;
+use orbit_types::workflow::{
+    HostEvidenceRefusal, HostSandboxCommand, VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
+};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
+/// The file a required command may write its [`ValidationSummary`] to.
+pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
+/// A selection, as a candidate run's summary reported it, that the command
+/// must test instead of choosing its own.
+pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";
+
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
 /// step instead of holding it open indefinitely.
-const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
-/// Captured output kept per command. The log is reader evidence, not a build
-/// log archive, so a runaway command cannot balloon the task bundle.
+pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
+/// Captured output kept per command, split across stdout and stderr. The log
+/// is reader evidence, not a build log archive, so a runaway command cannot
+/// balloon the task bundle. See [`capture`].
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
 
 /// One required command's captured result on the candidate.
@@ -48,10 +70,57 @@ pub(super) struct RequiredCommandRun {
     pub(super) timed_out: bool,
     pub(super) passed: bool,
     pub(super) output: String,
+    /// Why a successful host run cannot count as passing evidence.
+    pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
     /// The environment the command ran in.
     pub(super) environment: ValidationEnvironment,
     /// Set when the command failed because a tool was missing.
     pub(super) missing_tool: Option<MissingTool>,
+    /// Reruns after a network-inconclusive failure [ORB-14258].
+    pub(super) network_retries: u32,
+    /// The line showing the failure was the network's, when it still was
+    /// after every rerun.
+    pub(super) network_evidence: Option<String>,
+    /// What the command reported it ran, when it reports that.
+    pub(super) summary: Option<ValidationSummary>,
+}
+
+/// What a command reported about its own run in [`VALIDATION_SUMMARY_ENV`]:
+/// `{"schema_version": 1, "selection": ..., "tests_run": n | null}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationSummary {
+    /// What the command chose to test, in its own terms. Only compared for
+    /// equality and handed back through [`VALIDATION_SELECTION_ENV`].
+    pub selection: Value,
+    /// Tests executed, or `None` when the command could not count them.
+    pub tests_run: Option<u64>,
+}
+
+impl ValidationSummary {
+    fn read(path: &Path) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Recorded {
+            schema_version: u32,
+            selection: Value,
+            tests_run: Option<u64>,
+        }
+        let bytes = std::fs::read(path).ok()?;
+        match serde_json::from_slice::<Recorded>(&bytes) {
+            Ok(recorded) if recorded.schema_version == 1 && !recorded.selection.is_null() => {
+                Some(Self {
+                    selection: recorded.selection,
+                    tests_run: recorded.tests_run,
+                })
+            }
+            Ok(_) | Err(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "ignoring a required validation summary that is not schema version 1"
+                );
+                None
+            }
+        }
+    }
 }
 
 /// Evidence that a failed command lacked a tool, not a passing candidate.
@@ -111,6 +180,11 @@ impl RequiredCommandRun {
             .as_ref()
             .and_then(|missing| missing.tool.as_deref())
     }
+
+    /// The selection the command reported testing, for a base rerun.
+    pub(super) fn selection(&self) -> Option<&Value> {
+        self.summary.as_ref().map(|summary| &summary.selection)
+    }
 }
 
 /// The recorded shape of a resolved validation environment: its source, PATH
@@ -125,16 +199,20 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
             .map(|shell| shell.display().to_string()),
         "login_shell_enabled": environment.login_shell_enabled,
         "login_shell_error": environment.login_shell_error,
+        "probe_mode": environment.probe_mode.map(|mode| mode.as_str()),
+        "fallback_reason": environment.fallback_reason,
         "config_path": environment.config_path,
         "path_mode": environment.path_mode.as_str(),
     })
 }
 
-/// Run one required command in `workspace_path`.
+/// Run one required command in `workspace_path`, handing it `selection`
+/// to test when one is given.
 pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     command: &str,
+    selection: Option<&Value>,
 ) -> Result<RequiredCommandRun, OrbitError> {
     let command = command.trim();
     if command.is_empty() {
@@ -147,6 +225,27 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         .path()
         .unwrap_or("<unset; /bin/sh uses its default search path>")
         .to_string();
+    // Outside the checkout, which must stay clean while the suite runs.
+    let summary_dir = tempfile::Builder::new()
+        .prefix("orbit-validation-")
+        .tempdir()
+        .map_err(|error| {
+            OrbitError::Execution(format!("create the validation summary directory: {error}"))
+        })?;
+    let summary_path = summary_dir.path().join("summary.json");
+    let mut env = environment
+        .env
+        .iter()
+        .filter(|(key, _)| key != VALIDATION_SUMMARY_ENV && key != VALIDATION_SELECTION_ENV)
+        .cloned()
+        .collect::<Vec<_>>();
+    env.push((
+        VALIDATION_SUMMARY_ENV.to_string(),
+        summary_path.to_string_lossy().into_owned(),
+    ));
+    if let Some(selection) = selection {
+        env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
+    }
     let outcome = run_process(
         &ExecRequest {
             program: "/bin/sh".to_string(),
@@ -154,13 +253,27 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             current_dir: Some(workspace_path.to_string_lossy().into_owned()),
             timeout_ms: Some(VALIDATION_TIMEOUT_MS),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(environment.env.clone()),
+            environment_mode: EnvironmentMode::ClearAndSet(env),
             debug: false,
         },
         &NoSandbox,
     )?;
-    let mut output = capture(&outcome.stdout, &outcome.stderr);
+    let summary = ValidationSummary::read(&summary_path);
+    // Judge the complete streams before `capture` bounds the log. A skip or
+    // deferral in the middle of a large output must still refuse a host pass.
     let passed = outcome.success && !outcome.timed_out;
+    let host_output_refusal = passed
+        .then(|| {
+            judge_host_test_output(
+                &HostSandboxCommand::RequiredValidation(command.to_string()),
+                outcome.success,
+                outcome.timed_out,
+                &format!("{}\n{}", outcome.stdout, outcome.stderr),
+            )
+            .err()
+        })
+        .flatten();
+    let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
         .flatten();
@@ -177,8 +290,12 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         timed_out: outcome.timed_out,
         passed,
         output,
+        host_output_refusal,
         environment,
         missing_tool,
+        network_retries: 0,
+        network_evidence: None,
+        summary,
     })
 }
 
@@ -287,27 +404,106 @@ pub(crate) fn missing_tool(
     })
 }
 
-/// Interleave what the command said, bounded. Truncation is reported inside
-/// the captured text so a reader never mistakes a clipped log for the whole
-/// output.
-fn capture(stdout: &str, stderr: &str) -> String {
-    let mut combined = String::new();
-    if !stdout.trim().is_empty() {
-        combined.push_str(stdout.trim_end());
+/// Join what the command wrote, bounded per stream.
+///
+/// Each non-empty stream gets a share of [`MAX_CAPTURED_OUTPUT_BYTES`]. A
+/// stream that fits in its share is kept whole, so a short stderr survives a
+/// stdout that would otherwise fill the cap. A stream over its share keeps a
+/// head and a tail, and the text says what was omitted. Stderr stays after
+/// stdout: `missing_tool` reads this string, and the repair excerpt reads its
+/// end, so the failure has to be in the kept tail [ORB-14086].
+pub(super) fn capture(stdout: &str, stderr: &str) -> String {
+    let stdout = trimmed_stream(stdout);
+    let stderr = trimmed_stream(stderr);
+    let separator = usize::from(!stdout.is_empty() && !stderr.is_empty());
+    if stdout.len() + stderr.len() + separator <= MAX_CAPTURED_OUTPUT_BYTES {
+        return join_streams(stdout, stderr);
     }
-    if !stderr.trim().is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(stderr.trim_end());
-    }
-    if combined.len() <= MAX_CAPTURED_OUTPUT_BYTES {
-        return combined;
-    }
-    let cut = floor_char_boundary(&combined, MAX_CAPTURED_OUTPUT_BYTES);
-    format!(
-        "[truncated to {cut} of {} bytes]\n{}",
-        combined.len(),
-        &combined[..cut]
+    let (stdout_budget, stderr_budget) = stream_budgets(stdout.len(), stderr.len());
+    join_streams(
+        &bound_stream(stdout, stdout_budget, "stdout"),
+        &bound_stream(stderr, stderr_budget, "stderr"),
     )
+}
+
+/// `text` with trailing whitespace removed, or empty when it is only whitespace.
+fn trimmed_stream(text: &str) -> &str {
+    if text.trim().is_empty() {
+        ""
+    } else {
+        text.trim_end()
+    }
+}
+
+/// Byte budgets for the two streams. Their kept content, plus one separator
+/// when both are non-empty, stays within [`MAX_CAPTURED_OUTPUT_BYTES`].
+/// Truncation notices sit outside that count.
+fn stream_budgets(stdout_len: usize, stderr_len: usize) -> (usize, usize) {
+    let separator = usize::from(stdout_len > 0 && stderr_len > 0);
+    let max = MAX_CAPTURED_OUTPUT_BYTES.saturating_sub(separator);
+    if stderr_len == 0 {
+        return (max.min(stdout_len), 0);
+    }
+    if stdout_len == 0 {
+        return (0, max.min(stderr_len));
+    }
+    let half = max / 2;
+    if stderr_len <= half {
+        (max - stderr_len, stderr_len)
+    } else if stdout_len <= half {
+        (stdout_len, max - stdout_len)
+    } else {
+        let stderr_budget = half;
+        (max - stderr_budget, stderr_budget)
+    }
+}
+
+/// Keep `text` when it fits in `budget`. Otherwise keep a head and a tail
+/// whose content bytes fit, and say how much was omitted.
+fn bound_stream(text: &str, budget: usize, stream: &str) -> String {
+    if text.len() <= budget {
+        return text.to_string();
+    }
+    let tail_budget = budget / 2;
+    let head_budget = budget - tail_budget;
+    let head_end = floor_char_boundary(text, head_budget);
+    let tail_start = ceil_char_boundary(text, text.len().saturating_sub(tail_budget));
+    if tail_start <= head_end {
+        let end = floor_char_boundary(text, budget.min(text.len()));
+        return text[..end].to_string();
+    }
+    let head = &text[..head_end];
+    let tail = &text[tail_start..];
+    let omitted = tail_start - head_end;
+    let head_len = head.len();
+    let tail_len = tail.len();
+    let total = text.len();
+    let mut bounded = String::with_capacity(head_len + tail_len + 64);
+    if !head.is_empty() {
+        bounded.push_str(head);
+        bounded.push('\n');
+    }
+    bounded.push_str(&format!(
+        "[{stream} truncated: kept {head_len}+{tail_len} of {total} bytes, {omitted} omitted]"
+    ));
+    if !tail.is_empty() {
+        bounded.push('\n');
+        bounded.push_str(tail);
+    }
+    bounded
+}
+
+fn join_streams(stdout: &str, stderr: &str) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => {
+            let mut combined = String::with_capacity(stdout.len() + stderr.len() + 1);
+            combined.push_str(stdout);
+            combined.push('\n');
+            combined.push_str(stderr);
+            combined
+        }
+    }
 }

@@ -27,6 +27,50 @@ use crate::runtime::event_bus::EventLog;
 #[cfg(unix)]
 use crate::application::job::run::active_cancellation_request;
 
+/// Whether a failed launch could already have executed the worker.
+#[derive(Debug)]
+pub(crate) enum WorkerLaunchError {
+    /// No child was spawned; the queued run can safely be cancelled.
+    NotStarted(OrbitError),
+    /// A child existed; its run must retain launch intent for reconciliation.
+    Uncertain(OrbitError),
+}
+
+impl From<OrbitError> for WorkerLaunchError {
+    fn from(error: OrbitError) -> Self {
+        Self::NotStarted(error)
+    }
+}
+
+impl WorkerLaunchError {
+    pub(crate) fn into_error(self) -> OrbitError {
+        match self {
+            Self::NotStarted(error) | Self::Uncertain(error) => error,
+        }
+    }
+}
+
+/// Transfer ownership to the observer, stopping and reaping an unobserved
+/// child if the channel closed. Even a stopped child may already have run.
+pub(super) fn handoff_worker(
+    sender: mpsc::SyncSender<Child>,
+    child: Child,
+) -> Result<(), WorkerLaunchError> {
+    sender.send(child).map_err(|error| {
+        let cause =
+            OrbitError::Execution(format!("hand pipeline worker to startup observer: {error}"));
+        stop_unobserved_worker(error.0, cause)
+    })
+}
+
+fn stop_unobserved_worker(mut child: Child, error: OrbitError) -> WorkerLaunchError {
+    let stopped = child.kill().and_then(|()| child.wait().map(|_| ()));
+    if let Err(stop_error) = stopped {
+        tracing::error!(worker_pid = child.id(), %stop_error, "could not stop and reap unobserved pipeline worker");
+    }
+    WorkerLaunchError::Uncertain(error)
+}
+
 /// The run-lifecycle steps worker supervision delegates back to its host.
 ///
 /// Terminalizing a run releases the run's task reservations and blocks the
@@ -145,7 +189,7 @@ impl PipelineWorkerSupervisor {
     }
 
     /// Launch a detached worker for `run_id` and start watching its startup.
-    pub(crate) fn spawn(&self, run_id: &str, actor: Option<&str>) -> Result<(), OrbitError> {
+    pub(crate) fn spawn(&self, run_id: &str, actor: Option<&str>) -> Result<(), WorkerLaunchError> {
         let mut command = self.command.build(self.workspace(), run_id)?;
         let worker_log =
             configure_pipeline_worker_stdio(&mut command, &self.paths.logs_dir, run_id)?;
@@ -164,7 +208,7 @@ impl PipelineWorkerSupervisor {
         actor: Option<&str>,
         mut command: Command,
         worker_log: PipelineWorkerLog,
-    ) -> Result<u32, OrbitError> {
+    ) -> Result<u32, WorkerLaunchError> {
         let PipelineWorkerLog {
             path: worker_log,
             reader: worker_log_reader,
@@ -213,18 +257,14 @@ impl PipelineWorkerSupervisor {
         if self.host.worker_bound() {
             command.env("ORBIT_WORKER_CONTEXT_REQUIRED", "1");
         }
-        let mut child = command
+        let child = command
             .spawn()
             .map_err(|error| OrbitError::Execution(format!("spawn pipeline worker: {error}")))?;
         let child_pid = child.id();
         if let Err(error) = self.host.register_worker_process(child_pid) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
+            return Err(stop_unobserved_worker(child, error));
         }
-        sender.send(child).map_err(|error| {
-            OrbitError::Execution(format!("hand pipeline worker to startup observer: {error}"))
-        })?;
+        handoff_worker(sender, child)?;
         Ok(child_pid)
     }
 

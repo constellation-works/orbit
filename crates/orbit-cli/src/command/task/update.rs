@@ -2,6 +2,7 @@ use clap::{ArgAction, Args};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
+use serde_json::{Map, Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -9,6 +10,8 @@ use super::output::task_to_json_for_runtime;
 
 #[derive(Args)]
 pub struct TaskUpdateArgs {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     /// Task ID
     pub id: String,
     /// New title
@@ -73,7 +76,9 @@ pub struct TaskUpdateArgs {
     /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]
     pub context_files: Vec<String>,
-    /// Accept context selectors whose target does not exist yet (for work that creates the file)
+    /// Accept context selectors whose target does not exist yet (for work that creates the file).
+    /// Each missing selector is recorded as durable creation intent; dropping a selector from the
+    /// list revokes it, and re-sending a recorded one needs no flag.
     #[arg(long)]
     pub allow_missing_context: bool,
     /// Task artifact write in `path=content` form. Repeat for multiple artifacts.
@@ -100,9 +105,13 @@ pub struct TaskUpdateArgs {
     /// change is recorded in task history as `forced`.
     #[arg(long, requires = "status")]
     pub force: bool,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
+    /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
+    #[arg(
+        long = "allow-drop-system-tags",
+        alias = "allow-drop-system-tag",
+        alias = "allow-dropping-system-tags"
+    )]
+    pub allow_drop_system_tags: bool,
 }
 
 /// Every field-mutation argument on this command. `--approve` performs a
@@ -111,7 +120,7 @@ pub struct TaskUpdateArgs {
 /// same invocation, and `--status` would be a direct contradiction of the
 /// transition being requested. Rejecting the combination in the parser keeps
 /// approval one write with one history entry.
-const APPROVE_CONFLICTS: [&str; 21] = [
+const APPROVE_CONFLICTS: [&str; 22] = [
     "force",
     "title",
     "description",
@@ -133,11 +142,13 @@ const APPROVE_CONFLICTS: [&str; 21] = [
     "context_files",
     "artifacts",
     "discard_candidate",
+    "allow_drop_system_tags",
 ];
 
 impl Execute for TaskUpdateArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let TaskUpdateArgs {
+            routing: _,
             id,
             title,
             description,
@@ -165,7 +176,7 @@ impl Execute for TaskUpdateArgs {
             note,
             force,
             discard_candidate,
-            json: _,
+            allow_drop_system_tags,
         } = self;
 
         if approve {
@@ -225,9 +236,15 @@ impl Execute for TaskUpdateArgs {
         let tags = (!tags.is_empty()).then_some(tags);
         let upsert_artifacts = parse_artifact_args(&artifacts)?;
         let context_files = parse_replacement_list(context_files);
-        if !allow_missing_context && let Some(candidates) = context_files.as_deref() {
-            runtime.ensure_context_selectors_exist(candidates)?;
-        }
+        let context_creation = match context_files.as_deref() {
+            Some(candidates) if allow_missing_context => {
+                runtime.authorize_missing_context(candidates)?
+            }
+            Some(candidates) => {
+                runtime.ensure_context_selectors_exist_for_update(&id, candidates)?
+            }
+            None => Default::default(),
+        };
         let changes_nothing = title.is_none()
             && description.is_none()
             && acceptance_criteria.is_none()
@@ -280,8 +297,10 @@ impl Execute for TaskUpdateArgs {
             crew,
             orchestrator,
             context_files,
+            context_creation,
             upsert_artifacts,
             discard_candidate,
+            allow_drop_system_tags,
             ..Default::default()
         };
         let task = if force {
@@ -295,6 +314,98 @@ impl Execute for TaskUpdateArgs {
             format!("Updated task '{}'", task.id),
         )
         .into())
+    }
+}
+
+impl TaskUpdateArgs {
+    /// The `orbit.task.update` input for a write delivered to the host that
+    /// holds the task [ORB-14449].
+    ///
+    /// Flags with no tool field are refused rather than dropped: `--force` is
+    /// a human override on that host, and `--approve`, `--artifact` and
+    /// `--discard-candidate` are not tool writes.
+    pub(crate) fn remote_tool_input(&self, host_ssh: &str) -> Result<Value, OrbitError> {
+        let unsupported = [
+            ("--force", self.force),
+            ("--approve", self.approve),
+            ("--artifact", !self.artifacts.is_empty()),
+            ("--discard-candidate", self.discard_candidate),
+        ]
+        .into_iter()
+        .filter_map(|(flag, set)| set.then_some(flag))
+        .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "{} cannot be routed to the host that holds task {}; run it there: `ssh {host_ssh} \
+                 orbit task update {} …`",
+                unsupported.join(", "),
+                self.id,
+                self.id
+            )));
+        }
+        let mut input = Map::new();
+        input.insert("id".into(), json!(self.id));
+        let strings = [
+            ("title", &self.title),
+            ("description", &self.description),
+            ("plan", &self.plan),
+            ("execution_summary", &self.execution_summary),
+            ("comment", &self.comment),
+            ("planned_by", &self.planned_by),
+            ("implemented_by", &self.implemented_by),
+            ("pr_status", &self.pr_status),
+            ("job_run_id", &self.job_run_id),
+            ("crew", &self.crew),
+            ("orchestrator", &self.orchestrator),
+        ];
+        for (key, value) in strings {
+            if let Some(value) = value {
+                input.insert(key.into(), json!(value));
+            }
+        }
+        if !self.acceptance_criteria.is_empty() {
+            input.insert(
+                "acceptance_criteria".into(),
+                json!(self.acceptance_criteria),
+            );
+        }
+        if let Some(dependencies) = parse_replacement_list(self.dependencies.clone()) {
+            input.insert("dependencies".into(), json!(dependencies));
+        }
+        if !self.tags.is_empty() {
+            input.insert("tags".into(), json!(self.tags));
+        }
+        if let Some(context) = parse_replacement_list(self.context_files.clone()) {
+            input.insert("context_files".into(), json!(context));
+        }
+        if self.allow_missing_context {
+            input.insert("allow_missing_context".into(), json!(true));
+        }
+        if self.allow_drop_system_tags {
+            input.insert("allow_drop_system_tags".into(), json!(true));
+        }
+        if let Some(status) = self.status {
+            input.insert("status".into(), json!(TaskStatus::from(status).to_string()));
+        }
+        if let Some(task_type) = self.task_type {
+            input.insert("type".into(), json!(task_type.to_string()));
+        }
+        if let Some(priority) = self.priority {
+            input.insert("priority".into(), json!(priority.to_string()));
+        }
+        if let Some(complexity) = self.complexity {
+            input.insert("complexity".into(), json!(complexity.to_string()));
+        }
+        if input.len() == 1 {
+            return Err(OrbitError::InvalidInput(
+                "nothing to update: pass at least one field flag, e.g. `--status` or `--title` (see `orbit task update --help`)"
+                    .to_string(),
+            ));
+        }
+        if let (_, Some(model)) = super::mutation_identity(self.model.clone()) {
+            input.insert("model".into(), json!(model));
+        }
+        Ok(Value::Object(input))
     }
 }
 

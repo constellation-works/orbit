@@ -8,6 +8,10 @@ use std::os::unix::net::UnixListener;
 /// Write a plugin outside the workspace checkout — installs are global, and a
 /// source inside the repository is refused on purpose.
 fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
+    write_plugin_with_scope(home, namespace, "workspace")
+}
+
+fn write_plugin_with_scope(home: &Path, namespace: &str, scope: &str) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
@@ -25,7 +29,7 @@ fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Roundtrip fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: echo\n      description: Echo the request envelope back.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          subject: {{ type: string, description: What to echo. }}\n"
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Roundtrip fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: echo\n      description: Echo the request envelope back.\n      execution_kind: read_only\n      mcp_scope: {scope}\n      input_schema:\n        type: object\n        properties:\n          subject: {{ type: string, description: What to echo. }}\n"
         ),
     )
     .expect("write plugin manifest");
@@ -83,9 +87,21 @@ fn bind_socket_in(dir: &Path, name: &str) -> UnixListener {
 
 #[cfg(unix)]
 #[test]
-fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
+fn brokered_plugin_calls_audit_only_caller_owned_failures() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "brokered_plugin_calls_audit_only_caller_owned_failures",
+    ) {
+        return;
+    }
+    for scope in ["workspace", "global"] {
+        check_brokered_plugin_audit(scope);
+    }
+}
+
+#[cfg(unix)]
+fn check_brokered_plugin_audit(scope: &str) {
     let workspace = McpWorkspace::init();
-    let source = write_plugin(&workspace.home, "brokerfixture");
+    let source = write_plugin_with_scope(&workspace.home, "brokerfixture", scope);
     std::fs::write(
         source.join("bin/backend.sh"),
         "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"ok\":true,\"output\":{\"value\":7}}'\n",
@@ -171,9 +187,16 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
             "detail":{"at":"posts[0]"}
         })
     );
+    assert_eq!(
+        audit_count_for_tool(&workspace, "brokerfixture.echo"),
+        audit_before,
+        "{scope}: successful calls and broker-dispatched failures add no caller row"
+    );
     let busy = client.call_tool_err("brokerfixture_echo", json!({}));
     assert_eq!(busy["code"], "plugin_broker_busy");
     assert_eq!(busy["retryable"], true);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 1);
+
     let cli_failed = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args([
             "tool",
@@ -192,6 +215,7 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     let cli_failed_error: Value =
         serde_json::from_slice(&cli_failed.stderr).expect("CLI writes structured error to stderr");
     assert_eq!(cli_failed_error, error);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 1);
     let explicit_input = json!({"workspace": workspace.work}).to_string();
     let explicit = run_orbit_with_env(
         &workspace,
@@ -240,6 +264,7 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     let unreachable = client.call_tool_err("brokerfixture_echo", json!({}));
     assert_eq!(unreachable["code"], "plugin_broker_unavailable");
     assert_eq!(unreachable["retryable"], false);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 2);
     let cli_unreachable = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args([
             "tool",
@@ -259,6 +284,7 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
         .expect("CLI writes structured broker error to stderr");
     assert_eq!(cli_error["code"], "plugin_broker_unavailable");
     assert_eq!(cli_error["retryable"], false);
+    assert_caller_failure_rows(&workspace, "brokerfixture.echo", audit_before, 3);
     let built_in = run_orbit_with_env(
         &workspace,
         &[
@@ -273,8 +299,8 @@ fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
     let _: Value = serde_json::from_slice(&built_in.stdout).expect("built-in tool output");
     assert_eq!(
         audit_count_for_tool(&workspace, "brokerfixture.echo"),
-        audit_before,
-        "forwarded calls must leave no local audit rows"
+        audit_before + 3,
+        "{scope}: only BUSY and the two unreachable calls add caller audit rows"
     );
 }
 
@@ -292,8 +318,232 @@ fn audit_count_for_tool(workspace: &McpWorkspace, tool: &str) -> i64 {
 }
 
 #[cfg(unix)]
+fn assert_caller_failure_rows(workspace: &McpWorkspace, tool: &str, before: i64, failures: i64) {
+    assert_eq!(
+        audit_count_for_tool(workspace, tool),
+        before + failures,
+        "each caller-owned failure must add exactly one durable row for {tool}"
+    );
+    let db = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open audit db");
+    let recorded: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE tool_name = ?1
+             AND status = 'failure' AND exit_code = 1 AND brokered IS NULL
+             AND error_message IS NOT NULL",
+            [tool],
+            |row| row.get(0),
+        )
+        .expect("count caller failures");
+    assert_eq!(
+        recorded, failures,
+        "{tool}: failures retain status and cause"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_global_plugin_tool_refusals_are_audited() {
+    if !orbit_exec::macos_sandbox_test_guard("managed_global_plugin_tool_refusals_are_audited") {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let source = write_plugin_with_scope(&workspace.home, "policyglobal", "global");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("plugin source"),
+            "--enable",
+        ],
+    );
+
+    // A non-managed MCP session ignores the server's stray activity envelope.
+    let mut interactive = workspace.serve_with_args_and_env(
+        &[],
+        &[
+            ("ORBIT_TASK_ACTOR_KIND", "agent"),
+            ("ORBIT_ACTIVITY_TOOLS", "orbit.task.show"),
+        ],
+    );
+    let output = interactive.call_tool_ok("policyglobal_echo", json!({}));
+    assert_eq!(output["plugin"], "policyglobal");
+    drop(interactive);
+
+    let base_env = [
+        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+        ("ORBIT_RUN_ID", "jrun-global-plugin-policy-test"),
+        ("ORBIT_TASK_ACTOR_KIND", "agent"),
+    ];
+    let mut env = base_env.to_vec();
+    env.push(("ORBIT_ACTIVITY_TOOLS", "policyglobal.echo"));
+    let mut allowed = workspace.serve_with_args_and_env(&[], &env);
+    let output = allowed.call_tool_ok("policyglobal_echo", json!({}));
+    assert_eq!(output["plugin"], "policyglobal");
+    drop(allowed);
+
+    let before = audit_count_for_tool(&workspace, "policyglobal.echo");
+    for (index, policy_env) in [
+        vec![("ORBIT_ACTIVITY_TOOLS", "orbit.task.show")],
+        vec![
+            ("ORBIT_ACTIVITY_TOOL_POLICY", "deny"),
+            ("ORBIT_ACTIVITY_TOOLS_DENY", "policyglobal.*"),
+            ("ORBIT_ACTIVITY_NAME", "plugin-policy-probe"),
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut env = base_env.to_vec();
+        env.extend(policy_env);
+        let mut client = workspace.serve_with_args_and_env(&[], &env);
+        let refused = client.call_tool_err("policyglobal_echo", json!({}));
+        assert_eq!(refused["code"], "policy_denied", "{refused}");
+        let reason = refused["message"].as_str().expect("policy refusal reason");
+        assert!(reason.contains("policyglobal.echo"), "{refused}");
+        assert_eq!(
+            audit_count_for_tool(&workspace, "policyglobal.echo"),
+            before + index as i64 + 1,
+            "each policy refusal must add exactly one durable row"
+        );
+        let db = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("audit db");
+        let audit: (String, i64, String, String, String) = db
+            .query_row(
+                "SELECT status, exit_code, subcommand, error_message, plugin_name FROM audit_events
+                 WHERE tool_name = ?1 ORDER BY id DESC LIMIT 1",
+                ["policyglobal.echo"],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("read the policy refusal audit row");
+        assert_eq!(audit.0, "denied");
+        assert_eq!(audit.1, 1);
+        assert_eq!(audit.2, "run-mcp");
+        assert!(
+            reason.ends_with(&audit.3),
+            "the audited cause must match the refusal: {audit:?}"
+        );
+        assert_eq!(audit.4, "policyglobal");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unreachable_host_read_is_audited_once_by_cli() {
+    let workspace = McpWorkspace::init();
+    // The audit schema is opened lazily. Exercise an audited built-in before
+    // reading the baseline, without running a host-credentialed command.
+    run_orbit(
+        &workspace,
+        &[
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            "{\"query\":\"audit\"}",
+        ],
+    );
+    let tool = "github.auth.status";
+    let before = audit_count_for_tool(&workspace, tool);
+    let socket = "absent-broker.sock";
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["tool", "run", tool, "--input", "{}", "--format", "json"])
+        .env("ORBIT_PLUGIN_BROKER", socket)
+        .output()
+        .expect("CLI host read against unreachable broker");
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stderr).expect("structured CLI error");
+    assert_eq!(error["code"], "plugin_broker_unavailable");
+    assert_caller_failure_rows(&workspace, tool, before, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
+    for scope in ["workspace", "global"] {
+        let workspace = McpWorkspace::init();
+        let source = write_plugin_with_scope(&workspace.home, "unbrokered", scope);
+        run_orbit(
+            &workspace,
+            &[
+                "plugin",
+                "add",
+                source.to_str().expect("source"),
+                "--enable",
+            ],
+        );
+        // Initialize the lazy audit schema and take the count before the MCP
+        // request that exercises the missing-broker refusal.
+        run_orbit(
+            &workspace,
+            &[
+                "tool",
+                "run",
+                "orbit.search",
+                "--input",
+                "{\"query\":\"unbrokered\"}",
+            ],
+        );
+        let tool = "unbrokered.echo";
+        let before = audit_count_for_tool(&workspace, tool);
+
+        // Match the signal supplied by the agent sandbox while leaving the
+        // fixture's installed plugin metadata available to the MCP server.
+        let plugins = workspace.home.join(".orbit/state/plugins");
+        std::fs::create_dir_all(&plugins).expect("plugin state tree");
+        std::fs::write(plugins.join(".orbit-brokered"), "masked")
+            .expect("lay the plugin state mask");
+
+        let mut client = workspace.serve();
+        let error = client.call_tool_err("unbrokered_echo", json!({}));
+        assert_eq!(
+            error["code"], "plugin_broker_unavailable",
+            "{scope}: {error}"
+        );
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("ORBIT_PLUGIN_BROKER is not set")),
+            "{scope}: refusal names the unavailable broker: {error}"
+        );
+        assert_caller_failure_rows(&workspace, tool, before, 1);
+        drop(client);
+
+        let cli = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["tool", "run", tool, "--input", "{}", "--format", "json"])
+            .env_remove("ORBIT_PLUGIN_BROKER")
+            .output()
+            .expect("run unbrokered CLI call");
+        assert!(!cli.status.success(), "{scope}: CLI must refuse the call");
+        assert!(
+            cli.stdout.is_empty(),
+            "{scope}: no plugin output on refusal"
+        );
+        let cli_error: Value =
+            serde_json::from_slice(&cli.stderr).expect("structured CLI broker refusal");
+        assert_eq!(
+            cli_error, error,
+            "{scope}: CLI and MCP return the same refusal"
+        );
+        assert_caller_failure_rows(&workspace, tool, before, 2);
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "exec_plugin_error_reaches_mcp_caller_as_structured_content",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "pluginerror");
     std::fs::write(
@@ -321,6 +571,11 @@ fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
 #[cfg(unix)]
 #[test]
 fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "roundtrip");
     let source = source.to_str().expect("utf8 plugin source");
@@ -432,6 +687,11 @@ fn add_global_tool(source: &Path) {
 #[cfg(unix)]
 #[test]
 fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "toggled");
     add_global_tool(&source);
@@ -523,6 +783,15 @@ fn plugin_add_refuses_a_source_inside_the_repository() {
 /// `ORBIT_ALLOWED_TOOLS` its plugin was granted. The plugin's tool reports
 /// the callback's exit status and stderr, so a refusal is observable.
 fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
+    write_callback_plugin_with_scope(home, namespace, requested, "workspace")
+}
+
+fn write_callback_plugin_with_scope(
+    home: &Path,
+    namespace: &str,
+    requested: &str,
+    scope: &str,
+) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
@@ -548,7 +817,7 @@ fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathB
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: {scope}\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
         ),
     )
     .expect("write plugin manifest");
@@ -563,6 +832,11 @@ fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathB
 #[cfg(unix)]
 #[test]
 fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_callback_reaches_only_its_granted_orbit_tools",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_callback_plugin(&workspace.home, "callback", "orbit.task.list");
     let source = source.to_str().expect("utf8 plugin source");
@@ -726,6 +1000,11 @@ fn callback_probe_input(tool: &str, forge: Option<&str>) -> String {
 #[cfg(unix)]
 #[test]
 fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_child_cannot_forge_its_orbit_tools_allowlist",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(&workspace.home, "forgecb", "orbit.task.list");
     let source = source.to_str().expect("utf8 plugin source");
@@ -795,6 +1074,11 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
 #[cfg(unix)]
 #[test]
 fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(
         &workspace.home,
@@ -862,6 +1146,117 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
     }
 }
 
+/// The global MCP path must mint the same immutable activity ceiling as the
+/// workspace path, including deny mode. Read the actual credential the host
+/// gives the sandboxed backend, rather than its informational environment.
+#[cfg(unix)]
+#[test]
+fn a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let source = write_callback_plugin_with_scope(
+        &workspace.home,
+        "globalceiling",
+        "orbit.task.list, orbit.search",
+        "global",
+    );
+    std::fs::write(
+        source.join("bin/backend.sh"),
+        "#!/bin/sh\n\
+         cat >/dev/null\n\
+         ceiling=$(sed -n 's/.*\"effective_tools\":[[:space:]]*\\(\\[[^]]*\\]\\).*/\\1/p' <&3)\n\
+         printf '{\"ok\":true,\"output\":{\"effective_tools\":%s}}\\n' \"$ceiling\"\n",
+    )
+    .expect("write callback credential probe");
+    run_orbit(
+        &workspace,
+        &["plugin", "add", source.to_str().expect("plugin source")],
+    );
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "enable",
+            "globalceiling",
+            "--grant",
+            "orbit_tools",
+        ],
+    );
+
+    for (policy_env, expected) in [
+        (vec![], vec!["orbit.search", "orbit.task.list"]),
+        (
+            vec![("ORBIT_ACTIVITY_TOOLS", "globalceiling.callback")],
+            vec![],
+        ),
+        (
+            vec![(
+                "ORBIT_ACTIVITY_TOOLS",
+                "globalceiling.callback,orbit.task.list",
+            )],
+            vec!["orbit.task.list"],
+        ),
+        (
+            vec![(
+                "ORBIT_ACTIVITY_TOOLS",
+                "globalceiling.callback,orbit.search",
+            )],
+            vec!["orbit.search"],
+        ),
+        (
+            vec![
+                ("ORBIT_ACTIVITY_TOOL_POLICY", "deny"),
+                ("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.search"),
+            ],
+            vec!["orbit.task.list"],
+        ),
+        (
+            vec![
+                ("ORBIT_ACTIVITY_TOOL_POLICY", "deny"),
+                ("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.task.*"),
+            ],
+            vec!["orbit.search"],
+        ),
+    ] {
+        let mut env = vec![
+            ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+            ("ORBIT_RUN_ID", "jrun-global-plugin-ceiling-test"),
+            ("ORBIT_TASK_ACTOR_KIND", "agent"),
+        ];
+        env.extend(policy_env);
+        // A global plugin has no workspace filesystem grant. Start an
+        // unbound server outside the checkout to exercise its credential
+        // without a workspace binding or runtime.
+        let mut command = McpWorkspace::orbit_command(&workspace.home, &workspace.home);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let child = command
+            .args(["mcp", "serve"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map(ChildGuard::new)
+            .expect("spawn unbound global plugin server");
+        let (mut client, initialized) = McpClient::initialized(
+            child,
+            McpClient::initialize_params("global-plugin-ceiling", None),
+        );
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "orbit-mcp");
+        let output = client.call_tool_ok("globalceiling_callback", json!({}));
+        assert_eq!(
+            output["effective_tools"],
+            json!(expected),
+            "the host-issued callback credential must carry exactly the activity ceiling: {output}"
+        );
+    }
+}
+
 /// Clearing `ORBIT_PLUGIN` in the plugin child cannot admit a tool outside
 /// the recorded allowlist: identity is the host-issued session, not the
 /// namespace variable. Clearing the *session* does not admit anything either
@@ -869,6 +1264,11 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
 #[cfg(unix)]
 #[test]
 fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist",
+    ) {
+        return;
+    }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(&workspace.home, "clearplug", "orbit.task.list");
     let source = source.to_str().expect("utf8 plugin source");
@@ -1126,6 +1526,9 @@ fn setsid_available() -> bool {
 #[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_plugin_is_advertised_and_proxied() {
+    if !orbit_exec::macos_sandbox_test_guard("an_mcp_backend_plugin_is_advertised_and_proxied") {
+        return;
+    }
     if !python3_available() {
         eprintln!("skipping: python3 is not available");
         return;
@@ -1176,6 +1579,11 @@ const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31c
 #[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it",
+    ) {
+        return;
+    }
     if !python3_available() {
         eprintln!("skipping: python3 is not available");
         return;
@@ -1292,6 +1700,11 @@ const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
 #[test]
 #[allow(clippy::print_stderr)]
 fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value",
+    ) {
+        return;
+    }
     if !python3_available() {
         eprintln!("skipping: python3 is not available");
         return;

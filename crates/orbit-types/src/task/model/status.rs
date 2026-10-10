@@ -5,9 +5,20 @@ use super::*;
 /// QA validation tasks file follow-up Orbit tasks).
 pub const NO_DIFF_EXPECTED_TAG: &str = "no-diff-expected";
 
+/// Tasks carrying this tag are never approved from `proposed` into `backlog`
+/// by an automatic promotion authority (an `--approve-proposed` drain or the
+/// CI sweep); they stay `proposed`, held with this tag as the reason, until a
+/// human approves them.
+pub const NO_AUTO_APPROVE_TAG: &str = "no-auto-approve";
+
 /// Task history event an operator records to discard the candidate the task's
 /// last failed run preserved; the next run implements fresh [ORB-13985].
 pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
+
+/// Task history event recording what a run, or a claim's admission, did with
+/// the candidate an earlier run or claim of the task preserved [ORB-13985]
+/// [ORB-14338].
+pub const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
 
 /// Operator-facing projection for a valid task reference whose prefix is not
 /// represented in this machine's coordination registry.
@@ -323,15 +334,11 @@ impl TaskComplexity {
 
     /// Reject [`TaskComplexity::Unassessed`] on human/agent create and update
     /// surfaces.
-    pub fn require_assessed(self) -> Result<Self, String> {
+    pub fn require_assessed(self) -> Result<Self, TaskError> {
         if self.is_assessed() {
             Ok(self)
         } else {
-            Err(
-                "complexity must be an assessed value (low, medium, hard, or xhard); \
-                 unassessed is reserved for automated creation"
-                    .to_string(),
-            )
+            Err(TaskError::UnassessedComplexity)
         }
     }
 }

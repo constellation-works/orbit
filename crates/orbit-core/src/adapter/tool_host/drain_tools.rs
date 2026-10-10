@@ -15,6 +15,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::application::distributed::DeclaredCallerContract;
 
+/// The review-policy label distributed-drain revisions before 5 declared.
+const LEGACY_CALLER_REVIEW_POLICY: &str = "caller_review_policy";
+
 pub(super) fn probe(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
@@ -25,7 +28,12 @@ pub(super) fn probe(
         &[
             "caller_version",
             "caller_schema",
-            "caller_review_policy",
+            "caller_fingerprint",
+            "caller_before_pr",
+            // A revision-4 follower still declares its review-policy label.
+            // Accepted and ignored so its probe answers `protocol_mismatch`
+            // instead of an unknown-field error [ORB-13992].
+            LEGACY_CALLER_REVIEW_POLICY,
             "workspace",
             "agent",
             "model",
@@ -34,7 +42,16 @@ pub(super) fn probe(
     let declared = DeclaredCallerContract {
         caller_version: optional_string(&input, "caller_version"),
         caller_schema: optional_u32(&input, "caller_schema")?,
-        caller_review_policy: optional_string(&input, "caller_review_policy"),
+        caller_fingerprint: match input.get("caller_fingerprint") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(fingerprint)) => Some(fingerprint.clone()),
+            Some(_) => {
+                return Err(OrbitError::InvalidInput(
+                    "caller_fingerprint must be a string".into(),
+                ));
+            }
+        },
+        caller_before_pr: optional_bool(&input, "caller_before_pr")?,
     };
     let report = runtime.drain_probe(session, &declared)?;
     serde_json::to_value(report).map_err(|error| OrbitError::Store(error.to_string()))
@@ -76,34 +93,28 @@ pub(super) fn pull(
     session: &ToolSessionContext,
     input: Value,
 ) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(
-        &input,
-        &[
-            "request_id",
-            "caller_version",
-            "caller_schema",
-            "caller_review_policy",
-            "run_context",
-            "ship",
-            "crews",
-            "os",
-            "workspace",
-            "agent",
-            "model",
-        ],
-    )?;
+    // Check the fingerprint before rejecting or deserializing new fields:
+    // the owner may have changed builds after the follower's last probe.
+    if let Some(caller) = input.get("caller_fingerprint").and_then(Value::as_str)
+        && caller != orbit_store::contracts::distributed_drain_protocol_fingerprint()
+    {
+        return Err(OrbitError::ProtocolSkew(format!(
+            "caller fingerprint {caller}; owner fingerprint {}",
+            orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+        )));
+    }
+    // The allowed keys come from the actual request type, so a new field
+    // cannot be fingerprinted but silently dropped by a parallel field list.
+    let schema = orbit_store::contracts::admission_request_schema();
+    let properties = schema["properties"]
+        .as_object()
+        .ok_or_else(|| OrbitError::Store("pull request schema has no properties".into()))?;
+    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+    keys.extend([LEGACY_CALLER_REVIEW_POLICY, "workspace", "agent", "model"]);
+    reject_unknown_tool_fields(&input, &keys)?;
     let request: AdmissionRequest = parse_fields(
         &input,
-        &[
-            "request_id",
-            "caller_version",
-            "caller_schema",
-            "caller_review_policy",
-            "run_context",
-            "ship",
-            "crews",
-            "os",
-        ],
+        &properties.keys().map(String::as_str).collect::<Vec<_>>(),
     )?;
     let response = runtime.serve_task_pull(session, &request)?;
     serde_json::to_value(response).map_err(|error| OrbitError::Store(error.to_string()))
@@ -189,6 +200,15 @@ fn optional_string(input: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// A declared switch must be a boolean; a malformed one is invalid input.
+fn optional_bool(input: &Value, key: &str) -> Result<Option<bool>, OrbitError> {
+    match input.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(OrbitError::InvalidInput(format!("{key} must be a boolean"))),
+    }
 }
 
 /// A malformed version field is invalid input, not a compatibility comparison.

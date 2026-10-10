@@ -1,16 +1,19 @@
 //! Locked JSONL persistence for [`super::SessionLogStore`].
 //!
 //! Every read and mutation holds `.session-log.jsonl.lock`. While that lock is
-//! held, a malformed unterminated final row is truncated so a torn append cannot
-//! wedge later list/resolve/append. Newline-terminated corrupt rows still fail.
+//! held, reads ignore malformed unterminated final rows without changing the
+//! log. Append repairs torn tails before writing; resolution replaces the
+//! recovered records. Newline-terminated corrupt rows still fail. The log must
+//! be a regular file, and opening it never follows a final-component symlink.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, sync_parent_dir};
+use orbit_common::fs::open_read_only_no_follow;
 
 use super::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter, SessionLogKind};
 use crate::fs::lock::acquire_exclusive;
@@ -31,7 +34,7 @@ pub(super) fn append(
 
     let _guard = acquire_exclusive(&lock_path(orbit_dir), "session-log append")?;
     let path = log_path(orbit_dir);
-    let entries = read_entries(&path)?;
+    let entries = read_entries_for_append(&path)?;
     let entry = SessionLogEntry {
         id: next_id(&entries)?,
         at: Utc::now(),
@@ -127,11 +130,7 @@ fn append_entry(path: &Path, entry: &SessionLogEntry) -> Result<(), OrbitError> 
     encoded.push(b'\n');
 
     let existed = path.exists();
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|error| OrbitError::Io(format!("open {}: {error}", path.display())))?;
+    let mut file = open_log_for_write(path, OpenOptions::new().create(true).append(true))?;
     file.write_all(&encoded)
         .map_err(|error| OrbitError::Io(format!("append {}: {error}", path.display())))?;
     file.sync_data()
@@ -154,14 +153,81 @@ fn append_entry(path: &Path, entry: &SessionLogEntry) -> Result<(), OrbitError> 
 }
 
 fn read_entries(path: &Path) -> Result<Vec<SessionLogEntry>, OrbitError> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = fs::read(path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    let raw = read_log(path)?;
+    Ok(scan_entries(path, &raw)?.entries)
+}
+
+// Only append needs an in-place repair: resolve writes a complete replacement.
+// Both callers hold the session-log lock throughout scanning and mutation.
+fn read_entries_for_append(path: &Path) -> Result<Vec<SessionLogEntry>, OrbitError> {
+    let raw = read_log(path)?;
     let scan = scan_entries(path, &raw)?;
     persist_scan_repair(path, raw.len(), &scan)?;
     Ok(scan.entries)
+}
+
+fn read_log(path: &Path) -> Result<Vec<u8>, OrbitError> {
+    let mut file = match open_read_only_no_follow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(OrbitError::Io(format!("open {}: {error}", path.display())));
+        }
+    };
+    check_log_file(
+        path,
+        &file
+            .metadata()
+            .map_err(|error| OrbitError::Io(format!("inspect {}: {error}", path.display())))?,
+    )?;
+    let mut raw = Vec::new();
+    file.read_to_end(&mut raw)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    Ok(raw)
+}
+
+fn check_log_file(path: &Path, metadata: &fs::Metadata) -> Result<(), OrbitError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(OrbitError::Io(format!(
+            "session-log path must be a regular file, not a symlink: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn open_log_for_write(path: &Path, options: &mut OpenOptions) -> Result<File, OrbitError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => check_log_file(path, &metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "inspect {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| OrbitError::Io(format!("open {}: {error}", path.display())))?;
+    check_log_file(
+        path,
+        &file
+            .metadata()
+            .map_err(|error| OrbitError::Io(format!("inspect {}: {error}", path.display())))?,
+    )?;
+    Ok(file)
 }
 
 struct SessionLogScan {
@@ -247,10 +313,7 @@ fn persist_scan_repair(
 }
 
 fn truncate_log(path: &Path, truncate_at: usize) -> Result<(), OrbitError> {
-    let file = OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|error| OrbitError::Io(format!("open {}: {error}", path.display())))?;
+    let file = open_log_for_write(path, OpenOptions::new().write(true))?;
     file.set_len(truncate_at as u64)
         .map_err(|error| OrbitError::Io(format!("truncate {}: {error}", path.display())))?;
     file.sync_all()
@@ -258,10 +321,7 @@ fn truncate_log(path: &Path, truncate_at: usize) -> Result<(), OrbitError> {
 }
 
 fn append_trailing_newline(path: &Path) -> Result<(), OrbitError> {
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|error| OrbitError::Io(format!("open {}: {error}", path.display())))?;
+    let mut file = open_log_for_write(path, OpenOptions::new().append(true))?;
     file.write_all(b"\n")
         .map_err(|error| OrbitError::Io(format!("append {}: {error}", path.display())))?;
     file.sync_data()

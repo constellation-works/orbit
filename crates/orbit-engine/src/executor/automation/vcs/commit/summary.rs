@@ -13,12 +13,18 @@
 //! --stat` after it. It also never overwrites a summary the agent did persist:
 //! an agent-authored account of the work is the better artifact and wins.
 //!
+//! ORB-14837: a delivery automation review leaves no change; its deliverable
+//! is the coverage evidence its settlement accepts. With a clean worktree the
+//! summary restates that evidence, which the host validates against the
+//! frozen batch. Incomplete or mismatched evidence derives nothing.
+//!
 //! ADR-0326 records the decision and the alternatives it rejected.
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
+use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, CoverageEvidence};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
@@ -34,9 +40,9 @@ const MAX_LISTED_FILES: usize = 25;
 /// Give the task a durable execution summary when nothing else did.
 ///
 /// Returns the task the caller must use from here on: unchanged when a
-/// meaningful summary is already persisted or when the worktree carries no
-/// change to describe, otherwise carrying the derived summary that was just
-/// written to the task record.
+/// meaningful summary is already persisted or when neither a worktree change
+/// nor accepted coverage evidence describes the work, otherwise carrying the
+/// derived summary that was just written to the task record.
 pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
     host: &H,
     task: Task,
@@ -48,23 +54,36 @@ pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
     }
 
     let changes = worktree_changes(workspace_path)?;
-    if changes.is_empty() {
+    let (summary, note) = if !changes.is_empty() {
+        (
+            render_derived_summary(&task.id, run_id, &changes),
+            format!(
+                "automation: derived execution_summary from {} changed file(s) in the delivery \
+                 worktree",
+                changes.len()
+            ),
+        )
+    } else if let Some(evidence) = host.accepted_automation_coverage(&task.id)? {
+        (
+            render_coverage_summary(&task.id, run_id, &evidence),
+            format!(
+                "automation: derived execution_summary from accepted {COVERAGE_ARTIFACT} for \
+                 batch {}",
+                evidence.batch_id
+            ),
+        )
+    } else {
         // Nothing deterministic to say. The delivery gate still refuses the
         // empty summary, and the commit step still reports the empty stage.
         return Ok(task);
-    }
+    };
 
-    let summary = render_derived_summary(&task.id, run_id, &changes);
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
             execution_summary: Some(summary.clone()),
             status_event: Some(DERIVED_SUMMARY_EVENT.to_string()),
-            status_note: Some(format!(
-                "automation: derived execution_summary from {} changed file(s) in the delivery \
-                 worktree",
-                changes.len()
-            )),
+            status_note: Some(note),
             ..TaskAutomationUpdate::default()
         },
     )?;
@@ -176,5 +195,37 @@ fn render_derived_summary(task_id: &str, run_id: &str, changes: &[WorktreeChange
          beyond it. Re-check it with `git show --stat` on the delivery commit."
             .to_string(),
     );
+    lines.join("\n")
+}
+
+fn render_coverage_summary(task_id: &str, run_id: &str, evidence: &CoverageEvidence) -> String {
+    let mut lines = vec![
+        format!(
+            "Execution summary derived by Orbit for {task_id} from the accepted coverage evidence \
+             of run {run_id}; no execution summary was persisted by the implementing agent and \
+             the worktree holds no change."
+        ),
+        String::new(),
+        format!(
+            "Reviewed range: {}..{} (batch {}).",
+            evidence.from_exclusive.commit, evidence.through_inclusive.commit, evidence.batch_id
+        ),
+        format!(
+            "Examined {} commit(s) and {} delivery(ies); examination complete.",
+            evidence.examined_commits.len(),
+            evidence.examined_deliveries.len()
+        ),
+        format!("Findings ({}):", evidence.findings.len()),
+    ];
+    if evidence.findings.is_empty() {
+        lines.push("- none".to_string());
+    }
+    for finding in &evidence.findings {
+        lines.push(format!("- {}", finding.trim()));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "This restates {COVERAGE_ARTIFACT} and asserts nothing beyond it."
+    ));
     lines.join("\n")
 }

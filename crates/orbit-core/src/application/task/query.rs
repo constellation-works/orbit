@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
@@ -7,7 +7,7 @@ use orbit_types::task::{
 
 use orbit_store::RegisteredTaskResolution;
 
-use super::listing::list_task_metadata_in;
+use super::listing::{list_task_metadata_in, metadata_task};
 
 use crate::OrbitRuntime;
 
@@ -147,6 +147,33 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         list_task_metadata_in(self.stores().tasks())
+    }
+
+    /// [`Self::list_task_metadata`] for the listed `ids` only: one keyed read
+    /// per id, so the cost follows the ids asked for, not the workspace. A
+    /// worker invocation falls back to the full listing, as it does there.
+    pub fn list_task_metadata_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(self
+                .list_tasks()?
+                .into_iter()
+                .filter(|task| ids.contains(&task.id))
+                .collect());
+        }
+
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .stores()
+            .tasks()
+            .task_envelopes_for_ids(ids)?
+            .into_iter()
+            .map(metadata_task)
+            .collect())
     }
 
     /// Each backlog task whose `os:` tags this host's OS does not satisfy,

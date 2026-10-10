@@ -9,9 +9,14 @@ const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).h
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
+const cronZoneTest = fileURLToPath(new URL('./dashboard_operations_cron_zone.mjs', import.meta.url));
+const routineTriggersTest = fileURLToPath(new URL('./dashboard_operations_routine_triggers.mjs', import.meta.url));
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' } : dashboardFile(name);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' }
+    : name === '/cron-zone.mjs' ? { data: fs.readFileSync(cronZoneTest), type: 'text/javascript' }
+    : name === '/routine-triggers.mjs' ? { data: fs.readFileSync(routineTriggersTest), type: 'text/javascript' }
+    : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
@@ -19,7 +24,7 @@ const server = http.createServer((req, res) => {
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const pageOverflow = () => document.documentElement.scrollWidth > window.innerWidth + 1;
+const pageOverflow = () => document.scrollingElement.scrollWidth > window.innerWidth;
 const assertNoOverflow = async (label) => {
   const overflow = await page.evaluate(pageOverflow);
   if (overflow) {
@@ -31,12 +36,14 @@ let browser;
 let page;
 try {
   browser = await chromium.launch({headless:true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined});
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // A fixed zone away from UTC, so local times cannot pass as UTC.
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
   const sharedDrainDeadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
   await page.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   // Serve the actual markup/styles with only the Operations module initialized.
   // All API traffic is fixture data; no live scheduler or dashboard is contacted.
-  page.on('pageerror', error => console.error(error));
+  const pageErrors = [];
+  page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
   await page.addScriptTag({ type: 'module', url: '/test.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
@@ -44,6 +51,12 @@ try {
     const workspace = document.getElementById('rail-workspace');
     if (workspace && !document.getElementById('workspace-select')) {
       workspace.innerHTML = '<select class="workspace-select" id="workspace-select" aria-label="Workspace"><option selected>ws_orbit</option></select>';
+      const note = document.createElement('span');
+      note.id = 'workspace-scope-note';
+      note.className = 'workspace-scope-note';
+      note.textContent = 'Fleet-wide on Reliability';
+      note.hidden = true;
+      workspace.appendChild(note);
     }
     const tasks = document.getElementById('tasks-body');
     if (tasks) {
@@ -59,12 +72,17 @@ try {
     let diag = 'runs';
     let operations = 'routines';
     let knowledge = 'frictions';
+    let config = 'effective';
+    let runId = null;
+    let runSubtab = 'steps';
     initRouter({
       getTab: () => tab, setTab: (value) => { tab = value; },
       getDiagSubtab: () => diag, setDiagSubtab: (value) => { diag = value; },
       getOperationsSubtab: () => operations, setOperationsSubtab: (value) => { operations = value; },
       getKnowledgeSubtab: () => knowledge, setKnowledgeSubtab: (value) => { knowledge = value; },
-      getRunId: () => null, setRunId: () => {}, getRunSubtab: () => 'steps', setRunSubtab: () => {},
+      getConfigSubtab: () => config, setConfigSubtab: (value) => { config = value; },
+      getRunId: () => runId, setRunId: (value) => { runId = value; },
+      getRunSubtab: () => runSubtab, setRunSubtab: (value) => { runSubtab = value; },
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
@@ -81,6 +99,104 @@ try {
     { name: '390', width: 390, height: 844 },
     { name: '375x812', width: 375, height: 812 },
   ];
+
+  // ORB-14442: task dock breakpoints must not override Health's router-owned
+  // list grid. These checks exercise the shipped CSS and router at the widths
+  // where the shared tasks-layout rules used to leave an empty column.
+  const diagnosticLayout = async (subtab, width) => {
+    await page.setViewportSize({ width, height: 730 });
+    await page.click('.tab[data-tab="diagnostics"]');
+    await page.click(`#diag-subtabs .subtab[data-subtab="${subtab}"]`);
+    const layout = await page.evaluate(() => {
+      const main = document.getElementById('diagnostics-main');
+      const panel = document.getElementById('diagnostics-panel');
+      const side = document.getElementById('diagnostics-side-col');
+      const style = getComputedStyle(main);
+      const mainBox = main.getBoundingClientRect();
+      const panelBox = panel.getBoundingClientRect();
+      const paddingLeft = parseFloat(style.paddingLeft);
+      const contentWidth = mainBox.width - paddingLeft - parseFloat(style.paddingRight);
+      return {
+        tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
+        contentWidth,
+        panelWidth: panelBox.width,
+        panelLeft: panelBox.left,
+        contentLeft: mainBox.left + paddingLeft,
+        sideVisible: getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0,
+      };
+    });
+    if (layout.tracks !== 1 || Math.abs(layout.panelWidth - layout.contentWidth) > 1
+      || Math.abs(layout.panelLeft - layout.contentLeft) > 1 || layout.sideVisible) {
+      throw new Error(`Health ${subtab} should fill one column at ${width}px: ${JSON.stringify(layout)}`);
+    }
+  };
+  for (const width of [1073, 1250]) {
+    for (const subtab of ['incidents', 'errors']) await diagnosticLayout(subtab, width);
+    await page.click('#diag-subtabs .subtab[data-subtab="metrics"]');
+    const metrics = await page.evaluate(() => {
+      const main = document.getElementById('diagnostics-main');
+      const side = document.getElementById('diagnostics-side-col');
+      return {
+        tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
+        sideVisible: getComputedStyle(side).display !== 'none' && side.getBoundingClientRect().width > 0,
+      };
+    });
+    if (metrics.tracks !== 2 || !metrics.sideVisible) {
+      throw new Error(`Health Metrics summary should remain beside the list at ${width}px: ${JSON.stringify(metrics)}`);
+    }
+  }
+
+  await page.setViewportSize({ width: 1073, height: 730 });
+  await page.click('.tab[data-tab="audit"]');
+  const audit = await page.evaluate(() => {
+    const main = document.querySelector('.tab-pane[data-tab="audit"] > main');
+    const first = document.getElementById('audit-pane').getBoundingClientRect();
+    const second = document.getElementById('audit-summary-panel').getBoundingClientRect();
+    return {
+      tracks: getComputedStyle(main).gridTemplateColumns.trim().split(/\s+/).length,
+      sideBySide: first.width > 0 && second.width > 0 && first.right <= second.left,
+    };
+  });
+  if (audit.tracks !== 2 || !audit.sideBySide) throw new Error(`Audit columns should remain side by side at 1073px: ${JSON.stringify(audit)}`);
+
+  await page.click('.tab[data-tab="tasks"]');
+  for (const width of [1251, 1250, 1073, 901, 900]) {
+    await page.setViewportSize({ width, height: 730 });
+    const tasks = await page.evaluate(() => {
+      const main = document.querySelector('.tab-pane[data-tab="tasks"] > main.tasks-layout');
+      const list = document.getElementById('tasks-panel').getBoundingClientRect();
+      const dock = document.getElementById('side-dock').getBoundingClientRect();
+      const style = getComputedStyle(main);
+      const contentWidth = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const available = contentWidth - parseFloat(style.columnGap || '0');
+      const expectedDock = window.innerWidth <= 900
+        ? contentWidth
+        : window.innerWidth > 1250
+          ? Math.min(720, Math.max(336, contentWidth * 0.32))
+          : Math.max(280, available * 1.15 / 3.15);
+      return {
+        tracks: style.gridTemplateColumns.trim().split(/\s+/).length,
+        listWidth: list.width,
+        dockWidth: dock.width,
+        expectedDock,
+        mainWidth: contentWidth,
+        available,
+      };
+    });
+    const expectedTracks = width > 900 ? 2 : 1;
+    if (tasks.tracks !== expectedTracks) throw new Error(`Tasks grid has ${tasks.tracks} tracks at ${width}px, expected ${expectedTracks}: ${JSON.stringify(tasks)}`);
+    if (Math.abs(tasks.dockWidth - tasks.expectedDock) > 2) {
+      throw new Error(`Tasks dock width changed at ${width}px: ${JSON.stringify(tasks)}`);
+    }
+    if (width === 900 && Math.abs(tasks.listWidth - tasks.mainWidth) > 1) {
+      throw new Error(`Tasks layout should stack at 900px: ${JSON.stringify(tasks)}`);
+    }
+    if (width > 900 && Math.abs(tasks.listWidth + tasks.dockWidth - tasks.available) > 2) {
+      throw new Error(`Tasks list and dock should fill both columns at ${width}px: ${JSON.stringify(tasks)}`);
+    }
+  }
+  await page.click('.tab[data-tab="operations"]');
+
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.evaluate(() => {
@@ -153,7 +269,7 @@ try {
     if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
     if (result.firstPanel !== 'auto-drain-panel') throw new Error(`auto-drain card is not the first dock card at ${label}: ${result.firstPanel}`);
     if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
-    if (result.durations !== 6 || !result.text.includes('Blocked by running')) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
+    if (result.durations !== 6 || !result.text.includes('Pool: waiting on locks') || /Pool: blocked/.test(result.text)) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     return result.dockWidth;
   };
@@ -168,21 +284,63 @@ try {
       global: document.getElementById('global-drain-state').textContent,
       globalHidden: document.getElementById('global-drain-state').hidden,
       tab: document.getElementById('dock-drain-state').textContent,
+      tabLabel: document.getElementById('dock-tab-drain').getAttribute('aria-label'),
       status: document.getElementById('auto-drain-operation-feedback').textContent,
     }));
     if (rendered.card !== phase || !rendered.header.includes(label)) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
     if (phase === 'draining' && (!rendered.header.includes('left') || !rendered.header.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.header}`);
-    if (phase === 'winding_down' && !rendered.header.includes('1 workers still running')) throw new Error(`Missing wind-down count: ${rendered.header}`);
-    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tab.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (phase !== 'idle' && !rendered.header.includes('This window: 1 running of 3 admitted')) throw new Error(`Missing scoped window count: ${rendered.header}`);
+    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tabLabel.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (phase === 'draining' && rendered.tab) throw new Error(`ORB-14489: Drain tab repeats draining state: ${rendered.tab}`);
     if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
     await drainCheck(`state-${phase}`, 336);
   }
+
+  // ORB-14566: changing concurrency alters the readiness URL but must keep
+  // the panel scope stable while that refresh is pending, then restore focus.
+  await page.evaluate(() => {
+    const input = document.getElementById('auto-drain-concurrency');
+    input.focus();
+    input.value = '6';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    globalThis.focusedDrainInput = input;
+    globalThis.startPendingDrainReadinessRefresh();
+  });
+  await page.waitForFunction(() => globalThis.drainReadinessRequestPending());
+  const pendingDrainRefresh = await page.evaluate(() => {
+    const body = document.getElementById('auto-drain-body');
+    const input = globalThis.focusedDrainInput;
+    return {
+      bodyBusy: body.getAttribute('aria-busy'),
+      inputConnected: input.isConnected,
+      inputFocused: document.activeElement === input,
+      loading: [...body.querySelectorAll('[data-panel-status]')].some(note => note.textContent === 'Loading…'),
+      liveCount: document.getElementById('auto-drain-live').textContent,
+      requestedConcurrency: globalThis.drainReadinessConcurrency(),
+    };
+  });
+  if (pendingDrainRefresh.bodyBusy !== 'true' || !pendingDrainRefresh.inputConnected
+    || !pendingDrainRefresh.inputFocused || pendingDrainRefresh.loading
+    || pendingDrainRefresh.liveCount === '—' || pendingDrainRefresh.requestedConcurrency !== '6') {
+    throw new Error(`Concurrency refresh reset the Drain card or lost focus while pending: ${JSON.stringify(pendingDrainRefresh)}`);
+  }
+  await page.evaluate(() => globalThis.releasePendingDrainReadinessRefresh());
+  const completedDrainRefresh = await page.evaluate(() => ({
+    inputFocused: document.activeElement?.id === 'auto-drain-concurrency',
+    inputValue: document.getElementById('auto-drain-concurrency')?.value,
+    liveCount: document.getElementById('auto-drain-live').textContent,
+  }));
+  if (!completedDrainRefresh.inputFocused || completedDrainRefresh.inputValue !== '6'
+    || completedDrainRefresh.liveCount === '—') {
+    throw new Error(`Concurrency refresh did not restore focus and updated state: ${JSON.stringify(completedDrainRefresh)}`);
+  }
+
   const timeLeft = async target => {
     await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
     return target.locator('#auto-drain-live').textContent();
   };
   const firstBrowser = await timeLeft(page);
-  const otherPage = await browser.newPage();
+  const otherPage = await browser.newPage({ timezoneId: 'America/Los_Angeles' });
   await otherPage.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   await otherPage.goto(`http://127.0.0.1:${server.address().port}/`);
   await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
@@ -198,9 +356,66 @@ try {
   }
   await otherPage.close();
   await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
+
+  // ORB-14489: render the live throttle case with spare workspace capacity.
+  // A text check alone would pass for clipped IDs, so also measure each link
+  // against its row and inspect the clipping styles at the reported width.
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.evaluate(() => globalThis.setDrainFixtureReadiness({ capacity: {
+    active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0,
+    occupancy: { runs: [{ task_ids: ['ORB-14488'], phase: 'post_implementation' }] },
+    resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] },
+  } }));
+  await drainCheck('1024-throttled-blockers', null);
+  const drainEvidence = await page.evaluate(() => {
+    const card = document.getElementById('auto-drain-panel');
+    const row = card.querySelector('.drain-blocked-row');
+    const who = row.querySelector('.drain-blocked-who');
+    const lock = row.querySelector('.drain-blocked-lock');
+    const bounds = row.getBoundingClientRect();
+    const links = [...who.querySelectorAll('a')].map(link => {
+      const box = link.getBoundingClientRect();
+      return { text: link.textContent, visible: box.width > 0 && box.left >= bounds.left && box.right <= bounds.right + 1 };
+    });
+    return {
+      summary: card.querySelector('.drain-slots').textContent,
+      workspace: card.querySelector('.drain-capacity-count').textContent,
+      window: card.querySelector('.drain-window-count').textContent,
+      pool: [...card.querySelectorAll('.drain-stat-label')].map(node => node.textContent),
+      tab: document.getElementById('dock-tab-drain').textContent.trim(),
+      blocker: who.textContent, links,
+      idsClipped: getComputedStyle(who).overflow === 'hidden' || who.scrollWidth > who.clientWidth + 1,
+      lockTruncated: lock.scrollWidth > lock.clientWidth && getComputedStyle(lock).textOverflow === 'ellipsis',
+      stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
+    };
+  });
+  if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary)) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
+  if (!drainEvidence.workspace.includes('Workspace: 6 of 12') || !drainEvidence.window.includes('This window: 1 running of 3') || !drainEvidence.pool.every(label => label.startsWith('Pool:'))) throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
+  if (drainEvidence.blocker !== 'ORB-14334 waits on ORB-14488' || drainEvidence.links.length !== 2 || drainEvidence.links.some(link => !link.visible) || drainEvidence.idsClipped || !drainEvidence.lockTruncated) throw new Error(`ORB-14489: blocker IDs must stay whole while the lock path truncates at 1024px: ${JSON.stringify(drainEvidence)}`);
+  if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
+  if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
+  fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
+  // ORB-14705: a 36-task backlog (17 locks, 13 throttled, 3 saturated, 3 other)
+  // reads as four figures that add up, at desktop and phone widths.
+  await page.evaluate(() => {
+    const task = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
+    const reasons = [...Array(17).fill('context_lock_conflict'), ...Array(13).fill('resource_throttled'), ...Array(3).fill('capacity_saturated'), 'operator_validation_handoff', 'pilot_already_landed', 'surface_reserved'];
+    return globalThis.setDrainFixtureReadiness({
+      capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } },
+      tasks: reasons.map((reason, i) => task(i, reason)),
+    });
+  });
+  for (const [label, width, dock] of [['1440', 1440, 336], ['390', 390, null]]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await drainCheck(`backlog36-${label}`, dock);
+    const pool = await page.evaluate(() => [...document.querySelectorAll('#auto-drain-panel .drain-stat')].map(node => Number(node.querySelector('.drain-stat-value').textContent)));
+    if (pool.reduce((sum, n) => sum + n, 0) !== 36) throw new Error(`Pool figures at ${label}px do not sum to 36: ${pool}`);
+  }
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.evaluate(() => globalThis.setDrainFixtureReadiness());
   await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
-  const logBadge = await page.locator('#dock-drain-state').textContent();
-  if (logBadge !== 'Draining') throw new Error(`Drain tab has no live badge while Log is selected: ${logBadge}`);
+  const logDrainState = await page.locator('#dock-tab-drain').getAttribute('aria-label');
+  if (!logDrainState.includes('Draining')) throw new Error(`Drain tab loses its accessible live state while Log is selected: ${logDrainState}`);
   await page.click('.tab[data-tab="runs"]');
   await page.click('#global-drain-state');
   if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
@@ -214,6 +429,53 @@ try {
   await drainCheck('900', null);
   await page.setViewportSize({ width: 375, height: 812 });
   await drainCheck('375x812', null);
+  // The approve-proposed opt-in and the live window's approvals line fit the
+  // card with no overflow, and the card is captured on its own for review.
+  const approveCard = async (label) => {
+    await page.evaluate(async () => {
+      await globalThis.setDrainFixturePhase('idle');
+      document.querySelector('input[name="auto-drain-approve"][value="approve"]').click();
+    });
+    const form = await page.evaluate(() => {
+      const card = document.getElementById('auto-drain-panel');
+      const box = card.getBoundingClientRect();
+      const label = card.querySelector('.drain-field-approve');
+      return {
+        selected: card.querySelector('input[name="auto-drain-approve"][value="approve"]').checked,
+        overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
+        reachable: label.getBoundingClientRect().width > 0,
+      };
+    });
+    if (!form.selected || !form.reachable || form.overflowing.length) throw new Error(`Approve-proposed control at ${label}: ${JSON.stringify(form)}`);
+    await page.waitForTimeout(400);
+    await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
+    await page.evaluate(async () => {
+      await globalThis.setDrainFixturePhase('draining');
+      await globalThis.setDrainFixtureApprovals({ enabled: true, approved_total: 3, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] });
+    });
+    const live = await page.evaluate(() => {
+      const card = document.getElementById('auto-drain-panel');
+      const box = card.getBoundingClientRect();
+      return {
+        text: card.querySelector('.drain-approvals')?.textContent,
+        overflowing: Array.from(card.querySelectorAll('*')).filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1).map((node) => node.className || node.tagName),
+      };
+    });
+    if (live.text !== 'Approving proposed tasks · 3 approved · 2 held' || live.overflowing.length) throw new Error(`Live approvals line at ${label}: ${JSON.stringify(live)}`);
+    await page.waitForTimeout(400);
+    await page.locator('#auto-drain-panel').screenshot({ path: path.join(evidence, `drain-approve-live-${label}.png`) });
+    await page.evaluate(async () => {
+      await globalThis.setDrainFixtureApprovals({ enabled: false });
+      document.querySelector('input[name="auto-drain-approve"][value="leave"]')?.click();
+      await globalThis.setDrainFixturePhase('draining');
+    });
+  };
+  await approveCard('375x812');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', '336px'));
+  await approveCard('1440-dock336');
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
+  await page.setViewportSize({ width: 375, height: 812 });
   await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
   // The Log dock toolbar keeps every control reachable at the 280px (<=1250px
@@ -222,19 +484,118 @@ try {
   // follow handler and SSE consumer, fed by a fixture stream.
   await page.evaluate(async () => {
     const fixtureFetch = globalThis.fetch;
-    globalThis.fetch = (url, options) => new URL(url, location.href).pathname === '/api/log'
-      ? Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [], offset: 0 }) })
-      : fixtureFetch(url, options);
+    // The first snapshot fails (dashboard restart / 5xx). Later attempts
+    // succeed only after the test releases the server, so the retry and the
+    // disconnected state are observable before any EventSource exists.
+    let logSnapshotAttempts = 0;
+    let releaseSnapshot = false;
+    globalThis.logSnapshotAttempts = () => logSnapshotAttempts;
+    globalThis.releaseLogSnapshot = () => { releaseSnapshot = true; };
+    globalThis.fetch = (url, options) => {
+      const pathname = new URL(url, location.href).pathname;
+      if (pathname !== '/api/log') return fixtureFetch(url, options);
+      logSnapshotAttempts += 1;
+      if (!releaseSnapshot) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ error: 'log snapshot unavailable' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          events: [{
+            ts: '2026-09-27T12:00:00Z',
+            level: 'info',
+            code: 'OK',
+            source: 'orbit.log',
+            message_html: 'snapshot recovered',
+          }],
+          offset: 42,
+        }),
+      });
+    };
     globalThis.EventSource = class FixtureStream {
       static CLOSED = 2;
-      constructor() { globalThis.logFixtureStream = this; this.readyState = 1; }
+      constructor(url) {
+        globalThis.logFixtureStream = this;
+        globalThis.logFixtureUrl = String(url);
+        this.readyState = 1;
+        queueMicrotask(() => {
+          if (this.readyState === FixtureStream.CLOSED) return;
+          if (typeof this.onopen === 'function') this.onopen();
+        });
+      }
       close() { this.readyState = FixtureStream.CLOSED; }
     };
     const { initLogTail, setDockMode } = await import('/js/log-tail.js');
     initLogTail();
     setDockMode('log');
   });
-  await page.waitForFunction(() => globalThis.logFixtureStream?.onmessage);
+  await page.waitForFunction(() => {
+    const bar = document.getElementById('log-statusbar');
+    const box = bar ? bar.getBoundingClientRect() : { width: 0, height: 0 };
+    const label = bar?.querySelector('.sb-label')?.textContent;
+    return box.width > 0 && box.height > 0
+      && bar.classList.contains('disconnected')
+      && document.getElementById('side-dock')?.classList.contains('disconnected')
+      && label === 'log stream unavailable, retrying'
+      && globalThis.logSnapshotAttempts() >= 1
+      && !globalThis.logFixtureStream;
+  });
+  // Hiding the tab must cancel the snapshot backoff. A background tab neither
+  // retries nor opens a stream; showing it resumes, and only the recovered
+  // snapshot may open the EventSource.
+  const attemptsAtFailure = await page.evaluate(() => {
+    let hidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+    globalThis.__setLogHidden = (value) => { hidden = value; };
+    return globalThis.logSnapshotAttempts();
+  });
+  await page.waitForTimeout(1300);
+  const whileHidden = await page.evaluate(() => ({
+    attempts: globalThis.logSnapshotAttempts(),
+    stream: Boolean(globalThis.logFixtureStream),
+  }));
+  if (whileHidden.attempts !== attemptsAtFailure || whileHidden.stream) {
+    throw new Error(`hidden tab retried the snapshot or opened a stream: ${JSON.stringify(whileHidden)} after ${attemptsAtFailure}`);
+  }
+  await page.evaluate(() => {
+    globalThis.__setLogHidden(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.hidden;
+    globalThis.releaseLogSnapshot();
+  });
+  await page.waitForFunction(() => {
+    const bar = document.getElementById('log-statusbar');
+    const dock = document.getElementById('side-dock');
+    const stream = globalThis.logFixtureStream;
+    return stream
+      && stream.readyState === 1
+      && typeof stream.onmessage === 'function'
+      && bar
+      && !bar.classList.contains('disconnected')
+      && dock
+      && !dock.classList.contains('disconnected')
+      && bar.getAttribute('aria-label') === 'Latest log line';
+  }, undefined, { timeout: 20000 });
+  const recovered = await page.evaluate(() => ({
+    attempts: globalThis.logSnapshotAttempts(),
+    url: globalThis.logFixtureUrl,
+    text: document.getElementById('logInner')?.textContent || '',
+  }));
+  if (recovered.attempts <= attemptsAtFailure) {
+    throw new Error(`snapshot was not retried after the first failure: ${recovered.attempts} (at failure ${attemptsAtFailure})`);
+  }
+  if (!String(recovered.url).includes('from=42')) {
+    throw new Error(`stream did not resume from the recovered snapshot offset: ${recovered.url}`);
+  }
+  if (!recovered.text.includes('snapshot recovered')) {
+    throw new Error(`recovered snapshot was not rendered: ${recovered.text}`);
+  }
   const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
     await page.setViewportSize(viewport);
     // The dashboard re-applies the saved dock width (or clears --dock-w when
@@ -245,7 +606,7 @@ try {
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.evaluate((width) => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', `${width}px`), dockWidth);
     const ids = ['all', 'err', 'deny', 'warn'].map(filter => `.log-filters .filter-pill[data-filter="${filter}"]`)
-      .concat(['#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
+      .concat(['#log-show-agent', '#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
     const layout = await page.evaluate((selectors) => {
       const bar = document.querySelector('#side-dock .log-filters');
       const barBox = bar.getBoundingClientRect();
@@ -311,29 +672,118 @@ try {
   await assertNoOverflow('375x812 / tasks');
   await page.screenshot({ path: path.join(evidence, 'tasks-375x812.png'), fullPage: true });
 
-  // The Health views are only shown while Health is the open section (the
-  // router hides the other sections' views), so open it before measuring.
-  await page.click('.tab[data-tab="diagnostics"]');
-  await page.waitForTimeout(200);
-  const navReachable = await page.evaluate(() => {
-    const unique = [...document.querySelectorAll('.rail .tab')];
-    const subtabs = [...document.querySelectorAll('#diag-subtabs .subtab')];
-    const onscreen = (node) => {
-      node.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  // Exercise the real shell and hash router at phone width. The content is
+  // fixture data; navigation, scrolling, keyboard focus and layout are native.
+  await page.evaluate(() => {
+    for (const [id, value] of Object.entries({
+      'rail-count-diag-incidents': '3',
+      'rail-count-ops-routines': '4/5',
+      'rail-count-ops-auto-tasks': '8/16',
+      'rail-count-ops-jobs': '33 running',
+    })) document.getElementById(id).textContent = value;
+  });
+  const mobileEvidence = { routes: [], navigation: [], counts: [] };
+  for (const [route, panel] of [
+    ['tasks', 'tasks-panel'],
+    ['diagnostics/runs', 'diagnostics-panel'],
+    ['runs/jrun-dashboard-fixture', 'run-detail-panel'],
+    ['diagnostics/incidents', 'diagnostics-panel'],
+  ]) {
+    await page.evaluate(hash => { location.hash = hash; }, `#${route}`);
+    await page.waitForFunction(id => document.getElementById(id).closest('.tab-pane').classList.contains('active'), panel);
+    await page.locator(`#${panel}`).evaluate(node => Promise.all(node.closest('.tab-pane').getAnimations().map(animation => animation.finished)));
+    const layout = await page.locator(`#${panel}`).evaluate(node => {
+      node.closest('.tab-pane').scrollTop = 0;
       const box = node.getBoundingClientRect();
-      return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight && box.right > 0 && box.left < window.innerWidth + 8;
-    };
+      return { top: box.top, width: box.width, scrollWidth: document.scrollingElement.scrollWidth };
+    });
+    if (layout.width <= 0 || layout.top < 0 || layout.top > 200) throw new Error(`First panel too low at #${route}: ${JSON.stringify(layout)}`);
+    await assertNoOverflow(`375x812 / #${route}`);
+    mobileEvidence.routes.push({ route, ...layout });
+    await page.screenshot({ path: path.join(evidence, `shell-${route.replaceAll('/', '-')}-375x812.png`), fullPage: true });
+  }
+  const destinations = await page.locator('.rail .tab').evaluateAll(nodes => nodes.map(node => node.dataset.tab));
+  for (const destination of destinations) {
+    await page.click(`.rail .tab[data-tab="${destination}"]`);
+    const selectors = await page.locator('.rail .tab, .rail-subtabs:not(.dimmed) .subtab').evaluateAll(nodes => nodes.map(node =>
+      node.classList.contains('tab') ? `.rail .tab[data-tab="${node.dataset.tab}"]` : `#${node.parentElement.id} .subtab[data-subtab="${node.dataset.subtab}"]`));
+    // Tab through every visible entry from the workspace selector. Browser
+    // focus must scroll the overflow row without hiding its focus ring.
+    await page.focus('#workspace-select');
+    for (const selector of selectors) {
+      await page.keyboard.press('Tab');
+      const focused = await page.locator(selector).evaluate(node => {
+        const box = node.getBoundingClientRect();
+        const row = document.getElementById('tabs').getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return {
+          active: document.activeElement === node && node.matches(':focus-visible'),
+          ring: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2,
+          onscreen: box.width > 0 && box.height > 0 && box.left >= row.left - 1 && box.right <= row.right + 1,
+          sameRow: box.top >= row.top && box.bottom <= row.bottom,
+          left: box.left, right: box.right, rowLeft: row.left, rowRight: row.right,
+        };
+      });
+      if (!focused.active || !focused.ring || !focused.onscreen || !focused.sameRow) throw new Error(`Unreachable navigation at ${destination} / ${selector}: ${JSON.stringify(focused)}`);
+      await page.click(selector, { trial: true, timeout: 2000 });
+    }
+    const subtabs = selectors.filter(selector => selector.includes('.subtab'));
+    for (const selector of subtabs) {
+      await page.click(selector);
+      await page.waitForFunction(sel => document.querySelector(sel).classList.contains('active'), selector);
+      // Enter must activate the same route through the native button handler.
+      await page.focus(selector);
+      await page.keyboard.press('Enter');
+      const subtab = await page.locator(selector).getAttribute('data-subtab');
+      if (!new URL(page.url()).hash.startsWith(`#${destination}/${subtab}`)) throw new Error(`Subtab did not route at ${selector}: ${page.url()}`);
+      await assertNoOverflow(`375x812 / ${destination}/${subtab}`);
+      const gap = await page.locator(selector).evaluate(node => {
+        const count = node.querySelector('.rail-count');
+        if (!count?.textContent) return null;
+        const label = document.createRange();
+        label.selectNodeContents(node.firstChild);
+        return count.getBoundingClientRect().left - label.getBoundingClientRect().right;
+      });
+      if (gap !== null && gap < 6) throw new Error(`Subtab count touches its label at ${selector}: ${gap}px`);
+      if (gap !== null) mobileEvidence.counts.push({ selector, gap });
+    }
+    await assertNoOverflow(`375x812 / ${destination}`);
+    mobileEvidence.navigation.push({ destination, controls: selectors.length, subtabs: subtabs.length });
+  }
+  // The widest readings the chips are sized for, with one resource held.
+  const header = await page.evaluate(async () => {
+    const { renderHostResources } = await import('/js/host-resources.js');
+    renderHostResources({
+      cpu: { percent: 1234, severity: 'critical' }, memory: { percent: 100, severity: 'critical' },
+      disk: { path: '/workspace', percent: 100, severity: 'critical' }, sample_age_seconds: 1, max_age_seconds: 15,
+      stale: false, throttle: true, pressures: [{ resource: 'memory' }], reason: 'memory high', thresholds: { enabled: true },
+    });
+    const workspace = document.getElementById('workspace-select').getBoundingClientRect();
+    const brand = document.querySelector('.rail-brand').getBoundingClientRect();
+    const drain = document.getElementById('global-drain-state').getBoundingClientRect();
+    const refresh = document.getElementById('refresh-btn').getBoundingClientRect();
+    const strip = document.getElementById('host-resource-chips');
+    const row = strip.getBoundingClientRect();
+    const chips = [...strip.querySelectorAll('.host-resource')].map(node => (
+      { resource: node.dataset.resource, box: node.getBoundingClientRect().toJSON(), clipped: node.scrollWidth > node.clientWidth }));
     return {
-      tabs: unique.map((node) => ({ tab: node.dataset.tab, onscreen: onscreen(node) })),
-      subtabs: subtabs.map((node) => ({ subtab: node.dataset.subtab, onscreen: onscreen(node) })),
+      actionsInHeader: [brand, drain, refresh].every(box => box.width > 0 && Math.abs(box.top + box.height / 2 - workspace.top - workspace.height / 2) < 1),
+      chipsSingleRow: chips.length === 3 && chips.every(({ box }) => box.width > 0 && Math.abs(box.top - chips[0].box.top) < 1),
+      // All three readings are in view at 375px without scrolling the row.
+      chipsInView: chips.every(({ box, clipped }) => !clipped && box.left >= row.left - 0.5 && box.right <= Math.min(row.right, innerWidth) + 0.5),
+      chips,
     };
   });
-  for (const tab of navReachable.tabs) {
-    if (!tab.onscreen) throw new Error(`top-level tab ${tab.tab} not reachable at 375px`);
+  if (!header.actionsInHeader || !header.chipsSingleRow || !header.chipsInView) throw new Error(`Phone header or host chips wrapped or clipped: ${JSON.stringify(header)}`);
+  await page.screenshot({ path: path.join(evidence, 'topbar-375x812.png') });
+  for (const selector of ['#refresh-btn', '#global-drain-state', ...['cpu', 'memory', 'disk'].map(resource => `#host-resource-chips [data-resource="${resource}"]`)]) {
+    await page.locator(selector).focus();
+    await page.locator(selector).scrollIntoViewIfNeeded();
+    await page.locator(selector).click({ trial: true });
   }
-  for (const subtab of navReachable.subtabs) {
-    if (!subtab.onscreen) throw new Error(`diagnostics subtab ${subtab.subtab} not reachable at 375px`);
-  }
+  mobileEvidence.header = header;
+  fs.writeFileSync(path.join(evidence, 'mobile-shell.json'), `${JSON.stringify(mobileEvidence, null, 2)}\n`);
+  console.log(`PASS: phone shell panel positions ${JSON.stringify(mobileEvidence.routes)}; all ${destinations.length} destinations and active rail subtabs reachable; count gaps >=6px; no page overflow.`);
 
   await page.click('.tab[data-tab="operations"]');
   await page.click('#operations-subtabs .subtab[data-subtab="auto-tasks"]');
@@ -398,7 +848,24 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
+  // A browser in UTC, a host cron zone elsewhere: triggers read in the host
+  // zone and agree with the UTC next fire beside them.
+  const utcPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+  utcPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await utcPage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
+  await utcPage.addScriptTag({ type: 'module', url: '/cron-zone.mjs' });
+  await utcPage.waitForFunction(() => globalThis.cronZoneTestsPassed, undefined, { timeout: 15000 });
+  await utcPage.screenshot({ path: path.join(evidence, 'cron-zone-utc-browser.png') });
+  // State- and delivery-triggered routines read by their own trigger, and the
+  // next-hour strip draws every slot of a frequent cron routine.
+  const triggerPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+  triggerPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+  await triggerPage.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
+  await triggerPage.addScriptTag({ type: 'module', url: '/routine-triggers.mjs' });
+  await triggerPage.waitForFunction(() => globalThis.routineTriggerTestsPassed, undefined, { timeout: 15000 });
+  await triggerPage.screenshot({ path: path.join(evidence, 'routine-triggers-browser.png') });
+  if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }

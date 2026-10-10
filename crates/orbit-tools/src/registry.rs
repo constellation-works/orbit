@@ -180,6 +180,10 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
         if name.starts_with("orbit.task.")
+            // Pull owns typed protocol negotiation in the host adapter, which
+            // checks the fingerprint before validating the derived request
+            // shape. This registry cannot know the owner's request types.
+            && name != "orbit.task.pull"
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
         {

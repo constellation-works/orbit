@@ -375,8 +375,8 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     .unwrap();
     let ws = runtime.workspace_id().unwrap();
     // Seed the persisted shape produced before timeout accounting was fixed,
-    // deliberately omitting `decisions` and carrying the retired repair-cycle
-    // counts to exercise compatibility.
+    // deliberately omitting `decisions` and carrying the retired start and
+    // repair-cycle limits to exercise compatibility.
     let lineage = format!("{ws}/{id}/main");
     let now = chrono::Utc::now();
     let ledger = json!({
@@ -385,12 +385,11 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
         "state": {"state": "settled", "verdict": "incomplete"}, "repair_cycles": 0, "elapsed_seconds": 19385}],
         "consumed_seconds": 19385, "revision": 1, "updated_at": now,
     });
-    // How that ledger reads today: the retired repair-cycle counts drop out.
+    // How that ledger reads today: the retired limits drop out.
     let mut current = ledger.clone();
-    current["budget"]
-        .as_object_mut()
-        .unwrap()
-        .remove("repair_cycles");
+    for retired in ["reviewer_starts", "repair_cycles"] {
+        current["budget"].as_object_mut().unwrap().remove(retired);
+    }
     current["attempts"][0]
         .as_object_mut()
         .unwrap()
@@ -555,7 +554,9 @@ fn stdio_drain_start_notes_that_no_required_validation_runs() {
 /// [ORB-13987] With login-shell resolution disabled and no configured PATH,
 /// required validation runs with whatever PATH launched the worker. The MCP
 /// drain status and the CLI doctor both say so before a drain is started;
-/// without required commands there is nothing to warn about.
+/// without required commands there is nothing to warn about. Doctor also
+/// reports configured tool shadowing, the selected startup mode, and the
+/// reason a broken interactive rc falls back to login-only resolution.
 #[test]
 fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
     let workspace = McpWorkspace::init();
@@ -614,11 +615,110 @@ fn drain_status_and_doctor_warn_when_validation_cannot_use_the_login_shell() {
         "the warning names the disabled resolution, the fallback and its PATH: {warning}"
     );
     assert_eq!(row["status"], "warning", "{row}");
-    assert_eq!(row["message"], warning, "doctor reports the same warning");
+    assert!(
+        row["message"].as_str().unwrap().contains(warning),
+        "doctor includes the same warning: {row}"
+    );
     assert!(
         row["remediation"]
             .as_str()
             .is_some_and(|fix| fix.contains("workflow.validation_env.path")),
         "{row}"
+    );
+
+    // The validation PATH is separate from the fixture command's PATH, so
+    // these stubs affect only doctor resolution, never workspace setup.
+    let first = workspace.home.join("validation-first");
+    let later = workspace.home.join("validation-later");
+    for tool in ["python3", "git", "make"] {
+        plant_agent_cli_stub(&first, tool);
+        plant_agent_cli_stub(&later, tool);
+    }
+    configure("workflow.validation_env.path_mode", "replace");
+    configure(
+        "workflow.validation_env.path",
+        &json!([first, later]).to_string(),
+    );
+    let (_, row) = observe();
+    assert_eq!(row["status"], "warning", "shadowing is advisory: {row}");
+    let message = row["message"].as_str().unwrap();
+    assert!(message.contains("probe mode: disabled"), "{message}");
+    assert!(
+        message.contains(&format!("PATH={}:{}", first.display(), later.display())),
+        "{message}"
+    );
+    for tool in ["python3", "git", "make"] {
+        assert!(
+            message.contains(&format!(
+                "{tool} resolves to {}",
+                first.join(tool).display()
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("{tool}: {} shadows", first.join(tool).display())),
+            "{message}"
+        );
+        assert!(
+            message.contains(&later.join(tool).display().to_string()),
+            "{message}"
+        );
+    }
+
+    configure("workflow.validation_env.login_shell", "true");
+    configure("workflow.validation_env.interactive", "false");
+    let (_, row) = observe();
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("probe mode: login;"),
+        "the setting reaches the runtime resolver: {row}"
+    );
+    configure("workflow.validation_env.interactive", "true");
+    let (_, row) = observe();
+    let message = row["message"].as_str().unwrap();
+    // With no rc files the interactive probe succeeds unless a saturated host
+    // holds `bash -i -l` past the resolver's production timeout. That bounded
+    // fallback is the resolver working, so it passes only when the report says
+    // so: the login mode and the reason the interactive attempt was abandoned.
+    // A fallback that drops its reason still fails.
+    let timed_out_fallback = message.contains("probe mode: login;")
+        && message.contains("interactive fallback reason: interactive login shell")
+        && message.contains("did not finish within");
+    assert!(
+        message.contains("probe mode: interactive_login;") || timed_out_fallback,
+        "the interactive setting reaches the resolver ({}): {row}",
+        orbit_common::test_env::host_load()
+    );
+
+    // Fixture rc files affect only the probe, with no dependency on the
+    // operator's dotfiles. Cover the common account shells on Linux/macOS.
+    for profile in [".bash_profile", ".profile"] {
+        std::fs::write(workspace.home.join(profile), ". \"$HOME/.bashrc\"\n").unwrap();
+    }
+    for rc in [".bashrc", ".zshrc"] {
+        std::fs::write(workspace.home.join(rc), "case $- in *i*) exit 42 ;; esac\n").unwrap();
+    }
+    let fish = workspace.home.join(".config/fish");
+    std::fs::create_dir_all(&fish).unwrap();
+    std::fs::write(
+        fish.join("config.fish"),
+        "if status is-interactive\nexit 42\nend\n",
+    )
+    .unwrap();
+    let (_, row) = observe();
+    assert_eq!(row["status"], "warning", "fallback is advisory: {row}");
+    let message = row["message"].as_str().unwrap();
+    // The rc guard exits 42, which the probe reports. A saturated host can
+    // instead hold `bash -i -l` past the production timeout, the same bounded
+    // fallback accepted above. Either way the reason must be stated: a
+    // fallback that drops it still fails.
+    assert!(
+        message.contains("probe mode: login;")
+            && message.contains("interactive fallback reason:")
+            && (message.contains("exited with status 42")
+                || message.contains("did not finish within")),
+        "{message}"
     );
 }

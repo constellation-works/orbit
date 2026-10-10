@@ -25,7 +25,7 @@ const RECORDED_THROTTLE_MAX_AGE_SECONDS: i64 = 300;
 /// Every one of these existed before the distributed drain and keeps its own
 /// surface, schedule and enablement. What they no longer keep is a private
 /// idea of what the host is already doing: they all ask
-/// [`OrbitRuntime::drain_entry_admission`], which reads one occupancy, one
+/// [`OrbitRuntime::drain_entry_admission`](crate::OrbitRuntime::drain_entry_admission), which reads one occupancy, one
 /// claim ledger and one destination-authority rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainEntryPoint {
@@ -35,6 +35,8 @@ pub enum DrainEntryPoint {
     /// `orbit run ship`, `orbit.workflow.ship`, and the dashboard endpoint —
     /// the explicit shipment surfaces, with or without named tasks.
     ExplicitShip,
+    /// Whole-run replay from the CLI or dashboard.
+    Replay,
     /// The independent registry-driven `orbit run ship-sweep` CLI, which
     /// dispatches per workspace without a workspace runtime of its own.
     ShipSweep,
@@ -46,6 +48,7 @@ impl DrainEntryPoint {
         match self {
             DrainEntryPoint::OwnerDrain => "orbit.workflow.auto",
             DrainEntryPoint::ExplicitShip => "orbit.workflow.ship",
+            DrainEntryPoint::Replay => "orbit.job.replay",
             DrainEntryPoint::ShipSweep => "orbit.run.ship-sweep",
         }
     }
@@ -132,10 +135,11 @@ pub struct DrainEntryAdmission {
     /// The single capacity reading legacy dispatch and pull both allocate
     /// against.
     pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
-    /// The owner's effective review policy. v1 admits only `none` through the
-    /// claim contract, which is why it is reported on every decision rather
-    /// than left for each surface to look up.
-    pub review_policy: String,
+    /// The owner's `review.before_pr`. With it on, every claimed PR leaf runs
+    /// the before-PR review its claim captures [ORB-13908], which is why it
+    /// is reported on every decision rather than left for each surface to
+    /// look up. After-landing review never affects admission.
+    pub before_pr: bool,
     /// Whether the claim contract would admit this workspace at all — the
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
     /// retained entry cannot disagree about it.
@@ -192,7 +196,7 @@ impl crate::OrbitRuntime {
         let mut decision = DrainEntryAdmission {
             entry_point,
             occupancy,
-            review_policy: ship.review_policy.clone(),
+            before_pr: ship.before_pr,
             claim_admission_refusal: self.claim_contract_refusal(&ship),
             host_shutdown: self.scheduled_host_shutdown(),
             resource_throttle: None,
@@ -267,6 +271,43 @@ impl crate::OrbitRuntime {
         Ok(decision)
     }
 
+    /// Run the sandbox's Git protection scan on the registered checkout, as
+    /// every leaf would at launch. `orbit doctor` reports the refusal.
+    /// Hosts other than Linux and macOS report the scan as unavailable.
+    pub fn check_git_protection(&self) -> Result<(), OrbitError> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            crate::runtime::git_sandbox::scan_checkout(&self.paths().repo_root)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Err(OrbitError::CapabilityRefused(
+                "Git protection scan is only available on Linux and macOS".to_string(),
+            ))
+        }
+    }
+
+    /// Refuse a drain on a host whose Git protection would fail every leaf
+    /// into `blocked`. Only an executor with an OS sandbox this host can apply
+    /// runs the scan, so a host without one is never held for it.
+    pub fn preflight_git_protection(&self) -> Result<(), OrbitError> {
+        let sandboxed = self.list_executor_defs()?.iter().any(|executor| {
+            executor.sandbox.is_some_and(|kind| {
+                kind.target_os().is_some() && kind.is_available_on(std::env::consts::OS)
+            })
+        });
+        if !sandboxed {
+            return Ok(());
+        }
+        self.check_git_protection().map_err(|error| match error {
+            OrbitError::PolicyDenied(reason) => OrbitError::PolicyDenied(format!(
+                "this host's Git protection would refuse every sandboxed leaf, so no task was \
+                 claimed: {reason}"
+            )),
+            other => other,
+        })
+    }
+
     /// Host pressure as admission sees it: a fresh sample evaluated against
     /// recent host-wide history, or the throttle a live auto or pull drain
     /// recorded on its latest pass. Disabled settings report nothing.
@@ -304,9 +345,10 @@ impl crate::OrbitRuntime {
     }
 
     /// Whether the claim contract would admit this workspace, by the spec's
-    /// own ordered ladder. Reported rather than raised: a workspace whose
-    /// review policy is not `none` still ships through its legacy leaf, and
-    /// saying so is what keeps the two facts from being confused.
+    /// own ordered ladder. Reported rather than raised: a workspace the claim
+    /// contract refuses — `review.before_pr` on a local ship mode, say —
+    /// still ships through its legacy leaf, and saying so is what keeps the
+    /// two facts from being confused.
     fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
             machine_id: self
@@ -319,7 +361,10 @@ impl crate::OrbitRuntime {
             request_id: "entry-point".to_string(),
             caller_version: owner_binary_version().to_string(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            caller_review_policy: ship.review_policy.clone(),
+            caller_fingerprint: None,
+            caller_before_pr: ship.before_pr,
+            // This binary's claimed PR leaves run the before-PR gate.
+            review_gate: true,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),

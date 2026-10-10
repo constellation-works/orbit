@@ -1,5 +1,6 @@
 //! Explicit waiver history and removal from scheduling eligibility are atomic.
 
+use super::checkpoint;
 use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
@@ -41,6 +42,10 @@ pub(super) fn commit(
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+
         let changed = conn
             .execute(
                 "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
@@ -49,7 +54,7 @@ pub(super) fn commit(
                     encode(next)?,
                     previous.consumer,
                     previous.generation,
-                    encode(previous)?
+                    previous_json
                 ],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;

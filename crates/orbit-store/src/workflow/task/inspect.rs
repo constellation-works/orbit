@@ -7,7 +7,8 @@
 //! projections, claims, audit rows, or execution records.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -17,7 +18,7 @@ use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::task::{TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACTS_DIR_NAME, TaskEnvelopeV2};
 use orbit_types::workspace::{
     canonicalize_publication_branch, redact_git_remote, validate_git_commit_id,
-    validate_source_repository_fingerprint,
+    validate_publication_remote, validate_source_repository_fingerprint,
 };
 use tempfile::TempDir;
 
@@ -32,6 +33,19 @@ use super::publication::{
 
 /// Error prefix and command label for every consumer-side failure.
 const INSPECT_LABEL: &str = "publication inspect";
+
+/// Largest snapshot file inspect or restore will buffer.
+///
+/// Mode-120000 entries are refused before this applies. The cap stops a huge
+/// regular blob, or a link checkout failed to suppress, from making a content
+/// read allocate without a bound. Orbit's own artifact blobs are at most 1 MiB.
+const MAX_PUBLICATION_SNAPSHOT_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Git file-type bits (`S_IFMT` / `S_IFLNK` / `S_IFREG`), matched against
+/// `ls-tree` modes parsed as octal.
+const GIT_MODE_TYPE_MASK: u32 = 0o170000;
+const GIT_MODE_SYMLINK: u32 = 0o120000;
+const GIT_MODE_REGULAR: u32 = 0o100000;
 
 /// Serializes every mutation of one publication's shared Git cache.
 const CACHE_LOCK_FILE_NAME: &str = "cache.lock";
@@ -206,6 +220,14 @@ fn validate_request(request: PublicationInspectRequest) -> Result<ValidatedReque
     if request.publication_remote.trim().is_empty() {
         return Err(inspect_error("publication remote must not be empty"));
     }
+    // Keep the store's local transports; network URLs use the same validation
+    // as publication bindings, including redacted errors for malformed URLs.
+    if request.publication_remote.contains("://")
+        && !request.publication_remote.starts_with("file://")
+    {
+        validate_publication_remote(&request.publication_remote)
+            .map_err(|error| inspect_error(error.to_string()))?;
+    }
     if remote_has_password(&request.publication_remote) {
         return Err(inspect_error(format!(
             "publication remote '{}' must not contain credentials",
@@ -316,6 +338,11 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
         )));
     }
 
+    // Classify the commit before checkout writes a worktree. `ls-tree` lists
+    // modes and paths; it does not read blob bytes, so a symlink's target path
+    // and the host file it names both stay unread.
+    refuse_untrusted_snapshot_entries(git_dir_s, &commit_id)?;
+
     git(&[
         "--git-dir",
         git_dir_s,
@@ -326,6 +353,10 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
         "--detach",
         &commit_id,
     ])?;
+    // `core.symlinks=false` writes a former link as a regular file containing
+    // the link text. A real symlink or special file here means that checkout
+    // did not honor the flag, so refuse before any content read.
+    refuse_checked_out_special_entries(tree.path())?;
 
     let git_parent = GitRunner::new(INSPECT_LABEL).single_parent(git_dir_s, &commit_id)?;
 
@@ -358,14 +389,249 @@ fn private_tree(trees_dir: &Path) -> Result<TempDir, OrbitError> {
 
 fn read_envelope(tree_dir: &Path) -> Result<PublicationEnvelope, OrbitError> {
     let path = tree_dir.join(PUBLICATION_ENVELOPE_FILE_NAME);
-    let raw = fs::read_to_string(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            inspect_error("publication snapshot is missing orbit-task-publication.yaml")
-        } else {
-            OrbitError::from_write_io(&path, error)
-        }
-    })?;
+    let raw = read_bounded_snapshot_text(&path, PUBLICATION_ENVELOPE_FILE_NAME)?;
     PublicationEnvelope::from_yaml(&raw)
+}
+
+/// Read one snapshot file that the pre-checkout listing already classified.
+///
+/// The open refuses a final-component symlink (`O_NOFOLLOW`) and keeps at most
+/// [`MAX_PUBLICATION_SNAPSHOT_FILE_BYTES`] bytes, so a link swapped in after
+/// the listing, or a file that grew past the cap, cannot be followed or
+/// buffered without a bound.
+fn read_bounded_snapshot_text(path: &Path, rel: &str) -> Result<String, OrbitError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(missing_envelope());
+        }
+        Err(error) => return Err(OrbitError::from_write_io(path, error)),
+    };
+    refuse_regular_snapshot_file(rel, &metadata)?;
+    let file = open_no_follow(path).map_err(|error| map_snapshot_open(path, rel, error))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| OrbitError::from_write_io(path, error))?;
+    refuse_regular_snapshot_file(rel, &opened)?;
+    let mut raw = String::new();
+    file.take(MAX_PUBLICATION_SNAPSHOT_FILE_BYTES.saturating_add(1))
+        .read_to_string(&mut raw)
+        .map_err(|error| OrbitError::from_write_io(path, error))?;
+    let len = u64::try_from(raw.len()).map_err(|_| oversize_entry(rel))?;
+    if len > MAX_PUBLICATION_SNAPSHOT_FILE_BYTES {
+        return Err(oversize_entry(rel));
+    }
+    Ok(raw)
+}
+
+fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+fn map_snapshot_open(path: &Path, rel: &str, error: std::io::Error) -> OrbitError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return missing_envelope();
+    }
+    if is_symlink_open_refusal(&error) {
+        return symlink_entry(rel);
+    }
+    OrbitError::from_write_io(path, error)
+}
+
+/// `O_NOFOLLOW` reports a symlinked final component as `ELOOP`, which has no
+/// stable [`std::io::ErrorKind`] to match on.
+#[cfg(unix)]
+fn is_symlink_open_refusal(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_symlink_open_refusal(_error: &std::io::Error) -> bool {
+    false
+}
+
+fn missing_envelope() -> OrbitError {
+    inspect_error("publication snapshot is missing orbit-task-publication.yaml")
+}
+
+/// Refuse symlink and non-regular entries the consumer would read.
+///
+/// `git ls-tree -r -z` prints `mode SP type SP object TAB path NUL`. The blob
+/// of a symlink is the target path, so this listing must not be followed by
+/// `git cat-file` or a worktree read of that path.
+fn refuse_untrusted_snapshot_entries(git_dir: &str, commit_id: &str) -> Result<(), OrbitError> {
+    let listing = git(&["--git-dir", git_dir, "ls-tree", "-r", "-z", commit_id])?;
+    for entry in listing.split('\0') {
+        if entry.is_empty() {
+            continue;
+        }
+        let (mode, path) = parse_ls_tree_entry(entry)?;
+        if !snapshot_path_is_confined(path) {
+            return Err(escaping_entry(path));
+        }
+        if !snapshot_path_is_read(path) {
+            continue;
+        }
+        let mode = u32::from_str_radix(mode, 8)
+            .map_err(|_| inspect_error("publication snapshot listing is malformed"))?;
+        if mode & GIT_MODE_TYPE_MASK == GIT_MODE_SYMLINK {
+            return Err(symlink_entry(path));
+        }
+        if mode & GIT_MODE_TYPE_MASK != GIT_MODE_REGULAR {
+            return Err(special_entry(path));
+        }
+    }
+    Ok(())
+}
+
+fn parse_ls_tree_entry(entry: &str) -> Result<(&str, &str), OrbitError> {
+    let Some((meta, path)) = entry.split_once('\t') else {
+        return Err(malformed_listing());
+    };
+    if path.is_empty() {
+        return Err(malformed_listing());
+    }
+    let mut parts = meta.split(' ');
+    let (Some(mode), Some(_kind), Some(object)) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(malformed_listing());
+    };
+    if parts.next().is_some() || mode.is_empty() || object.is_empty() {
+        return Err(malformed_listing());
+    }
+    Ok((mode, path))
+}
+
+fn snapshot_path_is_confined(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn snapshot_path_is_read(path: &str) -> bool {
+    if path == PUBLICATION_ENVELOPE_FILE_NAME {
+        return true;
+    }
+    match path.strip_prefix(PUBLICATION_TASKS_DIR_NAME) {
+        Some("") => true,
+        Some(rest) => rest.starts_with('/'),
+        None => false,
+    }
+}
+
+/// Walk the checked-out envelope and `tasks/` tree without following links.
+fn refuse_checked_out_special_entries(tree_dir: &Path) -> Result<(), OrbitError> {
+    let envelope = tree_dir.join(PUBLICATION_ENVELOPE_FILE_NAME);
+    match fs::symlink_metadata(&envelope) {
+        Ok(metadata) => refuse_regular_snapshot_file(PUBLICATION_ENVELOPE_FILE_NAME, &metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(OrbitError::from_write_io(&envelope, error)),
+    }
+    refuse_checked_out_tree(
+        &tree_dir.join(PUBLICATION_TASKS_DIR_NAME),
+        PUBLICATION_TASKS_DIR_NAME,
+    )
+}
+
+fn refuse_checked_out_tree(dir: &Path, rel: &str) -> Result<(), OrbitError> {
+    let metadata = match fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(OrbitError::from_write_io(dir, error)),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(symlink_entry(rel));
+    }
+    if !file_type.is_dir() {
+        return Err(special_entry(rel));
+    }
+    for entry in fs::read_dir(dir).map_err(|error| OrbitError::from_write_io(dir, error))? {
+        let entry = entry.map_err(|error| OrbitError::from_write_io(dir, error))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return Err(inspect_error(format!(
+                "publication snapshot path under '{rel}' is not valid UTF-8"
+            )));
+        };
+        if name.contains('/') || name == "." || name == ".." {
+            return Err(escaping_entry(&format!("{rel}/{name}")));
+        }
+        let child_rel = format!("{rel}/{name}");
+        let child = entry.path();
+        let child_type = entry
+            .file_type()
+            .map_err(|error| OrbitError::from_write_io(&child, error))?;
+        if child_type.is_symlink() {
+            return Err(symlink_entry(&child_rel));
+        }
+        if child_type.is_dir() {
+            refuse_checked_out_tree(&child, &child_rel)?;
+        } else if child_type.is_file() {
+            let metadata = fs::symlink_metadata(&child)
+                .map_err(|error| OrbitError::from_write_io(&child, error))?;
+            refuse_regular_snapshot_file(&child_rel, &metadata)?;
+        } else {
+            return Err(special_entry(&child_rel));
+        }
+    }
+    Ok(())
+}
+
+fn refuse_regular_snapshot_file(rel: &str, metadata: &fs::Metadata) -> Result<(), OrbitError> {
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(symlink_entry(rel));
+    }
+    if !file_type.is_file() {
+        return Err(special_entry(rel));
+    }
+    if metadata.len() > MAX_PUBLICATION_SNAPSHOT_FILE_BYTES {
+        return Err(oversize_entry(rel));
+    }
+    Ok(())
+}
+
+fn symlink_entry(path: &str) -> OrbitError {
+    inspect_error(format!(
+        "refusing to read symlink '{path}' in the publication snapshot"
+    ))
+}
+
+fn special_entry(path: &str) -> OrbitError {
+    inspect_error(format!(
+        "refusing to read non-regular publication snapshot entry '{path}'"
+    ))
+}
+
+fn oversize_entry(path: &str) -> OrbitError {
+    inspect_error(format!(
+        "refusing to read publication snapshot entry '{path}' larger than {MAX_PUBLICATION_SNAPSHOT_FILE_BYTES} bytes"
+    ))
+}
+
+fn escaping_entry(path: &str) -> OrbitError {
+    inspect_error(format!(
+        "refusing publication snapshot path '{path}' that escapes the checkout"
+    ))
+}
+
+fn malformed_listing() -> OrbitError {
+    inspect_error("publication snapshot listing is malformed")
 }
 
 fn assert_pairing(

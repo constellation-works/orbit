@@ -20,7 +20,8 @@ use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigRoots, ConfigSection, ConfigStore,
     ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason, WorkspaceInitMode,
-    admit_config_key, config_key_options, describe_config_key, load_effective_config,
+    admit_config_key, admit_settable_config_key, config_key_options, describe_config_key,
+    load_effective_config,
 };
 use serde_json::{Map, Value as JsonValue, json};
 
@@ -44,6 +45,15 @@ const CREW_FIELDS: &[&str] = &[
 /// leaves the workspace unable to resolve work, so the delete is refused with
 /// the key that still names it.
 const CREW_REFERENCE_KEYS: &[&str] = &["workflow.default_crew", "workflow.system_crew"];
+
+/// Weighted or bare crew lists whose membership the settings view reports.
+const CREW_POOL_KEYS: &[&str] = &[
+    "workflow.final_recovery_crews",
+    "workflow.low_complexity_crews",
+    "workflow.medium_complexity_crews",
+    "workflow.hard_complexity_crews",
+    "workflow.xhard_complexity_crews",
+];
 
 /// How a write initializes a workspace `config.toml` that does not exist yet.
 ///
@@ -132,17 +142,24 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         },
         "workspace_binding": workspace_binding_json(runtime, values),
         "sections": sections,
-        "crews": crew_rows(values),
+        "crews": crew_rows(runtime, values),
         "paths": path_rows_json(runtime, None),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),
         "workspace_file_exists": workspace_file_exists,
+        // The runtime may have been opened before the last config write, so
+        // the review switches resolve from the files this view just read.
+        "review": crate::application::review::review_switches_view(
+            runtime,
+            &orbit_config::ResolvedConfig::load(&config_roots(runtime))?.operation,
+            chrono::Utc::now(),
+        ),
     }))
 }
 
-/// One physical file resolved in isolation, mirroring `orbit config show
-/// --scope global|workspace`: the same grouping without layering, shadowed
-/// values, or crews (a scoped snapshot admits registry keys only).
+/// One physical file's settings and defaults, mirroring `orbit config show
+/// --scope global|workspace`. Workspace crew references use layered crew
+/// definitions, while displayed settings retain their scoped values.
 pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue, OrbitError> {
     let global_file = config_layer_file(&runtime.global_root())?;
     let workspace_file = config_layer_file(&runtime.shared_root())?;
@@ -150,8 +167,17 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
         ConfigScope::Global => &global_file,
         ConfigScope::Workspace => &workspace_file,
     };
-    let store = ConfigStore::open(scope, file.path.clone())?;
-    let snapshot = store.snapshot()?;
+    let file_error = |error| match error {
+        OrbitError::InvalidInput(reason) => OrbitError::InvalidInput(format!(
+            "config file '{}': {reason}",
+            redact_home_dir(&file.path.display().to_string())
+        )),
+        other => other,
+    };
+    let store = ConfigStore::open(scope, file.path.clone()).map_err(file_error)?;
+    let snapshot = store
+        .snapshot_with_global(&runtime.global_root())
+        .map_err(file_error)?;
     let settings = snapshot.all_values();
     let sections = file_sections(&store, &settings);
 
@@ -177,8 +203,8 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
     }))
 }
 
-/// The `orbit config keys` reference: every settable key with its type,
-/// section, description, and accepted choices.
+/// The `orbit config keys` reference: every registered key with its write
+/// availability, type, section, description, and accepted choices.
 pub fn key_catalog() -> JsonValue {
     let keys = CONFIG_KEY_REGISTRY
         .iter()
@@ -190,6 +216,7 @@ pub fn key_catalog() -> JsonValue {
                 "section": descriptor.section.token(),
                 "section_title": descriptor.section.title(),
                 "description": descriptor.description,
+                "settable": admit_settable_config_key(descriptor.key).is_ok(),
             })
         })
         .collect::<Vec<_>>();
@@ -216,7 +243,7 @@ pub fn set_key(
     match scope {
         ConfigScope::Global => {
             store.validate()?;
-            store.validate_for_set(key)?;
+            store.validate_global_for_set(key, &runtime.shared_root())?;
         }
         ConfigScope::Workspace => {
             let global_root = runtime.global_root();
@@ -282,7 +309,7 @@ pub fn set_crew(
     validate_store(runtime, scope, &store)?;
     for key in &keys {
         match scope {
-            ConfigScope::Global => store.validate_for_set(key)?,
+            ConfigScope::Global => store.validate_global_for_set(key, &runtime.shared_root())?,
             ConfigScope::Workspace => {
                 let global_root = runtime.global_root();
                 store.validate_workspace_for_set(key, &global_root)?;
@@ -447,7 +474,10 @@ fn validate_store(
     store: &ConfigStore,
 ) -> Result<(), OrbitError> {
     match scope {
-        ConfigScope::Global => store.validate(),
+        ConfigScope::Global => {
+            store.validate()?;
+            store.validate_global_with_workspace(&runtime.shared_root())
+        }
         ConfigScope::Workspace => store.validate_workspace_with_global(&runtime.global_root()),
     }
 }
@@ -517,7 +547,7 @@ fn effective_value(runtime: &OrbitRuntime, key: &str) -> Result<JsonValue, Orbit
 /// The layered value of one crew, as the object its row renders.
 fn crew_value(runtime: &OrbitRuntime, name: &str) -> Result<JsonValue, OrbitError> {
     let effective = load_effective_config(&config_roots(runtime))?;
-    Ok(crew_rows(effective.values())
+    Ok(crew_rows(runtime, effective.values())
         .into_iter()
         .find(|crew| crew["name"] == json!(name))
         .unwrap_or(JsonValue::Null))
@@ -541,7 +571,7 @@ fn write_outcome(
         Some(key) if keys.len() == 1 => effective.value_for(key).unwrap_or(JsonValue::Null),
         Some(key) => {
             let name = key.split('.').nth(1).unwrap_or_default();
-            crew_rows(values)
+            crew_rows(runtime, values)
                 .into_iter()
                 .find(|crew| crew["name"] == json!(name))
                 .unwrap_or(JsonValue::Null)
@@ -756,6 +786,10 @@ fn base_row(
     let section = descriptor.map(|descriptor| descriptor.section);
     let mut row = Map::new();
     row.insert("key".to_string(), json!(key));
+    row.insert(
+        "settable".to_string(),
+        json!(admit_settable_config_key(key).is_ok()),
+    );
     row.insert("label".to_string(), json!(label_for(section, key)));
     row.insert("value".to_string(), value.clone());
     row.insert(
@@ -775,17 +809,58 @@ fn base_row(
 }
 
 /// One row per crew, folded from the per-field `crews.<name>.<field>` values.
-fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
-    let referenced = |key: &str| {
-        values
-            .iter()
-            .find(|entry| entry.key == key)
-            .and_then(|entry| entry.value.as_str().map(str::to_string))
-    };
-    let references = CREW_REFERENCE_KEYS
-        .iter()
-        .filter_map(|key| referenced(key).map(|crew| (*key, crew)))
-        .collect::<Vec<_>>();
+///
+/// The "Used by" column is decoration: a failed auto-task listing (every
+/// definition malformed) omits auto-task references rather than failing the
+/// Settings view or a crew write that already committed.
+///
+/// [ORB-14698] `limit` is the crew's tightest live usage window from the
+/// host's provider-limit view, `null` when no reading covers it.
+fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
+    let limits = runtime.provider_limits_view(chrono::Utc::now());
+    let mut references: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for entry in values {
+        if CREW_REFERENCE_KEYS.contains(&entry.key.as_str()) || entry.key == "operation.review_crew"
+        {
+            if let Some(name) = entry.value.as_str() {
+                references
+                    .entry(name.trim().to_string())
+                    .or_default()
+                    .insert(entry.key.clone());
+            }
+        } else if CREW_POOL_KEYS.contains(&entry.key.as_str())
+            && let Some(pool) = entry.value.as_array()
+        {
+            for member in pool.iter().filter_map(JsonValue::as_str) {
+                // Effective config has already admitted the name[:weight] grammar.
+                let name = member.split_once(':').map_or(member, |(name, _)| name);
+                references
+                    .entry(name.trim().to_string())
+                    .or_default()
+                    .insert(entry.key.clone());
+            }
+        }
+    }
+    // Use the scheduler's listing to omit definitions parked by an inactive plugin.
+    match runtime.auto_task_listing(false) {
+        Ok(listed_tasks) => {
+            for listed in listed_tasks {
+                let definition = listed.definition;
+                if definition.enabled
+                    && let Some(name) = definition.template.crew
+                {
+                    references
+                        .entry(name.trim().to_string())
+                        .or_default()
+                        .insert(format!("auto-task {}", definition.name));
+                }
+            }
+        }
+        Err(error) => tracing::warn!(
+            %error,
+            "auto-task listing unavailable; crew 'Used by' omits auto-task references"
+        ),
+    }
 
     let mut crews: BTreeMap<String, BTreeMap<String, (JsonValue, ConfigValueSourceKind)>> =
         BTreeMap::new();
@@ -823,11 +898,7 @@ fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
             if layers.is_empty() {
                 layers.push(ConfigValueSourceKind::BuiltIn.label());
             }
-            let referenced_by = references
-                .iter()
-                .filter(|(_, crew)| crew == &name)
-                .map(|(key, _)| json!(key))
-                .collect::<Vec<_>>();
+            let referenced_by = references.remove(&name).unwrap_or_default();
             json!({
                 "name": name,
                 "enabled": cell("enabled"),
@@ -838,6 +909,7 @@ fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
                 "description": cell("description"),
                 "source": layers.join("+"),
                 "referenced_by": referenced_by,
+                "limit": limits.crew(&name),
             })
         })
         .collect()

@@ -7,7 +7,7 @@ use orbit_types::policy::ResolvedFsProfile;
 
 use crate::OrbitRuntime;
 
-use super::resolve::append_unique_modify_root;
+use super::resolve::{append_unique_modify_root, codex_side_write_roots, side_root_store};
 use super::runtime_paths::{
     open_or_create_runtime_directory, open_runtime_file, validated_linux_runtime_descendant,
     validated_linux_runtime_path, validated_linux_runtime_root,
@@ -52,6 +52,28 @@ pub(super) fn append_linux_runtime_write_roots(
     Ok(())
 }
 
+/// Grant Codex's `--add-dir` side roots as validated runtime store
+/// directories, never as bare whole-tree binds of a runtime root. [ORB-14538]
+pub(super) fn append_linux_codex_side_write_roots(
+    runtime: &OrbitRuntime,
+    provider: &str,
+    resolved: &mut ResolvedFsProfile,
+    authority: &mut Vec<LinuxRuntimeWriteAuthority>,
+) -> Result<(), DispatchError> {
+    let side_roots = codex_side_write_roots(runtime, provider)?;
+    if side_roots.is_empty() {
+        return Ok(());
+    }
+    let global = validated_linux_runtime_root(&runtime.paths().global_dir)?;
+    let workspace = validated_linux_runtime_root(&runtime.paths().orbit_dir)?;
+    for dir in side_roots {
+        if let Some((root, relative)) = side_root_store(&[&global, &workspace], &dir) {
+            append_runtime_directory_grant(root, &relative, resolved, authority)?;
+        }
+    }
+    Ok(())
+}
+
 /// Grant one runtime store directory, creating it when it is missing.
 ///
 /// A descendant that resolves outside its runtime root is skipped instead of
@@ -74,6 +96,9 @@ pub(super) fn append_runtime_directory_grant(
         );
         return Ok(());
     };
+    if authority.iter().any(|granted| granted.path == directory) {
+        return Ok(());
+    }
 
     let handle = open_or_create_runtime_directory(root, &directory)?;
     append_unique_modify_root(resolved, directory.display().to_string());

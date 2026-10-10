@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Process spawning, sandboxing, and timeout handling for Orbit tool execution.
 //!
 //! Provides the low-level primitives for launching child processes with
@@ -27,6 +22,8 @@
 //! # Key exports
 //! - [`run_process`] — primary entry point for spawning a subprocess
 //! - [`supervise_child`] — supervise a child spawned through a sandbox wrapper
+//! - [`spawn_supervised_cancellable`] — the same, with signals intercepted
+//!   before the spawn
 //! - [`ExecRequest`] — builder-style description of the process to run
 //! - [`ExecutionResult`] — captured stdout/stderr, exit code, and duration
 //! - [`Sandbox`] / [`NoSandbox`] — sandbox strategy trait and strategy that
@@ -79,30 +76,32 @@ pub use linux_landlock::{
 #[cfg(target_os = "linux")]
 pub use linux_sandbox::probe_bwrap_fresh_for_user;
 pub use linux_sandbox::{
-    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
+    BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, HOST_BWRAP_PATH,
+    LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest,
-    UnsatisfiedWriteGrant, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
-    compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority, existing_glob_matches,
-    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
-    probe_bwrap, probe_bwrap_fresh, spawn_under_linux_bwrap,
+    UnsatisfiedWriteGrant, WriteAnchorKind, bwrap_deferral_notice, bwrap_path,
+    bwrap_program_for_audit, compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
+    existing_glob_matches, linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants,
+    prepare_linux_bwrap_write_grants, probe_bwrap, probe_bwrap_fresh, report_bwrap_deferral,
+    spawn_under_linux_bwrap,
 };
 pub use macos_sandbox::{
-    MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
+    MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest, SandboxExecApplyProbe,
     append_macos_network_access, append_macos_read_boundary, append_macos_subpath_mask,
     claude_state_dir_from_env, compile_macos_sandbox_profile, macos_login_keychain_access,
-    sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
-    sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
+    macos_sandbox_test_guard, probe_sandbox_exec_apply, sandbox_exec_available, sandbox_exec_path,
+    sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 pub use path_identity::{lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
     EnvironmentMode, ExecRequest, StdinMode, run_process, run_process_streaming_stdout,
-    supervise_child, supervise_child_cancellable,
+    spawn_supervised_cancellable, supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
 pub use validation_env::{
     LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,
-    LoginShellEnv, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
+    LoginShellEnv, LoginShellMode, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
     ValidationPathMode, program_on_path,
 };

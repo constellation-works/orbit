@@ -66,6 +66,7 @@ impl AutoTaskDispatch for TestDispatch {
             waivers: Vec::new(),
             ownership: None,
             batch: Vec::new(),
+            refusals: Vec::new(),
         })
     }
 

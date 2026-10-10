@@ -85,11 +85,12 @@ impl OrbitRuntime {
                     evidence: update.evidence.clone(),
                 },
             ),
-            HandoffLandingStep::Stop => (
+            HandoffLandingStep::Stop { repairable } => (
                 format!("landing-stop:{}:{attempt}", update.handoff_id),
                 ClaimMutation::StopLanding {
                     handoff_id: update.handoff_id.clone(),
                     reason: update.evidence.clone(),
+                    repairable: *repairable,
                 },
             ),
         };
@@ -116,11 +117,22 @@ impl OrbitRuntime {
                 update.handoff_id
             )));
         }
+        if matches!(
+            accepted.handoff.candidate.delivery,
+            orbit_types::workflow::handoff::HandoffDelivery::NoDiff { .. }
+        ) {
+            // Completion re-runs the same base and verifier-report checks as
+            // acceptance, including current owner-required validation policy.
+            return self.observe_claim_handoff(&accepted.handoff, false);
+        }
         Ok(HandoffObservation {
             footprint_widening: accepted.handoff.footprint_widening.clone(),
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
             owner_completion_authority: self.owner_completion_authority(),
+            // Acceptance observed the review's base and repository; the store
+            // rechecks the review evidence the handoff pinned without them.
+            review: None,
         })
     }
 }

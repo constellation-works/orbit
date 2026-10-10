@@ -12,15 +12,14 @@
 //! stalled transport is killed and reaped, and the caller receives
 //! [`OrbitError::ProcessTimeout`] instead of waiting forever.
 
-use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::create_private_dir_all;
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
 use orbit_common::process::run_bounded;
-use orbit_types::workspace::git_remotes_equivalent;
+use orbit_types::workspace::{git_remotes_equivalent, redact_git_remote};
 
 /// Highest-precedence attributes for an Orbit-owned cache. Unsets every
 /// conversion Git would otherwise apply from a published `.gitattributes`,
@@ -96,6 +95,12 @@ impl<'a> GitRunner<'a> {
                 "core.autocrlf=false",
                 "-c",
                 "core.safecrlf=false",
+                // A publication checkout is untrusted. Leaving symlinks enabled
+                // turns mode-120000 entries into host symlinks, and the next
+                // read follows them. Inspect still refuses those modes before
+                // reading; this stops checkout from creating the link at all.
+                "-c",
+                "core.symlinks=false",
             ])
             .args(args);
         for (key, value) in &self.env {
@@ -189,16 +194,16 @@ fn isolate_git_dir(git_dir: &Path) -> Result<(), OrbitError> {
     let info = git_dir.join("info");
     create_private_dir_all(&info).map_err(|error| OrbitError::from_write_io(&info, error))?;
     let path = info.join("attributes");
-    fs::write(&path, LITERAL_ATTRIBUTES)
+    atomic_write_text(&path, LITERAL_ATTRIBUTES)
         .map_err(|error| OrbitError::from_write_io(&path, error))?;
     Ok(())
 }
 
-/// Absolute paths are local filesystem detail; keep them out of error text.
+/// Keep local filesystem details and remote credentials out of error text.
 fn redact_args(args: &[&str]) -> String {
     args.iter()
         .filter(|arg| !Path::new(arg).is_absolute())
-        .cloned()
+        .map(|arg| redact_git_remote(arg))
         .collect::<Vec<_>>()
         .join(" ")
 }

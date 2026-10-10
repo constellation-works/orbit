@@ -23,7 +23,7 @@ impl TestWorkspace {
         let home = temp.path().join("home");
         let work = home.join("work");
         fs::create_dir_all(&home).expect("create home");
-        fs::create_dir_all(work.join(".git")).expect("create work repo");
+        crate::git_repo::init(&work);
 
         let workspace = Self {
             _temp: temp,
@@ -138,6 +138,66 @@ fn run_orbit(cwd: &Path, home: &Path, args: &[&str]) -> Output {
         .env("USERPROFILE", home)
         .args(args);
     command.output().expect("run orbit")
+}
+
+#[test]
+fn completed_add_and_update_leave_the_next_write_free_list_indexed() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task_with_tag("Fresh index", "initial");
+    for (tag, expected_title) in [("initial", "Fresh index"), ("updated", "Updated index")] {
+        if tag == "updated" {
+            workspace.run(
+                &[
+                    "task",
+                    "update",
+                    &id,
+                    "--title",
+                    expected_title,
+                    "--tag",
+                    tag,
+                    "--comment",
+                    "Published update",
+                    "--json",
+                ],
+                "update task and history",
+            );
+        }
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .current_dir(&workspace.work)
+            .env("HOME", &workspace.home)
+            .env("USERPROFILE", &workspace.home)
+            .env("RUST_LOG", "warn,orbit.store.task_query=debug")
+            .env("NO_COLOR", "1")
+            .args(["task", "list", "--tag", tag, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let tasks: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["id"], id);
+        assert_eq!(tasks[0]["title"], expected_title);
+        let logs = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            logs.contains("path=\"index\""),
+            "next write-free list must accept the generated index: {logs}"
+        );
+        assert!(
+            !logs.contains("bundle_scan"),
+            "completed writes must not require a bundle scan: {logs}"
+        );
+        assert!(
+            !logs.contains("WARN"),
+            "ordinary indexed reads must be quiet: {logs}"
+        );
+    }
 }
 
 #[test]

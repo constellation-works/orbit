@@ -69,10 +69,6 @@ spec:
           properties:
             task_id:
               type: string
-            context_files_before:
-              type: array
-              items:
-                type: string
             context_files_after:
               type: array
               items:
@@ -137,6 +133,20 @@ spec:
               type: array
               items:
                 type: string
+            required_os:
+              type: array
+              items:
+                type: object
+                required: [criterion, os, evidence]
+                properties:
+                  criterion:
+                    type: integer
+                    minimum: 1
+                  os:
+                    type: string
+                    enum: [linux, macos, windows]
+                  evidence:
+                    type: string
       summary:
         type: string
   instruction: |
@@ -164,7 +174,10 @@ spec:
        criteria, plan, tags, relations, status, and exact current
        `context_files`. Use `orbit.search` for the task ID and relevant design
        terms; inspect linked decision docs when a result points to one.
-    2. With `proc.spawn` run only read-only `git`/`rg` commands. Verify the
+    2. Use the native inspection surface named in the host's appended
+       provider instruction to run only read-only `git`/`rg` commands and
+       read candidate files. The Orbit MCP tool list is separate from these
+       native tools. Verify the
        workspace Git top-level and confirm HEAD equals `source_revision`
        when set. Read candidate files only under this supplied checkout.
        If `source_revision` is a commit id, inspect
@@ -174,12 +187,18 @@ spec:
        branch that snapshot belongs to; it is provenance, not a ref to resolve
        again. If `source_revision` is empty or null, this is a non-Git workspace:
        inspect the supplied filesystem directly.
-       Use the provider-native file-read tool to inspect candidate targets. Do not edit repository files.
+       Do not edit repository files.
     3. Propose `context_files_after` as exact canonical selectors using only
        `file:`, `dir:`, or `symbol:`. Every anchor must already exist inside
        `workspace_path` at `source_revision` when that field is set; omit
        read-for-context files and working-tree-only or later-commit paths.
-       Preserve the exact current list as `context_files_before`.
+       The one exception is an operator-declared creation target: a selector
+       named by the task's latest `context_creation_authorized` history entry.
+       Keep each one exactly as recorded even though it does not exist yet.
+       Never propose any other missing path; deterministic apply keeps
+       declared targets you omit and rejects every undeclared missing anchor.
+       Apply uses the host's prepared snapshot as `context_files_before`;
+       do not echo that list in your assessment.
        Derive the modification targets from evidence, never by sweeping a
        directory or a crate. For a removal or a rename, the targets are the
        files that actually reference the symbol — enumerate them
@@ -226,6 +245,29 @@ spec:
        variable to make a criterion reachable. A criterion that expects a
        refusal is a correct negative test, and a tool name inside a quoted
        example is not a requirement; report neither.
+       Also check whether a criterion requires execution or evidence on a
+       specific native operating system, such as a real macOS launch or
+       sandbox-exec result, a Linux Bubblewrap result, or a native Windows
+       integration check. Record each such requirement in `required_os` as
+       `{"criterion":N,"os":"macos|linux|windows","evidence":"..."}`, where
+       `N` is the criterion's 1-based position, whether or not the task
+       already carries the matching tag. Admission reads only this typed
+       finding: until the task carries the matching tag, a host of another OS
+       does not start it. Then compare the requirement with the task's current
+       tags, ignoring case. If the required OS has no matching tag, also report a
+       `utility_warnings` finding citing the criterion and naming the exact
+       tag to add: `os:macos`, `os:linux`, or `os:windows`. A different OS tag
+       does not satisfy the requirement. Recommend adding the matching tag
+       before dispatch so admission can select a capable host; never edit
+       tags yourself. If the matching tag is already present, do not repeat
+       this warning merely because the inspecting host runs another OS.
+       A platform mention, cross-compilation target, mocked platform check,
+       or negative test of another OS's admission refusal does not by itself
+       require that native host, so it belongs in neither `required_os` nor
+       `utility_warnings`. Multiple OS tags admit any one of those
+       OSes; when evidence is required on every named OS, recommend separate
+       host-scoped validation tasks rather than claiming those tags arrange
+       execution on all hosts.
     6. Assess the bounded logical repair, not alert severity, alert count, file
        count, version increment, or expected wall-clock time. Evaluate repair
        certainty, behavioral change, component coupling, and validation
@@ -253,8 +295,8 @@ spec:
        is `medium` or `low`, list those rating-changing unknowns in `evidence_gaps`.
        Explicitly exclude 'validation not executed in this read-only assessment'
        style entries: this lane is a read-only preflight and never builds, tests,
-       or runs validation commands (`proc.spawn` is CLI-only, so an MCP-transport
-       session does not advertise it at all). The structural absence of test
+       or runs validation commands. The native inspection surface permits
+       read-only inspection only. The structural absence of test
        execution is never an evidence gap and must not be listed in `evidence_gaps`,
        nor used to return `unassessed`. Name the checks that would establish the repair
        in `validation_approach` / `reassessment_triggers`, and report missing validation
@@ -298,7 +340,6 @@ spec:
       "task_ids":["ORB-NNNNN"],
       "tasks":[{
         "task_id":"ORB-NNNNN",
-        "context_files_before":[],
         "context_files_after":["file:path/to/target"],
         "disposition":"selectors|verified_no_diff|host_operational",
         "evidence":"required when context_files_after is empty",
@@ -315,7 +356,8 @@ spec:
         "release_action_required":null,
         "adr_conflicts":[],
         "utility_warnings":[],
-        "surface_warnings":[]
+        "surface_warnings":[],
+        "required_os":[]
       }],
       "summary":"one short partition summary"
     },"error":null}

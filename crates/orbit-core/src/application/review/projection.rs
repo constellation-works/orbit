@@ -5,6 +5,7 @@
 //! records. A task without a certificate simply has no review projection.
 
 use chrono::Utc;
+use orbit_automation::review::validation_limitations;
 use orbit_common::OrbitError;
 use orbit_types::task::{ArtifactManifestFileV2, Task};
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
@@ -41,6 +42,8 @@ pub fn task_review_projection(
             })));
         }
     };
+    let evidence_hold = super::evidence::evidence_hold(runtime, &task.id)?
+        .filter(|hold| hold.attempt_id == certificate.attempt_id && !certificate.verdict.passed());
     let store = runtime.review_store()?;
     let ledger = store.review_ledger(&runtime.workspace_id()?, &certificate.lineage_key)?;
     let landings = store.review_landings(&certificate.attempt_id)?;
@@ -55,6 +58,7 @@ pub fn task_review_projection(
         "attempt_id": certificate.attempt_id,
         "lineage_key": certificate.lineage_key,
         "verdict": certificate.verdict.as_str(),
+        "evidence_hold": evidence_hold,
         "assurance": certificate.assurance.map(|assurance| assurance.as_str()),
         "passed": certificate.verdict.passed(),
         "escalation": certificate.escalation,
@@ -66,7 +70,12 @@ pub fn task_review_projection(
         "repair_commits": certificate.repair_commits,
         "findings": certificate.findings,
         "validation": certificate.validation,
+        "required_validation_commands": certificate.required_validation_commands,
         "validation_complete": certificate.validation_complete,
+        "validation_limitations": validation_limitations(&certificate.validation),
+        "retained_obligations": certificate.retained_obligations,
+        "retired_validation": certificate.retired_validation,
+        "validation_scope": certificate.validation_scope,
         "task_meaning_digest": certificate.task_meaning_digest,
         "budget": certificate.budget,
         "consumed": certificate.consumed,

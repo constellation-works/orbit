@@ -19,8 +19,25 @@
 # - A failed step leaves the worktree for inspection and terminalizes the run.
 #   The drain's settlement then records the failure against the claim and
 #   releases only this claim's reservation.
+# - An implementer-declared blocker (`task_blocked_by_agent`) stops the leaf
+#   before the next step and before final recovery. Pending changes stay.
 # - `claim_validate` fails the run when a required command does not pass on the
-#   exact candidate, so no handoff is ever recorded for unvalidated work.
+#   exact candidate, so no handoff is ever recorded for unvalidated work. A
+#   failure the base shares (`baseline_red`) releases the claim with a hold
+#   instead, so the owner keeps the task in its backlog until the required
+#   command passes on a new base tip.
+# - A leaf that ends after `commit` names its committed worktree branch in its
+#   failure settlement, and the owner keeps it [ORB-14338]. The task's next
+#   claim carries it as `resume_candidate`, and the `resume_candidate` step
+#   applies it onto the new base so the implementer continues it, as the
+#   claimed PR leaf does. The candidate is already in the owner's own
+#   repository, so nothing is pushed.
+#
+# ORB-14261: a repair claim — admitted after the owner's landing of an earlier
+# handoff stopped on a base conflict or stale base — runs this same leaf with
+# `claim_repair` set. `resume_candidate` re-applies that handoff's candidate
+# onto the current base before the implementer, so the attempt rebases and
+# revalidates the preserved work instead of starting over.
 #
 schemaVersion: 2
 kind: Job
@@ -43,6 +60,12 @@ spec:
     base_sync: local
     landing_mode: local
     allowed_crews: []
+    # [ORB-14338] The candidate the owner kept from the task's last claim,
+    # set by the claim; `null` implements fresh.
+    resume_candidate: null
+    # The repair a claim carries when it re-runs a handoff whose landing
+    # stopped on its base [ORB-14261]; null for a first attempt.
+    claim_repair: null
 
   steps:
     - id: worktree
@@ -57,6 +80,25 @@ spec:
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
         landing_mode: "{{ input.landing_mode }}"
+
+    # [ORB-14338] Carry the candidate the task's last claim committed onto
+    # this base as uncommitted changes, as the claimed PR leaf does. The owner
+    # already retired one an operator discarded or whose spec changed.
+    # [ORB-14261] A repair claim instead carries the candidate its stopped
+    # landing preserved, handed to the implementer as a `conflict` or
+    # `landing` repair; the leaf then commits, rebases, revalidates and hands
+    # off again under the same task. The implementer always runs: the handoff
+    # carries its summary, and `validate` judges the result.
+    - id: resume_candidate
+      target: activity:candidate_resume
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        candidate: "{{ input.resume_candidate }}"
+        claimed: true
+        claim_repair: "{{ input.claim_repair }}"
 
     - id: implement_bundle
       loop:
@@ -74,6 +116,7 @@ spec:
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.
               claimed: true
+              resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
       recovery_activity: step_failure_recovery
@@ -81,6 +124,7 @@ spec:
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
         scope: all
+        verify_already_landed: true
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_ref: "{{ steps.worktree.output.base_ref }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
@@ -97,6 +141,8 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        already_landed_checkpoint: "{{ steps.commit.output }}"
 
     - id: handoff
       target: activity:claim_handoff
@@ -104,6 +150,7 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sync: "{{ input.base_sync }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
+        no_diff_evidence: "{{ steps.validate.output.no_diff_evidence }}"
         candidate: "{{ steps.validate.output.candidate }}"
         validation: "{{ steps.validate.output.validation }}"
         # A claim binds exactly one task, so the loop ran once and this is

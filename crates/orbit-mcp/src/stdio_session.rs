@@ -11,12 +11,15 @@
 //! itself, without buffering beyond one partial line, and passes complete
 //! lines to the MCP service. It tracks which requests are outstanding from
 //! the lines it forwards and the responses the service flushes. The session
-//! is idle when every forwarded line has been consumed and every request has
-//! been answered.
+//! is idle when every forwarded line has been consumed and every request the
+//! transport accepts has been answered. Rejected or dropped input never adds
+//! a pending request, since its error may not echo the original id.
 //!
 //! At that point it stops reading, stops the service, and returns
 //! [`StdioExit::HandOver`] with the client's original `initialize` request
-//! and any partial line it had read. The caller execs the new executable with
+//! and any partial line it had read. The reader defers a handover while that
+//! partial line exceeds [`MAX_CARRYOVER`], keeping the service alive until a
+//! later idle check. The caller execs the new executable with
 //! that state in [`RESUME_ENV`]. Because `exec` keeps the pid and the stdio
 //! descriptors, the client sees one uninterrupted session. The new process
 //! replays the `initialize` request into its server rather than expecting a
@@ -34,7 +37,9 @@ use base64::Engine as _;
 use orbit_common::OrbitError;
 use orbit_common::fs::generation;
 use rmcp::ServiceExt;
-use rmcp::model::{InitializeRequestParams, Meta};
+use rmcp::model::{
+    ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializeRequestParams, Meta,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -142,26 +147,35 @@ struct Tracker {
 
 impl Tracker {
     fn forwarded(&mut self, line: &[u8]) {
-        let Ok(message) = serde_json::from_slice::<Value>(line) else {
+        // Match rmcp's incoming message type, including its BOM tolerance.
+        // A raw method/id pair is insufficient: decoding failures receive an
+        // id-less error or are dropped by the transport's compatibility path.
+        let line = line.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(line);
+        let Ok(message) = serde_json::from_slice::<ClientJsonRpcMessage>(line) else {
             return;
         };
-        for message in messages(message) {
-            let Some(method) = message.get("method").and_then(Value::as_str) else {
-                continue;
-            };
-            if method == "notifications/cancelled" {
-                if let Some(id) = message.pointer("/params/requestId") {
-                    self.pending.remove(&id.to_string());
+        match message {
+            ClientJsonRpcMessage::Request(request) => {
+                let Ok(id) = serde_json::to_string(&request.id) else {
+                    return;
+                };
+                if matches!(request.request, ClientRequest::InitializeRequest(_)) {
+                    self.initialize = serde_json::from_slice::<Value>(line)
+                        .ok()
+                        .and_then(|message| message.get("params").cloned());
                 }
-                continue;
+                self.pending.insert(id);
             }
-            let Some(id) = message.get("id") else {
-                continue;
-            };
-            if method == "initialize" {
-                self.initialize = message.get("params").cloned();
+            ClientJsonRpcMessage::Notification(notification) => {
+                if let ClientNotification::CancelledNotification(cancelled) =
+                    notification.notification
+                    && let Some(id) = cancelled.params.request_id
+                    && let Ok(id) = serde_json::to_string(&id)
+                {
+                    self.pending.remove(&id);
+                }
             }
-            self.pending.insert(id.to_string());
+            _ => {}
         }
     }
 
@@ -198,6 +212,20 @@ pub(crate) async fn serve(
         return serve_handing_over(server, resumed, stdin).await;
     }
     serve_plain(server, resumed).await
+}
+
+/// Whether a stdio session in this process could hand over: `serve` does
+/// only when stdin can be polled. A process registers this before it serves,
+/// so an updater knows which sessions follow a renamed candidate.
+pub fn stdin_supports_handover() -> bool {
+    #[cfg(unix)]
+    {
+        unix::stdin_is_pollable()
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 /// Without a pollable stdin (a regular file, `/dev/null`) the session is
@@ -245,7 +273,7 @@ async fn serve_handing_over(
     let tracker = Arc::new(Mutex::new(Tracker::default()));
     let undelivered = Arc::new(AtomicUsize::new(0));
     let (lines, receiver) = mpsc::channel::<Vec<u8>>(64);
-    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let (stop, stopped) = mpsc::channel(1);
     let (carryover, initialize) = match resumed {
         Some(resumed) => (resumed.carryover, resumed.initialize),
         None => (Vec::new(), None),
@@ -297,7 +325,7 @@ async fn serve_handing_over(
                 finished
                     .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?
                     .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?;
-                let _ = stop.send(true);
+                let _ = stop.send(unix::PumpStop::Always).await;
                 let _ = pump.await;
                 return Ok(StdioExit::Closed);
             }
@@ -312,9 +340,20 @@ async fn serve_handing_over(
         if matches!(decision, Lifecycle::Continue) || !is_idle(&tracker, &undelivered) {
             continue;
         }
-        // Stop reading first, then wait out whatever was forwarded before
-        // the pump stopped: a request answered, a notification consumed.
-        let _ = stop.send(true);
+        // Let the pump check its own buffer before stopping: checking a
+        // shared length here would race with another stdin read. A deferred
+        // handover leaves both the reader and the service running.
+        if matches!(decision, Lifecycle::HandOver(_)) {
+            let (accepted, response) = tokio::sync::oneshot::channel();
+            let _ = stop.send(unix::PumpStop::HandOver(accepted)).await;
+            if matches!(response.await, Ok(false)) {
+                continue;
+            }
+        } else {
+            let _ = stop.send(unix::PumpStop::Always).await;
+        }
+        // Wait out whatever was forwarded before the pump stopped: a
+        // request answered, a notification consumed.
         let Ok(Ok(outcome)) = pump.await else {
             return Err(OrbitError::Execution(
                 "mcp serve_stdio: the stdin reader stopped unexpectedly".into(),
@@ -340,7 +379,7 @@ async fn serve_handing_over(
         let _ = service.await;
         unix::restore_blocking_stdin();
         return Ok(match decision {
-            Lifecycle::HandOver(executable) if carryover.len() <= MAX_CARRYOVER => {
+            Lifecycle::HandOver(executable) => {
                 let resume = serde_json::to_string(&ResumeState {
                     pid: std::process::id(),
                     initialize: lock(&tracker).initialize.clone(),
@@ -470,9 +509,9 @@ mod unix {
     use std::sync::{Arc, Mutex};
 
     use tokio::io::unix::AsyncFd;
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::{mpsc, oneshot};
 
-    use super::{READ_CHUNK, Tracker, lock};
+    use super::{MAX_CARRYOVER, READ_CHUNK, Tracker, lock};
 
     pub(super) struct StdinFd;
 
@@ -496,6 +535,19 @@ mod unix {
                 }
             }
         }
+    }
+
+    /// Whether [`NonBlockingStdin::new`] would succeed, asked before any
+    /// runtime exists: register stdin with a throwaway reactor the same way.
+    pub(super) fn stdin_is_pollable() -> bool {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+        else {
+            return false;
+        };
+        let _entered = runtime.enter();
+        AsyncFd::new(StdinFd).is_ok()
     }
 
     fn set_nonblocking(enabled: bool) -> Option<()> {
@@ -526,6 +578,13 @@ mod unix {
         Closed,
     }
 
+    pub(super) enum PumpStop {
+        /// Stop regardless of the partial line, for closure or yielding.
+        Always,
+        /// Stop only if the partial line fits in the resumed session state.
+        HandOver(oneshot::Sender<bool>),
+    }
+
     /// Forward complete lines from stdin until stopped or closed.
     pub(super) async fn pump(
         stdin: NonBlockingStdin,
@@ -533,7 +592,7 @@ mod unix {
         lines: mpsc::Sender<Vec<u8>>,
         tracker: Arc<Mutex<Tracker>>,
         undelivered: Arc<AtomicUsize>,
-        mut stopped: watch::Receiver<bool>,
+        mut stopped: mpsc::Receiver<PumpStop>,
     ) -> std::io::Result<PumpOutcome> {
         // Borrow fd 0 unbuffered; it must never be closed from here.
         // SAFETY: fd 0 stays open for the process lifetime and ManuallyDrop
@@ -544,12 +603,19 @@ mod unix {
         }
         let mut chunk = vec![0u8; READ_CHUNK];
         loop {
-            if *stopped.borrow() {
-                return Ok(PumpOutcome::Stopped(buffer));
-            }
             let mut ready = tokio::select! {
+                biased;
+                request = stopped.recv() => {
+                    if let Some(PumpStop::HandOver(accepted)) = request {
+                        if buffer.len() > MAX_CARRYOVER {
+                            let _ = accepted.send(false);
+                            continue;
+                        }
+                        let _ = accepted.send(true);
+                    }
+                    return Ok(PumpOutcome::Stopped(buffer));
+                }
                 ready = stdin.0.readable() => ready?,
-                _ = stopped.changed() => continue,
             };
             let read = ready.try_io(|_| (&*file).read(&mut chunk));
             let read = match read {

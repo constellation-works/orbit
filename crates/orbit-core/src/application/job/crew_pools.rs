@@ -2,8 +2,9 @@
 //! [ORB-12717], and capture pool policy on the admitting pipeline so each
 //! task's selection is frozen in its run input. Descendant pipelines inherit
 //! the same task choice; a task created without a crew before assignment moved
-//! to creation time is still routed through the pools at admission, which
-//! reads the record and never writes it.
+//! to creation time, a stale pool assignment after rerating, or a default
+//! fallback for an empty pool, is routed through the current pools at admission,
+//! which reads the record and never writes it.
 
 use std::collections::BTreeMap;
 
@@ -12,13 +13,14 @@ use orbit_config::{
     ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
 };
 use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity};
+use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::RunStateUpdate;
 use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember, FINAL_RECOVERY_CREWS_KEY};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::provider_limit::ProviderLimit;
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
@@ -45,6 +47,27 @@ const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::Hard,
     TaskComplexity::XHard,
 ];
+
+/// Replay recaptures automatic admission under current policy. Only a crew
+/// recorded as the caller's explicit choice survives; run-level pool overrides
+/// and allowlists remain caller input. Other jobs do not use this admission.
+pub(crate) fn strip_auto_crew_admission(job_name: &str, input: &mut Value) {
+    if !POLICY_PIPELINES.contains(&job_name) {
+        return;
+    }
+    if let Some(object) = input.as_object_mut() {
+        let explicit = object
+            .get(SELECTION_KEY)
+            .and_then(|selection| selection.get("source"))
+            .and_then(Value::as_str)
+            == Some("explicit");
+        object.remove(SELECTION_KEY);
+        object.remove(POOLS_KEY);
+        if !explicit {
+            object.remove("crew");
+        }
+    }
+}
 
 /// Crew chosen for a task at creation, with the provenance its history entry
 /// records: `explicit`, `pool:<complexity>`, or `default` [ORB-12717].
@@ -74,6 +97,84 @@ pub(crate) struct CrewCandidate {
 pub(crate) type CapturedCrewPools = BTreeMap<String, CapturedCrewPool>;
 
 impl OrbitRuntime {
+    /// Recover legacy assignment provenance only from the latest assignment
+    /// that names the current crew. Missing evidence preserves an explicit pin.
+    pub(crate) fn task_crew_source(&self, task: &Task) -> Result<Option<String>, OrbitError> {
+        if task.crew_source.is_some() {
+            return Ok(task.crew_source.clone());
+        }
+        let Some(crew) = task.crew.as_deref() else {
+            return Ok(None);
+        };
+        let history = self.get_task_history(&task.id)?;
+        let Some(note) = history
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.event.as_str(), "crew_assigned" | "crew_redrawn"))
+            .and_then(|entry| entry.note.as_deref())
+        else {
+            return Ok(None);
+        };
+        if let Some(source) = note.strip_prefix(&format!("assigned crew `{crew}` from ")) {
+            return Ok(Some(source.to_string()));
+        }
+        if let Some((_, source)) = note.split_once(&format!(" to `{crew}` via ")) {
+            return Ok(if source == "explicit name" {
+                Some("explicit".to_string())
+            } else {
+                source
+                    .strip_prefix("pool draw (")
+                    .and_then(|source| source.strip_suffix(')'))
+                    .map(ToOwned::to_owned)
+            });
+        }
+        Ok(None)
+    }
+
+    /// Redraw a pool assignment from another tier or a default fallback before
+    /// publishing the new complexity. The caller commits crew, source and this
+    /// history together.
+    pub(crate) fn rerate_task_crew(
+        &self,
+        task: &mut Task,
+        complexity: Option<TaskComplexity>,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        let Some(source) = self.task_crew_source(task)? else {
+            return Ok(None);
+        };
+        let pool_tier = source.strip_prefix("pool:");
+        if source != "default" && pool_tier.is_none() {
+            return Ok(None);
+        }
+        if (source == "default" && complexity == task.complexity)
+            || complexity.is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
+        {
+            return Ok(None);
+        }
+        let before = task.crew.clone();
+        let assignment =
+            self.creation_crew_assignment(complexity, None, &mut random_crew_ticket)?;
+        task.crew = assignment
+            .as_ref()
+            .map(|assignment| assignment.crew.clone());
+        task.crew_source = assignment.map(|assignment| assignment.source);
+        Ok(Some(TaskHistoryEntry {
+            at: chrono::Utc::now(),
+            by: "system".to_string(),
+            event: "crew_redrawn".to_string(),
+            note: Some(format!(
+                "crew redrawn from {} (`{}`) to {} (`{}`) after complexity changed to {}",
+                source,
+                before.as_deref().unwrap_or("(none)"),
+                task.crew_source.as_deref().unwrap_or("unassigned"),
+                task.crew.as_deref().unwrap_or("(none)"),
+                complexity.map_or("unassessed", TaskComplexity::as_str),
+            )),
+            from_status: None,
+            to_status: None,
+        }))
+    }
+
     /// Transport inputs only; validation and source capture happen at the
     /// common pipeline admission boundary, including generic job submissions.
     pub(crate) fn set_auto_crew_overrides(input: &mut Value, overrides: &ComplexityCrewPools) {
@@ -143,25 +244,71 @@ impl OrbitRuntime {
 
     /// One selection seam for both read-only eligibility and admission. The
     /// former inspects the candidates without drawing a random ticket.
+    ///
+    /// [ORB-14266] A standing provider failure hold removes the crews it
+    /// excludes from the draw, falling back to the complexity pool and then
+    /// the default. [ORB-14697] This host's provider limits then remove the
+    /// limited crews, falling back to the complexity pool only. An explicit
+    /// crew is the caller's decision and ignores both.
     pub(crate) fn auto_task_crew_candidates(
         &self,
         task: &Task,
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
-        if explicit.and_then(non_empty).is_some()
-            || task.crew.as_deref().and_then(non_empty).is_some()
-        {
+        if explicit.and_then(non_empty).is_some() {
             return Ok((
                 vec![sole_candidate(
                     self.resolve_crew_for_task(explicit, task.crew.as_deref())?,
                 )],
-                if explicit.and_then(non_empty).is_some() {
-                    "explicit"
-                } else {
-                    "task.crew"
+                "explicit".to_string(),
+            ));
+        }
+        self.admissible_crew_candidates(task, pools)
+    }
+
+    /// The task's validated pool assignment or explicit pin, else its complexity
+    /// pool, else the default chain,
+    /// before any provider failure hold.
+    pub(crate) fn unheld_task_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        let source = self.task_crew_source(task)?;
+        let pool_tier = source
+            .as_deref()
+            .and_then(|source| source.strip_prefix("pool:"));
+        if pool_tier.is_some() || source.as_deref() == Some("default") {
+            if let Some((candidates, pool_source)) =
+                self.complexity_pool_candidates(task.complexity, pools)?
+            {
+                if task
+                    .complexity
+                    .is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
+                    && let Some(candidate) = candidates.iter().find(|candidate| {
+                        candidate.weight > 0
+                            && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
+                    })
+                {
+                    return Ok((
+                        vec![sole_candidate(candidate.crew.clone())],
+                        source.unwrap_or_default(),
+                    ));
                 }
-                .to_string(),
+                return Ok((candidates, pool_source));
+            }
+            return Ok((
+                vec![sole_candidate(self.resolve_crew_for_task(None, None)?)],
+                "default".to_string(),
+            ));
+        }
+        if task.crew.as_deref().and_then(non_empty).is_some() {
+            return Ok((
+                vec![sole_candidate(
+                    self.resolve_crew_for_task(None, task.crew.as_deref())?,
+                )],
+                "task.crew".to_string(),
             ));
         }
         if let Some(drawn) = self.complexity_pool_candidates(task.complexity, pools)? {
@@ -183,7 +330,7 @@ impl OrbitRuntime {
     /// `workflow.default_crew` — and dispatch refuses that too if it is
     /// disabled. Enabled state is read from the current configuration, not the
     /// captured pool, so disabling a crew takes effect for the next draw.
-    fn complexity_pool_candidates(
+    pub(crate) fn complexity_pool_candidates(
         &self,
         complexity: Option<TaskComplexity>,
         pools: &CapturedCrewPools,
@@ -218,8 +365,8 @@ impl OrbitRuntime {
 
     /// Decide the crew a task is created with [ORB-12717].
     ///
-    /// Creation is the only place a crew-less task is routed through the
-    /// complexity pools — a status transition never revisits the choice — and
+    /// Creation and complexity re-rates draw from the complexity pools;
+    /// a status transition alone never revisits the choice, and
     /// `task update --crew ""` re-enters here for the task's current
     /// complexity. An explicit crew is kept exactly as the caller wrote it.
     /// `None` means this workspace can name no crew at all, so the field stays
@@ -371,6 +518,13 @@ impl OrbitRuntime {
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = weighted_draw(&candidates, &source, random)?;
+        // [ORB-14697] An explicit run crew is not gated; the selection
+        // records the provider limit it runs against.
+        let provider_limit = explicit.and_then(|_| {
+            self.provider_limit_gate(chrono::Utc::now())
+                .limit_for(&selected.crew)
+                .map(ProviderLimit::describe)
+        });
         input[SELECTION_KEY] = json!({
             "task_id": task.id,
             "crew": selected.crew.name,
@@ -383,6 +537,9 @@ impl OrbitRuntime {
                 .map(|candidate| json!({"name": candidate.crew.name, "weight": candidate.weight}))
                 .collect::<Vec<_>>(),
         });
+        if let Some(limit) = provider_limit {
+            input[SELECTION_KEY]["provider_limit"] = json!(limit);
+        }
         input["crew"] = json!(selected.crew.name);
         Ok(())
     }

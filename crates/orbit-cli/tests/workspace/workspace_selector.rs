@@ -40,6 +40,11 @@ fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
     fs::create_dir_all(&home).expect("home");
     init_git_repo(&target);
     init_git_repo(&foreign);
+    // Teardown is invoked from neither checkout. That cwd still needs its
+    // own lookup boundary, or a nested TMPDIR discovers the enclosing
+    // config before the named workspace can be resolved.
+    let operator = temp.path().join("operator");
+    crate::git_repo::seal_lookup_boundary(&operator);
     run_orbit(
         &target,
         &home,
@@ -116,7 +121,7 @@ fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
         .expect("save cross-ID catalog");
 
     let preview =
-        run_orbit_as_operator(temp.path(), &home, &["workspace", "teardown", "target"]).failure();
+        run_orbit_as_operator(&operator, &home, &["workspace", "teardown", "target"]).failure();
     let stderr = String::from_utf8_lossy(&preview.get_output().stderr);
     let partitions: Vec<_> = stderr
         .lines()
@@ -137,7 +142,7 @@ fn teardown_preview_and_execution_preserve_a_foreign_catalog_partition() {
     );
 
     run_orbit_as_operator(
-        temp.path(),
+        &operator,
         &home,
         &["workspace", "teardown", "target", "--confirm"],
     )
@@ -1450,8 +1455,7 @@ fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str]) -> Value {
 }
 
 fn init_git_repo(repo: &Path) {
-    fs::create_dir_all(repo).expect("create repo");
-    run_git(repo, &["init"]);
+    crate::git_repo::init(repo);
     run_git(repo, &["config", "user.name", "Orbit Test"]);
     run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -1461,7 +1465,7 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

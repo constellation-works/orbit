@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379"]
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -174,6 +174,10 @@ validator surface. If no such surface is available, leave this validation leg
 blocked/not-run and record the required authorized follow-up; do not broaden the committed
 permission or substitute a different executable to bypass it.
 
+The published `/.well-known/security.txt` is the canonical security-reporting document. Its
+`Contact` points to GitHub's private vulnerability-reporting form, matching
+[SECURITY.md](../../SECURITY.md), and its `Policy` points to that policy.
+
 The validator rejects missing or malformed RFC 9116 fields, invalid or expired
 `Expires`, non-HTTPS `Contact`/`Policy` URIs, an incorrect `Canonical`, invalid
 UTF-8, and HTML fallback content. The Orbit maintainers own renewal: review the
@@ -228,40 +232,108 @@ kill "$PREVIEW_PID" 2>/dev/null || true
 wait "$PREVIEW_PID" 2>/dev/null || true
 ```
 
+### Inline code layout checks
+
+After `npm run check` and `npm run build`, serve `dist/` with `npm run preview`
+and run the browser regression check from the repository root with an installed
+Playwright module and Chromium (the staged package from "Stage Playwright and
+Chromium" above satisfies this):
+
+```bash
+node website/scripts/check-inline-code.mjs \
+  "$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs" "$PREVIEW_URL" .orbit/tmp/inline-code-browser
+```
+
+The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
+1440px in both site themes with web fonts loaded. It also checks
+`/reference/config/` at 320, 1152 and 1920px in both themes, including
+code clipping, delimiter-only line breaks, single-line desktop keys, and table
+and page width. It opens disclosures, selects each provider panel, measures
+glyph line breaks and code/container bounds, checks that `.`, `,`, `;`, `:` or
+`)` after a code stays on the code's last line, checks that links containing
+only code keep their underline (painted, for four known links at 1280px),
+checks mobile page overflow, and
+verifies the agents provider table's width and borders. It saves measurements
+and failure screenshots in the evidence directory.
+
+When changing a Markdown plugin, run
+`ASTRO_TELEMETRY_DISABLED=1 npm exec -- astro sync --force` in `website/`
+before rebuilding to clear Astro's cached rendered content.
+
+Inline commands wrap at spaces and after `/`, `.` or `=`. Flags and identifiers
+stay intact regardless of length; a single token wider than its container gets
+local horizontal scrolling. The shared Markdown transform also handles raw HTML
+code examples, preserves their selectable text, and leaves `pre` blocks alone.
+It wraps each inline code in a `nowrap` box so punctuation after it cannot start
+a line, and the stylesheet leaves room for that punctuation and repeats the link
+underline on code inside links.
+
+## Site content and generated assets
+
+Pages are authored by hand under `website/src/content/docs/`, with two exceptions under
+`website/src/pages/`: `/changelog/` renders the repository's tracked `CHANGELOG.md` so the
+site never carries a drifting copy, and `/tasks/` is the landing for the task links Orbit
+mints into pull requests (`website/public/_redirects` sends `/tasks/<id>` there). Nothing on
+this site is fetched or generated at build time, so `npm run build` is a pure function of the
+tracked sources. Before website commands run, a cleanup hook removes the retired generated
+`website/src/content/docs/metrics/` directory left by older checkouts. Do not author pages in
+that reserved directory; the hook does not generate content.
+
+`website/public/robots.txt` allows all crawlers and points at the sitemap index Astro
+generates from the `site` URL. The social-preview image is `website/public/og-image.png`
+(1200x630); most platforms do not render SVG previews, so `website/public/og-image.svg` is
+kept beside it as the source. `og-image.*`, the logo SVGs in `website/src/assets/orbit-logo-*.svg`
+and `website/public/favicon.svg` are generated outside this repository; change their generators
+there rather than editing these files by hand. The dashboard screenshots in
+`website/src/assets/dashboard/` are captured from a live dashboard by
+[`website/scripts/dashboard-shots/`](../../website/scripts/dashboard-shots/README.md); rerun it
+when the dashboard changes.
+
 ## Production publication and evidence
 
-Daniel deploys `orbit-cli.com` manually. The repository contains the source,
+The maintainer deploys `orbit-cli.com` manually. The repository contains the source,
 static build, and validation procedures, but no GitHub Actions publication path.
 Do not dispatch or recreate a website deployment workflow. Run the local checks
-above, provide the resulting `website/dist/` output to Daniel, and keep hosting,
+above, provide the resulting `website/dist/` output to the maintainer, and keep hosting,
 Cloudflare account access, and DNS changes outside this repository task.
 
-The static `website/public/_headers` file is the sole repository-owned HSTS
-policy. Its one-year max-age intentionally does not use `includeSubDomains` or
-`preload`; the repository has not established that every subdomain is HTTPS-ready
-and under compatible operational ownership. HTTP redirect behavior belongs to the
-externally managed Cloudflare zone rather than the Pages artifact. A failed
-redirect check is an external-zone issue, not a reason to add a second redirect
-mechanism to the site.
+The static `website/public/_headers` file is the sole repository-owned response-header
+policy. Cloudflare Pages copies it to the static-output root and applies its
+`Strict-Transport-Security: max-age=31536000` rule to every HTTPS route, including static
+error responses. The one-year max-age intentionally does not use `includeSubDomains` or
+`preload`; the repository has not established that every subdomain is HTTPS-ready and under
+compatible operational ownership.
 
-After Daniel's manual publication, verify the public result independently:
+The same file sets `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, and a
+restrictive `Permissions-Policy` for every route, and serves `/_astro/*` (the content-hashed
+build assets) with a one-year `immutable` `Cache-Control`. It sets no
+`Content-Security-Policy`: pages carry small inline scripts, so a CSP would need hashes or
+nonces first.
+
+HTTP redirect behavior belongs to the externally managed Cloudflare zone rather than the
+Pages artifact. A failed redirect check is an external-zone issue, not a reason to add a
+second redirect mechanism to the site.
+
+After the maintainer's manual publication, verify the public result independently:
 
 1. Open `https://orbit-cli.com/`, the delivery-mode table, and
    `https://orbit-cli.com/getting-started/install/`; confirm each returns a
    successful response and the expected rendered content.
-2. Fetch `https://orbit-cli.com/deployment.json` only when Daniel's deployment
+2. Fetch `https://orbit-cli.com/deployment.json` only when the maintainer's deployment
    process intentionally provides that provenance file; compare its revision
    with the source revision being published.
-3. Check the canonical security document:
+3. Check the canonical security document, then run the validator on the saved body:
 
 ```bash
 curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
-  https://orbit-cli.com/.well-known/security.txt
+  --output "$SANDBOX_ROOT/security.txt" https://orbit-cli.com/.well-known/security.txt
 grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' /tmp/security-txt.headers
+npm --prefix "$REPO/website" run validate:security-txt -- "$SANDBOX_ROOT/security.txt"
 ```
 
 Then rerun the security scan. A 404, HTML response, stale `Expires`, failed
-HSTS check, or missing redirect is evidence that Daniel's external publication
+HSTS check, or missing redirect is evidence that the maintainer's external publication
 or hosting configuration needs attention. Do not treat the local `dist/` check as
 public deployment evidence.
 

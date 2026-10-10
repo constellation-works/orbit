@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::state::Ws;
-use axum::extract::Query;
+use crate::runtime_memo::SCOREBOARD_TTL;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Datelike, Utc};
@@ -13,8 +14,8 @@ use orbit_core::{FailureIncidentQuery, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::blocking;
 use super::incidents::{ActorFailureRollup, ROLLUP_SCAN_LIMIT, agent_family_key, rollup_by_actor};
+use super::map_runtime_error;
 
 /// Query-string shape for `GET /api/scoreboard`.
 ///
@@ -26,7 +27,11 @@ pub(super) struct ScoreboardQuery {
     pub(super) window: Option<String>,
 }
 
-pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQuery>) -> Response {
+pub(super) async fn scoreboard(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<ScoreboardQuery>,
+) -> Response {
     let window = match query.window.as_deref() {
         None => ScoreboardWindow::All,
         Some(raw) => match raw.parse::<ScoreboardWindow>() {
@@ -41,20 +46,28 @@ pub(super) async fn scoreboard(Ws(runtime): Ws, Query(query): Query<ScoreboardQu
         },
     };
 
-    let value = match blocking("scoreboard", move || {
-        let summary = runtime.generate_scoreboard_summary(Some(window))?;
-        let mut value = serde_json::to_value(&summary)
-            .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
-        assemble_scoreboard_joins(&runtime, window, &mut value);
-        Ok(value)
-    })
-    .await
+    let runtime_for_compute = runtime.clone();
+    let value = match state
+        .scoreboard_memo()
+        .get_or_compute(
+            &runtime,
+            window.as_str().to_string(),
+            SCOREBOARD_TTL,
+            move || {
+                let summary = runtime_for_compute.build_scoreboard_summary(Some(window))?;
+                let mut value = serde_json::to_value(&summary)
+                    .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                assemble_scoreboard_joins(&runtime_for_compute, window, &mut value);
+                Ok(value)
+            },
+        )
+        .await
     {
         Ok(value) => value,
-        Err(response) => return *response,
+        Err(error) => return map_runtime_error(error),
     };
 
-    Json(value).into_response()
+    Json((*value).clone()).into_response()
 }
 
 fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, value: &mut Value) {
@@ -106,7 +119,7 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
         max_events: ROLLUP_SCAN_LIMIT,
         ..Default::default()
     }) {
-        Ok(report) => Some(rollup_by_actor(&report)),
+        Ok(report) => Some((rollup_by_actor(&report), report.truncated)),
         Err(e) => {
             tracing::error!(
                 error = %e,
@@ -117,6 +130,10 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
             None
         }
     };
+
+    let failure_incidents_truncated = failure_rollup.as_ref().map(|(_, truncated)| *truncated);
+    value["failure_incidents_truncated"] = json!(failure_incidents_truncated);
+    value["failure_incidents_scan_limit"] = json!(ROLLUP_SCAN_LIMIT);
 
     if let Some(coverage) = value.get_mut("coverage").and_then(|v| v.as_object_mut()) {
         coverage.insert(
@@ -137,11 +154,17 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
         );
         coverage.insert(
             "failure_incidents".to_string(),
-            coverage_note(
-                failure_rollup.is_some(),
-                "Failure incidents are measured for the requested window; zero means no observed failure incidents.",
-                "Audit failure-incident query failed for the requested window; failure_incidents, unexpected_failure_incidents, and failure_incident_events are omitted (null) rather than shown as zero.",
-            ),
+            match failure_incidents_truncated {
+                Some(true) => json!({
+                    "availability": "partial",
+                    "detail": format!("Failure-incident counts are capped: only the newest {ROLLUP_SCAN_LIMIT} non-success audit rows in the requested window were scanned; older failures may be omitted, and zero means none in the scanned rows."),
+                }),
+                truncated => coverage_note(
+                    truncated.is_some(),
+                    "Failure incidents are measured for the requested window; zero means no observed failure incidents.",
+                    "Audit failure-incident query failed for the requested window; failure_incidents, unexpected_failure_incidents, and failure_incident_events are omitted (null) rather than shown as zero.",
+                ),
+            },
         );
     }
 
@@ -150,7 +173,7 @@ fn assemble_scoreboard_joins(runtime: &OrbitRuntime, window: ScoreboardWindow, v
             agents,
             metrics_extras.as_ref(),
             denial_map.as_ref(),
-            failure_rollup.as_ref(),
+            failure_rollup.as_ref().map(|(rollup, _)| rollup),
         );
     }
 }
@@ -172,7 +195,8 @@ fn coverage_note(available: bool, observed_detail: &str, unavailable_detail: &st
 /// with context by the caller): every field that source would have populated
 /// is set to `null`, never `0`, so a read failure can never be read as a
 /// measured zero. `Some(map)` — even an empty one — means the source
-/// succeeded, so an agent missing from it is a true, observed zero.
+/// succeeded, so an agent missing from it has no incidents in the scanned
+/// population. The caller reports partial coverage when that scan is capped.
 fn apply_side_source_extras(
     agents: &mut serde_json::Map<String, Value>,
     metrics_extras: Option<&BTreeMap<String, MetricsExtras>>,

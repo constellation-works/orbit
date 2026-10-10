@@ -72,7 +72,7 @@ pub fn task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool 
 /// The companion field an otherwise-legal transition still needs from its
 /// caller, if the task does not already carry equivalent evidence.
 ///
-/// This is the read-side counterpart of [`ensure_status_change_allowed`]. UI
+/// This is the read-side counterpart of `ensure_status_change_allowed`. UI
 /// projections use it to collect evidence before submitting a mutation while
 /// the guarded update path remains the authority that accepts or refuses it.
 pub fn task_status_transition_required_field(
@@ -164,8 +164,14 @@ pub(crate) fn ensure_completion_run_stopped(
     calling_run_id: Option<&str>,
 ) -> Result<(), OrbitError> {
     let mut pending = Vec::new();
-    pending.extend(task.job_run_id.clone());
-    pending.extend(replacement_run_id.map(str::to_string));
+    if runtime.task_run_is_local(task) {
+        pending.extend(task.job_run_id.clone());
+    }
+    pending.extend(
+        replacement_run_id
+            .filter(|id| runtime.task_run_is_local(task) || task.job_run_id.as_deref() != Some(*id))
+            .map(str::to_string),
+    );
     let mut visited = HashSet::new();
 
     while let Some(run_id) = pending.pop() {
@@ -233,8 +239,13 @@ fn completion_evidence_present(
     }
 
     let job_run_id = match &params.job_run_id {
-        Some(replacement) => replacement.as_deref(),
-        None => task.job_run_id.as_deref(),
+        Some(replacement) => replacement.as_deref().filter(|id| {
+            runtime.task_run_is_local(task) || task.job_run_id.as_deref() != Some(*id)
+        }),
+        None => task
+            .job_run_id
+            .as_deref()
+            .filter(|_| runtime.task_run_is_local(task)),
     };
     let Some(job_run_id) = job_run_id.map(str::trim).filter(|id| !id.is_empty()) else {
         return Ok(false);
@@ -261,4 +272,26 @@ pub(crate) fn ensure_task_has_execution_plan(id: &str, plan: &str) -> Result<(),
 /// bring a plan with it.
 pub(crate) fn in_progress_transition_requires_plan(from_status: TaskStatus) -> bool {
     !matches!(from_status, TaskStatus::Backlog | TaskStatus::InProgress)
+}
+
+/// Whether a `blocked → in-progress` write closes out a rescued task rather
+/// than starting work on it [ORB-14931].
+///
+/// When a blocked task's work lands outside its run (a PR merged by hand),
+/// the operator walks it `blocked → in-progress → review → done`. That first
+/// step starts no run, so the footprint guard on starting work must not refuse
+/// it because another run holds a claim on the same files. The write says it is
+/// a close by carrying the `execution_summary` the close needs, and only an
+/// operator caller with no agent identity can make it: an agent or drain moving
+/// the same task still starts work and is refused on an overlapping claim.
+pub(crate) fn is_operator_rescue_close(
+    from: TaskStatus,
+    to: TaskStatus,
+    execution_summary: Option<&str>,
+    operator: bool,
+) -> bool {
+    operator
+        && from == TaskStatus::Blocked
+        && to == TaskStatus::InProgress
+        && execution_summary.is_some_and(|summary| !summary.trim().is_empty())
 }

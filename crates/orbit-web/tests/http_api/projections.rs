@@ -1,12 +1,154 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
+use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
+use orbit_core::V2AuditEventInsertParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
-use super::support::{Fixture, isolated, json_ok, write_json};
+use super::support::{Fixture, error_code, isolated, json_ok, write_json};
+
+fn seed_cli_failure(fixture: &Fixture, id: &str, ts: DateTime<Utc>, blob_ref: &str) {
+    fixture
+        .runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: fixture.runtime.workspace_id().unwrap(),
+            event_id: id.into(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "cli_invocation_finished".into(),
+            ts,
+            run_id: "jrun-friction-fixture".into(),
+            agent_identity: "http-fixture".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: json!({
+                "event_id": id,
+                "ts": ts.to_rfc3339(),
+                "body_kind": "cli_invocation_finished",
+                "run_id": "jrun-friction-fixture",
+                "step_id": "implement",
+                "provider": id,
+                "exit_code": 1,
+                "stderr_blob_ref": blob_ref,
+            })
+            .to_string(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs() {
+    isolated(
+        "projections::friction_stderr_previews_bound_bytes_and_lines_and_tolerate_missing_blobs",
+        || {
+            let fixture = Fixture::new();
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            let cases = [
+                (
+                    "oversized",
+                    "x".repeat(1024 * 1024),
+                    format!("{}\n[truncated]", "x".repeat(8192)),
+                ),
+                ("exact-cap", "x".repeat(8192), "x".repeat(8192)),
+                ("short", "short stderr\n".into(), "short stderr\n".into()),
+                (
+                    "many-lines",
+                    "line\n".repeat(121),
+                    format!("{}\n[truncated]", "line\n".repeat(120)),
+                ),
+                (
+                    "unicode",
+                    format!("{}☃tail", "x".repeat(8191)),
+                    format!("{}\n[truncated]", "x".repeat(8191)),
+                ),
+                ("missing", String::new(), String::new()),
+            ];
+            for (id, content, _) in &cases {
+                let blob_ref = if *id == "missing" {
+                    "0".repeat(64)
+                } else {
+                    blobs.write(content.as_bytes()).unwrap()
+                };
+                seed_cli_failure(&fixture, id, ts, &blob_ref);
+            }
+            let server = fixture.server(false);
+            let result =
+                json_ok(server.get(
+                    "/api/diagnostics/friction?month=2026-04&limit=20&workspace=ws_http_fixture",
+                ));
+            let rows = result.as_array().unwrap();
+            assert_eq!(rows.len(), cases.len());
+            for (id, _, expected) in cases {
+                let row = rows.iter().find(|row| row["command"] == id).unwrap();
+                assert_eq!(row["stderr"], expected, "bounded stderr for {id}");
+                assert_eq!(row["step"], "implement");
+                assert_eq!(row["exit_code"], 1);
+            }
+        },
+    );
+}
+
+#[test]
+fn friction_polls_reuse_projection_without_mixing_months_or_limits() {
+    isolated(
+        "projections::friction_polls_reuse_projection_without_mixing_months_or_limits",
+        || {
+            let fixture = Fixture::new();
+            let blobs = BlobStore::new(fixture.runtime.data_root().join("state/audit/blobs"));
+            let blob_ref = blobs.write(b"cached stderr").unwrap();
+            let ts = "2026-04-10T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            seed_cli_failure(&fixture, "first", ts, &blob_ref);
+            let path = "/api/diagnostics/friction?month=2026-04&limit=1&workspace=ws_http_fixture";
+            // A neighboring dashboard has the same logical workspace ID but
+            // an empty store. Its health response must not admit this child
+            // before the child has bound and announced its own address.
+            let empty_fixture = Fixture::new();
+            let empty_server = empty_fixture.server(false);
+            assert!(
+                json_ok(empty_server.get(path))
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            let server = fixture.server(false);
+            assert_ne!(server.origin, empty_server.origin);
+            let first = json_ok(server.get(path));
+            assert_eq!(first.as_array().unwrap().len(), 1);
+            assert_eq!(first[0]["command"], "first");
+
+            // If a second poll rescans the audit store it will return the new
+            // event, rather than the previously computed projection.
+            seed_cli_failure(&fixture, "second", ts + Duration::seconds(1), &blob_ref);
+            assert_eq!(json_ok(server.get(path)), first, "poll must reuse its memo");
+            let two =
+                json_ok(server.get(
+                    "/api/diagnostics/friction?month=2026-04&limit=2&workspace=ws_http_fixture",
+                ));
+            assert_eq!(two.as_array().unwrap().len(), 2);
+            assert_eq!(two[0]["command"], "second");
+            assert_eq!(two[1]["command"], "first");
+            let previous =
+                json_ok(server.get(
+                    "/api/diagnostics/friction?month=2026-03&limit=1&workspace=ws_http_fixture",
+                ));
+            assert!(
+                previous.as_array().unwrap().is_empty(),
+                "month has its own memo"
+            );
+            assert_eq!(
+                server
+                    .get("/api/diagnostics/friction?month=invalid&workspace=ws_http_fixture")
+                    .status()
+                    .as_u16(),
+                400,
+            );
+        },
+    );
+}
 
 #[test]
 fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
@@ -50,6 +192,19 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     "/api/scoreboard?window={window}&workspace=ws_http_fixture"
                 )));
                 let after = Utc::now();
+                let metrics = json_ok(server.get(&format!(
+                    "/api/diagnostics/metrics?since={window}&workspace=ws_http_fixture"
+                )));
+                assert_eq!(
+                    metrics
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|row| row["retry_count"].as_u64().unwrap())
+                        .sum::<u64>(),
+                    expected,
+                    "metrics must filter all month partitions before limiting: {window}"
+                );
                 assert_eq!(result["window"], window);
                 assert_eq!(
                     result["agents"]["http-metrics-fixture"]["retries"], expected,
@@ -68,6 +223,40 @@ fn scoreboard_windows_scope_metrics_and_timestamp_arithmetic() {
                     assert!(result["window_since"].is_null());
                 }
             }
+            let limited = json_ok(
+                server.get("/api/diagnostics/metrics?since=all&limit=1&workspace=ws_http_fixture"),
+            );
+            assert_eq!(limited.as_array().unwrap().len(), 1);
+            assert_eq!(
+                limited[0]["retry_count"], 1,
+                "newest eligible row wins across partitions"
+            );
+            assert!(
+                json_ok(
+                    server.get(
+                        "/api/diagnostics/metrics?since=all&limit=0&workspace=ws_http_fixture"
+                    )
+                )
+                .as_array()
+                .unwrap()
+                .is_empty()
+            );
+            assert_eq!(
+                server
+                    .get("/api/diagnostics/metrics?since=bogus&workspace=ws_http_fixture")
+                    .status()
+                    .as_u16(),
+                400
+            );
+            assert_eq!(
+                server
+                    .get(
+                        "/api/diagnostics/metrics?since=24h&month=2026-04&workspace=ws_http_fixture"
+                    )
+                    .status()
+                    .as_u16(),
+                400
+            );
             let default = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
             assert_eq!(default["window"], "all");
             assert_eq!(
@@ -151,6 +340,7 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
                             task_type: TaskType::Chore,
                             tags: vec![],
                             required_tools: vec![],
+                            context_files: Vec::new(),
                             priority: TaskPriority::Medium,
                             complexity: None,
                             crew: None,
@@ -196,6 +386,14 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
             let before = Utc::now();
             let auto = json_ok(server.get("/api/auto-tasks?workspace=ws_http_fixture"));
             let after = Utc::now();
+            // Cron is evaluated in host-local time, so both payloads name that
+            // zone for the dashboard to label triggers with.
+            let host_offset = chrono::Local::now().offset().local_minus_utc();
+            assert_eq!(auto["cron_zone"]["offset_seconds"], host_offset, "{auto}");
+            assert!(
+                auto["cron_zone"]["name"].is_string() || auto["cron_zone"]["name"].is_null(),
+                "{auto}"
+            );
             let definitions = auto["definitions"].as_array().unwrap();
             assert_eq!(definitions.len(), 4, "{auto}");
             for (name, state, hypothetical) in [
@@ -236,6 +434,7 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
             let before = Utc::now();
             let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
             let after = Utc::now();
+            assert_eq!(report["cron_zone"], auto["cron_zone"], "{report}");
             let rows = report["routines"].as_array().unwrap();
             assert_eq!(rows.len(), 3, "{report}");
             for (name, state, hypothetical) in [
@@ -275,6 +474,165 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
                 fs::read_to_string(cursor).unwrap(),
                 "{broken",
                 "GET must preserve corrupt evidence"
+            );
+        },
+    );
+}
+
+/// [ORB-14173] On a replica the dashboard lists the worktree GC routine as
+/// toggleable and the owner's work apart with the owner named; toggling the
+/// owner's routine is refused without a write.
+#[test]
+fn replica_routines_project_only_worktree_gc_as_toggleable() {
+    isolated(
+        "projections::replica_routines_project_only_worktree_gc_as_toggleable",
+        || {
+            let fixture = Fixture::replica_of("hm_fixture_remote");
+            fixture.job("worktree_gc_pipeline");
+            fixture.job("workspace_ship_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            for (name, job) in [
+                ("replica-gc", "worktree_gc_pipeline"),
+                ("replica-ship", "workspace_ship_pipeline"),
+            ] {
+                fs::write(
+                    routines.join(format!("{name}.yaml")),
+                    format!(
+                        "schemaVersion: 1\nname: {name}\nenabled: false\ntrigger: {{cron: '* * * * *'}}\ntarget: job:{job}\n"
+                    ),
+                )
+                .unwrap();
+            }
+            let ship_path = routines.join("replica-ship.yaml");
+            let ship_before = fs::read(&ship_path).unwrap();
+            let server = fixture.server(true);
+            let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            let scheduled = report["routines"].as_array().unwrap();
+            assert_eq!(scheduled.len(), 1, "{report}");
+            assert_eq!(scheduled[0]["name"], "replica-gc", "{report}");
+            let owner_only = report["owner_only"].as_array().unwrap();
+            assert_eq!(owner_only.len(), 1, "{report}");
+            assert_eq!(owner_only[0]["name"], "replica-ship");
+            assert_eq!(owner_only[0]["owner_machine"], "hm_fixture_remote");
+
+            let toggle = |name: &str, target: &str| {
+                server.send(
+                    "POST",
+                    "/api/routines/toggle?workspace=ws_http_fixture",
+                    json!({"name":name,"source":"fixture","target":target,
+                        "machine_name":"http-fixture","expected_enabled":false,"enabled":true}),
+                )
+            };
+            let refused = error_code(
+                toggle("replica-ship", "job:workspace_ship_pipeline"),
+                409,
+                "owner_authority",
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("hm_fixture_remote")),
+                "{refused}"
+            );
+            assert_eq!(fs::read(&ship_path).unwrap(), ship_before);
+            let enabled = json_ok(toggle("replica-gc", "job:worktree_gc_pipeline"));
+            assert_eq!(enabled["changed"], true, "{enabled}");
+            assert!(
+                fs::read_to_string(routines.join("replica-gc.yaml"))
+                    .unwrap()
+                    .contains("enabled: true")
+            );
+        },
+    );
+}
+
+/// [ORB-14173] Replica auto-task controls must match the scheduler's owner-only
+/// boundary: the dashboard names the owner and neither toggle nor manual mint
+/// mutates replica control-plane state.
+#[test]
+fn replica_auto_task_controls_explain_owner_authority_and_refuse_mutations() {
+    isolated(
+        "projections::replica_auto_task_controls_explain_owner_authority_and_refuse_mutations",
+        || {
+            let fixture = Fixture::new();
+            fixture
+                .runtime
+                .auto_task_add(AutoTaskAddParams {
+                    name: "qa-sweep".into(),
+                    description: "Replica control boundary fixture".into(),
+                    schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                    template: AutoTaskTemplate {
+                        title: "Should remain unminted".into(),
+                        description: "An auto-task may not issue work from a replica.".into(),
+                        acceptance_criteria: vec!["No task is minted.".into()],
+                        task_type: TaskType::Chore,
+                        tags: vec![],
+                        required_tools: vec![],
+                        context_files: Vec::new(),
+                        priority: TaskPriority::Medium,
+                        complexity: None,
+                        crew: None,
+                        status: TaskStatus::Backlog,
+                    },
+                    dedupe: DedupePolicy::SkipIfOpen,
+                })
+                .unwrap();
+            let fixture = fixture.into_replica("hm_fixture_remote");
+            let definition_path = fixture.work.join("auto_tasks/qa-sweep.yaml");
+            let definition_before = fs::read(&definition_path).unwrap();
+            let server = fixture.server(true);
+
+            let listed = json_ok(server.get("/api/auto-tasks?workspace=ws_http_fixture"));
+            assert_eq!(listed["controls_authorized"], false, "{listed}");
+            for action in ["auto_task_toggle", "auto_task_mint"] {
+                let capability = &listed["capabilities"][action];
+                assert_eq!(capability["authorized"], false, "{action}: {listed}");
+                assert!(
+                    capability["reason"]
+                        .as_str()
+                        .is_some_and(|reason| reason.contains("hm_fixture_remote")),
+                    "{action} refusal names the owner: {listed}"
+                );
+            }
+
+            let refused_toggle = error_code(
+                server.send(
+                    "POST",
+                    "/api/auto-tasks/toggle?workspace=ws_http_fixture",
+                    json!({"name":"qa-sweep","expected_enabled":true,"enabled":false}),
+                ),
+                403,
+                "capability_refused",
+            );
+            assert!(
+                refused_toggle["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("hm_fixture_remote")),
+                "{refused_toggle}"
+            );
+            let refused_mint = error_code(
+                server.send(
+                    "POST",
+                    "/api/auto-tasks/mint?workspace=ws_http_fixture",
+                    json!({"name":"qa-sweep","acknowledge_unconditional":true}),
+                ),
+                403,
+                "capability_refused",
+            );
+            assert!(
+                refused_mint["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("hm_fixture_remote")),
+                "{refused_mint}"
+            );
+            assert_eq!(fs::read(&definition_path).unwrap(), definition_before);
+            assert!(
+                fixture
+                    .runtime
+                    .list_tasks_by_tags(&["auto-task:qa-sweep".into()])
+                    .unwrap()
+                    .is_empty()
             );
         },
     );
@@ -322,11 +680,19 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
             let policy =
                 json_ok(server.get("/api/diagnostics/denials?since=24h&workspace=ws_http_fixture"));
             assert_eq!(policy["total"], RAW_DENIED_COUNT + V2_POLICY_COUNT);
+            assert_eq!(policy["policy_decisions"]["total"], summary["denials"]);
+            assert_eq!(policy["policy_decisions"]["sql"], SQL_POLICY_COUNT);
+            assert_eq!(policy["policy_decisions"]["v2"], V2_POLICY_COUNT);
             let tool_policy = json_ok(
                 server
                     .get("/api/diagnostics/denials?kind=tool&since=24h&workspace=ws_http_fixture"),
             );
             let recent = tool_policy["recent_denials"].as_array().unwrap();
+            assert_eq!(
+                tool_policy["policy_decisions"], policy["policy_decisions"],
+                "evidence filters must not change the top-bar population"
+            );
+            assert!(tool_policy["total"].as_i64().unwrap() < policy["total"].as_i64().unwrap());
             assert!(
                 recent
                     .iter()
@@ -339,6 +705,59 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
             );
             let raw = json_ok(server.get("/api/audit?status=denied&workspace=ws_http_fixture"));
             assert_eq!(raw.as_array().unwrap().len(), RAW_DENIED_COUNT as usize);
+        },
+    );
+}
+
+#[test]
+fn scoreboard_polls_reuse_window_memo_without_writing_summary() {
+    isolated(
+        "projections::scoreboard_polls_reuse_window_memo_without_writing_summary",
+        || {
+            let fixture = Fixture::new();
+            let summary_path = fixture.runtime.paths().scoreboard_dir.join("summary.json");
+            assert!(!summary_path.exists());
+            let server = fixture.server(false);
+            let first = json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
+            assert!(
+                !summary_path.exists(),
+                "scoreboard GET must not create summary.json"
+            );
+            let now = Utc::now();
+            let metrics_dir = fixture
+                .runtime
+                .data_root()
+                .join("state/diagnostics/metrics")
+                .join(now.format("%Y-%m").to_string());
+            fs::create_dir_all(&metrics_dir).unwrap();
+            fs::write(metrics_dir.join("memo.jsonl"), format!("{}\n", json!({
+                "ts":now.to_rfc3339(), "job_run":"memo-fixture", "step":"implement",
+                "actor_identity":"http-memo-fixture", "step_duration_ms":100, "retry_count":7,
+                "tool_invocations":1, "token_usage":10,
+            }))).unwrap();
+            let repeated =
+                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
+            assert_eq!(
+                repeated, first,
+                "same-window poll must return the cached computation"
+            );
+            let other = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
+            assert_eq!(other["agents"]["http-memo-fixture"]["retries"], 7);
+            assert!(!summary_path.exists(), "a memo miss must also be read-only");
+
+            // Explicit persistence remains available, and a GET for another
+            // window must not replace that durable lifetime document.
+            fixture.runtime.generate_scoreboard_summary(None).unwrap();
+            let persisted = fs::read(&summary_path).unwrap();
+            let finite = json_ok(server.get("/api/scoreboard?window=7d&workspace=ws_http_fixture"));
+            assert_eq!(finite["window"], "7d");
+            assert_eq!(fs::read(&summary_path).unwrap(), persisted);
+            let lifetime = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
+            assert_eq!(
+                lifetime,
+                json_ok(server.get("/api/scoreboard?window=all&workspace=ws_http_fixture")),
+                "omitted window and all share the canonical memo key"
+            );
         },
     );
 }

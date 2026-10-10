@@ -2,10 +2,10 @@
 //!
 //! Two independent concerns live behind this module and are re-exported here
 //! so `command::tool::*` remains the single import path for consumers:
-//! - [`dispatch`] — tool dispatch, audit correlation, agent-identity
+//! - `dispatch` — tool dispatch, audit correlation, agent-identity
 //!   resolution, the trusted MCP envelope boundary, and the calls a run's
 //!   plugin broker executes.
-//! - [`registry`] — registry CRUD (list/show/add/remove/enable/disable/doctor).
+//! - `registry` — registry CRUD (list/show/add/remove/enable/disable/doctor).
 
 mod dispatch;
 mod plugin;
@@ -21,16 +21,16 @@ pub(crate) mod dispatch_test_support {
 #[cfg(test)]
 mod tests;
 
-pub use crate::runtime::tool_exec::DryRunResult;
-
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
-    AuditContext, ToolDispatchOutcome, ToolEntryPoint, audit_role_label,
+    AuditContext, DryRunResult, ToolDispatchOutcome, ToolEntryPoint, audit_role_label,
     audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,
     mark_tool_audit_recorded, refuse_plugin_child_cli_command, take_tool_audit_recorded,
     trusted_mcp_audit_context,
 };
+#[cfg(unix)]
+pub use dispatch::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use plugin::{
     MAX_PLUGIN_SECRET_BYTES, PluginAddOptions, PluginAddResult, PluginCliGroup, PluginCliVerb,
     PluginDoctorResult, PluginEnableOptions, PluginEnableResult, PluginLinkSummary,

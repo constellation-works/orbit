@@ -124,15 +124,18 @@ fn a_stat_failure_other_than_absence_keeps_a_populated_partition() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let global_root = temp.path().join("global");
-    let repo_root = temp.path().join("proj");
+    let parent = temp.path().join("volume");
+    let repo_root = parent.join("proj");
     fs::create_dir_all(&global_root).expect("create global root");
     fs::create_dir_all(repo_root.join(".orbit")).expect("create checkout");
 
     bind(&global_root, "proj-5b631f", "proj", &repo_root);
     write_task_bundle(&global_root, "proj-5b631f", "ORB-1");
 
-    fs::remove_dir_all(&repo_root).expect("remove checkout directory");
-    fs::write(&repo_root, b"not a directory").expect("write a file where the checkout was");
+    fs::remove_dir_all(&parent).expect("remove checkout parent");
+    fs::write(&parent, b"not a directory").expect("replace checkout parent with a file");
+    let error = fs::metadata(&repo_root).expect_err("stat must fail beneath a regular file");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
 
     let partitions = inspect_task_store_partitions(&global_root)
         .expect("inspect partitions")

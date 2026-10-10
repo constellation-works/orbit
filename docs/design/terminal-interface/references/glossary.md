@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Terminal Interface"
-last_validated: 2026-09-20
+last_validated: 2026-10-08
 ---
 
 # Glossary: Terminal Interface
@@ -13,9 +13,9 @@ Vocabulary specific to how `orbit` renders terminal output. Standard terminal an
 | **`auto`** | The default output mode. Resolves to `table` on a TTY sink and to *plain* otherwise. Not itself a rendering — see [2_design.md §6](../2_design.md#6-per-command-structured-output) and [specs/output-modes.md §2](../specs/output-modes.md). |
 | **Fixed column** | A column that never shrinks under width pressure — IDs, statuses, timestamps, durations. Contrast *flexible column*. [specs/table-rendering.md §2](../specs/table-rendering.md). |
 | **Flexible column** | A column that may shrink to a floor of 8 display columns, then be dropped, when the result set exceeds the sink width. [specs/table-rendering.md §2](../specs/table-rendering.md). |
-| **Mode** | One of `auto`, `table`, `json`, `ndjson`. Resolved once per invocation from flags, environment, and sink; never chosen by a command body. [specs/output-modes.md §2](../specs/output-modes.md). |
+| **Mode** | One of `auto`, `table`, `plain`, `json`, `ndjson`. Resolved once per invocation from flags, environment, and sink; never chosen by a command body. [specs/output-modes.md §2](../specs/output-modes.md). |
 | **Payload** | The structured record a command produces, from which every rendering derives. The CLI's actual output contract; field names are as stable as flag names. [specs/output-modes.md §4](../specs/output-modes.md). |
-| **Plain** | The piped form of `table`: no header, no borders, no ANSI, no truncation, tab-separated. A rendering of `table`, not a mode a caller can request. [specs/output-modes.md §2](../specs/output-modes.md). |
+| **Plain** | The piped form of `table`: no header, no borders, no ANSI, no truncation, tab-separated. Selected by `auto` on a pipe or explicitly with `--format plain` on any sink. [specs/output-modes.md §2](../specs/output-modes.md). |
 | **Renderer** | The layer that projects a payload into bytes for a mode. The only code aware of width, TTY state, or escape sequences. [1_overview.md §2](../1_overview.md). |
 | **Role** | A semantic color token — `ok`, `warn`, `error`, `active`, `muted`, `neutral`. Attached to a value's meaning, mapped to ANSI only by the renderer, and never present in a payload. [specs/color-and-styling.md §1](../specs/color-and-styling.md). |
 | **Sink** | The resolved stdout target together with its capabilities (`is_tty`, `width`, `color_allowed`). The single place every environment question is answered. [specs/output-modes.md §1](../specs/output-modes.md). |

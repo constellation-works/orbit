@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Decisions"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-09-27
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: remote-access
 doc_role: decisions
@@ -65,3 +65,22 @@ These choices describe the current implementation.
 **Decision.** Treat the remote machine and its registered workspaces as authoritative for everything shown or mutated through that connection.
 
 **Consequences.** No merge, replication, or offline model is implied. Cost: state disappears from view when the target or tunnel is unavailable.
+
+## Forward dashboard requests to registered hosts
+
+**Context.** An operator with several registered hosts had to open one `web connect` session per host to see or act on each. The [Long-lived connectivity](./3_vision.md#long-lived-connectivity) gate required explicit lifecycle, port ownership, failure reporting and authority boundaries before one dashboard could hold tunnels to several machines.
+
+**Decision.** Cross that gate with `/api/on/<host>/<path>` ([specs/host-forward.md](./specs/host-forward.md)). The serving dashboard forwards the request to the named host's own dashboard through an SSH local forward it opens on demand, under these rules:
+
+- **Lifecycle.** One tunnel per host. Attach first, spawn otherwise. A dead child is replaced by the next request; there is no reconnect loop or heartbeat. Idle tunnels close after five minutes, and shutdown and the update handover stop every child this process started.
+- **Port ownership.** The local listener is `127.0.0.1` on an ephemeral port owned by that tunnel. The remote port is the default dashboard port.
+- **Failure reporting.** Typed `{error, code, host}` bodies; a bounded establish and request time; SSH runs with `BatchMode` so it never waits on a prompt; a slow host holds only its own requests.
+- **Identity.** Each new tunnel reads the remote's own `machine_id` and refuses a mismatch or a dashboard too old to report one.
+- **Authority.** Unsafe methods need the serving dashboard's operator session, through the governed dashboard operation `host.forward`. A spawned remote gets `--operator` only when that session has it. Refusals happen before any SSH process starts.
+
+**Consequences.** One dashboard reaches every registered host live, and each host stays authoritative for what it serves. Cost:
+
+- **An operator session on the serving dashboard can act as operator on every registered host the serving host's SSH identity can reach.** Whoever holds that session holds the operator capability fleet-wide, limited only by SSH access and each remote dashboard's own gates.
+- An attached remote dashboard keeps whatever capability it was started with; the forward cannot raise or lower it.
+- Each host adds an SSH child and a remote dashboard process while its tunnel is open.
+- A host that needs an interactive SSH prompt cannot be reached this way.

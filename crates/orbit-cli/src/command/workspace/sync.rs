@@ -19,9 +19,6 @@ pub struct WorkspaceSyncArgs {
     /// Inspect and report pending convergence without writing anything
     #[arg(long)]
     pub check: bool,
-    /// Emit structured JSON (equivalent to --format json)
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl WorkspaceSyncArgs {

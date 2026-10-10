@@ -24,6 +24,18 @@ not accepted as aliases. GitHub run tools take `run` despite returning
 Search statuses require the corpus prefix, such as `task:rejected` or
 `friction:resolved`, including when `kind` is supplied separately.
 
+To attach evidence, write a local file under `.orbit/tmp/` and use:
+
+```bash
+orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+```
+
+`source_path` is the local file; `path` is the stored artifact name.
+`orbit tool show <tool.name>` prints the tool's schema. List artifacts with
+`orbit.task.show` and `field: "artifacts"` before fetching optional evidence;
+read only paths present in the returned metadata array (MCP may wrap it in
+`value`).
+
 Read `comments` (chronological, each with `by` and `at`) alongside the
 canonical description. An orchestrator or operator refinement posted after the
 description supersedes a stale "Suggested direction"/"Suggested fix" section
@@ -31,7 +43,7 @@ still sitting in it: implement the comment's direction. An arbitrary comment is
 not authority by timestamp alone; resolve material contradictions before
 implementing, without reopening already settled decisions.
 
-Use `context_files` as the modification boundary, not a demand to ingest the
+Use `context_files` as starting targets, not a limit or a demand to ingest the
 whole repository before editing. Verify paths and inspect the interfaces needed
 for the next increment; for directories use `rg --files` to find those targets.
 Read enough of each affected file and its consumers to make a correct change.
@@ -91,6 +103,16 @@ in the current run, including the first attempt. The artifact names the current
 task and the covering task separately. `git_commit` checks the pinned HEAD,
 covering commit marker and ancestry, unchanged task scope, clean tree, and
 required validation logs. A success summary alone does not satisfy that gate.
+`already-landed.json` has `schema_version` 1, `task_id`, `run_id`,
+`tested_head`, `covering_commit`, `covering_task_id`, `scope`,
+`required_commands`, `validation` and `criteria_evidence`; unknown fields are
+refused. `criteria_evidence` is an array of non-empty strings, one per
+acceptance criterion in order, never objects. Each `validation[]` entry
+flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
+required command's entry carries `outcome: "passed"` and `role: "required"`.
+The role vocabulary is `required`, `expected_failure`, `excluded`,
+`superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
+refused.
 If a required check or covering evidence is unavailable, record the blocker;
 do not claim a verified already-landed result.
 
@@ -131,7 +153,7 @@ non-empty and unique. The commit verifier also requires a clean worktree and
 the current HEAD to equal `tested_head`; otherwise reconcile the changes and
 rerun validation before attaching the evidence.
 
-**Keep `context_files` current.** Declare newly identified modification targets
+**Keep `context_files` current.** You may declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
 rules. `orbit.task.update` replaces the whole context list when `context_files`
 or the legacy `context` alias is supplied. Omitting both preserves the list;
@@ -154,7 +176,8 @@ orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family
 Re-read after every context update and verify that every prior selector and
 every addition is present. If one is absent, repeat the read → full-union
 update → verify sequence. Use `allow_missing_context: true` to declare files
-before creation. Selectors are a starting point, not a limit: you may change
+before creation; it records durable creation intent for exactly those
+selectors, so later writes and task preparation keep them. Selectors are a starting point, not a limit: you may change
 any path the work requires. Delivery commits every changed path except
 `.orbit/tmp/` scratch and gitignored output, and widens the selectors with an
 exact `file:` entry for each uncovered path, recording which step introduced
@@ -165,7 +188,9 @@ In claimed mode, use the injected list and report additions in
 frozen footprint. A declaration does not acquire a lock. Paths outside the
 footprint still deliver: the owner widens the footprint from the published
 candidate at handoff. Only Git or `.orbit` metadata, environment files and
-symlinks are refused.
+symlinks are refused. Protected metadata names and environment patterns (including
+`.envrc`) ignore ASCII case on every host: `.Orbit/`, `.GIT/`, `.ENV` and
+`.Env.local` are refused even on Linux.
 
 **In a linked pipeline worktree, never use positional `git stash` /
 `git stash pop`.** Refs and the stash list are repository-global, so a positional
@@ -178,8 +203,8 @@ and linked job-run worktrees, the repository's `.git` mount is read-only and
 must not be worked around by chmod or host-side gitdir writes. Commands that
 write to `.git` fail:
 - Do not use `git worktree add` to inspect or build other revisions. Extract
-  each revision into its own scratch directory outside the checkout:
-  `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`. That reads
+  each revision into its own scratch directory under `.orbit/tmp/`:
+  `mkdir -p .orbit/tmp/base && git archive <sha> | tar -x -C .orbit/tmp/base`. That reads
   `.git` without writing it or creating `.git/worktrees/*`.
 - When `git checkout -- <path>` fails because it cannot acquire `index.lock`,
   revert the tracked file with `git show HEAD:<path> > <path>`.
@@ -220,11 +245,19 @@ it — see [friction.md](friction.md). Then:
   succeed.
 - **Claimed mode** (`input.claimed` is true, a distributed-drain leaf):
   another machine owns the task. Work from the injected envelope; you are not
-  granted `orbit.task.show` or `orbit.task.update`. Return the summary as the
-  output's `execution_summary` (with `context_files_added` and `comment` for
-  anything you would have written to the task); the pipeline's handoff
-  carries it to the owner. An owner-routed tool that answers unreachable is
-  not a task failure.
+  granted `orbit.task.update`. `orbit.task.show` reads only the claimed task
+  through the run's coordinator. Return the summary as the output's
+  `execution_summary` (with `context_files_added` and `comment` for anything
+  you would have written to the task); the pipeline's handoff carries it to
+  the owner. An owner-routed tool that answers unreachable is not a task
+  failure. A task you file must be `spawned_from` the claimed task; a claimed
+  `delivery-code-review` or `code-review` task may also give each finding a
+  `regression_from` relation to its culprit. `orbit.search` does not reach the
+  owner, so skip the duplicate search and say so; the owner's triage dedupes.
+  Return a finding the owner still refuses in `unfiled_findings` as
+  `{title, description}` objects (plain strings fail the implement step before
+  anything is committed or pushed); the handoff attaches it to the claimed task
+  as `unfiled-findings.json`.
 - **Direct execution** (no envelope): persist the summary *and* move to `review`
   via `orbit.task.update`.
 

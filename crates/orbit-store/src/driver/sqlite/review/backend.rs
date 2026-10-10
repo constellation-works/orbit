@@ -3,13 +3,13 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReservation,
-    ReviewResetDecision,
+    ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger, ReviewReconciliation,
+    ReviewReservation, ReviewResetDecision,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::attempts::{
-    record_invocation, release_attempt, reserve_new, reserve_new_in, settle_attempt,
+    record_invocation, release_attempt, reserve_new, reserve_new_in, review_spent, settle_attempt,
 };
 use super::ledger::{decode, encode, ledgers_held_by, read_ledger, write_ledger};
 use crate::Store;
@@ -45,7 +45,7 @@ impl ReviewStoreBackend for Store {
                 release_attempt(&mut ledger, &open.attempt_id, request.now, request.now);
             }
             let budget = request.budget.unwrap_or(ledger.budget);
-            if budget.reviewer_starts == 0 || budget.minutes == 0 {
+            if budget.minutes == 0 {
                 return Err(OrbitError::InvalidInput(
                     "review reset requires a usable review budget".into(),
                 ));
@@ -74,6 +74,14 @@ impl ReviewStoreBackend for Store {
         self.with_read_connection(|conn| read_ledger(conn, workspace_id, lineage_key))
     }
 
+    fn review_ledgers_held_by(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<ReviewLedger>, OrbitError> {
+        self.with_read_connection(|conn| ledgers_held_by(conn, workspace_id, run_id))
+    }
+
     fn review_reserve(
         &self,
         workspace_id: &str,
@@ -92,13 +100,17 @@ impl ReviewStoreBackend for Store {
                 )
             });
 
-            // An interrupted attempt on the same candidate resumes; on a
-            // different candidate it is partial work, released as incomplete
-            // with the reviewer runtime already spent.
+            // An interrupted attempt on the same candidate resumes while its
+            // review has minutes left; on a different candidate it is partial
+            // work, released as incomplete with the reviewer runtime already
+            // spent.
             if let Some(open) = ledger.open_attempt().cloned() {
                 if open.candidate == *request.candidate
                     && open.task_meaning_digest == request.task_meaning_digest
                 {
+                    if let Some(exhausted) = review_spent(&ledger, request) {
+                        return Ok((exhausted, ledger));
+                    }
                     return Ok((ReviewReservation::Resumed { attempt: open }, ledger));
                 }
                 release_attempt(&mut ledger, &open.attempt_id, request.now, request.now);
@@ -110,6 +122,23 @@ impl ReviewStoreBackend for Store {
                     request.now,
                 )?;
                 return reserve_new(conn, workspace_id, ledger, request);
+            }
+
+            // Continue the latest unfinished review with the same attempt and
+            // report identity; a timeout is not a final reviewer verdict.
+            if let Some(attempt) = ledger
+                .latest_attempt()
+                .filter(|attempt| {
+                    attempt.released_at.is_some()
+                        && attempt.candidate == *request.candidate
+                        && attempt.task_meaning_digest == request.task_meaning_digest
+                })
+                .cloned()
+            {
+                if let Some(exhausted) = review_spent(&ledger, request) {
+                    return Ok((exhausted, ledger));
+                }
+                return Ok((ReviewReservation::Resumed { attempt }, ledger));
             }
 
             let reserved = reserve_new_in(conn, workspace_id, previous_revision, ledger, request)?;
@@ -426,5 +455,37 @@ impl ReviewStoreBackend for Store {
             rows.map(|row| decode(&row.map_err(|error| OrbitError::Store(error.to_string()))?))
                 .collect()
         })
+    }
+
+    fn review_reconciliation_open(
+        &self,
+        workspace_id: &str,
+        record: &ReviewReconciliation,
+    ) -> Result<ReviewReconciliation, OrbitError> {
+        self.reconciliation_open(workspace_id, record)
+    }
+
+    fn review_reconciliation(
+        &self,
+        workspace_id: &str,
+        reconciliation_id: &str,
+    ) -> Result<Option<ReviewReconciliation>, OrbitError> {
+        self.reconciliation(workspace_id, reconciliation_id)
+    }
+
+    fn review_reconciliations_for_task(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<ReviewReconciliation>, OrbitError> {
+        self.reconciliations_for_task(workspace_id, task_id)
+    }
+
+    fn review_reconciliation_update(
+        &self,
+        workspace_id: &str,
+        record: &ReviewReconciliation,
+    ) -> Result<ReviewReconciliation, OrbitError> {
+        self.reconciliation_update(workspace_id, record)
     }
 }

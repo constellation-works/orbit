@@ -1,21 +1,24 @@
 //! Resolved configuration construction and admitted consumer settings.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::Crew;
 
 use super::compatibility::{
-    CompatibilityKeys, RETIRED_BACKEND_ENV, reject_retired_backend_overrides,
-    reject_stale_agent_tables, removed_keys_present, validate_task_artifact_store_from_raw,
+    CompatibilityKeys, RETIRED_BACKEND_ENV, deprecated_keys_present,
+    reject_retired_backend_overrides, reject_stale_agent_tables, removed_keys_present,
+    validate_task_artifact_store_from_raw,
 };
 use super::crew::{IgnoredCrewProperty, alias_system_crew, crews_from_raw, default_crews};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
 use crate::layering::load_layered_resolved;
-use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
+use crate::operation::{
+    OperationLayer, OperationLayerSource, OperationPolicy, translate_legacy_review_keys,
+};
 use crate::persistence::PersistenceConfig;
 use crate::raw::RawRuntimeConfig;
 use crate::registry::ConfigSnapshot;
@@ -79,8 +82,8 @@ pub struct ResolvedConfig {
     /// deferred to dispatch so a bad system crew does not stop unrelated
     /// activity execution.
     pub system_crew: String,
-    /// Resolved `[operation]` review preferences with per-field provenance
-    /// (built-in: no automatic review) [ORB-11333].
+    /// Resolved review preferences with per-field provenance (built-in: no
+    /// before-PR review) [ORB-11333] [ORB-13992].
     pub operation: OperationPolicy,
     /// Optional floor for the local task-id allocator (`[tasks] id_start`).
     /// Applied forward-only on runtime build so machines can hold disjoint id
@@ -164,34 +167,80 @@ impl ResolvedConfig {
         raw: &str,
         config_path: &Path,
         persistence: PersistenceConfig,
+        operation_layer_source: OperationLayerSource,
     ) -> Result<Self, OrbitError> {
-        let document = toml::from_str::<toml::Value>(raw).map_err(|err| {
+        let mut document = toml::from_str::<toml::Value>(raw).map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid runtime config '{}': {err}",
                 redact_home_dir(&config_path.display().to_string())
             ))
         })?;
-        Self::from_document_with_warnings(document, config_path, persistence, true)
+        translate_legacy_review_keys(&mut document, config_path)?;
+        let resolved = Self::from_document_with_warnings(
+            document,
+            config_path,
+            &|_, _| config_path.to_path_buf(),
+            persistence,
+            true,
+            false,
+            operation_layer_source,
+        )?;
+        // A merged layered document is checked once its layers resolve, with
+        // each switch's real source; store validation uses the store's scope.
+        resolved.operation.ensure_one_review_layer()?;
+        Ok(resolved)
     }
 
     /// Resolve an already-merged layered document while leaving compatibility
     /// warnings to the loader, which still has each source document and its
     /// path. Takes ownership of the merged `toml::Value` directly rather than
     /// a re-serialized string, so the document is parsed once by the loader
-    /// and never re-parsed here.
+    /// and never re-parsed here. `config_path` is the merged document's path;
+    /// `crew_field_path` attributes an ignored crew field to the layer that set it.
     pub(crate) fn from_layered_value(
         document: toml::Value,
         config_path: &Path,
+        crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
-        Self::from_document_with_warnings(document, config_path, persistence, false)
+        Self::from_document_with_warnings(
+            document,
+            config_path,
+            crew_field_path,
+            persistence,
+            false,
+            false,
+            OperationLayerSource::Workspace,
+        )
+    }
+
+    /// Admit a file snapshot with contextual crews, without requiring the
+    /// scoped file to choose a runtime default crew when it omits that key.
+    pub(crate) fn from_scoped_value(
+        document: toml::Value,
+        config_path: &Path,
+        crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
+        persistence: PersistenceConfig,
+    ) -> Result<Self, OrbitError> {
+        Self::from_document_with_warnings(
+            document,
+            config_path,
+            crew_field_path,
+            persistence,
+            false,
+            true,
+            OperationLayerSource::Workspace,
+        )
     }
 
     fn from_document_with_warnings(
         document: toml::Value,
         config_path: &Path,
+        crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
         persistence: PersistenceConfig,
         emit_compatibility_warnings: bool,
+        scoped: bool,
+        operation_layer_source: OperationLayerSource,
     ) -> Result<Self, OrbitError> {
         let parsed = document
             .clone()
@@ -217,14 +266,17 @@ impl ResolvedConfig {
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
         let (mut crews, ignored_crew_properties) =
-            crews_from_raw(parsed.crews.as_ref(), config_path)?;
-        let snapshot = ConfigSnapshot::admit(&document, config_path, &crews)?;
+            crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
+        let snapshot = if scoped {
+            ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
+        } else {
+            ConfigSnapshot::admit(&document, config_path, &crews)?
+        };
         // One document is one layer. The layered loader replaces this with
-        // the exact global/workspace resolution; a single file (or the
-        // store's pre-write validation) resolves it as the workspace layer.
+        // the exact global/workspace resolution; a store passes the scope of
+        // its file so pre-write validation reports accurate provenance.
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
-        let operation =
-            OperationPolicy::resolve(&[(OperationLayerSource::Workspace, &operation_layer)]);
+        let operation = OperationPolicy::resolve(&[(operation_layer_source, &operation_layer)]);
         let system_crew_alias = alias_system_crew(
             &mut crews,
             &snapshot.workflow_system_crew,
@@ -241,6 +293,7 @@ impl ResolvedConfig {
             retired_routines: parsed.routines.is_some(),
             retired_docs: parsed.docs.is_some(),
             removed_keys: removed_keys_present(&document),
+            deprecated_keys: deprecated_keys_present(&document),
         };
         if emit_compatibility_warnings {
             compatibility_keys.warn(config_path);

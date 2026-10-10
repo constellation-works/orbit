@@ -2,7 +2,7 @@
 title: Orbit MCP — Design
 owner: codex
 last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 status: Draft
 feature: mcp-bridge
 doc_role: design

@@ -11,7 +11,7 @@
 //! claim journal transaction, so a revoked, stale or re-validated candidate
 //! cannot reach `review -> done` through this path either.
 use chrono::Utc;
-use orbit_common::OrbitError;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::*;
 
@@ -53,7 +53,9 @@ impl TaskCommitBoundary {
     ) -> Result<(TaskCoordinationRow, LandingAttempt), OrbitError> {
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         if accepted.handoff_id != handoff_id {
-            return Err(invalid("handoff identity mismatch"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffIdentityMismatch,
+            ));
         }
         let raw = self
             .attempt_row(handoff_id)?
@@ -96,7 +98,9 @@ impl TaskCommitBoundary {
         }
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         if accepted.handoff_id != handoff_id {
-            return Err(invalid("handoff identity mismatch"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::HandoffIdentityMismatch,
+            ));
         }
         let authorization = self.current_landing_authorization(&accepted)?;
         let now = Utc::now();
@@ -119,7 +123,9 @@ impl TaskCommitBoundary {
             Some(old) => {
                 let mut attempt: LandingAttempt = decode(&old.payload_json)?;
                 if attempt.state == LandingAttemptState::Merged {
-                    return Err(invalid("handoff has already landed"));
+                    return Err(OrbitError::claim_refused(
+                        ClaimRefusalKind::HandoffAlreadyLanded,
+                    ));
                 }
                 match job_run_id {
                     // A stopped attempt reopens deliberately, and so does one
@@ -177,7 +183,9 @@ impl TaskCommitBoundary {
             return Err(invalid("verified merge evidence required"));
         }
         if state.unresolved_merge_intent.is_some() {
-            return Err(invalid("unresolved external merge intent"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::UnresolvedMergeIntent,
+            ));
         }
         // Full recheck: operator context, current authorization, no revocation,
         // trusted candidate observation and digest-pinned validation evidence.
@@ -198,15 +206,25 @@ impl TaskCommitBoundary {
 
     /// Stop the live attempt with durable evidence. The task stays in `review`
     /// with its authorization intact; a repair is a new validated handoff.
+    ///
+    /// A `repairable` stop — the candidate conflicts with, or is stale
+    /// against, its base — makes that new handoff automatic [ORB-14261]. The
+    /// handoff's authority is revoked so nothing lands it, and the outcome
+    /// tells the caller what becomes of the claim: an original claim waits in
+    /// `repair_pending` with its task back `in-progress` for one repair leaf;
+    /// a claim that already is that repair fails and blocks its task with
+    /// both attempts' evidence.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn stop_landing_attempt(
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
         handoff_id: &str,
         reason: &str,
+        repairable: bool,
         params: &mut TaskCoordinationCommitParams,
         effects: &mut ClaimCommitEffects,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<LandingStop, OrbitError> {
         if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
             return Err(invalid("current operator landing context required"));
         }
@@ -214,7 +232,9 @@ impl TaskCommitBoundary {
             return Err(invalid("stopping a landing requires evidence"));
         }
         if state.unresolved_merge_intent.is_some() {
-            return Err(invalid("unresolved external merge intent"));
+            return Err(OrbitError::claim_refused(
+                ClaimRefusalKind::UnresolvedMergeIntent,
+            ));
         }
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
         attempt.state = LandingAttemptState::Stopped;
@@ -225,6 +245,91 @@ impl TaskCommitBoundary {
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         params.status_note = Some(reason.into());
         params.status_event = Some("landing_stopped".into());
-        Ok(())
+        if !repairable {
+            return Ok(LandingStop::Stopped);
+        }
+        let accepted = self.accepted_handoff(&auth.claim_id)?;
+        match &state.claim.repair {
+            None => {
+                self.revoke_handoff_authority(
+                    auth,
+                    &format!(
+                        "landing stopped on a conflicting or stale base; an automatic repair \
+                         replaces this handoff: {reason}"
+                    ),
+                    params,
+                    effects,
+                )?;
+                params.status = Some(TaskStatus::InProgress);
+                params.status_note = Some(format!(
+                    "{reason}; the candidate waits for one automatic repair leaf, which \
+                     re-applies it onto the current base, revalidates it and hands it off again"
+                ));
+                Ok(LandingStop::Repair)
+            }
+            Some(first) => {
+                self.revoke_handoff_authority(
+                    auth,
+                    &format!("the automatic repair's landing stopped on its base again: {reason}"),
+                    params,
+                    effects,
+                )?;
+                params.status = Some(TaskStatus::Blocked);
+                Ok(LandingStop::Blocked(repair_exhausted_comment(
+                    first,
+                    &state.claim.claim_id,
+                    &accepted,
+                    reason,
+                )))
+            }
+        }
     }
+}
+
+/// What a landing stop did to its claim.
+pub(super) enum LandingStop {
+    /// The claim stays handed off and the task in `review`.
+    Stopped,
+    /// The claim waits for one automatic repair leaf.
+    Repair,
+    /// The automatic repair is spent: the claim fails and the task blocks with
+    /// this comment.
+    Blocked(String),
+}
+
+/// The blocked task's comment: both attempts' candidates and stop evidence,
+/// so an operator sees why the automatic repair could not land either.
+fn repair_exhausted_comment(
+    first: &ClaimRepair,
+    repair_claim_id: &str,
+    repaired: &AcceptedHandoff,
+    reason: &str,
+) -> String {
+    format!(
+        "Automatic repair exhausted: the repaired handoff's landing stopped on its base \
+         again, so the task is blocked for an operator.\n\n\
+         First attempt (claim {}, handoff {}): {}\nStopped: {}\n\n\
+         Repair attempt (claim {repair_claim_id}, handoff {}): {}\nStopped: {reason}",
+        first.repairs_claim_id,
+        first.handoff_id,
+        describe_candidate(&first.candidate),
+        first.stop_evidence,
+        repaired.handoff_id,
+        describe_candidate(&repaired.handoff.candidate),
+    )
+}
+
+fn describe_candidate(candidate: &HandoffCandidate) -> String {
+    let delivery = match &candidate.delivery {
+        HandoffDelivery::PullRequest { number } => format!("pull request #{number}"),
+        HandoffDelivery::LocalCandidate => "owner-local candidate".to_string(),
+        HandoffDelivery::NoDiff { .. } => "no-diff delivery".to_string(),
+        HandoffDelivery::AlreadyLanded {
+            covering_commit, ..
+        } => format!("already landed in {covering_commit}"),
+    };
+    format!(
+        "candidate {} on base {} from branch '{}', {delivery}",
+        candidate.candidate.commit, candidate.base.commit, candidate.source_branch
+    )
 }

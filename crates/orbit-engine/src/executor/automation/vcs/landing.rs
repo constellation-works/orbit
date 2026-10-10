@@ -21,7 +21,9 @@
 //!    unsatisfied branch protection or a check budget that runs out stops the
 //!    attempt with durable evidence. Repairing the candidate needs fresh
 //!    validation and a new handoff; this activity never rebases, force-pushes
-//!    or merges around a gate.
+//!    or merges around a gate. A stop on a conflicting or stale base is
+//!    recorded as repairable, and the owner store hands that candidate to one
+//!    automatic repair leaf that does exactly that [ORB-14261].
 //!
 //! The guarded `review -> done` transition is the owner store's, behind its own
 //! recheck of the current authorization and the digest-pinned validation
@@ -32,7 +34,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::automation::{DirectLandingRequest, SourceRevision};
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 use serde_json::{Value, json};
 
@@ -84,7 +86,8 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
         HandoffDelivery::PullRequest { number } => {
             land_pull_request(host, &context, number, input, &view)
         }
-        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, &view),
+        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, input, &view),
+        HandoffDelivery::NoDiff { .. } => land_no_diff(host, &context, &view),
         HandoffDelivery::AlreadyLanded {
             covering_commit, ..
         } => land_already_landed(host, &context, &covering_commit, &view),
@@ -147,7 +150,9 @@ impl LandingView {
 ///
 /// Returns the completion outcome when the external state proves the candidate
 /// merged; `None` means the intent is resolved as *not* merged and this run may
-/// attempt a fresh, fully rechecked landing.
+/// attempt a fresh, fully rechecked landing. A merged pull request with a
+/// different identity resolves the external uncertainty before recording Stop;
+/// resolving an intent is not proof that the authorized candidate landed.
 fn reconcile_intent<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
@@ -155,21 +160,31 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
     view: &LandingView,
 ) -> Result<Option<Value>, OrbitError> {
     let candidate = &context.candidate;
+    let mut delivery_error = None;
     let (merged, evidence) = match &candidate.delivery {
         HandoffDelivery::PullRequest { number } => {
             let status = read_pr_status(host, &context.workspace_path, &number.to_string())?;
             match classify_pr_state(&status) {
                 PrMergeState::Merged => {
                     let pin = pin_for(candidate);
-                    let delivered = pin.ensure_delivered(&status, &number.to_string())?;
-                    (
-                        true,
-                        json!({
+                    let evidence = match pin.ensure_delivered(&status, &number.to_string()) {
+                        Ok(delivered) => json!({
                             "reconciled": "pull_request_merged",
                             "pull_request": number,
                             "delivery": delivered.as_json(),
                         }),
-                    )
+                        Err(error) => {
+                            let evidence = json!({
+                                "reconciled": "pull_request_merged",
+                                "pull_request": number,
+                                "provider_state": status,
+                                "delivery_error": error.to_string(),
+                            });
+                            delivery_error = Some(error);
+                            evidence
+                        }
+                    };
+                    (true, evidence)
                 }
                 other => (
                     false,
@@ -204,7 +219,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
         // No-diff delivery performs no external call, so it never publishes an
         // intent; an intent recorded against one is not something this activity
         // may resolve by guessing.
-        HandoffDelivery::AlreadyLanded { .. } => {
+        HandoffDelivery::AlreadyLanded { .. } | HandoffDelivery::NoDiff { .. } => {
             return Err(OrbitError::Execution(format!(
                 "handoff_land: handoff '{}' records an unresolved merge intent for no-diff \
                  delivery, which performs no external merge; reconcile it explicitly",
@@ -226,6 +241,9 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
         None,
         &evidence,
     )?;
+    if let Some(error) = delivery_error {
+        return Err(stop(host, context, &error.to_string())?);
+    }
     if !merged {
         return Ok(None);
     }
@@ -321,17 +339,20 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Blocked(reason) => {
-                return Err(stop(
-                    host,
-                    context,
-                    &format!(
-                        "pull request #{pr_number} cannot be merged ({reason}); branch \
-                         protection and required checks are not bypassed"
-                    ),
-                )?);
+                let reason = format!(
+                    "pull request #{pr_number} cannot be merged ({reason}); branch \
+                     protection and required checks are not bypassed"
+                );
+                // A branch that is only behind its base is stale, not refused:
+                // the repair brings it up to date and revalidates it.
+                return Err(if behind_base(&status) {
+                    stop_for_repair(host, context, &reason)?
+                } else {
+                    stop(host, context, &reason)?
+                });
             }
             PrMergeState::Conflict => {
-                return Err(stop(
+                return Err(stop_for_repair(
                     host,
                     context,
                     &format!(
@@ -419,6 +440,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
 fn land_local_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
+    input: &Value,
     view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
@@ -451,6 +473,33 @@ fn land_local_candidate<H: RuntimeHost + ?Sized>(
                 candidate.landing_branch
             ),
         )?);
+    }
+
+    // A fast-forward is a direct landing with no provider identity, so the
+    // owner's delivery consumers learn which task it delivered only from an
+    // intent retained before the branch moves [ORB-13894]. A candidate that
+    // cannot fast-forward lands nothing and stops below.
+    let before = git_output(&checkout, &["rev-parse", "HEAD"])?;
+    if git_command_success(
+        &checkout,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            before.trim(),
+            &candidate.candidate.commit,
+        ],
+    )? {
+        let run_id = input_string_field(input, "run_id").ok_or_else(|| {
+            OrbitError::InvalidInput("handoff_land: run_id is required".to_string())
+        })?;
+        host.record_direct_landing_intent(&DirectLandingRequest {
+            run_id,
+            branch: candidate.landing_branch.clone(),
+            before_commit: before.trim().to_string(),
+            after_commit: candidate.candidate.commit.clone(),
+            task_ids: vec![context.task_id.clone()],
+            handoff_id: Some(context.handoff_id.clone()),
+        })?;
     }
 
     let intent_id = format!("{}:local", context.handoff_id);
@@ -489,7 +538,7 @@ fn land_local_candidate<H: RuntimeHost + ?Sized>(
         &evidence,
     )?;
     if !merged {
-        return Err(stop(
+        return Err(stop_for_repair(
             host,
             context,
             &format!(
@@ -539,6 +588,40 @@ fn land_already_landed<H: RuntimeHost + ?Sized>(
         "external_merge": false,
     });
     complete(host, context, observed, &evidence)
+}
+
+/// A verified clean base completes without an external merge. The Core host
+/// rechecks the pinned verifier report, and that the live base still contains
+/// the synchronized base, at the completion write. The landing branch may
+/// have advanced past that base since the run synchronized [ORB-15074];
+/// `observe_or_stop` already stops when it no longer contains it.
+fn land_no_diff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    view: &LandingView,
+) -> Result<Value, OrbitError> {
+    let observed = observe_or_stop(host, context, None, view)?;
+    let landing = resolve_landing_ref(
+        &context.workspace_path,
+        &observed.landing_branch,
+        &observed.delivery,
+    )?;
+    if observed.candidate != observed.base {
+        return Err(stop(
+            host,
+            context,
+            "NoDiff candidate is not its synchronized base; revalidate the current base",
+        )?);
+    }
+    complete(
+        host,
+        context,
+        observed,
+        &json!({
+            "delivery": "no_diff", "landing_ref": landing,
+            "verified": "clean_base_checkpoint", "external_merge": false,
+        }),
+    )
 }
 
 /// Observe the candidate, recording a durable stop when it cannot be confirmed.
@@ -740,14 +823,42 @@ fn stop<H: RuntimeHost + ?Sized>(
     context: &HandoffLandingContext,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
+    record_stop(host, context, reason, false)
+}
+
+/// [`stop`] for a candidate that conflicts with, or is stale against, the base
+/// it lands on. The owner store hands it to one automatic repair.
+fn stop_for_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    record_stop(host, context, reason, true)
+}
+
+fn record_stop<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    reason: &str,
+    repairable: bool,
+) -> Result<OrbitError, OrbitError> {
     record(
         host,
         context,
-        HandoffLandingStep::Stop,
+        HandoffLandingStep::Stop { repairable },
         None,
         &Value::String(reason.to_string()),
     )?;
     Ok(OrbitError::Execution(format!("handoff_land: {reason}")))
+}
+
+/// Whether the provider reports the pull request's branch as behind its base,
+/// which branch protection refuses until the branch is brought up to date.
+fn behind_base(status: &Value) -> bool {
+    status
+        .get("mergeStateStatus")
+        .and_then(Value::as_str)
+        .is_some_and(|state| state.eq_ignore_ascii_case("BEHIND"))
 }
 
 fn describe(state: &PrMergeState) -> String {

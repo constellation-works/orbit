@@ -60,78 +60,49 @@ impl TaskRegistryStore {
         validate_relation_targets_exist(&conn, &partition_id, None, relations)
     }
 
-    /// Audit the coordination registry for relation edges whose target is a
-    /// valid `ORB-` task id with no registered task bundle — the "grandfathered"
-    /// relations that make [`validate_relation_targets_exist`] reject an index
-    /// rebuild (ORB-10305). Scans indexed relation rows across the whole
-    /// registry, or a single workspace when `partition_id` is set, so these
-    /// targets can be surfaced (and cleaned) proactively instead of only when a
-    /// rebuild trips over them.
+    /// The relation edges `envelopes` name whose target is a task id under a
+    /// locally known prefix that no registered bundle resolves — exactly the
+    /// edges `validate_replacement_relations` rejects when an index rebuild
+    /// publishes these envelopes (ORB-10305).
     ///
-    /// Mirrors the validator's resolution semantics: only `ORB-` targets can be
-    /// unresolved; friction / ADR targets that `produces`/`resolves`
-    /// edges legitimately allow to dangle are excluded.
-    pub fn dangling_relation_targets(
+    /// The envelopes are the authority, not the generated relation rows: an
+    /// edge whose row is missing or stale still blocks the rebuild, so it is
+    /// reported with `indexed: false` rather than hidden. Friction/ADR
+    /// targets and foreign-prefix task references stay allowed to dangle and
+    /// are never reported.
+    pub fn unresolved_relation_targets(
         &self,
-        partition_id: Option<&str>,
+        partition_id: &str,
+        envelopes: &[TaskEnvelopeV2],
     ) -> Result<Vec<DanglingRelationTarget>, OrbitError> {
-        let partition_id = partition_id.map(validate_partition_id).transpose()?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
-
-        let mut sql = String::from(
-            "SELECT r.workspace_id, r.source_task_id, r.relation_type, r.target_task_id
-             FROM task_bundle_relations r
-             LEFT JOIN task_bundle_bindings b ON b.task_id = r.target_task_id
-             WHERE b.task_id IS NULL",
-        );
-        let mut values: Vec<String> = Vec::new();
-        if let Some(partition_id) = &partition_id {
-            sql.push_str(" AND r.workspace_id = ?1");
-            values.push(partition_id.clone());
+        let unresolved = unresolved_relation_edges(&conn, envelopes)?;
+        if unresolved.is_empty() {
+            return Ok(Vec::new());
         }
-        sql.push_str(
-            " ORDER BY r.workspace_id, r.source_task_id, r.relation_type, r.target_task_id",
-        );
-
-        let mut stmt = conn
-            .prepare(&sql)
+        let mut indexed = conn
+            .prepare_cached(
+                "SELECT 1 FROM task_bundle_relations
+                 WHERE source_task_id = ?1 AND relation_type = ?2 AND target_task_id = ?3",
+            )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let rows = stmt
-            .query_map(params_from_iter(values.iter()), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
+        unresolved
+            .into_iter()
+            .map(|edge| {
+                let relation_type = relation_type_name(edge.relation_type);
+                let indexed = indexed
+                    .exists(params![edge.source, relation_type, edge.target])
+                    .map_err(|e| OrbitError::Store(e.to_string()))?;
+                Ok(DanglingRelationTarget {
+                    partition_id: partition_id.clone(),
+                    source_task_id: edge.source,
+                    relation_type: relation_type.to_string(),
+                    target_task_id: edge.target,
+                    indexed,
+                })
             })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        let mut dangling = Vec::new();
-        let known_prefixes = known_task_prefixes(&conn)?;
-        for row in rows {
-            let (partition_id, source_task_id, relation_type, target_task_id) =
-                row.map_err(|e| OrbitError::Store(e.to_string()))?;
-            // Non-task artifact targets and foreign-prefix task references are
-            // both allowed to remain unresolved here. Only a locally known
-            // prefix can be a dangling relation in this registry.
-            if !is_valid_orb_task_id(&target_task_id) {
-                continue;
-            }
-            let Some(prefix) = task_id_prefix(&target_task_id) else {
-                continue;
-            };
-            if !known_prefixes.contains(prefix) {
-                continue;
-            }
-            dangling.push(DanglingRelationTarget {
-                partition_id,
-                source_task_id,
-                relation_type,
-                target_task_id,
-            });
-        }
-        Ok(dangling)
+            .collect()
     }
 
     pub fn indexed_relation_targets(
@@ -253,13 +224,36 @@ pub(super) fn validate_replacement_relations(
     Ok(())
 }
 
-/// Resolve every replacement relation target with one primary-key query, then
-/// use one materialized prefix set for any target that query did not find.
 fn validate_replacement_relation_targets(
     conn: &Connection,
     source_workspace_id: &str,
     envelopes: &[TaskEnvelopeV2],
 ) -> Result<(), OrbitError> {
+    let Some(edge) = unresolved_relation_edges(conn, envelopes)?
+        .into_iter()
+        .next()
+    else {
+        return Ok(());
+    };
+    Err(OrbitError::InvalidInput(format!(
+        "task relation {} {} -> '{}' from workspace '{}' does not resolve in the coordination registry",
+        edge.source,
+        relation_type_name(edge.relation_type),
+        edge.target,
+        source_workspace_id
+    )))
+}
+
+/// Every edge in `envelopes` whose target a rebuild cannot resolve, in
+/// envelope and relation order. One primary-key query resolves every
+/// target; the materialized prefix set is read only when that query left
+/// some unresolved. A self-reference is the source's own row, and a target
+/// under a prefix this registry never issued is a foreign id, not a
+/// dangling edge.
+fn unresolved_relation_edges(
+    conn: &Connection,
+    envelopes: &[TaskEnvelopeV2],
+) -> Result<Vec<TaskRelationEdge>, OrbitError> {
     let candidates = envelopes
         .iter()
         .flat_map(|envelope| {
@@ -273,14 +267,15 @@ fn validate_replacement_relation_targets(
         })
         .collect::<BTreeSet<_>>();
     if candidates.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let registered = registered_task_ids(conn, &candidates)?;
     if registered.len() == candidates.len() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let known_prefixes = known_task_prefixes(conn)?;
+    let mut unresolved = Vec::new();
     for envelope in envelopes {
         for relation in &envelope.relations {
             if !candidates.contains(&relation.target) || registered.contains(&relation.target) {
@@ -292,13 +287,14 @@ fn validate_replacement_relation_targets(
             if !known_prefixes.contains(prefix) {
                 continue;
             }
-            return Err(OrbitError::InvalidInput(format!(
-                "task relation target '{}' from workspace '{}' does not resolve in the coordination registry",
-                relation.target, source_workspace_id
-            )));
+            unresolved.push(TaskRelationEdge {
+                source: envelope.id.clone(),
+                relation_type: relation.relation_type,
+                target: relation.target.clone(),
+            });
         }
     }
-    Ok(())
+    Ok(unresolved)
 }
 
 fn validate_relations_in_registry(

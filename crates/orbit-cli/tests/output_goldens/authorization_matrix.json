@@ -14,6 +14,47 @@
   },
   {
     "surface": "cli_command",
+    "operation": "gc audit",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "gc runs",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "gc tmp",
+    "required_any": [
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
     "operation": "gc worktrees",
     "required_any": [
       "operator",
@@ -42,6 +83,19 @@
   {
     "surface": "cli_command",
     "operation": "workspace teardown",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "auto_drain.approve_proposed",
     "required_any": [
       "operator"
     ],
@@ -172,6 +226,32 @@
   {
     "surface": "dashboard",
     "operation": "handoff.revoke",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "host.edit",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "host.forward",
     "required_any": [
       "operator"
     ],
@@ -706,6 +786,19 @@
       "agent_session": "allow",
       "remote_agent_session": "allow",
       "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.task.reconcile_review",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
     }
   },
   {

@@ -1,6 +1,4 @@
-/* Live log tail in the Tasks dock: status bar, stream, and filters.
-   run-detail.css also styles .log-line (step logs); this file loads later,
-   so where both set a property, these values apply to both. */
+/* Live log tail in the Tasks dock: status bar, stream, and filters. */
 
 @media (max-width: 760px) {
   .log-statusbar { overflow: hidden; }
@@ -49,7 +47,6 @@
 .log-statusbar .sb-m[data-level="err"] { color: var(--status-blocked); }
 .log-statusbar .sb-m[data-level="deny"] { color: var(--status-review); }
 .log-statusbar .sb-m[data-level="warn"] { color: var(--status-proposed); }
-.log-statusbar.empty .sb-label { opacity: 0.6; }
 #side-dock.disconnected .live-dot,
 .log-statusbar.disconnected .live-dot {
   background: var(--fg-mute);
@@ -106,7 +103,7 @@
 .log-line:hover { background: rgba(255,255,255,0.03); }
 .log-line.expanded { background: rgba(255,255,255,0.02); border-bottom-color: var(--hair); }
 .log-line .t  { color: var(--fg-dim); font-feature-settings: "tnum"; white-space: nowrap; }
-.log-line .ag { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-line .ag { color: var(--fg-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The level text is replaced by the row keyline; the element stays for
    assistive tech and for the title tooltip. */
@@ -190,7 +187,7 @@
 .log-foot .seg:focus-visible,
 .log-foot .seg.right:focus-visible,
 .log-foot .count:focus-visible {
-  outline: 2px solid var(--accent-hover);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .log-foot .seg { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }

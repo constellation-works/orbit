@@ -4,15 +4,30 @@
 //! settle — and, while the window is open and the owner would admit this
 //! executor, tops the free slots up with new pull requests. Three consecutive
 //! failed passes latch a durable degraded warning and stop new admissions.
-//! Settlement retries keep flowing. If run state cannot be read or recorded,
+//! Protocol skew fails immediately with its typed code and preserves the
+//! durable settlement outbox. Other settlement retries keep flowing. If run state cannot be read or recorded,
 //! the activity fails visibly rather than retrying without health evidence.
 //!
 //! Each request declares the crews this window can run [ORB-13941]: the
 //! provider preflight taken on the window's first pass, minus every crew a
-//! claimed leaf has since found unusable. The owner skips a task whose crew is
-//! not among them, so a follower never burns a claim it cannot run. It also
-//! declares this host's OS, and the owner skips a task whose `os:` tags that
-//! OS does not satisfy.
+//! claimed leaf has since found unusable, and within the drain's
+//! `--allow-crew` restriction when it has one [ORB-14174]. The owner skips a
+//! task whose crew is not among them, so a follower never burns a claim it
+//! cannot run. The owner's before-PR reviewer is checked against the window
+//! without that restriction. Each request also declares this host's OS, and
+//! the owner skips a task whose `os:` tags that OS does not satisfy.
+//!
+//! A drain submitted without a window (`for_seconds` zero) is authorized for
+//! one admission pass [ORB-14174]. Its window is expired from the start, so
+//! the pass is not read off the window: the first pass that finds no stop or
+//! cancel takes it, recording it in run state before probing or requesting,
+//! and requests up to the free slots. Every later pass — the same run's,
+//! a retry's, or a resumed run's — finds it taken and only settles. A pass
+//! held by a throttle, a shutdown or an owner refusal is still that pass.
+//! A timed window that has expired never gains one.
+//!
+//! A stop or cancel recorded while a pass is requesting ends it before the
+//! next request.
 //!
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
@@ -60,7 +75,7 @@ use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, RefusedDelivery};
 use crate::OrbitRuntime;
 use crate::application::distributed::{
-    PullCrewWindow, RefusedPullSettlement, owner_binary_version,
+    OwnerAnswer, PullCrewWindow, RefusedPullSettlement, owner_binary_version,
 };
 
 /// The job that runs this action. Recorded in each request's run context, so
@@ -101,6 +116,7 @@ pub(crate) fn pull_refill(
             serde_json::from_value(value).map_err(|error| failed(format!("`destination`: {error}")))
         })?;
     let window_expired = bool_input(input, "window_expired");
+    let single_pass = single_pass_input(input);
     let ceiling = u64_input(input, "max_active_leaf_runs", DEFAULT_MAX_ACTIVE_LEAF_RUNS);
     let poll = u64_input(input, "poll_sleep_seconds", DEFAULT_POLL_SLEEP_SECONDS);
     let idle = u64_input(input, "idle_sleep_seconds", DEFAULT_IDLE_SLEEP_SECONDS);
@@ -134,6 +150,22 @@ pub(crate) fn pull_refill(
         .as_ref()
         .and_then(|state| state.drain_last_pass.as_ref())
         .is_some_and(|pass| pass.degraded);
+    if let Some(pass) = state
+        .as_ref()
+        .and_then(|state| state.drain_last_pass.as_ref())
+        && pass.degraded
+        && (pass.last_pass_error_code.as_deref() == Some("protocol_skew")
+            || pass
+                .last_pass_error
+                .as_deref()
+                .is_some_and(|message| message.starts_with("protocol_mismatch:")))
+    {
+        return Err(DispatchError::ProtocolSkew(
+            pass.last_pass_error
+                .clone()
+                .unwrap_or_else(|| "pull request schema mismatch".into()),
+        ));
+    }
     // A launched leaf whose worker died is reconciled first, so this pass
     // records and delivers its failure rather than waiting on it. Cancellation
     // is read again afterwards: an operator can record it while reconciliation
@@ -145,15 +177,29 @@ pub(crate) fn pull_refill(
             .map_err(|error| failed(error.to_string()));
     }
 
+    // A windowless drain's only admission pass is this one if nothing has
+    // taken it yet; a timed window is open until it expires.
+    let window_open = if single_pass {
+        runtime.take_pull_single_pass(&run_id).map_err(|error| {
+            failed(format!(
+                "pull drain could not record its single admission pass: {error}"
+            ))
+        })?
+    } else {
+        !window_expired
+    };
     // Stop admitting while a host shutdown is pending: anything started now
     // would be killed by it [ORB-12968]. Settlement still runs.
     let host_shutdown = runtime.scheduled_host_shutdown();
     // Sustained host pressure holds new requests too [ORB-13901]; unknown
     // telemetry admits.
+    runtime.reclaim_worktrees_on_admission();
     let resource = runtime.resource_admission();
     let mut admitted = 0;
     let mut refusal = None;
     let mut error: Option<String> = None;
+    // What the owner said to the requests this pass sent [ORB-14475].
+    let mut idle_receipt = None;
     // What this window can run: its preflight, minus every crew a leaf has
     // since found unusable [ORB-13941]. Read by the refill after it has
     // reconciled, so a leaf this pass settles already counts.
@@ -182,7 +228,7 @@ pub(crate) fn pull_refill(
         }
     };
     let mut admitting = !degraded
-        && !window_expired
+        && window_open
         && host_shutdown.is_none()
         && resource.throttle.is_none()
         && !breaker_open
@@ -190,13 +236,18 @@ pub(crate) fn pull_refill(
         && consecutive_failures.is_some();
     // Whether `refill` ran, and so already reconciled this pass.
     let mut refilled = false;
+    if admitting && let Err(failure) = runtime.recover_pull_auth_exclusions(&run_id) {
+        error.get_or_insert(failure.to_string());
+        admitting = false;
+    }
     if admitting {
-        match probe(runtime, &transport, &destination) {
+        match probe(runtime, &run_id, &transport, &destination) {
             Ok(ProbeVerdict {
                 ship: Some(ship),
                 refusal: None,
             }) => {
                 let template = || {
+                    let caller_before_pr = captured_before_pr(runtime, &run_id)?;
                     let window = crew_window(runtime, &run_id)?;
                     let capability = (!window.runs_nothing()).then(|| window.capability());
                     *crews.borrow_mut() = Some(window);
@@ -204,38 +255,66 @@ pub(crate) fn pull_refill(
                         request_id: String::new(),
                         caller_version: owner_binary_version().to_string(),
                         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                        caller_review_policy: runtime.local_review_policy_label(),
+                        caller_fingerprint: Some(
+                            orbit_store::contracts::distributed_drain_protocol_fingerprint()
+                                .to_string(),
+                        ),
+                        caller_before_pr,
+                        // The claimed PR leaf runs the before-PR gate the
+                        // ship contract captures [ORB-13908].
+                        review_gate: true,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
                             job_name: PULL_DRAIN_JOB_NAME.to_string(),
-                            machine_name: None,
+                            machine_name: runtime
+                                .automation_execution_location()
+                                .and_then(|location| location.machine_name.clone()),
                         },
                         ship: ship.clone(),
                         crews: Some(capability),
                         os: runtime.host_os(),
                     }))
                 };
+                // A stop or cancel recorded mid-pass ends it before the next
+                // request; one that cannot be read ends it too.
+                let still_admitting = || {
+                    Ok(runtime.read_run_state(&run_id)?.is_none_or(|state| {
+                        state.drain_admissions_stop.is_none() && state.drain_cancel.is_none()
+                    }))
+                };
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
-                let pass = drain.refill_pass(&destination, &template, ceiling);
+                let pass = drain.refill_pass(&destination, &template, &still_admitting, ceiling);
                 refilled = true;
                 admitted = pass.admitted;
+                idle_receipt = pass.answer;
                 if let Some(failure) = pass.error {
+                    if let OrbitError::ProtocolSkew(message) = failure {
+                        return Err(protocol_skew_failure(
+                            runtime,
+                            action,
+                            &run_id,
+                            resource.throttle.clone(),
+                            message,
+                        ));
+                    }
                     error = Some(failure.to_string());
                 }
             }
             Ok(verdict) => {
-                if verdict
-                    .refusal
-                    .as_deref()
-                    .is_some_and(|message| message.starts_with("protocol_mismatch:"))
-                {
-                    error = verdict.refusal.clone();
-                }
                 refusal = Some(
                     verdict
                         .refusal
                         .unwrap_or_else(|| "owner probe returned no ship contract".into()),
                 );
+            }
+            Err(OrbitError::ProtocolSkew(message)) => {
+                return Err(protocol_skew_failure(
+                    runtime,
+                    action,
+                    &run_id,
+                    resource.throttle.clone(),
+                    message,
+                ));
             }
             Err(failure) => error = Some(failure.to_string()),
         }
@@ -291,7 +370,8 @@ pub(crate) fn pull_refill(
         }
     };
     let unsettled_holding = unsettled.is_none_or(|count| count > 0);
-    let done = window_expired && !unsettled_holding;
+    // A windowless drain admits on no later pass, whether or not this one did.
+    let done = (single_pass || window_expired) && !unsettled_holding;
     let sleep_seconds = if admitted > 0 {
         0
     } else if unsettled_holding || error.is_some() || resource.throttle.is_some() {
@@ -308,6 +388,37 @@ pub(crate) fn pull_refill(
             "pull drain pass did not complete; retrying next iteration",
         );
     }
+    let host_suppressed = crews
+        .as_ref()
+        .and_then(|window| window.host_suppressed.as_deref());
+    let no_runnable_crew = if let Some(reason) = host_suppressed {
+        format!(
+            "host_suppressed: this drain claims no more work on this host for its window \
+             because {reason}; see `crews.host_suppressed`, fix the host, and start a new drain"
+        )
+    } else if crews
+        .as_ref()
+        .is_some_and(PullCrewWindow::held_by_provider_limit)
+    {
+        // [ORB-14697, ORB-14902] A usage limit lifts by itself, so this drain admits
+        // again once one does.
+        "no_runnable_crew: no crew this drain may run is free on this host right now, and at \
+         least one is held by a provider usage limit; see `crews.excluded`: each \
+         `provider_limit` exclusion lifts at its `until` and this drain admits again"
+            .to_string()
+    } else if crews
+        .as_ref()
+        .is_some_and(|window| window.allowed.is_some())
+    {
+        "no_runnable_crew: no crew this drain's --allow-crew permits can run on this host for \
+         this window; see `crews.allowed` and `crews.excluded`, then start a new drain with \
+         crews that run here"
+            .to_string()
+    } else {
+        "no_runnable_crew: every configured crew is excluded on this host for this window; see \
+         `crews.excluded`, fix the providers, and start a new drain"
+            .to_string()
+    };
     let refusal = refusal
         .or_else(|| {
             (!refused.is_empty()).then(|| {
@@ -328,15 +439,20 @@ pub(crate) fn pull_refill(
                 )
             })
         })
-        .or_else(|| {
-            runs_nothing.then(|| {
-                "no_runnable_crew: every configured crew is excluded on this host for this \
-                 window; see `crews.excluded`, fix the providers, and start a new drain"
-                    .to_string()
-            })
-        });
+        .or_else(|| runs_nothing.then_some(no_runnable_crew));
+    let owner_answer = match idle_receipt.as_deref() {
+        Some(receipt) => OwnerAnswer::Idle(receipt),
+        None if admitted > 0 => OwnerAnswer::Claimed,
+        None => OwnerAnswer::None,
+    };
     let health = runtime
-        .record_pull_pass(&run_id, resource.throttle.clone(), error.as_deref())
+        .record_pull_pass(
+            &run_id,
+            resource.throttle.clone(),
+            error.as_deref(),
+            None,
+            owner_answer,
+        )
         .map_err(|error| failed(format!("pull drain could not record pass health: {error}")))?;
     admitting &= !health.degraded;
     let refusal =
@@ -368,6 +484,30 @@ pub(crate) fn pull_refill(
         "wait": !done && sleep_seconds > 0,
         "sleep_seconds": sleep_seconds,
     }))
+}
+
+/// Preserve the cause before the engine terminalizes the drain. Its outbox
+/// remains available to leaf workers and later settlement-only passes.
+fn protocol_skew_failure(
+    runtime: &OrbitRuntime,
+    action: &str,
+    run_id: &str,
+    throttle: Option<orbit_types::workflow::ResourceThrottle>,
+    message: String,
+) -> DispatchError {
+    match runtime.record_pull_pass(
+        run_id,
+        throttle,
+        Some(&format!("protocol_skew: {message}")),
+        Some("protocol_skew"),
+        OwnerAnswer::None,
+    ) {
+        Ok(_) => DispatchError::ProtocolSkew(message),
+        Err(error) => DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("pull drain could not record pass health: {error}"),
+        },
+    }
 }
 
 /// The settlements for `destination` its owner refused while still holding
@@ -451,7 +591,8 @@ fn cancelling_pass(
             "cancelling pull drain pass did not complete; retrying next iteration",
         );
     }
-    let health = runtime.record_pull_pass(run_id, None, error.as_deref())?;
+    let health =
+        runtime.record_pull_pass(run_id, None, error.as_deref(), None, OwnerAnswer::None)?;
     Ok(json!({
         "admitted": 0,
         "unsettled": unsettled,
@@ -513,10 +654,9 @@ fn crew_window(runtime: &OrbitRuntime, run_id: &str) -> Result<PullCrewWindow, O
 /// The window's provider preflight [ORB-13941]: every configured crew this
 /// host could dispatch now, resolved the way dispatch resolves it — enabled,
 /// its provider's executor resolvable, and that executor's CLI found where a
-/// leaf would launch it. Cheap: no provider process is started. No shipped
-/// provider declares a side-effect-free authentication probe, so an
-/// unauthenticated CLI passes here and is caught by its first claimed leaf,
-/// whose typed provider failure excludes the crew for the rest of the window.
+/// leaf would launch it. Cheap: no provider process is started. An
+/// unauthenticated CLI passes here and is caught by its first claimed leaf.
+/// Only auth-excluded providers with a declared probe may recover later.
 fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
     let registry = runtime.configured_crew_registry_projection();
     let mut runnable = Vec::new();
@@ -547,6 +687,7 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
                 crew: crew.name.clone(),
                 source: CrewExclusionSource::Preflight,
                 reason,
+                until: None,
             }),
         }
     }
@@ -560,22 +701,19 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
 
 /// Ask the owner whether it would admit this executor now, and for the ship
 /// contract a new request must carry. Declaring this binary's version, the
-/// protocol schema and this host's review policy makes the owner report the
-/// first refusal admission would raise, so a mismatch stops new requests
-/// before any is persisted.
+/// protocol schema and the drain's captured `review.before_pr` makes the
+/// owner report the first refusal admission would raise, so a mismatch stops
+/// new requests before any is persisted.
 fn probe(
     runtime: &OrbitRuntime,
+    run_id: &str,
     transport: &std::sync::Arc<dyn orbit_tools::DrainOwnerTransport>,
     destination: &PullDestination,
 ) -> Result<ProbeVerdict, OrbitError> {
-    let report = transport.call(
+    let report = crate::application::distributed::probe_pull_contract(
+        transport.as_ref(),
         &destination.selector,
-        "orbit.drain.probe",
-        json!({
-            "caller_version": owner_binary_version(),
-            "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-            "caller_review_policy": runtime.local_review_policy_label(),
-        }),
+        captured_before_pr(runtime, run_id)?,
     )?;
     if report.get("owner_machine_id").and_then(Value::as_str)
         != Some(destination.owner_machine_id.as_str())
@@ -587,12 +725,6 @@ fn probe(
                 report.get("owner_machine_id"),
                 destination.owner_machine_id
             )),
-        });
-    }
-    if let Some(refusal) = crate::application::distributed::protocol_mismatch(&report) {
-        return Ok(ProbeVerdict {
-            ship: None,
-            refusal: Some(refusal),
         });
     }
     let admits = report.get("admits").and_then(Value::as_bool) == Some(true);
@@ -623,10 +755,61 @@ fn probe(
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| OrbitError::Store(format!("owner probe ship contract: {error}")))?;
+    if let Some(ship) = &ship
+        && let Some(refusal) = reviewer_refusal(runtime, run_id, ship)?
+    {
+        return Ok(ProbeVerdict {
+            ship: None,
+            refusal: Some(refusal),
+        });
+    }
     Ok(ProbeVerdict {
         ship,
         refusal: None,
     })
+}
+
+/// Why this drain cannot run the before-PR review the owner's ship contract
+/// captured [ORB-13908]: the crew is unset, does not resolve here, or the
+/// drain's window cannot run it. Claiming anyway would only escalate the
+/// task at its gate, so the drain requests nothing until the owner or this
+/// host changes.
+fn reviewer_refusal(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    ship: &AdmissionShipContract,
+) -> Result<Option<String>, OrbitError> {
+    if let Some(refusal) = runtime.claimed_review_refusal(ship) {
+        return Ok(Some(refusal));
+    }
+    let Some(crew) = ship
+        .review
+        .as_ref()
+        .and_then(|review| review.crew.as_deref())
+    else {
+        return Ok(None);
+    };
+    // The window without its `--allow-crew` restriction: that selects the
+    // claims' implementation crews, not the review each one owes.
+    Ok(crew_window(runtime, run_id)?
+        .reviewer_unrunnable_reason(crew)
+        .map(|reason| {
+            format!("before_pr_reviewer_unavailable: the owner's before-PR review {reason}")
+        }))
+}
+
+/// Whether the drain was submitted without a window: `for_seconds` zero, as
+/// the job forwards it. A pass given no `for_seconds` at all is a timed one.
+fn single_pass_input(input: &Value) -> bool {
+    match input.get("for_seconds") {
+        Some(Value::Number(number)) => number.as_f64() == Some(0.0),
+        Some(Value::String(text)) => {
+            let text = text.trim();
+            text.is_empty() || text.parse::<f64>().is_ok_and(|seconds| seconds == 0.0)
+        }
+        Some(Value::Null) => true,
+        _ => false,
+    }
 }
 
 /// A boolean templated into activity input, which renders as a string.
@@ -644,4 +827,17 @@ fn u64_input(input: &Value, key: &str, default: u64) -> u64 {
         Some(Value::String(text)) => text.trim().parse().unwrap_or(default),
         _ => default,
     }
+}
+
+/// The `review.before_pr` the pull drain captured at submission
+/// [ORB-13992]: turning it on later does not change what a running drain
+/// declares. A drain submitted before the capture existed falls back to this
+/// host's current setting.
+fn captured_before_pr(runtime: &OrbitRuntime, run_id: &str) -> Result<bool, OrbitError> {
+    Ok(
+        crate::application::review::run_review_admission(runtime, run_id)?.map_or_else(
+            || runtime.local_review_before_pr(),
+            |admission| admission.gates_pr(),
+        ),
+    )
 }

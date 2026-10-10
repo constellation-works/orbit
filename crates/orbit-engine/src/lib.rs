@@ -3,11 +3,6 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! v2 activity/job execution engine with template rendering and retry logic.
 //!
 //! Orchestrates the full lifecycle of running a v2 activity or job:
@@ -24,6 +19,10 @@
 //! - [`RuntimeHost`] — the single capability boundary used by job execution
 //! - [`execute_deterministic_action`] — the built-in automation actions
 //!   (git/PR/worktree/task-update) v2 job steps invoke
+//! - [`ci_log_signature`] — the normalized CI error signature, shared by
+//!   collection's reproduction check and `orbit-core`'s CI failure filing
+//! - [`ci_run_event`] — which run events build their branch's own commit,
+//!   shared the same way
 //!
 //! # Dependency direction
 //! orbit-common, orbit-agent, orbit-exec, orbit-store, orbit-tools
@@ -49,15 +48,23 @@ pub use context::{
     ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest, ReviewerInvocationRequest,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
-    WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
+    STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport,
+    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
+    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
+    WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, baseline_red_hold_update,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
+pub use executor::automation::ci::log_signature as ci_log_signature;
+pub use executor::automation::ci::run_event as ci_run_event;
 pub use executor::automation::execute_action as execute_deterministic_action;
-pub use executor::automation::vcs::claim::{observe_candidate, observe_published_candidate};
+pub use executor::automation::vcs::claim::{
+    observe_candidate, observe_no_diff_candidate, observe_published_candidate,
+};
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
-    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,
-    run_worktree_has_build_output, validate_claim_new_paths,
+    BaselineHoldStatus, WorktreeGcOptions, WorktreeGcResult, WorktreeReclaimReport,
+    baseline_hold_status, collect_worktrees, fetch_remote_base, recorded_baseline_hold_status,
+    run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
 };

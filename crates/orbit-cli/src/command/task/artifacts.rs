@@ -13,10 +13,6 @@ pub struct ArtifactsCommand {
     /// Treat the ID as a task ID instead of a run ID
     #[arg(long)]
     pub task: bool,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for ArtifactsCommand {
@@ -26,7 +22,13 @@ impl Execute for ArtifactsCommand {
         }
 
         eprintln!("[deprecated] use \"orbit run show {}\"", self.id);
-        run::run_show_payload(runtime, Some(&self.id), None, run::RunRead::Reconcile)
+        run::run_show_payload(
+            runtime,
+            Some(&self.id),
+            None,
+            run::RunRead::Reconcile,
+            false,
+        )
     }
 }
 

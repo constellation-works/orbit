@@ -11,8 +11,11 @@ use orbit_engine::{
     RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update,
     blocked_workflow_interruption_update,
 };
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_store::{JobRunStepParams, TaskReservationReleaseReason};
-use orbit_types::task::{Task, TaskComment, TaskStatus};
+use orbit_types::task::{
+    TASK_ENVELOPE_FILE_NAME, TASK_PLAN_FILE_NAME, Task, TaskComment, TaskEnvelopeV2, TaskStatus,
+};
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -104,7 +107,13 @@ fn in_progress_task(runtime: &OrbitRuntime, title: &str) -> Task {
 fn block_by_failed_run(runtime: &OrbitRuntime, task: &Task) -> String {
     let jobs = runtime.stores().jobs();
     let run = jobs
-        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": [task.id]})),
+            None,
+        )
         .expect("insert delivery run");
     jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
         .expect("mark run running");
@@ -236,6 +245,22 @@ fn every_owned_block_source_gets_exactly_one_recovery_within_the_concurrency_bou
     );
     let claim = in_progress_task(&runtime, "Claim settlement failed");
     block_with(&runtime, &claim, claim_failed_update());
+    let claimed_blocker = in_progress_task(&runtime, "Claimed implementer blocker");
+    block_with(
+        &runtime,
+        &claimed_blocker,
+        TaskAutomationUpdate {
+            execution_summary: Some(format!(
+                "Outcome: failed\nError: {} kind=environment toolchain unavailable",
+                orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER,
+            )),
+            status: Some(TaskStatus::Blocked),
+            status_event: Some("claim_failed".to_string()),
+            // Claimed failure settlements put their diagnostic in the task
+            // summary; the history event itself has no status note.
+            ..TaskAutomationUpdate::default()
+        },
+    );
     // A block a human set by hand is not the backstop's.
     let manual = in_progress_task(&runtime, "Blocked by hand");
     runtime
@@ -289,6 +314,12 @@ fn every_owned_block_source_gets_exactly_one_recovery_within_the_concurrency_bou
     assert_eq!(source_of(by_task(&gate)), "gate_failed");
     assert_eq!(source_of(by_task(&interrupted)), "run_interrupted");
     assert_eq!(source_of(by_task(&claim)), "claim_failed");
+    assert!(
+        inputs
+            .iter()
+            .all(|input| input["task_id"] != json!(claimed_blocker.id)),
+        "a claimed implementer blocker does not dispatch another recovery agent"
+    );
     assert!(
         inputs
             .iter()
@@ -370,8 +401,10 @@ fn activity_by_a_human_after_the_block_suppresses_recovery() {
     );
 }
 
-/// A field-only edit records no history and no actor. Neither before nor
-/// after dispatch may an automated decision override it.
+const EDITED_PLAN: &str = "1) fix the fixture by hand 2) requeue";
+
+/// ORB-14228: modern field edits have attributed semantic history. Exercise
+/// the dashboard's human surface rather than relying on the process actor.
 #[test]
 fn a_human_field_edit_after_the_block_is_never_overridden() {
     if !enter_isolated_child(
@@ -380,6 +413,89 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
     ) {
         return;
     }
+    field_edit_after_the_block_is_never_overridden(|runtime, task| {
+        let history = runtime.get_task_history(&task.id).expect("history");
+        let comments = runtime.get_task_comments(&task.id).expect("comments");
+        runtime
+            .update_task_as_human(
+                &task.id,
+                TaskUpdateParams {
+                    plan: Some(EDITED_PLAN.to_string()),
+                    ..Default::default()
+                },
+                "human:recovery-operator".to_string(),
+            )
+            .expect("human edits the plan");
+        let updated_history = runtime.get_task_history(&task.id).expect("durable history");
+        assert_eq!(updated_history.len(), history.len() + 1);
+        assert_eq!(&updated_history[..history.len()], history.as_slice());
+        let event = updated_history.last().expect("semantic update event");
+        assert_eq!(event.event, "updated");
+        assert_eq!(event.by, "human:recovery-operator");
+        assert!(event.at > history.last().expect("block history").at);
+        assert_eq!(
+            runtime.get_task_comments(&task.id).expect("comments"),
+            comments
+        );
+        EpisodeDisposition::HumanIntervened {
+            by: event.by.clone(),
+        }
+    });
+}
+
+/// Fault injection in an isolated bundle models a legacy client that wrote
+/// the plan and timestamp without history. The modern API cannot model this.
+#[test]
+fn a_legacy_unattributed_field_edit_after_the_block_is_never_overridden() {
+    if !enter_isolated_child(
+        module_path!(),
+        "a_legacy_unattributed_field_edit_after_the_block_is_never_overridden",
+    ) {
+        return;
+    }
+    field_edit_after_the_block_is_never_overridden(|runtime, task| {
+        assert_isolated_child();
+        let history = runtime.get_task_history(&task.id).expect("history");
+        let comments = runtime.get_task_comments(&task.id).expect("comments");
+        let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root()))
+            .expect("isolated task registry");
+        let bundle = registry
+            .canonical_task_bundle_path(&runtime.workspace_id().expect("workspace"), &task.id)
+            .expect("isolated bundle");
+        let envelope_path = bundle.join(TASK_ENVELOPE_FILE_NAME);
+        let mut envelope: TaskEnvelopeV2 =
+            serde_yaml::from_slice(&std::fs::read(&envelope_path).expect("read envelope"))
+                .expect("parse envelope");
+        // Pass the timestamp slack since every attributed write; record no
+        // event or comment, just as the old field-only writer did.
+        let slack = u64::try_from(ATTRIBUTION_SLACK_MS).expect("non-negative slack");
+        std::thread::sleep(std::time::Duration::from_millis(slack + 100));
+        envelope.updated_at = Utc::now();
+        std::fs::write(bundle.join(TASK_PLAN_FILE_NAME), EDITED_PLAN).expect("legacy plan write");
+        std::fs::write(
+            envelope_path,
+            serde_yaml::to_string(&envelope).expect("serialize envelope"),
+        )
+        .expect("legacy timestamp write");
+        assert_eq!(
+            runtime.get_task_history(&task.id).expect("history"),
+            history
+        );
+        assert_eq!(
+            runtime.get_task_comments(&task.id).expect("comments"),
+            comments
+        );
+        EpisodeDisposition::UnexplainedChange {
+            changed_at: envelope.updated_at,
+        }
+    });
+}
+
+/// Deterministically interleave a field edit on each side of dispatch and
+/// exercise both recovery steps against the changed durable task revision.
+fn field_edit_after_the_block_is_never_overridden(
+    edit_plan: impl Fn(&OrbitRuntime, &Task) -> EpisodeDisposition,
+) {
     let (_root, runtime) = recovery_runtime(r#"["implementer"]"#);
     let edited = in_progress_task(&runtime, "Operator rewrote the plan before dispatch");
     let dispatched = in_progress_task(&runtime, "Operator rewrote the plan after dispatch");
@@ -395,40 +511,9 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
             .expect("blocked task in view")
     };
     assert_eq!(disposition(&edited), EpisodeDisposition::Eligible);
-
-    // Past the slack that an appended comment's own timestamp is allowed.
-    let slack = u64::try_from(ATTRIBUTION_SLACK_MS).expect("non-negative slack");
-    std::thread::sleep(std::time::Duration::from_millis(slack + 100));
-    let edit_plan = |task: &Task| {
-        let history = runtime.get_task_history(&task.id).expect("history").len();
-        let comments = runtime.get_task_comments(&task.id).expect("comments").len();
-        runtime
-            .update_task(
-                &task.id,
-                TaskUpdateParams {
-                    plan: Some("1) fix the fixture by hand 2) requeue".to_string()),
-                    ..Default::default()
-                },
-            )
-            .expect("human edits the plan");
-        assert_eq!(
-            (
-                runtime.get_task_history(&task.id).expect("history").len(),
-                runtime.get_task_comments(&task.id).expect("comments").len(),
-            ),
-            (history, comments),
-            "the edit under test must leave no attributed record"
-        );
-    };
-    edit_plan(&edited);
-    assert!(
-        matches!(
-            disposition(&edited),
-            EpisodeDisposition::UnexplainedChange { .. }
-        ),
-        "{:?}",
-        disposition(&edited)
-    );
+    assert_eq!(disposition(&dispatched), EpisodeDisposition::Eligible);
+    let expected = edit_plan(&runtime, &edited);
+    assert_eq!(disposition(&edited), expected);
 
     let (first, inputs) = tick(&runtime);
     assert_eq!(
@@ -444,7 +529,8 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
     // Once dispatched, the same edit makes both steps of the run stand down.
     let input = BlockedRecoveryInput::from_json(&inputs[0]).expect("run input");
     let run_id = first.dispatched[0].1.clone();
-    edit_plan(&dispatched);
+    let expected = edit_plan(&runtime, &dispatched);
+    assert_eq!(disposition(&dispatched), expected);
     assert!(matches!(
         runtime
             .prepare_blocked_task_recovery(&input, &run_id)
@@ -466,13 +552,18 @@ fn a_human_field_edit_after_the_block_is_never_overridden() {
     for task in [&edited, &dispatched] {
         let task = runtime.get_task(&task.id).expect("task");
         assert_eq!(task.status, TaskStatus::Blocked);
-        assert_eq!(task.plan, "1) fix the fixture by hand 2) requeue");
+        assert_eq!(task.plan, EDITED_PLAN);
     }
+    let (held, inputs) = tick(&runtime);
+    assert!(held.dispatched.is_empty() && inputs.is_empty());
 }
 
 #[test]
-#[allow(clippy::print_stdout)] // Report unavailable native sandbox checks visibly.
 fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
+    // Report the kernel-only deferral in the outer harness too: the recovery
+    // assertions still run in the isolated child, whose successful output is captured.
+    #[cfg(target_os = "macos")]
+    let _ = orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch");
     if !enter_isolated_child(
         module_path!(),
         "a_recovery_applies_one_decision_recorded_with_its_run_id",
@@ -618,7 +709,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
                 guard.verify().expect("allowed source and scratch writes");
             } else {
-                println!("SKIP: recovery agent kernel launch: {}", probe.detail);
+                orbit_exec::report_bwrap_deferral("recovery agent kernel launch", &probe.detail);
             }
             std::fs::write(prepared.checkout.join("new.env"), "forbidden")
                 .expect("simulate an agent write");
@@ -632,7 +723,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             let profile_text =
                 orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "claude")
                     .expect("compile the effective recovery sandbox");
-            if orbit_exec::sandbox_exec_available() {
+            if orbit_exec::macos_sandbox_test_guard("recovery agent kernel launch") {
                 let (child, _profile_file) =
                     orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
                         profile_text: &profile_text,
@@ -649,13 +740,6 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                 let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
                     .expect("bounded recovery agent step");
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
-            } else {
-                assert_ne!(
-                    std::env::var("ORBIT_REQUIRE_SANDBOX_EXEC").as_deref(),
-                    Ok("1"),
-                    "native recovery launch must run on the admitted macOS CI host"
-                );
-                println!("SKIP: recovery agent kernel launch: sandbox-exec is unavailable");
             }
         }
     }
@@ -906,4 +990,272 @@ fn a_recovery_checkout_never_resolves_outside_its_directory() {
         .remove_recovery_checkout("jrun-legit_1")
         .expect("remove checkout");
     assert!(!checkout.exists());
+}
+
+/// [F2026-10-159] Recovering a task whose run lost its worker, the backstop's
+/// agent was offered `resume` and in-checkout implementation it cannot apply,
+/// and nothing named the failed run's worktree that still held the work. The
+/// shipped pipeline runs here end to end against a substitute provider that
+/// records the envelope it was given and still proposes `resume`.
+#[test]
+#[cfg(unix)]
+fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_types::workflow::ExecutorSandboxKind;
+
+    use crate::adapter::engine_host::v2_host::test_support::seed_executor;
+    use crate::application::task::BACKSTOP_DECISIONS;
+    use crate::bootstrap::init::{InitOptions, init_workspace_at_root};
+
+    if !enter_isolated_child(
+        module_path!(),
+        "the_backstop_offers_only_its_decisions_and_names_the_retained_candidate",
+    ) {
+        return;
+    }
+    let (root, runtime) = recovery_runtime(r#"["implementer"]"#);
+    init_workspace_at_root(
+        &runtime.global_root(),
+        InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .expect("seed the shipped recovery job and activities");
+    let runtime = OrbitRuntime::from_roots(
+        &runtime.global_root(),
+        &runtime.paths().repo_root.join(".orbit"),
+    )
+    .expect("reopen with the shipped catalog");
+    let repo = runtime.paths().repo_root.clone();
+
+    // The failed run's worktree, where it was created, holding two
+    // uncommitted files.
+    let task = in_progress_task(&runtime, "Worker lost mid-implementation");
+    let failed_run_id = block_by_failed_run(&runtime, &task);
+    let failed_run = runtime
+        .get_job_run_backend(&failed_run_id)
+        .expect("read failed run")
+        .expect("failed run");
+    let worktree =
+        orbit_engine::run_worktree_paths(&repo, &failed_run).expect("worktree")[0].clone();
+    let target = worktree.to_string_lossy().to_string();
+    let added = run_git(
+        &repo,
+        &["worktree", "add", "--detach", "--quiet", &target, "HEAD"],
+    )
+    .expect("git worktree add");
+    assert!(added.success, "{}", added.stderr);
+    std::fs::write(worktree.join("candidate.rs"), "pub fn done() {}\n").expect("write file");
+    std::fs::write(worktree.join("candidate_test.rs"), "#[test]\nfn t() {}\n").expect("write");
+    let git_dir = run_git(&worktree, &["rev-parse", "--absolute-git-dir"]).expect("git dir");
+    let index = Path::new(git_dir.stdout.trim()).join("index");
+    let index_before = std::fs::read(&index).expect("read index");
+    let index_mtime = std::fs::metadata(&index)
+        .and_then(|m| m.modified())
+        .expect("mtime");
+
+    let envelope = root.path().join("envelope.json");
+    let provider = root.path().join("codex");
+    std::fs::write(
+        &provider,
+        format!(
+            "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{}'\n",
+            envelope.display(),
+            r#"{"schemaVersion":1,"status":"success","result":{"decision":"resume","step_id":"agent_implement","rationale":"finished the implementation"},"error":null}"#
+        ),
+    )
+    .expect("write provider");
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755))
+        .expect("make provider executable");
+    seed_executor(&runtime, "codex", Some(ExecutorSandboxKind::Off));
+    let mut executor = runtime
+        .get_executor_def("codex")
+        .expect("read executor")
+        .expect("executor");
+    executor.command = Some(provider.to_string_lossy().to_string());
+    executor.args = Vec::new();
+    runtime
+        .upsert_executor_def(&executor)
+        .expect("point executor at the provider");
+
+    let (_, inputs) = tick(&runtime);
+    assert_eq!(inputs.len(), 1);
+    let job = runtime
+        .show_job_catalog_entry(BLOCKED_TASK_RECOVERY_JOB)
+        .expect("shipped recovery job");
+    let recovery = runtime
+        .run_job_v2_from_yaml(&job.path, inputs[0].clone())
+        .expect("run the recovery pipeline");
+    assert!(recovery.success, "{recovery:#?}");
+
+    let candidate = &recovery.pipeline["prepare"]["recovery"]["retained_candidate"];
+    assert_eq!(candidate["status"], "present", "{candidate}");
+    assert_eq!(candidate["path"], json!(target));
+    assert_eq!(
+        candidate["changed_paths"],
+        json!(["candidate.rs", "candidate_test.rs"]),
+        "{candidate}"
+    );
+
+    // What the agent was given: only the backstop's decisions, no step to
+    // resume from, the lane's limits, and the candidate.
+    let given = std::fs::read_to_string(&envelope).expect("provider saw an envelope");
+    let (_, envelope_text) = given
+        .split_once("Execution envelope:\n")
+        .expect("the prompt embeds the envelope");
+    let given: Value = serde_json::from_str(envelope_text.trim()).expect("envelope parses");
+    let input = &given["input"];
+    assert_eq!(input["decisions"], json!(BACKSTOP_DECISIONS));
+    assert!(
+        !input["decisions"]
+            .as_array()
+            .expect("decisions")
+            .contains(&json!("resume")),
+        "the backstop has no live run to resume: {input}"
+    );
+    assert!(input.get("step_ids").is_none(), "{input}");
+    assert!(
+        input["lane_contract"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty()),
+        "{input}"
+    );
+    assert_eq!(&input["retained_candidate"], candidate);
+    assert_ne!(input["workspace_path"], json!(target));
+
+    // `resume` is applied as an escalation naming the failed run and its
+    // retained candidate, which is left exactly as it was.
+    assert_eq!(recovery.pipeline["apply"]["outcome"], "escalated");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Blocked
+    );
+    let comments = recovery_comments(&runtime, &task.id);
+    let comment = &comments.last().expect("decision comment").message;
+    for named in [
+        failed_run_id.as_str(),
+        target.as_str(),
+        "candidate.rs",
+        "candidate_test.rs",
+    ] {
+        assert!(comment.contains(named), "comment names {named}: {comment}");
+    }
+    assert!(worktree.join("candidate.rs").is_file());
+    assert!(worktree.join("candidate_test.rs").is_file());
+    assert_eq!(std::fs::read(&index).expect("read index"), index_before);
+    assert_eq!(
+        std::fs::metadata(&index)
+            .and_then(|m| m.modified())
+            .expect("mtime"),
+        index_mtime,
+        "identifying the candidate must not write its index"
+    );
+    assert!(
+        !Path::new(input["workspace_path"].as_str().expect("checkout")).exists(),
+        "the recovery checkout is removed"
+    );
+}
+
+/// A failed run with no worktree left still gets a candidate entry saying
+/// so, and `complete_no_diff` completes only on a commit reachable from the
+/// base.
+#[test]
+fn complete_no_diff_needs_a_covering_commit_on_the_base() {
+    if !enter_isolated_child(
+        module_path!(),
+        "complete_no_diff_needs_a_covering_commit_on_the_base",
+    ) {
+        return;
+    }
+    let (_root, runtime) = recovery_runtime(r#"["implementer"]"#);
+    let repo = runtime.paths().repo_root.clone();
+    let unreachable = in_progress_task(&runtime, "Claims an unlanded commit");
+    let covered = in_progress_task(&runtime, "Already landed");
+    block_by_failed_run(&runtime, &unreachable);
+    block_by_failed_run(&runtime, &covered);
+    for args in [
+        &["checkout", "-q", "-b", "side"][..],
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@orbit.invalid",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "not on main",
+        ][..],
+    ] {
+        let output = run_git(&repo, args).expect("run git");
+        assert!(output.success, "git {args:?}: {}", output.stderr);
+    }
+    let side = run_git(&repo, &["rev-parse", "HEAD"]).expect("rev-parse");
+    let main = run_git(&repo, &["rev-parse", "main"]).expect("rev-parse");
+
+    let (tick_result, inputs) = tick(&runtime);
+    assert_eq!(tick_result.dispatched.len(), 2);
+    let apply = |task: &Task, commit: &str| {
+        let index = inputs
+            .iter()
+            .position(|input| input["task_id"] == json!(task.id))
+            .expect("dispatched");
+        let input = BlockedRecoveryInput::from_json(&inputs[index]).expect("run input");
+        let run_id = &tick_result.dispatched[index].1;
+        let BlockedRecoveryPreparation::Ready(prepared) = runtime
+            .prepare_blocked_task_recovery(&input, run_id)
+            .expect("prepare")
+        else {
+            panic!("a current episode is prepared");
+        };
+        let outcome = runtime
+            .apply_blocked_task_recovery(
+                &input,
+                run_id,
+                &prepared.base_ref,
+                Some(&json!({
+                    "decision": "complete_no_diff",
+                    "evidence_commit": commit,
+                    "rationale": "the outcome is on the base",
+                })),
+            )
+            .expect("apply");
+        runtime
+            .remove_recovery_checkout(run_id)
+            .expect("remove checkout");
+        (prepared, outcome)
+    };
+
+    let (prepared, outcome) = apply(&unreachable, side.stdout.trim());
+    assert!(
+        matches!(
+            &prepared.retained_candidate,
+            crate::application::task::retained_candidate::RetainedCandidate::Absent { .. }
+        ),
+        "{:?}",
+        prepared.retained_candidate
+    );
+    assert!(
+        matches!(outcome, FinalRecoveryOutcome::Escalated { .. }),
+        "a commit off the base never completes the task: {outcome:?}"
+    );
+    assert_eq!(
+        runtime.get_task(&unreachable.id).expect("task").status,
+        TaskStatus::Blocked
+    );
+
+    let (_, outcome) = apply(&covered, main.stdout.trim());
+    assert!(
+        matches!(
+            outcome,
+            FinalRecoveryOutcome::Completed {
+                status: TaskStatus::Review,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
 }

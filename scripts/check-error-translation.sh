@@ -8,6 +8,12 @@
 # defined in a caller crate. Runs in `make ci-fast` (local) and
 # `scripts/ci-guardrails.sh` (CI).
 #
+# Exception — target-crate placement: `orbit-types` cannot name `OrbitError`
+# (`orbit-common` depends on it), so each of its boundary errors translates
+# through one `impl From<Type> for OrbitError` in `orbit-common`, the crate
+# that owns the target type. The `from_registry` below lists them; Checks 1
+# and 3 apply to them with `orbit-common` as the translating crate.
+#
 # Mechanical approximation (three checks, tuned against false positives):
 #
 #   1. Registry completeness — every registered boundary error type has a
@@ -49,6 +55,32 @@ registry=(
   "DispatchError:orbit-engine:dispatch_error_to_orbit"
 )
 
+# --- Target-crate registry: boundary error type -> owning crate. Each is
+# translated by `impl From<Type> for OrbitError` in `$from_translation_crate`;
+# callers convert with `?` or `OrbitError::from`.
+from_translation_crate="orbit-common"
+from_registry=(
+  "ArchiveDigestError:orbit-types"
+  "FinalRecoveryError:orbit-types"
+  "IdentityError:orbit-types"
+  "JobRunStateError:orbit-types"
+  "PluginGrantError:orbit-types"
+  "PluginPinError:orbit-types"
+  "PolicyError:orbit-types"
+  "ProviderModelError:orbit-types"
+  "ProviderSandboxError:orbit-types"
+  "RecordError:orbit-types"
+  "ResourceError:orbit-types"
+  "RetiredBackendError:orbit-types"
+  "ReviewAdmissionError:orbit-types"
+  "ReviewHistoryError:orbit-types"
+  "ReviewReportError:orbit-types"
+  "TaskError:orbit-types"
+  "ToolError:orbit-types"
+  "WorkerBindingError:orbit-types"
+  "WorkflowError:orbit-types"
+)
+
 # --- Allowlist: fn names matching *_error_to_orbit that are NOT crate-boundary
 # translators. Each entry needs a justifying comment.
 #
@@ -56,7 +88,8 @@ allowlist=()
 
 is_allowlisted() {
   local name="$1"
-  for entry in "${allowlist[@]}"; do
+  # `${arr[@]+...}` keeps an empty array from tripping `set -u` on Bash 3.2.
+  for entry in ${allowlist[@]+"${allowlist[@]}"}; do
     if [[ "$entry" == "$name" ]]; then
       return 0
     fi
@@ -111,6 +144,26 @@ for entry in "${registry[@]}"; do
   fi
 done
 
+# --- Check 1b: every target-crate entry is defined in its owning crate and
+# has its `From` translator in the translating crate. ---
+for entry in "${from_registry[@]}"; do
+  IFS=':' read -r err_type crate <<<"$entry"
+  if [[ ! -d "$crates_dir/$crate/src" ]]; then
+    echo "error-translation: from_registry names missing crate '$crate' (entry: $entry)"
+    fail=1
+    continue
+  fi
+  if ! rg -q "pub (enum|struct) ${err_type}\\b" "$crates_dir/$crate/src"; then
+    echo "error-translation: from_registry entry '$err_type' is not defined in crate '$crate'"
+    fail=1
+  fi
+  if ! rg -q "impl From<${err_type}> for OrbitError" "$crates_dir/$from_translation_crate/src"; then
+    echo "error-translation: crate '$from_translation_crate' has no 'impl From<${err_type}> for OrbitError'"
+    echo "  '$crate' cannot name OrbitError; translate it beside OrbitError per docs/design-patterns/error_translation.md"
+    fail=1
+  fi
+done
+
 # --- Check 2: no translator definitions outside the registry/allowlist. ---
 while IFS=: read -r file line text; do
   [[ -n "$file" ]] || continue
@@ -145,6 +198,20 @@ for entry in "${registry[@]}"; do
     echo "error-translation: ${file#"$repo_root"/}:$line maps '$err_type' to OrbitError ad hoc:"
     echo "    ${text#"${text%%[![:space:]]*}"}"
     echo "  use .map_err(${translator}) from '$crate' instead"
+    fail=1
+  done < <(rust_sources "" | xargs rg -n "\\b${err_type}\\b.*OrbitError::|OrbitError::.*\\b${err_type}\\b" 2>/dev/null || true)
+done
+
+for entry in "${from_registry[@]}"; do
+  IFS=':' read -r err_type _crate <<<"$entry"
+  while IFS=: read -r file line text; do
+    [[ -n "$file" ]] || continue
+    if [[ "$(crate_of "$file")" == "$from_translation_crate" ]]; then
+      continue # the From impl beside OrbitError is the one legitimate site
+    fi
+    echo "error-translation: ${file#"$repo_root"/}:$line maps '$err_type' to OrbitError ad hoc:"
+    echo "    ${text#"${text%%[![:space:]]*}"}"
+    echo "  convert with '?' or OrbitError::from (impl in '$from_translation_crate') instead"
     fail=1
   done < <(rust_sources "" | xargs rg -n "\\b${err_type}\\b.*OrbitError::|OrbitError::.*\\b${err_type}\\b" 2>/dev/null || true)
 done

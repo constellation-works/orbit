@@ -112,7 +112,7 @@ impl OrbitRuntime {
     /// Record `run_id` interrupted for `switch` and exit the process.
     fn yield_to_pending_switch(&self, run_id: &str, switch: &PendingSwitch) -> ! {
         self.record_upgrade_interruption(run_id, switch.pid, switch.role);
-        std::process::exit(0)
+        orbit_common::observability::logging::exit(0)
     }
 
     /// Record `run_id` interrupted so the process `pid` can switch the store

@@ -10,14 +10,14 @@ use crate::executor::automation::input::input_string_field;
 use super::super::git::{
     GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    resolve_worktree_start_point,
+    normalize_base_branch, resolve_worktree_start_point, timeout_recovery_error,
 };
 use super::cleanup::remove_worktree;
 use super::dependency_delivery::{
     DependencyDeliveryMode, dependency_delivery_mode_from_input,
     ensure_dependencies_delivered_into_base,
 };
-use super::merge::{checkout_holding_branch, ensure_clean_checkout};
+use super::merge::{checkout_holding_branch, ensure_base_checkout_ready};
 use super::{WorktreeIdentity, is_registered_worktree};
 
 const DEFAULT_BASE: &str = "main";
@@ -90,15 +90,21 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     }
 
     // ORB-11373: when delivering into a local checkout, verify that the landing
-    // base checkout is clean before creating the worktree or admitting tasks.
+    // base checkout has no tracked changes before creating the worktree or
+    // admitting tasks. Untracked files are checked against the candidate at
+    // merge time, once its changed paths are known.
     // An initialized dirty base (e.g. from `workspace init`) will deterministically
     // fail the final merge step, so catch it early before expensive agent runs.
     if let Some((field, mode)) = landing_mode {
         match mode.as_str() {
             "local" => {
-                let base_checkout = checkout_holding_branch(repo_root, &base)?
+                // Same spelling rule as `merge_batch_worktree_into_base`:
+                // `origin/<branch>` names the local landing branch, and the
+                // pre-check inspects the checkout that holds that branch.
+                let landing_branch = normalize_base_branch(&base)?;
+                let base_checkout = checkout_holding_branch(repo_root, &landing_branch)?
                     .unwrap_or_else(|| repo_root.to_path_buf());
-                ensure_clean_checkout(&base_checkout, "base branch checkout")?;
+                ensure_base_checkout_ready(&base_checkout, None)?;
             }
             "pr" => {}
             other => {
@@ -130,13 +136,12 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 
     // ORB-13985: the run a single task was last linked to, read before this
     // run stamps its own id; `candidate_resume` looks there for a candidate
-    // that run's failure handoff preserved.
-    let prior_job_run_id = match task_ids.as_slice() {
-        [task_id] => host
-            .get_task(task_id)?
-            .job_run_id
-            .filter(|prior| prior != &job_run_id),
-        _ => None,
+    // that run's failure handoff preserved. ORB-14603: a run another machine
+    // executed — a claim's leaf — is named with that machine and never as a
+    // local run id, which this store may hold for unrelated work.
+    let (prior_job_run_id, prior_foreign_run) = match task_ids.as_slice() {
+        [task_id] => prior_run(host, task_id, &job_run_id)?,
+        _ => (None, None),
     };
 
     for task_id in task_ids {
@@ -158,7 +163,32 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         base_sha,
     );
     output["prior_job_run_id"] = json!(prior_job_run_id);
+    output["prior_foreign_run"] = prior_foreign_run.unwrap_or(Value::Null);
     Ok(output)
+}
+
+/// The run `task_id` was last linked to, other than `job_run_id`: its id when
+/// this machine executed it, else the run and the machine that did.
+fn prior_run<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    job_run_id: &str,
+) -> Result<(Option<String>, Option<Value>), OrbitError> {
+    let task = host.get_task(task_id)?;
+    let Some(prior) = task.job_run_id else {
+        return Ok((None, None));
+    };
+    // An unrecorded location is a local binding, made before locations were
+    // recorded or by a host without a machine identity.
+    match task.job_run_machine {
+        Some(bound) if host.local_machine_id().as_deref() != Some(bound.machine_id.as_str()) => {
+            Ok((
+                None,
+                Some(json!({"run_id": prior, "machine_id": bound.machine_id})),
+            ))
+        }
+        _ => Ok(((prior != job_run_id).then_some(prior), None)),
+    }
 }
 
 // pub(crate) widened for tests/ layout migration (ORB-00240); test reaches via
@@ -246,7 +276,7 @@ fn ensure_worktree(
     }
 
     if let Some(parent) = worktree_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
             OrbitError::Execution(format!(
                 "failed to create worktree directory '{}': {error}",
                 parent.display()
@@ -330,10 +360,12 @@ fn inspect_registered_worktree(
         return Ok(RegisteredWorktree::Usable { branch, head });
     }
 
+    // An unreadable status proves nothing about the working tree, so it is
+    // treated as retained work rather than as a clean checkout.
     let retained_work = unique_commits
         || status
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+            .is_none_or(|value| !value.trim().is_empty());
     Ok(RegisteredWorktree::Incomplete {
         retained_work,
         evidence,
@@ -469,9 +501,12 @@ fn recover_worktree_add_timeout(
     let timeout = git_timeout_error(repo_root, args, outcome.timeout_ms, &outcome.stderr);
     let registered = is_registered_worktree(repo_root, worktree_path).unwrap_or(false);
     if !registered && !worktree_path.exists() {
-        return OrbitError::Execution(format!(
-            "{timeout}; worktree add timed out before registration. This is timeout recovery, not conflict or failure-handoff recovery."
-        ));
+        return timeout_recovery_error(
+            outcome.timeout_ms,
+            format!(
+                "{timeout}; worktree add timed out before registration. This is timeout recovery, not conflict or failure-handoff recovery."
+            ),
+        );
     }
 
     let inspection = if registered {
@@ -489,15 +524,21 @@ fn recover_worktree_add_timeout(
 
     if registered && can_remove {
         if let Err(error) = remove_owned_incomplete_worktree(repo_root, worktree_path) {
-            return OrbitError::Execution(format!(
-                "{timeout}; failed to remove incomplete owned worktree '{}': {error}. Leave it in place and inspect before retrying. This is timeout recovery, not conflict or failure-handoff recovery.",
-                worktree_path.display()
-            ));
+            return timeout_recovery_error(
+                outcome.timeout_ms,
+                format!(
+                    "{timeout}; failed to remove incomplete owned worktree '{}': {error}. Leave it in place and inspect before retrying. This is timeout recovery, not conflict or failure-handoff recovery.",
+                    worktree_path.display()
+                ),
+            );
         }
-        return OrbitError::Execution(format!(
-            "{timeout}; removed incomplete owned worktree '{}'. Retry must create a complete checkout; this is timeout recovery, not conflict or failure-handoff recovery.",
-            worktree_path.display()
-        ));
+        return timeout_recovery_error(
+            outcome.timeout_ms,
+            format!(
+                "{timeout}; removed incomplete owned worktree '{}'. Retry must create a complete checkout; this is timeout recovery, not conflict or failure-handoff recovery.",
+                worktree_path.display()
+            ),
+        );
     }
 
     let evidence = match &inspection {
@@ -507,10 +548,13 @@ fn recover_worktree_add_timeout(
         }
         None => format!("registered={registered}, path={}", worktree_path.display()),
     };
-    OrbitError::Execution(format!(
-        "{timeout}; leaving checkout '{}' in place ({evidence}). Retry will not admit an incomplete checkout. This is timeout recovery, not conflict or failure-handoff recovery.",
-        worktree_path.display()
-    ))
+    timeout_recovery_error(
+        outcome.timeout_ms,
+        format!(
+            "{timeout}; leaving checkout '{}' in place ({evidence}). Retry will not admit an incomplete checkout. This is timeout recovery, not conflict or failure-handoff recovery.",
+            worktree_path.display()
+        ),
+    )
 }
 
 fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {

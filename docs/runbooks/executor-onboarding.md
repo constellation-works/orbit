@@ -1,7 +1,7 @@
 ---
 type: runbook
 summary: Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state.
-last_validated: 2026-09-12
+last_validated: 2026-10-04
 tags: [contributors, executors, providers, testing]
 paths: ["crates/orbit-agent/**", "crates/orbit-core/assets/executors/**", "crates/orbit-core/src/application/executor.rs", "crates/orbit-core/src/adapter/engine_host/v2_host/cli_executor.rs", "crates/orbit-engine/src/activity_job/**"]
 related_features: [activity-job, policy-sandbox]
@@ -56,7 +56,7 @@ Verify the seams against the current checkout before editing. These are the auth
 | Provider terminal-output reduction | `crates/orbit-agent/src/providers/<provider>/<provider>_output.rs` | Reduce the provider protocol to trustworthy terminal response bytes before the common completion-envelope parser. Reject stale, partial, malformed, or failed frames. |
 | Child lifecycle, cancellation, and cleanup | `crates/orbit-engine/src/activity_job/cli_runner/`; `crates/orbit-exec/src/supervision/` | Reuse the v2 runner and supervisor. Do not add provider-owned process spawning or cleanup. |
 | Deterministic shell input and output | `crates/orbit-engine/src/executor/automation/shell.rs` — `local_shell`, `parse_shell_config`, `compose_argv` | Keep argv in static activity config. Run an actual shell only when `shell` and `script` are declared explicitly. |
-| OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/provider_state.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs`; `crates/orbit-exec/src/macos_sandbox/compile.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. On macOS, a state-directory grant is not a login: Claude, Copilot, and Cursor keep their default login in the user keychain and receive a narrow `$HOME/Library/Keychains` read carve-out. |
+| OS sandbox / provider home grant | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/provider_state.rs`; `crates/orbit-exec/src/macos_sandbox/provider_dirs.rs`; `crates/orbit-exec/src/macos_sandbox/compile.rs` | Give only the active provider's required state directory a write grant. Keep the activity `fsProfile` authoritative for the worktree. On macOS, a state-directory grant is not a login: Claude, Copilot, Cursor, and Antigravity keep their default login in the user keychain and receive a narrow `$HOME/Library/Keychains` read carve-out. |
 | End-to-end fixtures | `crates/orbit-core/tests/provider/pi_fake_agent.rs`, `crates/orbit-core/tests/provider/antigravity_fake_agent.rs`, `crates/orbit-core/tests/provider/opencode_fake_agent.rs`, `crates/orbit-engine/tests/engine/v2_local_shell.rs` | Exercise the real v2 dispatch seam with fakes; add output/error/timeout/cancellation cases. |
 
 ## Add a CLI-agent executor
@@ -102,6 +102,7 @@ On macOS, Orbit's `macos-sandbox-exec` profile denies `$HOME/Library/Keychains` 
 | `claude` | login keychain item `Claude Code-credentials` | `ANTHROPIC_API_KEY` via `[execution.env].pass` |
 | `copilot` | login keychain item `github-copilot-app` | `COPILOT_GITHUB_TOKEN` via `[execution.env].pass` |
 | `cursor` | login keychain items `cursor-access-token` / `cursor-refresh-token` | `CURSOR_API_KEY` via `[execution.env].pass`, or log in with `AGENT_CLI_CREDENTIAL_STORE=file` and pass that variable too (it writes `$HOME/.cursor/auth.json`, the CLI re-reads the variable on every run, and setting it later does not migrate an existing keychain login) |
+| `antigravity` | Antigravity CLI (`agy`) OAuth token in the login keychain | No file-store override is documented |
 
 A failed keychain-backed step records Orbit's diagnosis — sandbox hid the item versus a real logout — on the run error and the task's `workflow_run_failed` note, not only `exited with code 1`. Do not document a provider as file-backed on macOS from its state directory alone; inspect the CLI's credential store.
 
@@ -141,20 +142,36 @@ Set a wall-clock deadline through the agent activity or `local_shell` config and
 | MCP / CLI envelope | Native-MCP lanes receive only their supported configuration; non-MCP lanes reach granted Orbit tools through the injected `orbit` binary and fail predictably when their required shell tool is unavailable. |
 | Local-shell injection resistance | Runtime input cannot modify argv; both literal argv and explicit shell forms behave as declared; non-zero and timeout output is audited. |
 
-Run focused tests during development, replacing `<provider>` only with a real crate/package/test target:
+Run focused tests during development, replacing `<provider>` with a real
+provider filter/module name (for example, `pi`):
 
 ```bash
 cargo test -p orbit-agent <provider>
-cargo test -p orbit-core --test <provider>_fake_agent
+cargo test -p orbit-core --test provider <provider>_fake_agent::
 cargo test -p orbit-engine --test engine v2_local_shell::
 ./scripts/generate-doc-indexes.sh --check
 ./scripts/sync-plugin-skills.sh --check
 make ci-fast
+make ci-test-affected
 make ci-lint
 make goldens
 ```
 
-The first two commands are examples of target selection, not provider CLI flags. If no provider-specific test target exists yet, run the package's relevant test module and add the integration fixture before calling the lane supported. `make ci-fast`, `make ci-lint`, and `make goldens` are the repository handoff gates; do not substitute a live authenticated smoke for fixture coverage.
+The fake-agent fixtures are modules in the `provider` integration-test target,
+not separate targets. Check selection before running a new filter:
+
+```bash
+cargo test -p orbit-core --test provider pi_fake_agent:: -- --list
+```
+
+Require a nonempty list; an unknown filter can exit zero with no tests. Add a
+new provider's fixture as a module registered in `tests/provider/main.rs`
+before calling the lane supported. These Cargo filters are not provider CLI
+flags. `make ci-fast`, `make ci-test-affected`, `make ci-lint`, and `make goldens`
+are the repository handoff gates. `make ci-fast` runs no Rust tests; the
+affected-test gate runs full test targets for changed crates and workspace
+dependents. See [validation and CI](../DEVELOPMENT.md#validation-and-ci).
+Do not substitute a live authenticated smoke for fixture coverage.
 
 ## Package and hand off managed assets
 

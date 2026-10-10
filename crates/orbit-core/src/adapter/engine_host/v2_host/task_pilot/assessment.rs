@@ -7,8 +7,10 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_engine::DispatchError;
-use orbit_types::task::TaskComplexity;
+use orbit_types::task::{HostOs, TaskComplexity};
 use serde_json::{Value, json};
+
+use crate::application::task::NativeOsRequirement;
 
 use super::VALIDATION_TOOL_WARNINGS;
 use super::input::{action_failed, required_string, required_string_array, string_array_value};
@@ -19,6 +21,7 @@ pub(super) struct ValidatedSelectors {
     pub(super) normalizations: Vec<Value>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn validate_after_selectors(
     action: &str,
     task_id: &str,
@@ -27,6 +30,7 @@ pub(super) fn validate_after_selectors(
     selectors: &[String],
     workspace_root: &Path,
     source: Option<&SourceSnapshot>,
+    authorized_creation: &[String],
 ) -> Result<ValidatedSelectors, DispatchError> {
     if selectors.is_empty() {
         if !matches!(disposition, "verified_no_diff" | "host_operational") {
@@ -145,17 +149,30 @@ pub(super) fn validate_after_selectors(
                 ),
             ));
         }
+        // Only an exact selector the task's durable creation grant names may
+        // be missing; it still has to be absent, never a target of another
+        // kind or a symlink.
+        let authorized = has_kind && authorized_creation.contains(&canonical);
         if let Some(source) = source {
-            validate_selector_at_source(action, task_id, &canonical, workspace_root, source)?;
-        } else {
-            if !exists_in_workspace(&canonical, workspace_root) {
+            validate_selector_at_source(
+                action,
+                task_id,
+                &canonical,
+                workspace_root,
+                source,
+                authorized,
+            )?;
+        } else if !exists_in_workspace(&canonical, workspace_root) {
+            if !authorized {
                 return Err(action_failed(
                     action,
                     format!(
-                        "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target"
+                        "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target{}",
+                        reauthorization_hint(&canonical)
                     ),
                 ));
             }
+        } else {
             validate_selector_target_kind(action, task_id, &canonical, workspace_root)?;
         }
         if !seen.insert(canonical) {
@@ -294,6 +311,59 @@ pub(super) fn validate_recommendations(
     Ok(complexity)
 }
 
+/// The pilot's typed native-OS finding: each `required_os` entry names a
+/// 1-based criterion of the task's `criteria` acceptance criteria, the OS
+/// whose native host alone can produce its evidence, and that evidence.
+/// Absent or empty is no finding. Admission holds only this typed field,
+/// never warning prose.
+pub(super) fn required_os(
+    action: &str,
+    task_id: &str,
+    assessment: &Value,
+    criteria: usize,
+) -> Result<Vec<NativeOsRequirement>, DispatchError> {
+    let Some(entries) = assessment
+        .get("required_os")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(Vec::new());
+    };
+    let invalid =
+        |detail: &str| action_failed(action, format!("task {task_id} required_os {detail}"));
+    let mut requirements = Vec::new();
+    for entry in entries
+        .as_array()
+        .ok_or_else(|| invalid("must be an array or null"))?
+    {
+        let criterion = entry
+            .get("criterion")
+            .and_then(Value::as_u64)
+            .and_then(|criterion| usize::try_from(criterion).ok())
+            .filter(|criterion| (1..=criteria).contains(criterion))
+            .ok_or_else(|| {
+                invalid(&format!(
+                    "criterion must be a 1-based index of the task's {criteria} acceptance criteria"
+                ))
+            })?;
+        let os = entry
+            .get("os")
+            .and_then(Value::as_str)
+            .and_then(HostOs::parse)
+            .ok_or_else(|| invalid("os must be linux, macos, or windows"))?;
+        entry
+            .get("evidence")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|evidence| !evidence.is_empty())
+            .ok_or_else(|| invalid("evidence must be a non-empty string"))?;
+        let requirement = NativeOsRequirement { criterion, os };
+        if !requirements.contains(&requirement) {
+            requirements.push(requirement);
+        }
+    }
+    Ok(requirements)
+}
+
 fn validate_optional_finding(
     action: &str,
     task_id: &str,
@@ -329,12 +399,58 @@ fn validate_optional_finding(
     Ok(())
 }
 
+/// Selectors the task's current scope declares that do not exist where the
+/// assessment was validated and that no durable creation grant covers, which
+/// the assessment dropped. Each finding names the existing reauthorization
+/// path; nothing here infers that the target was meant to be created.
+pub(super) fn unauthorized_missing_targets(
+    action: &str,
+    before: &[String],
+    after: &[String],
+    authorized_creation: &[String],
+    workspace_root: &Path,
+    source: Option<&SourceSnapshot>,
+) -> Result<Vec<String>, DispatchError> {
+    let mut findings = Vec::new();
+    for selector in before {
+        if after.contains(selector) || authorized_creation.contains(selector) {
+            continue;
+        }
+        let Ok(anchor) = anchor_path(selector) else {
+            continue;
+        };
+        let missing = match source {
+            Some(source) => {
+                source.path_kind(action, workspace_root, &anchor)? == GitPathKind::Missing
+            }
+            None => !exists_in_workspace(selector, workspace_root),
+        };
+        if missing {
+            findings.push(format!(
+                "{selector} was dropped: it does not exist and carries no durable creation authorization{}",
+                reauthorization_hint(selector)
+            ));
+        }
+    }
+    Ok(findings)
+}
+
+/// How an operator records that a missing selector is a target the task will
+/// create. Agents' proposals, comments and plans never grant it.
+fn reauthorization_hint(selector: &str) -> String {
+    format!(
+        "; if the task will create it, an operator must re-declare it with orbit.task.update \
+         (the full context_files list including {selector}, plus allow_missing_context: true)"
+    )
+}
+
 fn validate_selector_at_source(
     action: &str,
     task_id: &str,
     selector: &str,
     workspace_root: &Path,
     source: &SourceSnapshot,
+    authorized_creation: bool,
 ) -> Result<(), DispatchError> {
     let anchor = anchor_path(selector).map_err(|error| {
         action_failed(
@@ -346,11 +462,14 @@ fn validate_selector_at_source(
     let expected_dir = selector.starts_with("dir:");
     match (kind, expected_dir) {
         (GitPathKind::Tree, true) | (GitPathKind::Blob, false) => Ok(()),
+        (GitPathKind::Missing, _) if authorized_creation => Ok(()),
         (GitPathKind::Missing, _) => Err(action_failed(
             action,
             format!(
-                "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target at source revision {} ({})",
-                source.source_revision, source.source_ref
+                "task {task_id} selector {selector:?} does not resolve to an existing in-workspace target at source revision {} ({}){}",
+                source.source_revision,
+                source.source_ref,
+                reauthorization_hint(selector)
             ),
         )),
         _ => Err(action_failed(

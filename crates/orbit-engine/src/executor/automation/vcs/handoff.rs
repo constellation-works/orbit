@@ -13,7 +13,7 @@ use super::super::input::{
 use super::claim::{carries_implementer_output, implementer_summary};
 use super::pr::meaningful_execution_summary;
 
-const FAILED_HANDOFF_ACTOR: &str = "system";
+pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 
 /// The durable execution-summary first line that blocks delivery.
 const DELIVERY_FAILED_LINE: &str = "Outcome: failed";
@@ -220,7 +220,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     let base_ref = input_string_field(input, "base_ref")
         .map(|value| format!("Base checkpoint: {value}\n"))
         .unwrap_or_default();
-    let timed_out = error.to_string().contains("timed out");
+    let timed_out = error.is_timeout();
     let recovery = if matches!(phase, FailedHandoffPhase::Rebase)
         && rebase_in_progress(&context.workspace_path).unwrap_or(false)
     {

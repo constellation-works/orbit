@@ -6,9 +6,11 @@ pub(crate) mod crew_pools;
 pub(crate) mod delivery;
 mod exec;
 mod final_recovery;
+mod forge_hold_resume;
 pub(crate) mod pipeline;
 mod resume;
 mod run;
+mod upgrade_resume;
 
 #[cfg(test)]
 mod tests;
@@ -51,6 +53,6 @@ pub use run::{
     ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopRequest,
     DrainAdmissionsStopResult, DrainWorkerLimitChange, DrainWorkerLimitRequest, JobRunCancelResult,
     JobRunListParams, JobRunOrder, RemainingDrainChild, UnstoppedChild, UnstoppedLeaf,
-    job_run_to_json, job_run_to_json_with_activity_provenance, run_error_step,
+    job_run_task_ids, job_run_to_json, job_run_to_json_with_activity_provenance, run_error_step,
 };
 pub(crate) use run::{RunOwnerLiveness, run_owner_liveness};

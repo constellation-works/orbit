@@ -1,14 +1,20 @@
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_types::task::TaskComment;
+use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
 use super::freshness::{commit_sha, remote_branch_sha};
 use super::git::{git_command_success, git_output, git_success};
-use super::handoff::{FailedHandoffPhase, load_handoff_context, record_failed_handoff};
+use super::handoff::{
+    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, load_handoff_context,
+    record_failed_handoff,
+};
 use super::operations;
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
@@ -30,11 +36,73 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
         Ok(output) => Ok(output),
         Err(error) => {
             if let Some(context) = handoff.as_ref() {
-                record_failed_handoff(host, context, input, FailedHandoffPhase::Push, &error)?;
+                match ForgeUnavailableHold::from_text(&error.to_string()) {
+                    Some(hold) => record_forge_hold(host, context, &hold)?,
+                    None => record_failed_handoff(
+                        host,
+                        context,
+                        input,
+                        FailedHandoffPhase::Push,
+                        &error,
+                    )?,
+                }
             }
             Err(error)
         }
     }
+}
+
+/// Tell the task's readers once per batch that its push is held for the
+/// forge [ORB-14617]. The failed-handoff comment would ask for a manual
+/// reconcile that nothing here needs.
+fn record_forge_hold<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffContext,
+    hold: &ForgeUnavailableHold,
+) -> Result<(), OrbitError> {
+    let header = format!("push held: forge unavailable [run={}]", context.batch_id);
+    // [ORB-14634] A claimed leaf already retried inside its window; its
+    // claim's release, not the clock, decides what happens next.
+    let next = if host.worker_invocation().is_some() {
+        "The candidate, its worktree and its review are kept on this host; the leaf retried \
+         the push for as long as its claim's retry window allowed and now releases the claim, \
+         naming the head it kept."
+    } else {
+        "The candidate, its worktree and its review are kept; the clock resumes the held run, \
+         which pushes the same head and continues to the pull request without implementing or \
+         reviewing again."
+    };
+    let message = format!(
+        "{header}\n\nThe forge refused the push of {} to {} {} times over {} s for a \
+         server-side reason, so the run holds at this step instead of failing. {next}\n\nLast \
+         refusal:\n{}",
+        hold.head_sha,
+        hold.target_ref,
+        hold.attempts,
+        hold.waited_ms / 1000,
+        hold.diagnostic,
+    );
+    for task in &context.tasks {
+        if host
+            .get_task_comments(&task.id)?
+            .iter()
+            .any(|comment| comment.message.starts_with(&header))
+        {
+            continue;
+        }
+        host.apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                append_comments: vec![TaskComment {
+                    at: Utc::now(),
+                    by: FAILED_HANDOFF_ACTOR.to_string(),
+                    message: message.clone(),
+                }],
+                ..TaskAutomationUpdate::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
@@ -60,6 +128,19 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
 
     let local_sha = commit_sha(workspace_path, &branch)?;
     let remote_sha = remote_branch_sha(workspace_path, &branch)?;
+    // [ORB-14849] A before-landing reviewer's fix goes onto the published
+    // head it reviewed and nowhere else: a branch that moved since loses the
+    // lease, and the push itself is conditional on that head.
+    let lease = input_string_field(input, "lease_remote_sha");
+    if let Some(lease) = &lease
+        && remote_sha.as_deref() != Some(lease.as_str())
+    {
+        return Err(OrbitError::Execution(format!(
+            "push_lease_lost: 'origin/{branch}' is at {}, not the published head {lease} the \
+             review settled on; the reviewer fix is not pushed",
+            remote_sha.as_deref().unwrap_or("<missing>")
+        )));
+    }
     let decision = push_decision(workspace_path, &branch, &local_sha, remote_sha.as_deref())?;
     let (label, force_with_lease) = match decision {
         PushDecision::Missing => ("performed_create", false),
@@ -91,16 +172,26 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     });
     if force_with_lease {
         tool_input["expected_remote_sha"] = json!(remote_sha);
+    } else if let Some(lease) = &lease {
+        tool_input["force_with_lease"] = json!(true);
+        tool_input["expected_remote_sha"] = json!(lease);
     }
-    host.run_private_vcs_operation(operations::PUSH, tool_input)?;
+    if let Some(retry) = input.get("forge_retry").filter(|value| !value.is_null()) {
+        tool_input["forge_retry"] = retry.clone();
+    }
+    let pushed = host.run_private_vcs_operation(operations::PUSH, tool_input)?;
 
-    Ok(push_output(
+    let mut output = push_output(
         label,
         &branch,
         &local_sha,
         remote_sha.as_deref(),
         force_with_lease,
-    ))
+    );
+    // What the transient retries cost, for the run's step record.
+    output["push_attempts"] = pushed.get("attempts").cloned().unwrap_or(json!(1));
+    output["push_waited_ms"] = pushed.get("waited_ms").cloned().unwrap_or(json!(0));
+    Ok(output)
 }
 
 /// Refuse to push into the repository we are pushing from.
@@ -112,7 +203,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
 /// that reached no publication target at all. Failing here keeps a failed push
 /// distinguishable from a successful one even if something outside the pipeline
 /// wrote that remote into the repository's configuration [ORB-12103].
-fn ensure_origin_publishes_elsewhere(
+pub(super) fn ensure_origin_publishes_elsewhere(
     workspace_path: &Path,
     branch: &str,
 ) -> Result<(), OrbitError> {

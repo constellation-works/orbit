@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::{Store, parse_timestamp};
 
@@ -37,7 +38,7 @@ impl Store {
                 params.payload_json,
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         Ok(())
     }
 

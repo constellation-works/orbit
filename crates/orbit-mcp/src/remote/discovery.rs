@@ -9,16 +9,62 @@ use orbit_types::tool::{
     ToolSchema, validate_mcp_tool_definitions,
 };
 use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// Private wire name used by the federated mux to inspect every local checkout.
 ///
-/// This is deliberately absent from [`discovery_tool_definitions`]: direct v1
+/// This is deliberately absent from `discovery_tool_definitions`: direct v1
 /// clients continue to see and call only `orbit.workspace.list`, whose Active
 /// filter is part of that surface. The destination server recognizes this
 /// exact private request without adding it to the advertised tool surface.
 pub const FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL: &str =
     "orbit_federated_destination_workspace_list";
+
+/// What a destination says about itself on every discovery envelope.
+///
+/// `machine_id` is the v1 key. The other four are additive [ORB-14448]: a
+/// destination built before them omits them, and a reader treats each as
+/// unknown rather than guessing. They let `orbit host` read a host's identity
+/// and skew from the host itself instead of from operator-maintained config.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostFacts {
+    pub machine_id: String,
+    /// The destination's `[machine] name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_name: Option<String>,
+    /// The destination's `[machine] task_prefix`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_prefix: Option<String>,
+    /// The destination's running binary version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_version: Option<String>,
+    /// The destination's distributed-drain pull-protocol fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_fingerprint: Option<String>,
+}
+
+impl HostFacts {
+    /// Read the facts a discovery envelope carries. Only `machine_id` is
+    /// required; a non-string optional field reads as unknown.
+    pub fn from_envelope(content: &Value) -> Option<Self> {
+        let text = |key: &str| content[key].as_str().map(ToOwned::to_owned);
+        Some(Self {
+            machine_id: text("machine_id")?,
+            machine_name: text("machine_name"),
+            task_prefix: text("task_prefix"),
+            binary_version: text("binary_version"),
+            protocol_fingerprint: text("protocol_fingerprint"),
+        })
+    }
+
+    fn envelope(&self, workspaces: Vec<&Workspace>) -> Value {
+        let mut envelope = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
+        envelope["machine_id"] = json!(self.machine_id);
+        envelope["workspaces"] = json!(workspaces);
+        envelope
+    }
+}
 
 /// `include` value that attaches each workspace's effective crews to its row.
 pub const WORKSPACE_LIST_INCLUDE_CREWS: &str = "crews";
@@ -80,7 +126,7 @@ fn workspace_list_definition() -> McpToolDefinition {
 pub fn execute_discovery_tool(
     name: &str,
     registry: &WorkspaceRegistry,
-    local_machine_id: &str,
+    host: &HostFacts,
 ) -> Result<Value, OrbitError> {
     match name {
         "orbit.workspace.list" => {
@@ -88,10 +134,7 @@ pub fn execute_discovery_tool(
                 .into_iter()
                 .filter(|workspace| workspace.status == WorkspaceStatus::Active)
                 .collect::<Vec<_>>();
-            Ok(json!({
-                "machine_id": local_machine_id,
-                "workspaces": workspaces,
-            }))
+            Ok(host.envelope(workspaces))
         }
         _ => Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string())),
     }
@@ -104,13 +147,9 @@ pub fn execute_discovery_tool(
 /// silently dropping them.
 pub fn execute_federated_workspace_discovery(
     registry: &WorkspaceRegistry,
-    local_machine_id: &str,
+    host: &HostFacts,
 ) -> Value {
-    let workspaces = locally_bound_workspaces(registry);
-    json!({
-        "machine_id": local_machine_id,
-        "workspaces": workspaces,
-    })
+    host.envelope(locally_bound_workspaces(registry))
 }
 
 fn locally_bound_workspaces(registry: &WorkspaceRegistry) -> Vec<&Workspace> {

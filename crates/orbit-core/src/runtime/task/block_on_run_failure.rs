@@ -1,10 +1,30 @@
 //! Task coupling-out on run terminalization: when a job run reaches a terminal
-//! *failure* state (`failed`, `timeout`, `cancelled`) or is reconciled
-//! `interrupted`, every task coupled to that run — stamped with its
-//! `job_run_id` during `worktree_setup` — is moved to `blocked` so a
-//! human/orchestrator has to look before anything runs again.
+//! *failure* state (`failed`, `timeout`) or is reconciled `interrupted`, every
+//! task coupled to that run — stamped with its `job_run_id` during
+//! `worktree_setup` — is moved to `blocked` so a human/orchestrator has to look
+//! before anything runs again. Operator cancellation also blocks by default
+//! for older/internal callers; an explicit persisted operator policy can
+//! instead return the task to backlog with its cancellation reason.
 //! A backlog task whose latest status decision is this run's final-recovery
 //! requeue is preserved: recovery already authorized another attempt.
+//! Resumes keep the checkpoint batch's `job_run_id` for delivery, but their
+//! readmission history records the resumed run and that batch binding. Cleanup
+//! uses the latest matching readmission as the coupled owner instead, including
+//! when the resumed worker never starts. Review and withdrawal protections
+//! still apply, and an older run cannot overwrite a newer resume's decision.
+//!
+//! [ORB-14258] A run that failed because a required command fails on its
+//! base exactly as on the candidate (`[baseline_red]`) holds its tasks in the
+//! backlog instead (`baseline_red_hold`): nothing about the work is wrong, and
+//! admission releases the hold once the required command passes on a new base.
+//! A task the run's failure
+//! handoff already held is left as it is.
+//!
+//! [ORB-14266] A run that failed on its provider — `[provider_capacity]`,
+//! `[provider_unavailable]` or `[provider_refusal]` — did not judge the work
+//! either. Its tasks go back to the backlog under a `provider_failure_hold`
+//! that excludes the failing crews until a backoff passes, and admission
+//! draws another crew or defers (see `provider_hold`).
 //!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
@@ -34,21 +54,28 @@
 //! cleared ones and `orbit task recheck-blocked --confirm` can return them to
 //! backlog. Every other block keeps the human decision described above.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::missing_launcher_in;
 use orbit_engine::{
-    RuntimeHost, WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update,
+    RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, ProviderFailureClass,
+    is_baseline_red_failure,
+};
 
 use crate::OrbitRuntime;
 
 use super::FINAL_RECOVERY_REQUEUED_EVENT;
+use super::provider_hold::{held_by_run, provider_failure_hold_update};
+
+pub(crate) const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
 
 /// A blocked task whose block was caused by host configuration — its run
 /// failed because dispatch could not find the provider launcher — rather than
@@ -69,8 +96,8 @@ pub struct InfraBlockedTask {
     pub launcher: Option<PathBuf>,
 }
 
-/// Terminal run states that strand a coupled task and therefore trigger the
-/// block transition. `Interrupted` is included [ORB-12969]: the run is
+/// Terminal run states that strand a coupled task and therefore trigger task
+/// cleanup. `Interrupted` is included [ORB-12969]: the run is
 /// resumable from its step checkpoints, but nothing resumes it on its own, so
 /// its task must not keep looking like live work. Resume re-admits the blocked
 /// task, so blocking it does not get in the way of the resume.
@@ -107,6 +134,29 @@ fn task_is_blockable_on_run_failure(status: TaskStatus) -> bool {
             | TaskStatus::Proposed
             | TaskStatus::Someday
     )
+}
+
+/// The latest resume's cleanup owner, only while its recorded batch binding
+/// still matches the task. A later restamp invalidates the old coupling.
+pub(crate) fn resumed_task_run_id<'a>(
+    history: &'a [TaskHistoryEntry],
+    owner_run_id: &str,
+) -> Option<&'a str> {
+    let entry = history.iter().rev().find(|entry| {
+        entry.by == "system"
+            && matches!(
+                entry.event.as_str(),
+                "resume_readmitted" | "resume_review_restored"
+            )
+    })?;
+    let note = entry.note.as_deref()?;
+    let (note, owner) = note.rsplit_once("; owner_run_id=")?;
+    if owner != owner_run_id {
+        return None;
+    }
+    note.strip_prefix("resume lineage reconciliation: run '")?
+        .split_once("' resumes '")
+        .map(|(run, _)| run)
 }
 
 /// Extract `(error_code, error_message)` for the failure note from the run's
@@ -237,51 +287,173 @@ impl OrbitRuntime {
         } else {
             blocked_workflow_failure_update
         };
-        let tasks = self.list_run_tasks(run_id)?;
+        // [ORB-14258] A run that failed because a required command is red on
+        // its base holds its tasks in the backlog instead of blocking them.
+        let hold = (state == JobRunState::Failed)
+            .then(|| {
+                error_message
+                    .as_deref()
+                    .filter(|message| is_baseline_red_failure(error_code.as_deref(), Some(message)))
+                    .and_then(BaselineRedHold::from_text)
+            })
+            .flatten()
+            .map(|mut hold| {
+                if hold.run_id.is_empty() {
+                    hold.run_id = run_id.to_string();
+                }
+                hold
+            });
+        // [ORB-14266] Nor does a run its provider failed; its tasks wait in
+        // the backlog for another crew instead.
+        let provider_failure = (state == JobRunState::Failed && hold.is_none())
+            .then(|| ProviderFailureClass::of(error_code.as_deref(), error_message.as_deref()))
+            .flatten();
+        let task_cancellation_policy = if state == JobRunState::Cancelled {
+            self.read_run_state(run_id)?
+                .and_then(|state| state.task_cancellation_policy)
+        } else {
+            None
+        };
+        let mut tasks: BTreeMap<_, _> = self
+            .list_run_tasks(run_id)?
+            .into_iter()
+            .map(|task| (task.id.clone(), task))
+            .collect();
+        if run.retry_source_run_id.is_some() {
+            // A resume can readmit tasks without an input task list, and can
+            // retain a descendant's binding when no checkpoint is reused.
+            // Enumerate blockable statuses, then require this run's exact
+            // durable coupling under the lock; lineage alone is not ownership.
+            for status in [TaskStatus::InProgress, TaskStatus::Backlog] {
+                for task in self.list_tasks_filtered(Some(status), None, None, None, None, None)? {
+                    tasks.entry(task.id.clone()).or_insert(task);
+                }
+            }
+        }
         let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
-        for task in tasks {
+        for task in tasks.into_values() {
             // Recovery and cleanup serialize the decision with the status
             // write. Re-read the binding too: another run may have admitted
             // this task since list_run_tasks took its snapshot.
-            let result =
-                self.stores()
-                    .tasks()
-                    .with_task_write_lock(&task.id, &mut || {
-                        let current = self.get_task(&task.id)?;
-                        if current.job_run_id.as_deref() != Some(run_id)
-                            || !task_is_blockable_on_run_failure(current.status)
-                        {
-                            return Ok(());
-                        }
-                        // The task event, written with the requeue, survives even
-                        // when recording its run-state outcome failed. An older
-                        // requeue or another run's decision grants no exemption.
-                        if current.status == TaskStatus::Backlog
-                            && self
-                                .get_task_history(&task.id)?
-                                .iter()
-                                .rev()
-                                .find(|entry| {
-                                    entry.to_status.is_some()
-                                        || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                })
-                                .is_some_and(|entry| {
-                                    entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                        && entry.note.as_deref().is_some_and(|note| {
-                                            note.starts_with(&requeue_note_prefix)
-                                        })
-                                })
-                        {
-                            return Ok(());
-                        }
-                        let update = blocked_update(
-                            &run.job_id,
-                            run_id,
-                            error_code.as_deref(),
-                            error_message.as_deref(),
-                        );
-                        self.apply_task_automation_update(&task.id, update)
+            let result = self
+                .stores()
+                .tasks()
+                .with_task_write_lock(&task.id, &mut || {
+                    let current = self.get_task(&task.id)?;
+                    if !task_is_blockable_on_run_failure(current.status) {
+                        return Ok(());
+                    }
+                    // Run ids are machine-local, just as in list_run_tasks.
+                    if current.job_run_machine.as_ref().is_some_and(|bound| {
+                        run.executed_on
+                            .as_ref()
+                            .is_none_or(|local| local.machine_id != bound.machine_id)
+                    }) {
+                        return Ok(());
+                    }
+                    let history = self.get_task_history(&task.id)?;
+                    let coupled_run = current.job_run_id.as_deref().map(|owner| {
+                        resumed_task_run_id(&history, owner).unwrap_or(owner)
                     });
+                    if coupled_run != Some(run_id) {
+                        return Ok(());
+                    }
+                    // The task event, written with the requeue or the
+                    // failure handoff's baseline hold, survives even when
+                    // recording its run-state outcome failed. An older
+                    // decision or another run's grants no exemption.
+                    if current.status == TaskStatus::Backlog
+                        && history
+                            .iter()
+                            .rev()
+                            .find(|entry| {
+                                entry.to_status.is_some()
+                                    || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
+                                    || entry.event == BASELINE_RED_HOLD_EVENT
+                            })
+                            .is_some_and(|entry| {
+                                let note = entry.note.as_deref().unwrap_or_default();
+                                (entry.event == FINAL_RECOVERY_REQUEUED_EVENT
+                                    && note.starts_with(&requeue_note_prefix))
+                                    || (entry.event == BASELINE_RED_HOLD_EVENT
+                                        && BaselineRedHold::from_text(note)
+                                            .is_some_and(|held| held.run_id == run_id))
+                            })
+                    {
+                        return Ok(());
+                    }
+                    // A replayed finalization finds this run's provider hold.
+                    if current.status == TaskStatus::Backlog
+                        && held_by_run(&history, run_id)
+                    {
+                        return Ok(());
+                    }
+                    // A review timeout has already requeued a continuation;
+                    // an external-evidence hold has a named resumption condition.
+                    // Do not turn either decision into an operator-only block.
+                    if history
+                        .iter()
+                        .rev()
+                        .find(|entry| {
+                            entry.to_status.is_some()
+                                || matches!(
+                                    entry.event.as_str(),
+                                    "review_timeout_incomplete"
+                                        | "review_awaiting_evidence"
+                                        | "review_evidence_received"
+                                )
+                        })
+                        .is_some_and(|entry| {
+                            matches!(
+                                entry.event.as_str(),
+                                "review_timeout_incomplete"
+                                    | "review_awaiting_evidence"
+                                    | "review_evidence_received"
+                            ) && entry.note.as_deref().is_some_and(|note| {
+                                note.contains(&format!("run={run_id},"))
+                                    || note.starts_with(&format!("run={run_id};"))
+                            })
+                        })
+                    {
+                        return Ok(());
+                    }
+                    let update = if state == JobRunState::Cancelled
+                        && let Some(policy) = task_cancellation_policy
+                            .as_ref()
+                            .filter(|policy| !policy.block)
+                    {
+                        TaskAutomationUpdate {
+                            status: Some(TaskStatus::Backlog),
+                            status_event: Some(WORKFLOW_RUN_CANCELLED_EVENT.to_string()),
+                            status_note: Some(format!(
+                                "workflow run cancelled: job={}, run_id={}; returned to backlog; {}",
+                                run.job_id, run_id, policy.note
+                            )),
+                            ..TaskAutomationUpdate::default()
+                        }
+                    } else {
+                        match (&hold, provider_failure) {
+                            (Some(hold), _) => baseline_red_hold_update(&run.job_id, hold),
+                            (None, Some(class)) => provider_failure_hold_update(
+                                &run.job_id,
+                                &self.provider_failure_hold(
+                                    &current,
+                                    &run,
+                                    class,
+                                    error_message.as_deref(),
+                                    Utc::now(),
+                                )?,
+                            ),
+                            (None, None) => blocked_update(
+                                &run.job_id,
+                                run_id,
+                                error_code.as_deref(),
+                                error_message.as_deref(),
+                            ),
+                        }
+                    };
+                    self.apply_task_automation_update(&task.id, update)
+                });
             // Per-task best-effort: one task's write failure must not strand the
             // rest of the bundle.
             if let Err(error) = result {

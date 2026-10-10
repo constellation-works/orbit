@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
-use super::drain_summary::{pass_throttle_line, summarize_drain_leaves};
+use super::drain_summary::{pass_throttle_line, pass_waiting_lines, summarize_drain_leaves};
 use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_cause_lines};
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
@@ -20,9 +20,12 @@ use super::steps::{
     step_summary_table,
 };
 
+/// `CatalogReferenceLayer::layer` for a definition this binary ships.
+const SHIPPED_CATALOG_LAYER: &str = "shipped";
+
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight` or `provider_unavailable`) and `reason`, and is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"crew_window\":<window|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",\"stopped_descendants\":[...],\"blocked_on_stopped_descendant\":<descendant|null>,...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none; a run that ended `success` or `cancelled` cannot resume, so `.step_output_pointers` maps each step index whose output `.pipeline` holds to the JSON pointer of that entry, in place of its `.step_outputs` copy. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. The `#` column of the table is one-based and Duration is human-readable (`3h 39m 51s`); `.steps[].step_index` stays zero-based and every duration stays in milliseconds. A step from the audit trail is numbered in the order steps started, which is not the position `.pipeline_state.step_output_pointers` and `.step_outputs` key by when an earlier step was skipped (by `when:` or by resume); `-s` reads that step's output by its id, not by index. A run whose record holds only a run-level step (an interrupted run's) shows its audit steps instead. The Catalog: lines name only layers other than `shipped` unless `--verbose` is given; `.catalog_layers` always lists every reference. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes, whether its outcome reached the owner, and its `failure_class` once a failure or release is recorded (`candidate` and `task_input` block the owner's task; `operator_cancel`, `provider`, `environment`, `owner_route`, `baseline_red`, `transient` and `base_conflict` release it to the backlog); it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`, plus `capacity` (workspace `active_leaf_runs`, `inherited_leaf_runs` outside this coordinator, and `max_active_leaf_runs`, sampled before the last admission wave; the Capacity: line) and `resource_throttle` when host resource pressure held that pass (the Throttled: line, shown for pull drains too from `.pipeline_state.drain_last_pass`); a drain's own `.run.state` says the coordinator ran, not that its leaves shipped. `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines) and is empty for every other run; `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once; `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable`, `leaf_released` or `provider_limit`) and `reason`, and `auth_exclusions` (provider, host, excluded_at, error_class, relogin_hint, credential_source and next_probe_at). Declared auth probes may re-admit these crews in the same window, and a `provider_limit` exclusion carries `until` (its Crews: line reads `(provider_limit until <time>)`) and lifts by itself then, in the same window; other exclusions last until the next drain. It is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped; `.stopped_descendants` lists every such descendant the supervisor reported, and whether it ended it.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -32,15 +35,16 @@ pub struct RunShowArgs {
     #[arg(short = 's', long = "step")]
     pub step_id: Option<String>,
 
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
-
     /// Report stored run records as-is: skip stale-run reconciliation, which
     /// finalizes an orphaned pending or running run as interrupted and
     /// releases its task reservations
     #[arg(long)]
     pub no_reconcile: bool,
+
+    /// Also list the catalog layer of every job and activity reference; by
+    /// default only references that did not resolve to a shipped definition
+    #[arg(long)]
+    pub verbose: bool,
 }
 
 impl Execute for RunShowArgs {
@@ -50,6 +54,7 @@ impl Execute for RunShowArgs {
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             RunRead::from_no_reconcile(self.no_reconcile),
+            self.verbose,
         )
     }
 }
@@ -59,16 +64,14 @@ pub(crate) fn run_show_payload(
     run_id: Option<&str>,
     step_id: Option<&str>,
     read: RunRead,
+    verbose: bool,
 ) -> CommandOut {
     let run = resolve_run(runtime, run_id, read)?;
     let state = runtime.read_run_state(&run.run_id)?;
 
     if let Some(step_id) = step_id {
         let step = resolve_run_step(runtime, &run, step_id)?;
-        let step_output = state
-            .as_ref()
-            .and_then(|state| state.step_outputs.get(&step.step_index))
-            .cloned();
+        let step_output = state.as_ref().and_then(|state| step.output(state)).cloned();
         return step_record_payload(&run, &step, step_output);
     }
 
@@ -103,7 +106,7 @@ pub(crate) fn run_show_payload(
     // progress, and the output reference a failed step never checkpoints.
     run_projection["agent_invocation"] = serde_json::to_value(agent_invoke_result(
         &run,
-        state.as_ref().map(|state| &state.step_outputs),
+        state.as_ref(),
         provider_processes.last(),
     ))
     .unwrap_or(Value::Null);
@@ -173,6 +176,31 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    for process in &provider_processes {
+        if let Some(waits) = &process.build_budget_waits {
+            header.push_str(&format!(
+                "\nBuild-budget waits ({}): count {}; total {:.3}s; longest {:.3}s; queued wall {:.3}s; deadline extended {:.3}s.",
+                process.step_id.as_deref().unwrap_or("agent"), waits.count,
+                waits.total_ms as f64 / 1000.0, waits.longest_ms as f64 / 1000.0,
+                waits.queued_wall_ms as f64 / 1000.0, waits.deadline_extension_ms as f64 / 1000.0,
+            ));
+        }
+    }
+    for id in orbit_core::application::job::job_run_task_ids(&run) {
+        let title = match runtime.get_task(&id) {
+            Ok(task) => Some(task.title),
+            Err(error) => {
+                tracing::debug!(%id, %error, "run task title unavailable");
+                None
+            }
+        };
+        header.push_str(&format!(
+            "\n{} {}{}",
+            crate::output::color::bold("Task:"),
+            id,
+            title.map(|title| format!(" — {title}")).unwrap_or_default()
+        ));
+    }
     let cause_lines = format_root_cause_lines(&root_causes);
     if !cause_lines.is_empty() {
         header.push('\n');
@@ -187,7 +215,7 @@ pub(crate) fn run_show_payload(
             "\n{} iteration={} step_outputs={} updated_at={}",
             crate::output::color::bold("Pipeline:"),
             state.iteration,
-            state.step_outputs.len(),
+            state.step_output_entries().count(),
             state.updated_at.to_rfc3339(),
         ));
     }
@@ -203,9 +231,13 @@ pub(crate) fn run_show_payload(
         header.push('\n');
         header.push_str(&provenance_lines.join("\n"));
     }
-    header.push_str(&catalog_layer_lines(&catalog_layers));
+    header.push_str(&catalog_layer_lines(&catalog_layers, verbose));
     header.push_str(&live_provider_process_lines(&provider_processes));
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
+    header.push_str(&super::security_summary::security_alert_sweep_lines(
+        &run,
+        state.as_ref(),
+    ));
     let exclusion_lines = format_backlog_exclusion_lines(state.as_ref());
     if !exclusion_lines.is_empty() {
         header.push('\n');
@@ -214,14 +246,18 @@ pub(crate) fn run_show_payload(
     if let Some(summary) = &drain_summary {
         header.push('\n');
         header.push_str(&summary.lines(run.state).join("\n"));
-    } else if let Some(line) = state
+    } else if let Some(pass) = state
         .as_ref()
         .and_then(|state| state.drain_last_pass.as_ref())
-        .and_then(pass_throttle_line)
     {
         // A pull drain records its passes too, without a leaf summary.
-        header.push('\n');
-        header.push_str(&line);
+        for line in pass_throttle_line(pass)
+            .into_iter()
+            .chain(pass_waiting_lines(pass))
+        {
+            header.push('\n');
+            header.push_str(&line);
+        }
     }
     if let Some(pass) = state
         .as_ref()
@@ -256,7 +292,7 @@ pub(crate) fn run_show_payload(
     }
     if steps_source == StepSource::Audit && !steps.is_empty() {
         header.push_str(&format!(
-            "\n{} reconstructed from the run audit trail; the run record stores none",
+            "\n{} reconstructed from the run audit trail; the run record holds no per-step history",
             crate::output::color::bold("Steps:"),
         ));
     }
@@ -465,12 +501,14 @@ fn claimed_leaf_lines(
 
 /// One line per catalog reference, naming the layer that resolved it.
 ///
-/// Printed for every run, not only one that touches a plugin: "which file is
-/// this step actually running" is the question, and the answer is the same
-/// shape whether a plugin is involved or not.
-fn catalog_layer_lines(layers: &[CatalogReferenceLayer]) -> String {
+/// A `shipped` layer is the default answer and says nothing on a 20-activity
+/// pipeline, so it is listed only under `--verbose`. Any other layer — a
+/// workspace override, a plugin, an unresolved job — is what an operator asking
+/// "which file is this step actually running" needs, and always prints.
+fn catalog_layer_lines(layers: &[CatalogReferenceLayer], verbose: bool) -> String {
     layers
         .iter()
+        .filter(|layer| verbose || layer.layer != SHIPPED_CATALOG_LAYER)
         .map(|layer| {
             format!(
                 "\n{} {}",
@@ -636,24 +674,55 @@ fn display_value(value: &Value) -> String {
 ///
 /// Finished children are omitted: their outcome is already in the step table,
 /// and the question this answers is "is the agent still running or is the child
-/// lost", which only applies to an open invocation.
+/// lost", which only applies to an open invocation. A live child blocked on a
+/// descendant that stayed stopped past the supervisor's threshold is marked
+/// `blocked=stopped-descendant`, not shown as plainly alive, and every stopped
+/// descendant the supervisor reported follows on its own line.
 fn live_provider_process_lines(processes: &[RunProviderProcess]) -> String {
     processes
         .iter()
         .filter(|process| !process.finished)
         .map(|process| {
-            format!(
-                "\n{} provider={} pid={} step={} liveness={} started_at={}",
+            let blocked = process.blocked_on_stopped_descendant();
+            let mut lines = format!(
+                "\n{} provider={} pid={} step={} liveness={}{} started_at={}",
                 crate::output::color::bold("Agent:"),
                 process.provider.as_deref().unwrap_or("-"),
                 process.pid,
                 process.step_id.as_deref().unwrap_or("-"),
                 process.liveness.as_str(),
+                if blocked.is_some() {
+                    " blocked=stopped-descendant"
+                } else {
+                    ""
+                },
                 process
                     .ts
                     .map(|ts| ts.to_rfc3339())
                     .unwrap_or_else(|| "-".to_string()),
-            )
+            );
+            for descendant in &process.stopped_descendants {
+                let outcome = if descendant.ended {
+                    "ended by the supervisor".to_string()
+                } else {
+                    format!(
+                        "the supervisor could not end it ({})",
+                        descendant.error.as_deref().unwrap_or("no reason recorded")
+                    )
+                };
+                lines.push_str(&format!(
+                    "\n  stopped descendant: pid={} command=`{}` stopped for at least {}s; {outcome}{}",
+                    descendant.pid,
+                    descendant.command.as_deref().unwrap_or("-"),
+                    descendant.stopped_ms.unwrap_or(0) / 1000,
+                    if descendant.still_stopped {
+                        "; still stopped"
+                    } else {
+                        ""
+                    },
+                ));
+            }
+            lines
         })
         .collect()
 }

@@ -12,7 +12,18 @@ use std::collections::HashMap;
 
 use super::params::*;
 
+/// When a run finished, for rollups that count runs per job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobRunCompletion {
+    pub job_id: String,
+    /// `finished_at`, or `created_at` for a row that never recorded one.
+    pub completed_at: DateTime<Utc>,
+}
+
 pub trait JobRunStoreBackend: Send + Sync {
+    /// The workspace partition this store reads and writes runs under. Run
+    /// ids are only unique within it.
+    fn workspace_id(&self) -> &str;
     /// Local permanent binding, independent of owner connectivity.
     fn local_pull_for_run(&self, _run_id: &str) -> Result<Option<LocalPullAdmission>, OrbitError> {
         Ok(None)
@@ -86,6 +97,16 @@ pub trait JobRunStoreBackend: Send + Sync {
         Err(OrbitError::Store("drain leaf occupancy unavailable".into()))
     }
 
+    /// The shared capacity reading, with slots outside this coordinator's
+    /// lineage counted as inherited. Includes workers of stopped coordinators,
+    /// explicit deliveries, and unsettled pull admissions.
+    fn drain_leaf_occupancy_for_run(
+        &self,
+        _run_id: &str,
+    ) -> Result<super::DrainLeafOccupancy, OrbitError> {
+        Err(OrbitError::Store("drain leaf occupancy unavailable".into()))
+    }
+
     fn mutate_local_pull(
         &self,
         _destination: &PullDestination,
@@ -114,12 +135,16 @@ pub trait JobRunStoreBackend: Send + Sync {
             "automation action lookup unavailable".into(),
         ))
     }
+    /// Atomically insert a run for a durable automation action key, or resolve
+    /// the run already bound to it without writing that run. An existing key
+    /// must name the same job and input. The outcome is decided inside the
+    /// insertion transaction so callers can initialize only newly admitted runs.
     fn insert_automation_job_run(
         &self,
         _job_id: &str,
         _input: serde_json::Value,
         _key: &str,
-    ) -> Result<JobRun, OrbitError> {
+    ) -> Result<KeyedJobRunAdmission, OrbitError> {
         Err(OrbitError::Store(
             "automation job admission unavailable".into(),
         ))
@@ -156,6 +181,12 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// Every recorded `duration_ms` among runs matching `query`, ignoring
     /// its `limit`.
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError>;
+    /// Job and completion time of every run matching `query`, ignoring its
+    /// `limit`. Feeds per-job rollups without decoding whole runs.
+    fn list_job_run_completions_filtered(
+        &self,
+        query: &JobRunQuery,
+    ) -> Result<Vec<JobRunCompletion>, OrbitError>;
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn insert_job_run(
@@ -296,6 +327,12 @@ pub trait JobRunStoreBackend: Send + Sync {
         run_ids: &[String],
     ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
+    /// Initialize an existing run's pipeline state only while it is absent.
+    /// Returns `false` if another writer already supplied state, preserving
+    /// that document so the caller can apply its change with `update_run_state`.
+    /// A missing run returns a not-found error.
+    fn initialize_run_state(&self, run_id: &str, state: &PipelineState)
+    -> Result<bool, OrbitError>;
     /// [ORB-11253] Read-modify-write a run's pipeline state in one immediate
     /// transaction.
     ///
@@ -359,12 +396,13 @@ pub struct KeyedJobRunParams {
     pub input: Value,
 }
 
+/// Outcome of an atomic retry-key or automation-key admission.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyedJobRunAdmission {
-    /// No run in the window carried the key; this one was inserted.
+    /// No matching run carried the key; this one was inserted.
     Admitted(Box<JobRun>),
-    /// The newest run in the window already carrying the key. Nothing was
-    /// written.
+    /// The run bound to the automation key, or the newest run in the retry
+    /// window carrying the key. Nothing was written.
     Existing(Box<JobRun>),
 }
 

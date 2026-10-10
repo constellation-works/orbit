@@ -13,7 +13,6 @@ workspace = true
 
 [dependencies]
 base64.workspace = true
-getrandom.workspace = true
 # The callers-file trust check compares the file owner to the effective uid.
 libc.workspace = true
 orbit-common = { path = "../orbit-common" }
@@ -23,14 +22,12 @@ orbit-tools = { path = "../orbit-tools" }
 rmcp = { version = "2.1.0", default-features = false, features = ["client", "server", "transport-io"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }
-toml.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
 tempfile.workspace = true
+toml.workspace = true
 # `io-util` supplies the in-memory duplex transport used by the wire test.
 tokio = { workspace = true, features = ["io-util"] }
-tracing-subscriber.workspace = true

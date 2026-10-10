@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-09-12
+last_validated: 2026-10-08
 ---
 
 # Spec: Canon Refined Theme
@@ -31,12 +31,21 @@ Borders delineate structure without heavy contrast.
 
 ### Typography
 - **Sans-serif (Primary):** `Geist`, self-hosted, used for prose, titles, and general UI text.
-- **Monospace (Secondary/Data):** `Geist Mono`, self-hosted, used for IDs, metrics, timestamps, and code snippets.
+- **Monospace (Secondary/Data):** `Geist Mono`, self-hosted, used for IDs, metrics, timestamps, code snippets and logs.
 - **Base Size:** `14px` with `1.5` line height.
+
+### Text conventions
+The shared classes live in `css/components.css`; a view sets layout on them (padding, alignment, stickiness) but never font, case or tracking.
+- **Column heads:** every `<th>` takes one style from the shared `th` rule, and every grid header row that stands in for a table head (Tasks, Runs, Automation, Settings crews, system and hosts) carries the same rule as `.col-head`: sans, `11px`, weight `600`, uppercase, `0.06em` tracking, `--fg-dim`. Numeric columns align right but keep the sans head; mono is for the cells.
+- **Titles:** sentence case: capitalize only the first word and proper names (`MCP vs CLI`, `Knowledge pack`, `Context files`). A panel header is `14px` sans, weight `600`. A section or card title inside a panel uses `.section-title`: `13px` sans, weight `600`, `--fg`. Titles are never `text-transform: capitalize`, which raises every word of generated text (`Average Implement_one Duration By Actor`). A title built from lowercase data raises only its first letter through `.section-title::first-letter`.
+- **Overlines:** the small uppercase style is for column heads and field labels inside a section, never for a title.
+- **Prose:** explanatory notes, hints, empty states, placeholders and error or status messages are sans. Mono stays for IDs, metrics, timestamps, code, and raw diagnostics or logs, even inside a sentence (`code` spans).
+- **Rail counts:** a rail count is either an attention count or a volume count. An attention count (failed runs) is the `.rail-count.alert` pill in the danger colours. A volume count (tasks listed, audited events) is plain `11px` `--fg-mute` numerals that do not brighten on the active entry. Colour or a pill on a volume count would give a total the weight of something that needs action.
 
 ### Semantic Colors
 Colors are muted but distinct, avoiding harsh neon tones while maintaining semantic meaning.
-- **Text:** `--fg` (`#ededf0`), `--fg-dim` (`#8f8f99`), `--fg-mute` (`#6b6b75`)
+- **Text:** `--fg` (`#ededf0`), `--fg-dim` (`#8f8f99`), `--fg-mute` (`#8a8a94`)
+- **Disabled text:** `--fg-disabled` (`#6b6b75`), reserved for disabled states. Muted text stays above 4.5:1 contrast on `--bg`, `--bg-rail` and `--bg-elev`; disabled plugin cards keep full text contrast so their status and diagnostics remain readable.
 - **Accent (Blue):** `--accent` (`#8ab3ff`)
 - **Success/Done (Green):** `--status-done` (`#5ad8a0`)
 - **In-Progress (Teal):** `--status-in-progress` (`#5cc8de`)
@@ -47,6 +56,7 @@ Colors are muted but distinct, avoiding harsh neon tones while maintaining seman
 Status colours are lighter than the Tailwind 500 steps they replaced so a 7px dot stays distinct on the near-black canvas; each is paired with a word, so colour is never the only signal.
 
 ### Structural Rules
+- **Keyboard focus:** Every focusable control uses a `2px solid var(--accent)` outline under `:focus-visible`, including filters and task-action textareas. Outline offsets may move the ring inside a clipped row or outside a control.
 - **Radii:** `12px` for panels, `8px` (`--radius`) for cards and segmented controls, `6–7px` for buttons, inputs and selects, and fully round for filter chips and status dots.
 - **Density:** Padding remains tight (e.g., `12px 16px` for headers, `8px` gaps), but text is allowed to breathe more than in the legacy terminal theme.
 - **Animation:** Minimal, purposeful motion. Used primarily for loading indicators (e.g., `pulse-skeleton 1.5s infinite ease-in-out`).
@@ -55,7 +65,7 @@ Status colours are lighter than the Tailwind 500 steps they replaced so a 7px do
 
 ### Expandable Rows
 Data tables use expandable rows (`.row.expanded`). When expanded:
-- The row background shifts to an accent wash (`rgba(110, 159, 255, 0.05)`).
+- The row background shifts to an accent wash (`rgba(138, 179, 255, 0.1)`).
 - The expanded detail view uses `#050505` with a 2-column layout (main content + side metadata).
 - Collapsible field carets rotate `-90deg` for clear state indication.
 

@@ -23,7 +23,8 @@
 //! file continues writing valid JSONL into the renamed inode (Unix) — no
 //! corruption, though those lines land in the archive rather than the new
 //! active file. That trade-off is acceptable given the criterion is
-//! corruption-freedom, not real-time reader completeness.
+//! corruption-freedom. The subscriber reopens periodically (every MiB), limiting
+//! writes to a renamed inode and checking the size budget while it runs.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -63,6 +64,17 @@ impl Default for LogRotationConfig {
 }
 
 impl LogRotationConfig {
+    /// Independent agent-output budget: 200 MiB of archives, 50 MiB per file.
+    /// The operational age limit applies to both feeds, but their byte budgets
+    /// are independent so agent transcripts cannot evict operational evidence.
+    pub fn agent_output(self) -> Self {
+        Self {
+            retention_days: self.retention_days,
+            max_total_bytes: 200 * BYTES_PER_MB,
+            max_file_bytes: 50 * BYTES_PER_MB,
+        }
+    }
+
     /// Build from raw `[runtime]` values (megabytes / days), validating each.
     /// A `None` field falls back to the conservative default. Returns a clear
     /// [`OrbitError::InvalidInput`] for out-of-range values so the config
@@ -146,7 +158,7 @@ fn load_global() -> Option<LogRotationConfig> {
 /// Opportunistically roll the active log if oversized, then prune archives by
 /// age and total-size budget. Best-effort: logs a warning on failure but never
 /// panics or fails the caller. Intended for long-lived processes and for the
-/// oversized-file path that [`rotate_if_active_exceeds_budget`] takes after a
+/// oversized-file path that `rotate_if_active_exceeds_budget` takes after a
 /// single `metadata()` check.
 pub fn rotate_and_prune(active_path: &Path, config: &LogRotationConfig) {
     if let Err(error) = maybe_roll(active_path, config) {

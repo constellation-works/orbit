@@ -13,6 +13,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "ci_failure.operator_suppression_hours": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "crews.golden.description": {
       "scope": "built-in",
       "state": "unset",
@@ -105,6 +111,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "execution.proc_spawn_max_timeout_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.id": {
       "scope": "built-in",
       "state": "unset",
@@ -159,24 +171,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "operation.review_minutes": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
-    "operation.review_policy": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
-    "operation.review_reviewer_starts": {
-      "scope": "built-in",
-      "state": "unset",
-      "path": null,
-      "shadowed_by": []
-    },
     "plugin.legacy_callback_identity": {
       "scope": "built-in",
       "state": "default",
@@ -201,6 +195,42 @@
       "path": null,
       "shadowed_by": []
     },
+    "retention.audit_days": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "retention.runs_days": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.baseline_commands": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.before_landing": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.before_pr": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "runtime.log_max_file_mb": {
       "scope": "built-in",
       "state": "default",
@@ -220,6 +250,12 @@
       "shadowed_by": []
     },
     "scoring.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "security_alert_sweep.min_severity": {
       "scope": "built-in",
       "state": "default",
       "path": null,
@@ -287,6 +323,30 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.provider_limit_budgets": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.provider_limit_explicit_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.provider_limit_max_used_pct": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.provider_limit_overrides": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.required_validation_commands": {
       "scope": "built-in",
       "state": "default",
@@ -294,6 +354,12 @@
       "shadowed_by": []
     },
     "workflow.resource_throttle.cpu_high_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.resource_throttle.cpu_light_leaves": {
       "scope": "built-in",
       "state": "default",
       "path": null,
@@ -353,6 +419,12 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.validation_env.interactive": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.validation_env.login_shell": {
       "scope": "built-in",
       "state": "default",
@@ -374,6 +446,18 @@
     "workflow.xhard_complexity_crews": {
       "scope": "built-in",
       "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "worktree.reclaim": {
+      "scope": "built-in",
+      "state": "default",
+      "path": null,
+      "shadowed_by": []
+    },
+    "worktree.reclaim_below_free_mib": {
+      "scope": "built-in",
+      "state": "unset",
       "path": null,
       "shadowed_by": []
     }

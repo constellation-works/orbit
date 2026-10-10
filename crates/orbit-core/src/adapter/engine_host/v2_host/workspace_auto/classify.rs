@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_engine::DispatchError;
-use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
+use orbit_types::workflow::{DrainAdmissionPass, DrainCapacity, DrainWaitingTask};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -12,11 +12,11 @@ use crate::adapter::engine_host::v2_host::admission::auto_admission::{
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusion, allowlist_from_input, backlog_snapshot,
 };
+use crate::adapter::engine_host::v2_host::admission::cpu_light::{LightBudget, ResourceGate};
 
 use super::action_failed;
 use super::drains::{
     DEFAULT_MAX_ACTIVE_LEAF_RUNS, live_admissions_stop, live_leaf_runs, live_worker_limit,
-    shared_leaf_occupancy,
 };
 
 /// Wait before re-listing when the backlog has admissible work but every slot
@@ -62,6 +62,12 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    runtime
+        .record_backlog_pilot_operator_handoffs()
+        .map_err(|error| {
+            action_failed(action, format!("record pilot operator handoffs: {error}"))
+        })?;
+
     let submitted_max_active_leaf_runs = templated_u64(
         action,
         input,
@@ -112,7 +118,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     }
     // [ORB-13901] Sustained host pressure holds the wave the same way until
     // every resource is back below its resume mark. Live children are never
-    // touched, and unknown telemetry admits.
+    // touched, and unknown telemetry admits. [ORB-14624] CPU pressure alone
+    // still admits CPU-light leaves within their reserved budget, below.
+    runtime.reclaim_worktrees_on_admission();
     let resource = runtime.resource_admission();
 
     // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy
@@ -120,14 +128,22 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // wrappers, every leaf definition they or a claim bind, and pending
     // admissions no run represents yet — not this classifier's own wrapper
     // count.
-    let occupancy = shared_leaf_occupancy(runtime)
+    let jobs = runtime.stores().jobs();
+    let occupancy = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map_or_else(
+            || jobs.drain_leaf_occupancy(),
+            |id| jobs.drain_leaf_occupancy_for_run(id),
+        )
         .map_err(|error| action_failed(action, format!("read shared leaf occupancy: {error}")))?;
     // Between iterations nothing of this drain is in flight in-process: a
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
     runtime.drain_upgrade_boundary();
-    let free_slots = if admissions_stopped || host_shutdown.is_some() || resource.throttle.is_some()
-    {
+    let unthrottled_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -142,6 +158,18 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // The same snapshot readiness reads, so the two cannot disagree about the
     // eligible population before they even reach the selection rule.
     let snapshot = backlog_snapshot(runtime, action, allowlist.as_ref(), &pools)?;
+    // [ORB-14624] A CPU-only throttle leaves the reserved light slots open.
+    let light_budget = LightBudget::new(
+        runtime
+            .context
+            .settings()
+            .resource_throttle()
+            .cpu_light_leaves,
+        &claimed,
+        &snapshot.task_lookup,
+    );
+    let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
+    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
     // Priority/age order is the snapshot's, and everything below preserves it:
     // the slots are scarce, so they go to the front of the queue rather than to
     // whichever tasks happen to sort last.
@@ -151,6 +179,25 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         .filter(|task_id| !claimed.contains(*task_id))
         .cloned()
         .collect();
+    // Under a CPU-only throttle the wave is chosen from CPU-light leaves
+    // alone, in the same order, so heavier work ahead of them in the queue
+    // does not hide them from the candidate pool.
+    let gated: Vec<String>;
+    let candidates: &[String] = if gate == ResourceGate::Open {
+        &pending
+    } else {
+        gated = pending
+            .iter()
+            .filter(|task_id| {
+                snapshot
+                    .task_lookup
+                    .get(*task_id)
+                    .is_some_and(|task| gate.admits(task))
+            })
+            .cloned()
+            .collect();
+        &gated
+    };
 
     // [ORB-11973] The wave used to be `pending[..free_slots]`, which could hand
     // every slot to one cluster of overlapping tasks and leave independent work
@@ -158,7 +205,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // compatible set instead, walking past a blocked candidate to the next
     // compatible one rather than stopping at it.
     let max_tasks = candidate_pool_limit(action, input)?;
-    let examined = &pending[..pending.len().min(max_tasks)];
+    let examined = &candidates[..candidates.len().min(max_tasks)];
     let holders = AdmissionHolders::new(
         &snapshot.lock_holders,
         &claimed,
@@ -177,7 +224,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
     // candidates rather than out of slots, so report exactly that case instead
     // of leaving a short wave looking like an empty backlog.
     let candidate_pool_truncated =
-        pending.len() > examined.len() && selection.selected.len() < free_slots;
+        candidates.len() > examined.len() && selection.selected.len() < free_slots;
     let admitted = &selection.selected;
     let loose_task_dispatches: Vec<Value> = admitted
         .iter()
@@ -203,6 +250,11 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         input,
         DrainAdmissionPass {
             recorded_at: Utc::now(),
+            capacity: occupancy.inherited.map(|inherited| DrainCapacity {
+                active_leaf_runs: occupancy.occupied as u64,
+                inherited_leaf_runs: inherited as u64,
+                max_active_leaf_runs,
+            }),
             queued: (pending.len() - admitted.len()) as u64,
             deferred: selection
                 .deferred
@@ -214,9 +266,14 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                     detail: None,
                 })
                 .collect(),
+            deferred_total: selection.deferred.len() as u64,
             excluded: waiting_excluded(&snapshot.excluded),
             excluded_total: snapshot.excluded.len() as u64,
+            waiting_recorded_at: None,
+            waiting_by_reason: BTreeMap::new(),
+            consecutive_idle_passes: 0,
             resource_throttle: resource.throttle.clone(),
+            last_pass_error_code: None,
             last_pass_error: None,
             consecutive_pass_failures: 0,
             degraded: false,
@@ -238,6 +295,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": occupancy.occupied,
+        "inherited_leaf_runs": occupancy.inherited,
         "wrapper_leaf_runs": live_leaves.len(),
         "leaf_occupancy_by_pipeline": occupancy.per_pipeline,
         "free_slots": free_slots,
@@ -250,6 +308,8 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         "host_shutdown": host_shutdown,
         "resource_throttle": resource.throttle,
         "resource_telemetry_unknown": resource.unknown,
+        // [ORB-14624] Light slots a CPU-only throttle still admits into.
+        "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
     }))
 }
 

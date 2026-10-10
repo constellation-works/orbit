@@ -7,7 +7,15 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default)]
 pub struct JobRunListParams {
     pub job_id: Option<String>,
+    /// Exact string membership in the run's submitted `input.task_ids` array,
+    /// or equality with a text top-level `input.task_id`. Applied before
+    /// ordering, limiting and row/step hydration. Missing or non-array
+    /// `task_ids`, non-text `task_id`, and nested fields do not match; other
+    /// input fields confer no ownership.
+    pub task_id: Option<String>,
     pub state: Option<JobRunState>,
+    /// Match any listed state; empty means unrestricted. Combined with state as an intersection.
+    pub states: Vec<JobRunState>,
     /// Restrict results to every state considered terminal by `JobRunState`.
     ///
     /// This is independent from `state` so existing callers can continue to

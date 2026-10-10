@@ -1,7 +1,7 @@
 name: macOS Platform
 
 # The orbit-exec macOS sandbox tests (`#[cfg(target_os = "macos")]`, gated on
-# `sandbox_exec_can_apply()`) compile generated SBPL profiles through the real
+# `macos_sandbox_test_guard()`) compile generated SBPL profiles through the real
 # `/usr/bin/sandbox-exec`. The primary CI workflow runs on Linux, where those
 # tests are compiled out entirely — which is how ORB-00366's `(?i)` SBPL
 # breakage (ORB-00372) reached agent-main undetected. This leg runs them on a
@@ -77,7 +77,68 @@ env:
   UV_MACOS_ARM64_SHA256: 33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232
 
 jobs:
+  # Read live state before allocating build runners; the PR event can be stale.
+  pr-state:
+    name: Live PR state
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      state: ${{ steps.state.outputs.state }}
+    steps:
+      - name: Read live PR state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" | jq -er '
+            if .merged == true then "merged"
+            elif .state == "open" or .state == "closed" then .state
+            else error("Unexpected pull request state") end
+          ')"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "PR #${PR_NUMBER} live state: $state"
+
+  macos-clippy:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    name: macOS Clippy (informational)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-macos-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-macos-clippy-
+            ${{ runner.os }}-cargo-macos-sandbox-
+            ${{ runner.os }}-cargo-
+
+      - name: Run workspace Clippy gates
+        run: make ci-lint
+
   macos-sandbox:
+    needs: pr-state
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
     name: macOS Sandbox
     runs-on: macos-latest
     timeout-minutes: 30 # Observed ~6 minutes; allows cold builds on shared runners.
@@ -92,7 +153,10 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -105,12 +169,10 @@ jobs:
             ${{ runner.os }}-cargo-macos-sandbox-
             ${{ runner.os }}-cargo-
 
-      # Exercises the real-`sandbox-exec` regex regression test added by
-      # ORB-00372, the existing macOS sandbox suite, the compiled SBPL goldens
-      # and the `tests/sandbox/macos_sandbox.rs` enforcement test. The unit tests
-      # gated on `sandbox_exec_can_apply()` still self-skip if a runner forbids
-      # `sandbox-exec`; the enforcement test skips visibly elsewhere but fails
-      # here, where ORBIT_REQUIRE_SANDBOX_EXEC is set (STD-04 §R8).
+      # Exercises the real sandbox-exec profiles, compiled SBPL goldens and
+      # tests/sandbox/macos_sandbox.rs enforcement tests. The shared apply guard
+      # reports a nested sandbox_apply refusal elsewhere, but must fail here:
+      # ORBIT_REQUIRE_SANDBOX_EXEC=1 requires live kernel coverage.
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
         env:
           ORBIT_REQUIRE_SANDBOX_EXEC: "1"
@@ -119,7 +181,8 @@ jobs:
       - name: Run macOS proc.spawn regressions
         run: |
           /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools restrictive_fs_profile_does_not_narrow_the_parent_read_view -- --nocapture
-          cargo test --locked -p orbit-tools a_git_shell_alias -- --nocapture
+          cargo test --locked -p orbit-tools git_can_read_a_benign_host_file_visible_to_its_parent -- --nocapture
+          cargo test --locked -p orbit-tools git_inherits_parent_access_to_a_deny_read_file -- --nocapture
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
       # stay inside the agent's profile, widened only by its own plugin state.

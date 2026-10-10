@@ -14,6 +14,8 @@
 #
 # Pass: exit 0. Fail: non-zero with the relevant stderr captured.
 # Supported: macOS arm64 / x86_64, Linux x86_64 / arm64. Not Windows.
+# --local-package-check instead builds/inspects the unpublished local candidate.
+# --dry-run-version-assertion only self-tests the version comparison predicate.
 set -euo pipefail
 NPM_PKG="@orbit-tools/cli"
 
@@ -37,12 +39,16 @@ run_version_assertion_test() {
   echo "PASS: version assertion rejects a mismatched tag version"
 }
 
-if [[ "${1:-}" == "--dry-run-version-assertion" ]]; then
+if [[ "$#" -eq 1 && "$1" == "--local-package-check" ]]; then
+  "$(dirname "$0")/require-python.sh"
+  exec python3 "$(dirname "$0")/check_npm_package.py"
+fi
+if [[ "$#" -eq 1 && "$1" == "--dry-run-version-assertion" ]]; then
   run_version_assertion_test
   exit 0
 fi
 if [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--dry-run-version-assertion]" >&2
+  echo "usage: $0 [--local-package-check|--dry-run-version-assertion]" >&2
   exit 2
 fi
 
@@ -179,13 +185,20 @@ npm_version="$(npm view "$NPM_PKG" version 2>/dev/null || echo '<unknown>')"
 echo "$NPM_PKG@latest on npm => $npm_version"
 
 echo "--- step 2: orbit init + workspace init ---"
+# This smoke covers the npm/release install chain, not host sandbox setup.
+# Ubuntu 22.04 is outside automatic preparation support, and the runner owns
+# its packages and security policy, so skip host preparation on Linux only.
+init_host_args=()
+if [[ "$(uname -s)" == "Linux" ]]; then
+  init_host_args+=(--skip-host-prerequisites)
+fi
 # `orbit mcp serve` deliberately refuses to bootstrap a workspace (see
 # OrbitRuntime::try_initialize_existing) — so without these two commands the
 # MCP server attaches but serves an empty tool surface. Initializing first
 # matches the documented binary-first installation flow.
 # Fresh-host non-interactive init requires machine identity (ORB-10721): a
 # machine name plus a 2-5 letter task prefix that is not ORB/ADR/L/F.
-if ! npx -y "$NPM_SPEC" init --non-interactive \
+if ! npx -y "$NPM_SPEC" init "${init_host_args[@]}" --non-interactive \
      --machine-name smoke-npm-install --task-prefix SMK \
      >"$TMPDIR_ROOT/init.out" 2>"$TMPDIR_ROOT/init.err"; then
   echo "FAIL: orbit init exited non-zero" >&2

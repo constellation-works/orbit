@@ -49,9 +49,6 @@ pub struct WorkspacePublicationBindArgs {
     /// Ordinary publication branch (short name or refs/heads/*).
     #[arg(long, default_value = DEFAULT_PUBLICATION_BRANCH)]
     branch: String,
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 impl WorkspacePublicationBindArgs {
@@ -107,11 +104,7 @@ impl WorkspacePublicationBindArgs {
 }
 
 #[derive(Args)]
-pub struct WorkspacePublicationShowArgs {
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
-}
+pub struct WorkspacePublicationShowArgs {}
 
 impl Execute for WorkspacePublicationShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
@@ -141,9 +134,6 @@ pub struct WorkspacePublicationRemoveArgs {
     /// Confirm removal of the local lineage and last-success record.
     #[arg(long)]
     pub confirm: bool,
-    /// Emit machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 impl Execute for WorkspacePublicationRemoveArgs {

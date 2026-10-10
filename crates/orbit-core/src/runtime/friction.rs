@@ -34,6 +34,26 @@ pub(crate) fn files_root(runtime: &OrbitRuntime) -> PathBuf {
 }
 
 impl OrbitRuntime {
+    /// Permit resolution of a replica's existing host-local friction corpus.
+    ///
+    /// Friction reads use this host's workspace partition, which can retain
+    /// records authored before the checkout became a replica. Closing those
+    /// records changes no owner state. The caller must only resolve an
+    /// existing record, never add, reopen, or move one through this exception.
+    /// Claimed workers still have to use their owner route.
+    pub(crate) fn ensure_local_friction_resolution_permitted(
+        &self,
+        id: &str,
+    ) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() || self.coordination_write_owner().is_none() {
+            return self.ensure_coordination_task_write_permitted();
+        }
+        store_for(self)?
+            .show(id)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))?;
+        Ok(())
+    }
+
     /// Workspace tag names and descriptions used to advertise friction inputs.
     pub fn friction_tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
         store_for(self)?.tag_taxonomy()
@@ -66,9 +86,12 @@ impl OrbitRuntime {
     /// The target resolves through the same catalog `--workspace` selectors
     /// use, and both sides must accept coordination writes here: a replica
     /// checkout of the owning workspace cannot receive the record any more
-    /// than it could receive a task. Every refusal the move can make is
-    /// checked before the edits land, so a refused move leaves the record as
-    /// it was.
+    /// than it could receive a task. Every refusal the store can decide
+    /// without its write lock (same-workspace target, malformed id,
+    /// unreadable target taxonomy, tags the target rejects) is checked before
+    /// the edits land, so those refusals leave the record as it was. The
+    /// edits and the move are still two commits: a failure only visible under
+    /// the write lock, such as a concurrent resolve, can land between them.
     pub(crate) fn rehome_friction(
         &self,
         id: &str,
@@ -92,6 +115,7 @@ impl OrbitRuntime {
                     "friction {id} is already resolved; there is nothing to re-home"
                 )));
             }
+            store.preflight_rehome(id, &params, &edits)?;
             store.update(id, edits)?;
         }
         store.rehome(id, params)

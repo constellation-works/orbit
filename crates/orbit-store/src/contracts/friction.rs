@@ -14,6 +14,11 @@ pub struct FrictionAddParams {
     pub title: Option<String>,
     pub body: String,
     pub tags: Vec<String>,
+    /// Initial status for the record. Automation can publish informational
+    /// events as resolved without a follow-up mutation; ordinary additions
+    /// remain open.
+    #[serde(default)]
+    pub status: FrictionStatus,
     pub during_task: Option<String>,
     pub created_at: DateTime<Utc>,
 }

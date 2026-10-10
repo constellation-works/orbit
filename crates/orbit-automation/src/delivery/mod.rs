@@ -4,6 +4,7 @@ use crate::AutomationError;
 use chrono::{DateTime, Utc};
 use orbit_types::workflow::automation::*;
 
+pub mod adopt;
 mod digest;
 mod evaluate;
 pub mod evidence;
@@ -67,13 +68,42 @@ pub trait DeliveryHost {
         Ok(None)
     }
 
+    /// Whether the evaluator adopts an edited definition on its own when
+    /// `recover --adopt-settings` would accept the change. Hosts that do not
+    /// opt in keep every edit at `definition_changed` for an operator.
+    fn adopts_settings(&self) -> bool {
+        false
+    }
+
+    /// File one friction for an automatic settings adoption, deduped on the
+    /// consumer and the identity change, and answer with the record filed or
+    /// found. Hosts without a friction corpus report nothing.
+    fn report_adoption(
+        &self,
+        _report: &adopt::AdoptionReport<'_>,
+    ) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError>;
+
+    /// Repository identity for settings adoption. Source-backed hosts can
+    /// answer without fetching a branch that a parked consumer cannot observe.
+    fn repository(&self, branch: &str) -> Result<String, AutomationError> {
+        self.head(branch).map(|(repository, _)| repository)
+    }
 
     fn observe(&self, branch: &str, state: &AutomationState)
     -> Result<SourcePage, AutomationError>;
 
     /// Canonical action admission must resolve the same durable key on replay.
     fn admit(&self, attempt: &BatchAttempt) -> Result<String, AutomationError>;
+
+    /// Resolve a minted action after a crash before its id was checkpointed.
+    /// This lookup is read-only and must use the attempt's durable action key.
+    fn action_id(&self, attempt: &BatchAttempt) -> Result<Option<String>, AutomationError> {
+        Ok(attempt.action_id.clone())
+    }
 
     fn outcome(&self, attempt: &BatchAttempt) -> Result<ActionOutcome, AutomationError>;
 }
@@ -89,8 +119,9 @@ pub enum ActionOutcome {
     },
 }
 
-/// An edited definition pauses new admission until it is restored. Hosts that
-/// layer their own reasons over this one report it ahead of theirs.
+/// An edited definition the evaluator may not adopt on its own pauses new
+/// admission until it is restored or recovered. Hosts that layer their own
+/// reasons over this one report it ahead of theirs.
 pub const DEFINITION_CHANGED: &str = "definition_changed";
 
 /// Inputs supplied by the existing sweep clock.

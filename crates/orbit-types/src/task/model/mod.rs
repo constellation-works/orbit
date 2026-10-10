@@ -39,9 +39,10 @@ mod support;
 mod task;
 
 pub use status::{
-    CANDIDATE_DISCARDED_EVENT, DEFAULT_TASK_LIST_LIMIT, NO_DIFF_EXPECTED_TAG,
-    TASK_REFERENCE_NOT_VERIFIABLE_HERE, TaskComplexity, TaskCreateStatus, TaskPriority, TaskStatus,
-    TaskType, UNSET_BUCKET, complexity_bucket, complexity_bucket_ord, labeled_or_unset,
+    CANDIDATE_DISCARDED_EVENT, CANDIDATE_RESUME_EVENT, DEFAULT_TASK_LIST_LIMIT,
+    NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, TASK_REFERENCE_NOT_VERIFIABLE_HERE, TaskComplexity,
+    TaskCreateStatus, TaskPriority, TaskStatus, TaskType, UNSET_BUCKET, complexity_bucket,
+    complexity_bucket_ord, labeled_or_unset,
 };
 
 pub use support::{
@@ -54,14 +55,15 @@ pub use support::{
 };
 
 pub use task::{
-    DELIVERY_JOB_TAG_PREFIX, ExecutionLocation, Task, TaskReferenceIndex,
-    archived_task_completed_before_archive, automatic_dispatch_cmp, delivery_job_selection,
-    deserialize_required_tools, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags, resolve_task_dependencies, resolve_task_dependencies_with_index,
-    resolve_task_relations, resolve_task_relations_with_index,
-    satisfy_completed_archived_dependencies, task_dependencies_ready,
-    task_dependencies_ready_with_index, task_matches_tags, unmet_task_dependencies,
-    unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
+    CI_FAILURE_KEY_TAG_PREFIX, DELIVERY_JOB_TAG_PREFIX, ExecutionLocation, Task,
+    TaskReferenceIndex, archived_task_completed_before_archive, automatic_dispatch_cmp,
+    automatic_dispatch_cmp_for_host, automatic_dispatch_cmp_with_expiry, delivery_job_selection,
+    deserialize_required_tools, is_system_identity_tag, normalize_required_tools,
+    normalize_task_dependencies, normalize_task_tags, resolve_task_dependencies,
+    resolve_task_dependencies_with_index, resolve_task_relations,
+    resolve_task_relations_with_index, satisfy_completed_archived_dependencies,
+    task_dependencies_ready, task_dependencies_ready_with_index, task_matches_tags,
+    unmet_task_dependencies, unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies,
     validate_task_dependencies_with,
 };

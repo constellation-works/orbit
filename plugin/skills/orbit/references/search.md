@@ -14,15 +14,20 @@ orbit tool run orbit.search --input '{"query":"scheduler retry","kind":"task","l
 
 Task search ranks indexed title, description, acceptance criteria, plan, and
 execution summary chunks with SQLite FTS5 BM25. Query words need not be adjacent:
-`"scheduler retry"` requires both terms in a chunk, not the exact phrase. Terms
-are quoted literally before FTS parsing. Prefer a few distinctive terms from
+`"scheduler retry"` ranks chunks containing both terms first. When fewer than
+`limit` full matches survive filtering, any-term matches fill the remaining
+slots, ordered by matched-term count in the best chunk, then BM25. These hits
+carry `matched_by: ["partial", "terms:1/2"]`, also shown in the CLI MATCH column.
+Terms are quoted literally before FTS parsing. Prefer a few distinctive terms from
 the task; search does not infer synonyms. Task create/update writes chunks
 synchronously in both CLI and long-lived hosts; deletion retracts them.
 
 The bundle matcher supplements BM25 for comments, external references, artifact
 manifest paths, and unindexed tasks. It matches a case-insensitive substring,
 so a multi-word query on these fields must be contiguous. Artifact payloads are
-not searched. Frictions use their existing lexical matcher.
+not searched. Frictions match a single case-insensitive substring, so query
+words must be adjacent. Empty multi-word results and partial task results carry
+notes explaining the semantics for each searched kind.
 
 Before creating a task, search its distinctive title or description terms to
 check for duplicates. Use the same query form for prior context after loading a
@@ -33,9 +38,16 @@ record to judge relevance. `--kind` accepts `task`, `friction`, or `all`.
 Repeated `--tag` values use AND. `--status` takes `kind:value` tokens, such as
 `task:open`; explicit statuses override `--all` for that kind.
 
-Ordinary searches hide closed history. `all: true` includes normally hidden
-statuses; use a bounded all-status pass before concluding a repair was never
-done. Task listing has different defaults and is not an equivalent search.
+Default task searches and `task:open` cover proposed, backlog, in-progress,
+review, and blocked. `--all` / `all: true` adds done, rejected, archived, and
+someday, covering every task status. Before filing a task or concluding a repair
+was never done, use a bounded all-status pass so deferred work and closed history
+also participate in the duplicate check. Explicit task statuses still override
+`all`. Task listing has different defaults and is not an equivalent search.
+
+Friction queries default to open; `--all` / `all: true` adds triaged and resolved.
+The tool's `kind: friction` listing without a query already covers every friction
+status unless an explicit `friction:` status narrows it.
 
 `workspaces` or `all_workspaces` can widen search when advertised and authorized.
 Managed runs may only search their own workspace. Federated hits identify their

@@ -56,13 +56,13 @@ impl TaskRecordService<'_> {
         &self,
         params: TaskCreateParams,
         key: Option<&str>,
-    ) -> Result<Task, OrbitError> {
-        let task = match key {
+    ) -> Result<(Task, bool), OrbitError> {
+        let (task, replayed) = match key {
             Some(key) => self.store.create_task_idempotent(params, key)?,
-            None => return self.create(params),
+            None => return self.create(params).map(|task| (task, false)),
         };
         self.index_task(&task);
-        Ok(task)
+        Ok((task, replayed))
     }
 
     pub(crate) fn create_guarded(
@@ -76,7 +76,7 @@ impl TaskRecordService<'_> {
             self.index_task(&result.0);
             Ok(result)
         } else {
-            self.create_with_key(params, key).map(|task| (task, false))
+            self.create_with_key(params, key)
         }
     }
 
@@ -85,6 +85,22 @@ impl TaskRecordService<'_> {
         id: &str,
         params: TaskRecordUpdateParams,
     ) -> Result<Task, OrbitError> {
+        // Let the artifact store finish its rejection checks before publishing
+        // document or status/history edits. Keeping those checks in the store
+        // also covers reserved evidence paths and malformed coverage payloads.
+        if params.has_artifact_changes() {
+            self.artifact.upsert_task_artifacts(
+                id,
+                TaskArtifactUpdateParams {
+                    origin: params.artifact_origin.clone(),
+                    owner_run_id: params.artifact_owner_run_id.clone(),
+                    writer: params.artifact_writer,
+                    actor: params.actor.clone(),
+                    upsert_artifacts: params.upsert_artifacts.clone(),
+                },
+            )?;
+        }
+
         if params.has_document_changes() {
             self.document.update_task_document(
                 id,
@@ -111,7 +127,9 @@ impl TaskRecordService<'_> {
                     job_run_id: params.job_run_id.clone(),
                     job_run_machine: params.job_run_machine.clone(),
                     crew: params.crew.clone(),
+                    crew_source: params.crew_source.clone(),
                     orchestrator: params.orchestrator.clone(),
+                    context_creation: params.context_creation.clone(),
                 },
             )?;
         }
@@ -127,18 +145,6 @@ impl TaskRecordService<'_> {
                     append_history: params.append_history.clone(),
                     append_comments: params.append_comments.clone(),
                     expected_status: params.expected_status.clone(),
-                },
-            )?;
-        }
-
-        if params.has_artifact_changes() {
-            self.artifact.upsert_task_artifacts(
-                id,
-                TaskArtifactUpdateParams {
-                    origin: params.artifact_origin.clone(),
-                    owner_run_id: params.artifact_owner_run_id.clone(),
-                    actor: params.actor.clone(),
-                    upsert_artifacts: params.upsert_artifacts.clone(),
                 },
             )?;
         }
@@ -191,6 +197,15 @@ impl crate::OrbitRuntime {
         self.stores()
             .tasks()
             .mutate_execution_claim(context, mutation_id, mutation)
+    }
+
+    /// Refuse a worker whose claim could no longer take its own update: the
+    /// read-side fence that matches [`Self::mutate_execution_claim`]'s.
+    pub(crate) fn verify_worker_claim(
+        &self,
+        context: &orbit_store::contracts::ClaimInvocation,
+    ) -> Result<(), OrbitError> {
+        self.stores().tasks().verify_worker_claim(context)
     }
 
     pub fn inspect_execution_claims(

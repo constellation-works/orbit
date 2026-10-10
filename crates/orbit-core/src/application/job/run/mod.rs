@@ -15,6 +15,7 @@
 
 mod actions;
 mod admissions_stop;
+mod build_budget;
 mod conflict;
 mod delivery;
 mod drain_cancel;
@@ -44,8 +45,8 @@ pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
-    ActivityInvocationEvidence, job_run_to_json, job_run_to_json_with_activity_provenance,
-    run_error_step,
+    ActivityInvocationEvidence, job_run_task_ids, job_run_to_json,
+    job_run_to_json_with_activity_provenance, run_error_step,
 };
 pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild, UnstoppedLeaf};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

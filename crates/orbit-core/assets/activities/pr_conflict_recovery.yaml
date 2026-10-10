@@ -41,6 +41,12 @@ spec:
         type: string
       failed_step_input:
         type: object
+      step_recovery_attempts:
+        type: array
+        items:
+          type: object
+      log_tail:
+        type: string
       crew:
         type: string
       crew_config_key:
@@ -109,21 +115,25 @@ spec:
     The executor has already proved that its existing `git_rebase` boundary
     stopped on actual unmerged index entries. The failed step is either
     `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
-    published PR only under retained `completion: done` authorization. It will
-    retry that same failed deterministic step exactly once after you return
-    success. You repair only; you do not restart implementation, dispatch or
+    published PR only under retained `completion: done` authorization. It
+    retries that same failed deterministic step after you return success. A
+    candidate with several commits can stop again on a later commit of the
+    same rebase; the retry then reports that stop and you are invoked again
+    for its paths, a bounded number of times. Resolve only the stop you are
+    given. You repair only; you do not restart implementation, dispatch or
     resume a job, create another task or branch, open another PR, push, merge,
     or change lifecycle status. The executor owns the lease-checked push and
     reuses the existing PR after a completion conflict.
 
     Claimed leaves: a run of `task_claimed_pr_pipeline` executes a task another
-    machine owns. There the runner withholds `orbit.task.show` and
-    `orbit.task.update` from you, so:
+    machine owns. There the runner withholds `orbit.task.update`; the
+    read-only `orbit.task.show` can read only the task bound to this claim
+    through its run's coordinator, so:
     - identify the task from `task_id` / `task_ids` and `failed_step_input`
       (its candidate branch, checkpoints and any rendered task fields), and
-      take the conflict evidence supplied here as authoritative; never read
-      or write the owner's task record, and never treat an unreachable owner
-      task store as a stop condition;
+      take the conflict evidence supplied here as authoritative; do not write
+      the owner's task record, and never treat an unreachable owner task store
+      as a stop condition;
     - the "task refuses writes" check below cannot be evaluated there and does
       not apply; the other identity checks still do.
 
@@ -133,11 +143,14 @@ spec:
 
     1. Read the supplied conflict evidence and `failed_step_input`, which
        retains the candidate branch and pre-rewrite checkpoint. Work only in
-       the supplied matching `workspace_path` and `repo_root`. Inspect the run
-       through `orbit run show "$ORBIT_RUN_ID" --json`, its task, and its
-       checkpointed worktree. The only identity and safety checks that stop
-       you before editing are:
-       - the run is cancelled;
+       the supplied matching `workspace_path` and `repo_root`. Use the injected
+       `step_recovery_attempts` (chronological audit records with bounded
+       diagnostics, outputs and decisions) and `log_tail` (this run's bounded,
+       redacted worker-log tail, empty when no log exists), its task, and its
+       checkpointed worktree. Run observation is operator-only; do not call
+       run observation tools or CLI commands. Run cancellation and
+       authorization remain the executor's responsibility. The identity
+       and safety checks that stop you before editing are:
        - the task refuses writes (terminal, or `orbit.task.update` rejects;
          not evaluated in a claimed leaf);
        - the checked-out branch is not `failed_step_input.head`, or the
@@ -170,15 +183,18 @@ spec:
        branch, original HEAD, stopped-rebase metadata, and conflict-path
        identity; it then stages the supplied conflict paths together with
        every other path you changed, continues the existing rebase onto
-       `target_base_sha`, and, when `origin/<base>` has advanced past that
-       pin, rebases the continued candidate onto the current tip. Orbit widens
+       `target_base_sha` (keeping your resolution when a later commit stops
+       again), and, when `origin/<base>` has advanced past that pin, rebases
+       the continued candidate onto the current tip. Orbit widens
        the task's selectors to cover the companion paths. Write scratch only
        under `.orbit/tmp/`; it is never staged.
     4. Confirm every supplied conflict file is fully repaired (no conflict
        markers). Run focused tests for the
        crates or modules that own the resolved paths. Then run the
-       repository's `make ci-fast` and `make ci-lint` gates as advisory
-       checks: record each command, its outcome, and whether any failure
+       workspace's required validation commands (`required_validation_commands`
+       in a supplied manifest or `workflow.required_validation_commands`),
+       following the workspace's own AGENTS.md, as advisory checks:
+       record each command, its outcome, and whether any failure
        involves a resolved path in the `gates` field of your result. A gate
        failure on paths you did not touch is baseline state, not evidence
        about your resolution; report it and still return success. Only a
@@ -203,6 +219,8 @@ spec:
     - orbit.auto_task.update
     - orbit.command.exec
     - orbit.pipeline.invoke
+    - orbit.workflow.run.show
+    - orbit.workflow.run.list
     - orbit.workflow.run.resume
     - orbit.workflow.ship
   proc_disallowed_programs:

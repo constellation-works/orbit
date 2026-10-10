@@ -1,10 +1,11 @@
-// Runs against shipped modules in both the Node DOM harness and Chromium.
-const { setWorkspace } = await import('./js/common.js');
+// Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
+// the required dashboard-operations-browser scenario in the QA sweep inventory.
+const { setWorkspace, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
 const fetchAndRenderOperations = async () => {
-  const results = await Promise.allSettled([fetchAndRenderOperationsPane(), fetchAndRenderAutoDrainPane()]);
+  const results = await Promise.allSettled([...(["routines", "auto-tasks", "jobs"].map(subtab => fetchAndRenderOperationsPane(subtab))), fetchAndRenderAutoDrainPane()]);
   const failed = results.find(result => result.status === 'rejected');
   if (failed) throw failed.reason;
 };
@@ -15,6 +16,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const allowed = { authorized: true, reason: null };
 const denied = { authorized: false, reason: 'Test session cannot perform this action. Ask the server operator.' };
+let operationsSubtab = 'routines';
 const capabilities = { routine_toggle: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 const enabled = { one: true, two: true };
 let clock = { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' };
@@ -24,26 +26,47 @@ let releasePost = null;
 let delayPost = false;
 let delayGet = false;
 let releaseGet = null;
+let delayJobRunsWorkspace = null;
+let releaseJobRuns = null;
+let failJobRunsWorkspace = null;
+let workspaceTwoRunId = null;
 let nextTask = 1;
 let drainRunId = null;
 let drainPhase = 'idle';
 let controlsAuthorized = true;
+let replicaWorkspace = false;
+let approvalsFixture = { enabled: false };
 let stopOutcome = 'stopped';
 let stopSettlements;
 let drainAdmissionsStopped = false;
 let pullDrainRunId = null;
 let pullDrainStopped = false;
 let failReadiness = false;
+let delayReadiness = false;
+let readinessPending = false;
+let releaseReadiness = null;
+let drainReadinessRefresh = null;
 let nullCapacity = false;
 let resourceThrottle = null;
+let drainCapacityOverride = {};
+let drainTasksOverride = null;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
+const memberDiagnostic = {
+  reason: 'withheld',
+  state: { consumer: 'routine/one', counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, unresolved: {}, members: {
+    counts: { pending: 999, fresh: 251, ready: 125, withheld: 1000, failed: 200 },
+    withheld: Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`member-${i}`, `Waiting for dependency ${i}`])),
+    active: { member: { key: 'member-active' }, attempt: 1, max_attempts: 2, deadline: '2026-10-07T09:00:00Z', action_id: 'jrun-member' },
+  } },
+};
+let fullStateError = false;
 const requests = [];
 const confirmations = [];
 const readinessTasks = [
   { task_id: 'ORB-1', status: 'backlog', eligible: true, reason: 'ready' },
   { task_id: 'ORB-2', status: 'backlog', eligible: false, reason: 'unmet_dependency', dependencies: [{ task_id: 'ORB-20', status: 'in-progress' }] },
-  { task_id: 'ORB-3', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-30'], conflicts: [{ requested_file: 'file:crates/shared/src/lib.rs', locking_task_id: 'ORB-30' }] },
+  { task_id: 'ORB-14334', status: 'backlog', eligible: false, reason: 'conflict_deferred', blocking_task_ids: ['ORB-14488'], conflicts: [{ requested_file: 'file:crates/shared/src/a-long-lock-selector-for-the-drain-layout-fixture.rs', locking_task_id: 'ORB-14488' }] },
   { task_id: 'ORB-4', status: 'backlog', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-claimed-child'] },
   { task_id: 'ORB-5', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-active-leaf'] },
   { task_id: 'ORB-6', status: 'backlog', eligible: false, reason: 'crew_not_allowed', crew: 'luna', allowed_crews: ['sol', 'terra'] },
@@ -57,12 +80,12 @@ globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   const workspace = url.searchParams.get('workspace');
   const body = options.body ? JSON.parse(options.body) : null;
-  requests.push({ path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
+  requests.push({ method: options.method || 'GET', path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
   if (options.method === 'POST') {
     if (delayPost) await new Promise(resolve => { releasePost = resolve; });
     if (responseError) return response({ error: responseError }, 500);
     if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
-    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', submitted_at: new Date().toISOString() });
+    if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', approve_proposed: body.approve_proposed === true, submitted_at: new Date().toISOString() });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
@@ -74,7 +97,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
-    const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, pending: [], pending_commits: [], waived: [], excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
+    const payload = { workspace, cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'in_progress', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, counts: { pending: 0, pending_commits: 0, waived: 0, excluded: 0, unresolved: 0 }, excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
     // A plugin-off definition is hidden unless asked for; listed, it is
     // enabled with an earlier slot, so leaking into a summary would show.
     payload.inactive_plugin_count = 1;
@@ -84,10 +107,14 @@ globalThis.fetch = async (path, options = {}) => {
     if (delayGet) await new Promise(resolve => { releaseGet = resolve; });
     return response(payload);
   }
+  if (url.pathname.startsWith('/api/automation/') && url.pathname.endsWith('/state')) {
+    return fullStateError ? response({ error: 'full state unavailable' }, 500)
+      : response({ state: { consumer: 'routine/one', members: { pending: { 'member-full': { fingerprint: 'full-input' } } } } });
+  }
   if (url.pathname === '/api/routines') return response({
-    machine_name: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
+    machine_name: 'fixture-host', cron_zone: { name: 'America/Los_Angeles', offset_seconds: -25200 }, controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
     routines: [
-      ...['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', last_fire: { state: 'succeeded', run_id: 'jrun-fixture-done', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 }, next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
+      ...['one', 'two'].map(source => ({ automation: memberDiagnostic, name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', last_fire: { state: 'succeeded', run_id: 'jrun-fixture-done', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 }, next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
       { name: 'Parked one', source: 'one', target: 'job:parked_pipeline', enabled: false, cron: '*/20 * * * *', description: 'Kept in the repo, never fires.', next_evaluation: { state: 'disabled', at: '2026-09-07T21:40:00Z', hypothetical: true } },
     ],
     clock: { ...clock },
@@ -96,18 +123,29 @@ globalThis.fetch = async (path, options = {}) => {
       ? [{ name: 'graph-refresh', source: 'one', target: 'job:graph_refresh_pipeline', plugin_inactive: true, reason: "seeded by plugin:graph@1.0.0, which is switched off in workspace 'one'; run `orbit plugin enable graph --scope workspace` there to fire it again" }]
       : [],
   });
-  if (url.pathname === '/api/job-runs') return response({
-    items: [
-      ...(submittedJob ? [submittedJob] : []),
-      { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
-      { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
-      { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
-    ],
-    total: submittedJob ? 4 : 3, limit: 100, truncated: false,
-  });
+  if (url.pathname === '/api/job-runs') {
+    if (workspace === delayJobRunsWorkspace) await new Promise(resolve => { releaseJobRuns = resolve; });
+    if (workspace === failJobRunsWorkspace) return response({ error: 'Fixture job runs unavailable' }, 500);
+    const items = workspace === 'two' && workspaceTwoRunId
+      ? [{ run_id: workspaceTwoRunId, job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T21:00:00Z', started_at: '2026-09-07T21:00:01Z', finished_at: null, duration_ms: null }]
+      : [
+        ...(submittedJob ? [submittedJob] : []),
+        { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
+        { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
+        { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
+      ];
+    return response({ items, total: items.length, limit: 100, truncated: false });
+  }
+  if (url.pathname === '/api/workflows/auto/readiness' && delayReadiness) {
+    readinessPending = true;
+    await new Promise(resolve => { releaseReadiness = resolve; });
+    readinessPending = false;
+  }
   if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: controlsAuthorized,
+    replica: replicaWorkspace,
+    approvals: approvalsFixture,
     snapshot: { read_only: true, limitations: 'Fixture snapshot only; eligibility can change immediately and does not guarantee a task will start.' },
     capacity: {
       active_leaf_runs: 4, max_active_leaf_runs: 4, free_slots: 0,
@@ -119,17 +157,26 @@ globalThis.fetch = async (path, options = {}) => {
       drain_phase: drainPhase,
       drain_status_run_id: drainPhase === 'idle' ? null : 'jrun-20260923-0400-a1',
       ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
-      admitted_workers: drainPhase === 'idle' ? 0 : 2,
+      admitted_workers: drainPhase === 'idle' ? 0 : 3,
       ...(nullCapacity ? { active_leaf_runs: null, max_active_leaf_runs: null, free_slots: null, occupancy: null } : {}),
       resource_throttle: resourceThrottle,
+      ...drainCapacityOverride,
     },
-    tasks: readinessTasks,
+    tasks: drainTasksOverride || readinessTasks,
   });
   return response({});
 };
 setWorkspace('one');
-initOperations({ getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })), formatAbsoluteTime: value => value });
+initOperations({ getOperationsSubtab: () => operationsSubtab, getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })) });
 await fetchAndRenderOperations();
+const mintedStatus = get('auto-tasks-body').querySelector('.pill');
+const taskStatus = statusPill('in-progress');
+get('auto-tasks-body').appendChild(taskStatus);
+assert(mintedStatus.dataset.status === taskStatus.dataset.status && mintedStatus.textContent === taskStatus.textContent, 'last-minted status uses the Tasks token');
+assert(getComputedStyle(mintedStatus, '::before').backgroundColor === getComputedStyle(taskStatus, '::before').backgroundColor, 'last-minted status uses the Tasks dot colour');
+assert(getComputedStyle(mintedStatus).getPropertyValue('--dot').trim() === getComputedStyle(mintedStatus).getPropertyValue('--status-in-progress').trim(), 'in-progress status uses its theme colour');
+taskStatus.remove();
+
 // The Drain card keeps only what an operator acts on: the capacity line and
 // what a window would admit, two counts, the blocked-by list, then duration,
 // concurrency, completion and Start/Stop.
@@ -140,27 +187,28 @@ const durations = descendants(drainBody).filter(node => node.type === 'button' &
 assert(durations.map(node => node.textContent).join(' ') === '15m 30m 1h 2h 4h 8h', `duration segments: ${durations.map(node => node.textContent)}`);
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
-assert(drainText().includes('Eligible now1') && drainText().includes('Blocked by running2'), `counts use strict server eligibility and lock reasons: ${drainText()}`);
-assert(drainText().includes('4 running · limit 4') && drainText().includes('0 free slots'), `capacity reads busy against the limit: ${drainText()}`);
-assert(drainText().includes('A window started now admits nothing until 1 running task finishes.'), 'a full pool says how many runs must finish before a window admits anything');
-assert(drainText().includes('ORB-3 waits on ORB-30') && drainText().includes('lock · …/src/lib.rs'), 'a lock-blocked task names its holder and the shortened lock');
+const poolCount = tone => drainBody.querySelector(`.drain-stat.${tone} .drain-stat-value`).textContent;
+assert(poolCount('eligible') === '1' && poolCount('locks') === '2' && poolCount('capacity') === '1' && poolCount('other') === '5', `counts use strict server eligibility and reason groups: ${drainText()}`);
+assert(drainBody.querySelector('.drain-capacity-count').textContent.includes('Workspace: 4 of 4') && drainText().includes('0 free slots'), `capacity labels workspace slot occupancy: ${drainText()}`);
+assert(drainBody.querySelector('.drain-slots').textContent.includes('1 occupied slot'), 'a saturated workspace says how many slots must clear');
+assert(drainText().includes('ORB-14334 waits on ORB-14488') && drainText().includes('lock · …/src/a-long-lock-selector'), 'a lock-blocked task names its holder and the shortened lock');
 assert(drainText().includes('ORB-4 waits on jrun-claimed-child'), 'a live-child claim names the claiming run');
 for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot only']) {
   assert(!drainText().includes(gone), `the card no longer renders ${JSON.stringify(gone)}`);
 }
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
 const blockedLinks = descendants(drainBody).filter(node => String(node.href || '').includes('#tasks?'));
-assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-30')), 'blocked-by links stay workspace-qualified');
+assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-14488')), 'blocked-by links stay workspace-qualified');
 assert(get('auto-drain-live').textContent === 'idle', 'no live window reads idle');
-// With no live window Stop becomes "Settle pending": the settle-only pass
+// With no live window Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
-assert(!drainButton('Stop') && drainButton('Settle pending') && !drainButton('Settle pending').disabled, 'Stop relabels to Settle pending and stays enabled without a live window');
-assert(drainText().includes('No auto-delivery window is live. Deliver settlements recorded for finished or cancelled drains.'), 'the idle control explains itself in visible text');
+assert(!drainButton('Stop') && drainButton('Send pending results') && !drainButton('Send pending results').disabled, 'Stop relabels to Send pending results and stays enabled without a live window');
+assert(drainBody.querySelector('.drain-stop-note:not([hidden])')?.textContent.trim(), 'the idle control has visible guidance');
 
 // More than three blocked tasks collapse to "+N more".
 readinessTasks.push(...[10, 11, 12].map(n => ({ task_id: `ORB-${n}`, status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] })));
 await fetchAndRenderOperations();
-assert(drainText().includes('Blocked by running5') && drainText().includes('+2 more'), 'blocked list is capped at three lines');
+assert(poolCount('locks') === '5' && drainText().includes('+2 more'), 'blocked list is capped at three lines');
 readinessTasks.splice(-3);
 
 // A task whose `os:` tags this host cannot run names the host it waits for,
@@ -168,7 +216,7 @@ readinessTasks.splice(-3);
 readinessTasks.push({ task_id: 'ORB-40', status: 'backlog', eligible: false, reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' });
 await fetchAndRenderOperations();
 assert(drainText().includes('ORB-40 waits for a macos host (os:macos)'), `an OS wait is named on the card: ${drainText()}`);
-assert(drainText().includes('Blocked by running2'), 'an OS wait is not counted as blocked by a running task');
+assert(poolCount('locks') === '2' && poolCount('other') === '6', 'an OS wait is not counted as waiting on a running task');
 readinessTasks.splice(-1);
 
 // Duration, stepper and completion drive the Start label and the submitted body.
@@ -187,12 +235,49 @@ markDone.checked = true; markDone.dispatchEvent(new Event('change'));
 assert(completionOption('done').checked && !completionOption('review').checked, 'choosing Mark done selects it and releases review');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const started = requests.find(r => r.path === '/api/workflows/auto');
-assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true, `start posts the chosen window: ${JSON.stringify(started)}`);
+assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false, `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
 const backToReview = completionOption('review');
 backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
 assert(completionOption('review').checked, 'completion returns to review');
+
+// Approving proposed tasks is its own explicit opt-in, off by default, with the
+// qualification rule in the tooltip and a line in the confirm dialog.
+const approveOption = value => descendants(get('auto-drain-body')).find(node => node.type === 'radio' && node.name === 'auto-drain-approve' && node.value === value);
+const approveLabel = value => approveOption(value).parentNode;
+assert(drainText().includes('Proposed tasks') && drainText().includes('Leave for me') && drainText().includes('Approve qualifying'), 'proposed-task handling names both choices');
+assert(approveOption('leave').checked && !approveOption('approve').checked, 'approving proposed tasks defaults to off');
+assert(String(approveLabel('approve').title).includes('context files') && String(approveLabel('approve').title).includes('task-pilot') && String(approveLabel('approve').title).includes('no-diff-expected') && String(approveLabel('approve').title).includes('no-auto-approve'), `the tooltip states the qualification rule: ${approveLabel('approve').title}`);
+const requestsBeforeApprove = requests.filter(r => r.path === '/api/workflows/auto').length;
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+const defaultStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
+assert(requests.filter(r => r.path === '/api/workflows/auto').length === requestsBeforeApprove + 1 && defaultStart.body.approve_proposed === false, `an ordinary start posts approve_proposed false: ${JSON.stringify(defaultStart)}`);
+assert(!confirmations.at(-1).includes('approve qualifying proposed tasks'), 'the confirm dialog stays quiet when approving is off');
+approveOption('approve').checked = true; approveOption('approve').dispatchEvent(new Event('change'));
+assert(approveOption('approve').checked && !approveOption('leave').checked, 'choosing Approve qualifying selects it');
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+const approveStart = requests.filter(r => r.path === '/api/workflows/auto').at(-1);
+assert(approveStart.body.approve_proposed === true && approveStart.body.complete === false, `the opt-in posts approve_proposed true: ${JSON.stringify(approveStart)}`);
+assert(confirmations.at(-1).includes('approve qualifying proposed tasks, including ones filed while it runs'), `the confirm dialog names it: ${confirmations.at(-1)}`);
+assert(get('auto-drain-operation-feedback').textContent.includes('Approving qualifying proposed tasks.'), 'the start result says the window approves');
+approveOption('leave').checked = true; approveOption('leave').dispatchEvent(new Event('change'));
+assert(approveOption('leave').checked, 'approving returns to off');
+
+// Unauthorized sessions and pull replicas get the control disabled with the
+// reason as visible text; Start itself still works without the opt-in.
+controlsAuthorized = false;
+await fetchAndRenderOperations();
+assert(approveOption('approve').disabled && !approveOption('leave').disabled, 'an unauthorized session cannot choose to approve');
+assert(drainText().includes('Approving proposed tasks requires an authorized operator session'), 'the unauthorized reason is visible text');
+assert(!drainButton('Start 2h window').disabled, 'an unauthorized session can still start a default window');
+controlsAuthorized = true;
+replicaWorkspace = true;
+await fetchAndRenderOperations();
+assert(approveOption('approve').disabled && drainText().includes('A pull replica cannot approve proposed tasks'), 'a pull replica is not offered approving');
+replicaWorkspace = false;
+await fetchAndRenderOperations();
+assert(!approveOption('approve').disabled, 'the opt-in returns on an owner');
 
 // Concurrency the server would refuse (zero, negative, fractional) never reaches
 // it: the readiness read a poll makes would answer 400 and blank the card, and
@@ -229,7 +314,7 @@ typeConcurrency('2');
 // is 0, which printed "0 free slots" and a placeholder of "null".
 nullCapacity = true;
 await fetchAndRenderOperations();
-assert(drainText().includes('Capacity unknown') && !drainText().includes('0 free slots') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
+assert(/capacity unknown/i.test(drainText()) && !drainText().includes('0 free slots') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
 assert(concurrencyInput().placeholder === 'auto', `no limit means no numeric placeholder: ${concurrencyInput().placeholder}`);
 nullCapacity = false;
 await fetchAndRenderOperations();
@@ -246,10 +331,10 @@ resourceThrottle = {
 };
 await fetchAndRenderOperations();
 assert(
-  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04T08:41:00Z') &&
+  drainText().includes('Admissions throttled: memory 93% (throttled at ≥ 90% since 2026-10-04 01:41 PDT') &&
   drainText().includes('; resumes below 80%)') &&
-  drainText().includes('cpu 89% (throttled at ≥ 90% since 2026-10-04T08:40:00Z') &&
-  drainText().includes('; resumes below 75%)') &&
+  drainText().includes('load 0.9× cores (throttled at ≥ 0.9× cores since 2026-10-04 01:40 PDT') &&
+  drainText().includes('; resumes below 0.75× cores)') &&
   drainText().includes('Running tasks are not touched.'),
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
 );
@@ -258,6 +343,76 @@ assert(descendants(drainBody).some(node => node.getAttribute?.('role') === 'stat
 resourceThrottle = null;
 await fetchAndRenderOperations();
 assert(!drainText().includes('Admissions throttled'), 'the note clears with the throttle');
+
+// ORB-14705: the pool figures partition the readiness tasks, so they add up to
+// the backlog and name each group; "blocked" stays a task status.
+const backlogTask = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
+drainTasksOverride = [
+  ...Array.from({ length: 17 }, (_, i) => backlogTask(i, 'context_lock_conflict')),
+  ...Array.from({ length: 13 }, (_, i) => backlogTask(17 + i, 'resource_throttled')),
+  ...Array.from({ length: 3 }, (_, i) => backlogTask(30 + i, 'capacity_saturated')),
+  backlogTask(33, 'operator_validation_handoff'),
+  backlogTask(34, 'pilot_already_landed'),
+  backlogTask(35, 'surface_reserved'),
+];
+await fetchAndRenderAutoDrainPane();
+const poolGroups = Array.from(drainBody.querySelectorAll('.drain-stat')).map(node => ({
+  label: node.querySelector('.drain-stat-label').textContent,
+  title: node.querySelector('.drain-stat-label').title,
+  value: Number(node.querySelector('.drain-stat-value').textContent),
+}));
+assert(poolGroups.map(group => `${group.label}=${group.value}`).join('; ') === 'Pool: eligible=0; Pool: waiting on locks=17; Pool: waiting on capacity=16; Pool: waiting, other=3', `pool groups: ${JSON.stringify(poolGroups)}`);
+assert(poolGroups.reduce((sum, group) => sum + group.value, 0) === 36, 'the pool figures sum to the 36 readiness tasks');
+assert(poolGroups[2].title.includes('resource_throttled 13') && poolGroups[2].title.includes('capacity_saturated 3'), `the capacity group lists its reasons: ${poolGroups[2].title}`);
+assert(['operator_validation_handoff 1', 'pilot_already_landed 1', 'surface_reserved 1'].every(part => poolGroups[3].title.includes(part)), `the other group lists its reasons: ${poolGroups[3].title}`);
+assert(!poolGroups.some(group => /blocked/i.test(`${group.label} ${group.title}`)), `no pool label calls a readiness group blocked: ${JSON.stringify(poolGroups)}`);
+drainTasksOverride = null;
+
+// The throttle note and the top bar's load chip state one CPU reading in one
+// unit: 164% of cores is "1.6× cores" in both, and 75% is a bare 0.75× threshold.
+{
+  const { renderHostResources } = await import('./js/host-resources.js');
+  const reading = percent => ({ percent, severity: 'critical' });
+  renderHostResources({ cpu: reading(164), memory: reading(40), disk: { path: '/', ...reading(50) }, throttle: true, pressures: [{ resource: 'cpu' }], reason: 'cpu high', thresholds: { enabled: true }, stale: false, sample_age_seconds: 1 });
+  const chip = get('host-resource-chips').querySelector('[data-resource="cpu"] .v');
+  resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
+  await fetchAndRenderAutoDrainPane();
+  const note = drainBody.querySelector('.drain-throttle-note').textContent;
+  assert(chip.textContent === '1.6× cores' && note.includes(`load ${chip.textContent} (throttled at ≥ 0.9× cores`) && note.includes('resumes below 0.75× cores'), `chip ${chip.textContent} vs note ${note}`);
+  assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
+  resourceThrottle = null;
+  await fetchAndRenderAutoDrainPane();
+}
+
+// ORB-14489: zero free slots alone does not imply that finishing a task can
+// unblock admission. Exercise the readiness-to-card boundary for each reason.
+for (const fixture of [
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } }, summary: /host resource throttle.*cpu/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 12, max_active_leaf_runs: 12, free_slots: 0 }, summary: /workspace leaf limit.*1 occupied slot/ },
+  { capacity: { active_leaf_runs: 14, max_active_leaf_runs: 12, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 10, task_pr_pipeline: 4 } }, summary: /workspace leaf limit.*3 occupied slots/, pipelines: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 6, free_slots: 0, leaf_occupancy_by_pipeline: { task_gate_pipeline: 4 } }, summary: /workspace leaf limit.*1 occupied slot/, otherSlots: true },
+  { capacity: { active_leaf_runs: null, max_active_leaf_runs: 12, free_slots: 0, occupancy: { active_leaf_runs: 12 } }, summary: /workspace leaf limit.*1 occupied slot/ },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, admissions_stopped: true }, summary: /window has stopped/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, host_shutdown: { kind: 'reboot' } }, summary: /host shutdown/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0 }, summary: /No admissions.*snapshot/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 6 }, tasks: [readinessTasks[2]], summary: /1 pool task.*locks or live claims/, cannotClearSlot: true },
+  { capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 2 }, tasks: [readinessTasks[0]], summary: /admits up to 1 task/ },
+]) {
+  drainCapacityOverride = fixture.capacity;
+  drainTasksOverride = fixture.tasks || null;
+  await fetchAndRenderAutoDrainPane();
+  const summary = drainBody.querySelector('.drain-slots').textContent;
+  assert(fixture.summary.test(summary), `readiness constraint is explained: ${JSON.stringify(fixture.capacity)} => ${summary}`);
+  if (fixture.cannotClearSlot) assert(!/finish|must clear/.test(summary), `ORB-14489: task completion must not be presented as clearing another constraint: ${summary}`);
+  if (fixture.pipelines) {
+    const pipelines = drainBody.querySelector('.drain-pipeline-occupancy').textContent;
+    assert(pipelines.includes('task_gate_pipeline: 10 slots') && pipelines.includes('task_pr_pipeline: 4 slots'), `occupied slots retain the per-pipeline explanation: ${pipelines}`);
+  }
+  if (fixture.otherSlots) assert(drainBody.querySelector('.drain-pipeline-occupancy').textContent.includes('other: 2 slots'), 'legacy wrapper occupancy reconciles with the workspace total');
+}
+drainCapacityOverride = {};
+drainTasksOverride = null;
+await fetchAndRenderOperations();
 
 // The window Start opens changes the card's state, and that change must not be
 // announced over Start's own result (the run and its completion mode).
@@ -284,7 +439,7 @@ assert(!drainButton('Start 2h window').disabled, 'the guard is released after a 
 failReadiness = false;
 await fetchAndRenderOperations();
 
-// Settle pending delivers recorded settlements and reports each outcome; a
+// Send pending results delivers recorded settlements and reports each outcome; a
 // settlement that did not reach its owner is never reported as plain success.
 stopOutcome = 'idle';
 stopSettlements = [
@@ -293,8 +448,7 @@ stopSettlements = [
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-3', leaf_run_id: null, outcome: 'owner_unreachable' },
   { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-4', leaf_run_id: null, outcome: 'launch_uncertain' },
 ];
-drainButton('Settle pending').click(); await tick(); await tick(); await tick();
-assert(confirmations.at(-1).includes('No auto-delivery window needs to be live'), 'settle confirms without demanding a window');
+drainButton('Send pending results').click(); await tick(); await tick(); await tick();
 const settleFeedback = get('auto-drain-operation-feedback');
 assert(settleFeedback.textContent.includes('No auto-delivery window was live'), `idle stop names what did not change: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('2 settlements delivered'), `delivered settlements are counted: ${settleFeedback.textContent}`);
@@ -302,7 +456,7 @@ assert(settleFeedback.textContent.includes('1 waiting for the owner (unreachable
 assert(settleFeedback.textContent.includes('1 launch uncertain — needs manual recovery, see the distributed drain runbook') && settleFeedback.textContent.includes('[ORB-4]'), `an uncertain launch points at the runbook: ${settleFeedback.textContent}`);
 assert(settleFeedback.className.includes('error') && !settleFeedback.className.includes('success'), 'unfinished settlements are not styled as success');
 stopSettlements = [{ owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' }];
-drainButton('Settle pending').click(); await tick(); await tick(); await tick();
+drainButton('Send pending results').click(); await tick(); await tick(); await tick();
 assert(settleFeedback.textContent.includes('1 settlement delivered') && settleFeedback.className.includes('success'), `a fully delivered pass is plain success: ${settleFeedback.textContent}`);
 stopOutcome = 'stopped';
 stopSettlements = undefined;
@@ -310,7 +464,7 @@ stopSettlements = undefined;
 // Read-only reasons are visible text beside the button, not only a tooltip.
 controlsAuthorized = false;
 await fetchAndRenderOperations();
-assert(drainButton('Settle pending').disabled && drainText().includes('requires an authorized operator session'), 'an unauthorized session sees why the control is off as visible text');
+assert(drainButton('Send pending results').disabled && drainText().includes('requires an authorized operator session'), 'an unauthorized session sees why the control is off as visible text');
 controlsAuthorized = true;
 await fetchAndRenderOperations();
 
@@ -322,6 +476,18 @@ await fetchAndRenderOperations();
 const liveLink = descendants(get('auto-drain-live')).find(node => String(node.href || '').includes('#runs/'));
 assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
 assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
+assert(get('auto-drain-live').querySelector('.drain-window-count').textContent.includes('This window: 1 running of 3 admitted'), 'live counts label this window separately from workspace slots');
+assert(!get('auto-drain-live').textContent.includes('Approving proposed tasks'), 'a window started without approve-proposed says nothing about it');
+approvalsFixture = { enabled: true, drain_run_id: drainRunId, approved_total: 3, approved: ['ORB-1'], awaiting_pilot: 1, held_total: 2, held_by_reason: { missing_complexity: 1, pilot_held: 1 }, held: [{ task_id: 'ORB-8', reason: 'missing_complexity' }, { task_id: 'ORB-9', reason: 'pilot_held' }] };
+await fetchAndRenderOperations();
+const approvalsNode = get('auto-drain-live').querySelector('.drain-approvals');
+assert(approvalsNode?.textContent === 'Approving proposed tasks · 3 approved · 2 held', `the live window shows approve-proposed with counts: ${approvalsNode?.textContent}`);
+assert(String(approvalsNode.title).includes('1 × missing complexity') && String(approvalsNode.title).includes('ORB-9: pilot held'), `hold reasons are in the tooltip: ${approvalsNode.title}`);
+approvalsFixture = { enabled: true, drain_run_id: drainRunId };
+await fetchAndRenderOperations();
+assert(get('auto-drain-live').querySelector('.drain-approvals').textContent === 'Approving proposed tasks', 'a payload without counts shows only the flag');
+approvalsFixture = { enabled: false };
+await fetchAndRenderOperations();
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
 assert(confirmations.at(-1).includes('This is not cancellation.') && confirmations.at(-1).includes('jrun-20260923-0400-a1'), 'stop confirms and names the window');
@@ -329,18 +495,18 @@ assert(get('auto-drain-operation-feedback').textContent.includes('Admissions sto
 // Once admissions are stopped the button offers the settle-only pass instead.
 drainAdmissionsStopped = true;
 await fetchAndRenderOperations();
-assert(drainButton('Settle pending') && !drainButton('Settle pending').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
+assert(drainButton('Send pending results') && !drainButton('Send pending results').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
 drainAdmissionsStopped = false;
 drainRunId = null;
 drainPhase = 'winding_down';
 
 // A replica's live pull drain has no auto window, yet Stop acts on it: the
-// button reads Stop (not Settle pending), and the confirm names the pull drain
+// button reads Stop (not Send pending results), and the confirm names the pull drain
 // and does not claim that no window is live or that nothing is stopped.
 drainPhase = 'idle';
 pullDrainRunId = 'jrun-pull-drain-0001';
 await fetchAndRenderOperations();
-assert(drainButton('Stop') && !drainButton('Settle pending') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Settle pending');
+assert(drainButton('Stop') && !drainButton('Send pending results') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Send pending results');
 assert(get('auto-drain-live').textContent.includes('Pull drain') && descendants(get('auto-drain-live')).some(node => String(node.title || '').includes('jrun-pull-drain-0001')), `header shows the pull drain: ${get('auto-drain-live').textContent}`);
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stopping a pull drain posts to the stop endpoint');
@@ -348,7 +514,7 @@ assert(confirmations.at(-1).includes('pull drain') && confirmations.at(-1).inclu
 // Once its admissions are stopped the readiness says so and the button offers the settle-only pass.
 pullDrainStopped = true;
 await fetchAndRenderOperations();
-assert(drainButton('Settle pending') && drainText().includes('Admissions are already stopped for pull drain jrun-pull-drain-0001'), `a stopped pull drain is reported as stopped: ${drainText()}`);
+assert(drainButton('Send pending results') && drainText().includes('Admissions are already stopped for pull drain jrun-pull-drain-0001'), `a stopped pull drain is reported as stopped: ${drainText()}`);
 pullDrainStopped = false;
 pullDrainRunId = null;
 drainPhase = 'winding_down';
@@ -401,6 +567,32 @@ releasePost(); await tick(); await tick(); await tick();
 delayPost = false;
 assert(get('job-operation-feedback').textContent.includes('jrun-dashboard-fixture submitted'), 'submission receipt is visible');
 assert(get('jobs-body').textContent.includes('jrun-dashboard-fixture'), 'new run appears after refresh');
+
+// A workspace switch clears the previous jobs view while the new workspace's
+// runs are still pending. A routines refresh must not repaint the old run list,
+// and a failed B read must leave only its error state in the panel.
+workspaceTwoRunId = 'jrun-workspace-two';
+delayJobRunsWorkspace = 'two';
+failJobRunsWorkspace = 'two';
+setWorkspace('two');
+const workspaceTwoJobs = fetchAndRenderOperationsPane('jobs');
+await tick(); await tick();
+assert(releaseJobRuns, 'workspace B job-runs request is pending');
+await fetchAndRenderOperationsPane('routines');
+const pendingJobsText = get('jobs-body').textContent;
+assert(pendingJobsText === 'Loading…' && !pendingJobsText.includes('jrun-fixture-running'), `pending B jobs show only loading state: ${pendingJobsText}`);
+releaseJobRuns();
+const failedWorkspaceTwoJobs = await Promise.allSettled([workspaceTwoJobs]);
+assert(failedWorkspaceTwoJobs[0].status === 'rejected', 'workspace B job-runs failure reaches the panel');
+const failedJobsText = get('jobs-body').textContent;
+assert(failedJobsText.startsWith('Unable to load:') && !failedJobsText.includes('jrun-fixture-running'), `failed B jobs show only the error state: ${failedJobsText}`);
+assert(requests.some(request => request.path === '/api/job-runs' && request.workspace === 'two'), 'workspace B jobs request uses its selected workspace');
+delayJobRunsWorkspace = null;
+failJobRunsWorkspace = null;
+await fetchAndRenderOperationsPane('jobs');
+assert(get('jobs-body').textContent.includes('jrun-workspace-two') && !get('jobs-body').textContent.includes('jrun-fixture-running'), 'workspace B run list appears after its jobs load');
+setWorkspace('one');
+await fetchAndRenderOperations();
 responseError = 'Fixture submission refused';
 jobRunButton('fixture').click(); await tick(); await tick();
 assert(get('job-operation-feedback').textContent.includes('Fixture submission refused'), 'server error is visible');
@@ -612,6 +804,9 @@ const autoGroups = descendants(get('auto-tasks-body')).filter(node => String(nod
 assert(autoGroups.some(text => text.startsWith('On a schedule2')), `auto-tasks grouped by trigger: ${autoGroups}`);
 const autoStats = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('operation-stat ')).map(node => node.textContent);
 assert(autoStats.some(text => text.startsWith('Definitions2')) && autoStats.some(text => text.startsWith('Enabled2')) && autoStats.some(text => text.startsWith('Open duplicates1')), `auto-task stats: ${autoStats}`);
+// The browser runs in America/Los_Angeles: the 22:00Z mint is a local 15:00
+// and says so, beside cron triggers that are stated in the host zone.
+assert(autoStats.some(text => text.startsWith('Next mint') && text.endsWith('15:00 PDT')), `next mint names its local zone: ${autoStats}`);
 const autoSwitch = descendants(autoCard).find(node => String(node.className || '').includes('operation-switch'));
 assert(autoSwitch?.getAttribute('role') === 'switch' && autoSwitch.getAttribute('aria-checked') === 'true', 'auto-task toggle is a switch');
 assert(autoHead.textContent.includes('still open · scheduler will skip'), 'open duplicate is called out on the row');
@@ -643,8 +838,12 @@ assert(!get('routines-body').textContent.includes('graph-refresh'), 'a plugin-of
 const showHidden = button('auto-tasks-body', 'Show 1 hidden · plugin off');
 assert(showHidden && showHidden.getAttribute('aria-pressed') === 'false', 'the auto-task pane offers the hidden definition');
 assert(button('routines-body', 'Show 1 hidden · plugin off'), 'the routine pane offers the hidden routine');
+operationsSubtab = 'auto-tasks';
+const beforeToggle = requests.length;
 await showHidden.click(); await tick(); await tick();
-assert(requests.some(request => request.path === '/api/auto-tasks') && requests.some(request => request.path === '/api/routines'), 'toggle refetches both panes');
+assert(requests.slice(beforeToggle).every(request => request.path === '/api/auto-tasks'), 'plugin toggle refreshes the displayed pane');
+operationsSubtab = 'routines';
+await fetchAndRenderOperationsPane();
 for (const [pane, name] of [['auto-tasks-body', 'graph-reindex'], ['routines-body', 'graph-refresh']]) {
   const group = descendants(get(pane)).find(node => String(node.className || '').includes('inactive-plugin-group'));
   assert(group && group.textContent.includes(name) && group.textContent.includes('Plugin off'), `${pane} lists ${name} in the plugin-off group`);
@@ -657,12 +856,35 @@ const autoSummary = descendants(get('auto-tasks-body')).find(node => String(node
 assert(autoSummary && !autoSummary.textContent.includes('20:05'), 'the inactive definition never becomes the next mint');
 assert(!descendants(get('auto-tasks-body')).some(node => String(node.className || '').includes('auto-task-card') && node.textContent.includes('graph-reindex')), 'no toggle or mint row for the inactive definition');
 await button('routines-body', 'Hide plugin-off definitions').click(); await tick(); await tick();
+operationsSubtab = 'auto-tasks'; await fetchAndRenderOperationsPane();
 assert(!get('auto-tasks-body').textContent.includes('graph-reindex') && !get('routines-body').textContent.includes('graph-refresh'), 'hiding again restores the default view');
 
 globalThis.setDrainFixturePhase = async (phase) => {
   drainPhase = phase;
   drainRunId = phase === 'draining' ? 'jrun-20260923-0400-a1' : null;
   await fetchAndRenderAutoDrainPane();
+};
+globalThis.setDrainFixtureApprovals = async (approvals) => {
+  approvalsFixture = approvals;
+  await fetchAndRenderAutoDrainPane();
+};
+globalThis.setDrainFixtureReadiness = async ({ capacity = {}, tasks = null } = {}) => {
+  drainCapacityOverride = capacity;
+  drainTasksOverride = tasks;
+  await fetchAndRenderAutoDrainPane();
+};
+globalThis.startPendingDrainReadinessRefresh = () => {
+  delayReadiness = true;
+  drainReadinessRefresh = fetchAndRenderAutoDrainPane();
+};
+globalThis.drainReadinessRequestPending = () => readinessPending;
+globalThis.drainReadinessConcurrency = () => lastReadiness()?.concurrency;
+globalThis.releasePendingDrainReadinessRefresh = async () => {
+  // Later readiness reads in the scenario must not wait on a release.
+  delayReadiness = false;
+  releaseReadiness?.();
+  await drainReadinessRefresh;
+  drainReadinessRefresh = null;
 };
 
 // Late Start/Stop acknowledgements belong to the workspace visit that submitted them.
@@ -690,4 +912,46 @@ responseError='old visit refused';releasePost();await tick();await tick();await 
 assert(!get('auto-drain-operation-feedback').textContent.includes('old visit refused'),'A to B to A suppresses errors from the old A visit');
 delayPost=false;responseError=null;
 
+// A refresh tick requests only what the active Automation subtab displays.
+for (const [subtab, expected] of [
+  ['auto-tasks', ['/api/auto-tasks']],
+  ['routines', ['/api/routines']],
+  ['jobs', ['/api/job-runs', '/api/routines']],
+]) {
+  operationsSubtab = subtab;
+  const before = requests.length;
+  await fetchAndRenderOperationsPane();
+  const paths = requests.slice(before).filter(request => request.method === 'GET').map(request => request.path).sort();
+  assert(JSON.stringify(paths) === JSON.stringify(expected), `${subtab} tick: ${JSON.stringify(paths)}`);
+}
+operationsSubtab = 'routines';
+await fetchAndRenderOperationsPane();
+const diagnostic = get('routines-body').querySelector('.automation-diagnostic');
+assert(diagnostic.textContent.includes('Pending members999'), 'projected pending count is rendered');
+assert(diagnostic.textContent.includes('Fresh / ready251 / 125'), 'projected fresh and ready counts are rendered');
+assert(diagnostic.textContent.includes('Withheld members1000') && diagnostic.textContent.includes('Exhausted inputs200'), 'withheld and exhausted totals are preserved');
+assert(diagnostic.querySelector('pre').textContent.split('\n').length === 20, 'the disclosure shows twenty withheld reasons');
+assert(diagnostic.textContent.includes('Waiting for dependency 19'), 'withheld reasons are visible');
+assert(diagnostic.textContent.includes('Batch member-active'), 'the active member batch remains visible');
+assert(!diagnostic.textContent.includes('Usage'), 'member diagnostics have no dead Usage field');
+assert(!get('auto-tasks-body').querySelector('.automation-diagnostic').textContent.includes('Usage'), 'delivery diagnostics have no dead Usage field');
+const fullRequests = () => requests.filter(request => request.path.startsWith('/api/automation/'));
+assert(fullRequests().length === 0, 'polling and rendering never load full membership');
+const disclosure = diagnostic.querySelector('details');
+disclosure.open = true;
+await tick(); await tick();
+assert(fullRequests().length === 1 && fullRequests()[0].workspace === 'one', 'full state loads on disclosure in the selected workspace');
+assert(disclosure.textContent.includes('full-input'), 'full membership is displayed');
+await fetchAndRenderOperationsPane(); await tick(); await tick();
+assert(fullRequests().length === 1, 'polling reuses explicitly loaded full state');
+const rebuilt = get('routines-body').querySelector('.automation-diagnostic details');
+assert(rebuilt.open && rebuilt.textContent.includes('full-input'), 'full disclosure survives a poll');
+fullStateError = true;
+rebuilt.querySelector('button').click(); await tick(); await tick();
+assert(rebuilt.textContent.includes('full state unavailable'), 'on-demand fetch failures are visible');
+fullStateError = false;
+rebuilt.querySelector('button').click(); await tick(); await tick();
+assert(rebuilt.textContent.includes('full-input'), 'full state can be retried after an error');
+// Leave the harness on the normal routines view for the layout scenarios.
+rebuilt.open = false; await tick();
 globalThis.operationsTestsPassed = true;

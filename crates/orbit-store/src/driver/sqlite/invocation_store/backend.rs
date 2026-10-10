@@ -4,9 +4,10 @@
 impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connection::Store {
     fn insert_invocation_trace_record(
         &self,
+        workspace_id: &str,
         params: &crate::contracts::InvocationInsertParams,
     ) -> Result<(), orbit_common::OrbitError> {
-        Self::insert_invocation_trace_record(self, params)
+        Self::insert_invocation_trace_record(self, workspace_id, params)
     }
 
     fn list_invocation_records(
@@ -21,6 +22,14 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         query: &crate::contracts::InvocationAccountingQuery,
     ) -> Result<Vec<crate::contracts::InvocationAccountingFact>, orbit_common::OrbitError> {
         Self::list_invocation_accounting_facts(self, query)
+    }
+
+    fn list_provider_ledger_entries(
+        &self,
+        provider_names: &[String],
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::contracts::ProviderLedgerEntry>, orbit_common::OrbitError> {
+        Self::list_provider_ledger_entries(self, provider_names, since)
     }
 
     fn list_activity_invocation_metrics(

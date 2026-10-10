@@ -3,14 +3,23 @@ use crate::contracts::TaskListFilter;
 use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
+    pub(crate) fn automation_task_for_key(&self, key: &str) -> Result<Option<Task>, OrbitError> {
+        self.ensure_recovered()?;
+        match self.registry.task_action_id(&self.workspace_id, key)? {
+            Some(id) => self.get_task(&id),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         self.create_task_with_key(params, None)
+            .map(|(task, _)| task)
     }
     pub(crate) fn create_task_with_key(
         &self,
         params: TaskCreateParams,
         key: Option<&str>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         self.in_boundary(|| self.create_task_locked(params, key, None))
     }
 
@@ -37,7 +46,6 @@ impl TaskV2Store {
                 return Ok((task, true));
             }
             self.create_task_locked(params, Some(key), Some(digest))
-                .map(|task| (task, false))
         })
     }
 
@@ -46,7 +54,7 @@ impl TaskV2Store {
         params: TaskCreateParams,
         key: Option<&str>,
         digest: Option<&str>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         if params.title.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "task title must not be empty".to_string(),
@@ -67,6 +75,13 @@ impl TaskV2Store {
         let relations = relations_from_create_params(&params)?;
         self.registry
             .validate_new_task_relation_targets(&self.workspace_id, &relations)?;
+        // Validated before an id is reserved; recorded once the id exists.
+        orbit_types::task::ContextCreationState::Absent.next_grant(
+            "",
+            &params.context_files,
+            &params.context_creation,
+            Utc::now(),
+        )?;
 
         let now = Utc::now();
         let id = if let Some(key) = key {
@@ -94,6 +109,39 @@ impl TaskV2Store {
                 body: comment.message.clone(),
             })
             .collect();
+        let mut events = vec![orbit_types::task::TaskEventRowV2 {
+            schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+            event_id: "EV-0001".to_string(),
+            at: now,
+            by: params.actor.clone(),
+            event_type: "created".to_string(),
+            note: None,
+            from_status: None,
+            to_status: Some(params.status),
+        }];
+        // The initial grant is part of the bundle the create publishes, so a
+        // task never exists without the creation intent its writer declared.
+        if let Some(mut grant) = orbit_types::task::ContextCreationState::Absent.next_grant(
+            &id,
+            &params.context_files,
+            &params.context_creation,
+            now,
+        )? {
+            let event_id = next_event_id(&events);
+            if grant.generation.is_none() {
+                grant.generation = Some(event_id.clone());
+            }
+            events.push(orbit_types::task::TaskEventRowV2 {
+                schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id,
+                at: now,
+                by: params.actor.clone(),
+                event_type: orbit_types::task::CONTEXT_CREATION_AUTHORIZED_EVENT.to_string(),
+                note: Some(grant.to_note()),
+                from_status: None,
+                to_status: None,
+            });
+        }
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
                 job_run_machine: None,
@@ -107,6 +155,7 @@ impl TaskV2Store {
                 pr_status: None,
                 job_run_id: None,
                 crew: params.crew,
+                crew_source: params.crew_source,
                 orchestrator: params.orchestrator,
                 relations,
                 tags: normalize_task_tags(params.tags),
@@ -123,45 +172,25 @@ impl TaskV2Store {
             acceptance: render_acceptance(&params.acceptance_criteria),
             plan: params.plan,
             execution_summary: params.execution_summary,
-            events: vec![orbit_types::task::TaskEventRowV2 {
-                schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
-                event_id: "EV-0001".to_string(),
-                at: now,
-                by: params.actor,
-                event_type: "created".to_string(),
-                note: None,
-                from_status: None,
-                to_status: Some(params.status),
-            }],
+            events,
             comments,
             artifact_manifest: None,
         };
 
         if key.is_some() {
-            let bundle = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
+            let (bundle, replayed) = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
             self.replace_index_best_effort(&bundle.envelope, "idempotent task creation");
-            return self.task_from_bundle(bundle);
+            return self.task_from_bundle(bundle).map(|task| (task, replayed));
         }
         self.bundle_store.create_bundle(&bundle)?;
         self.replace_index_best_effort(&bundle.envelope, "task creation");
-        self.task_from_bundle(bundle)
+        self.task_from_bundle(bundle).map(|task| (task, false))
     }
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
     pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
         self.ensure_recovered()?;
-        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter::default())? {
-            return Ok(tasks);
-        }
-
-        let mut tasks = self
-            .bundle_store
-            .list_bundles()?
-            .into_iter()
-            .map(|bundle| self.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()?;
-        sort_by_created_desc_id_asc(&mut tasks, |task| &task.created_at, |task| &task.id);
-        Ok(tasks)
+        self.tasks_for_index_filter(TaskIndexFilter::default())
     }
 
     pub(crate) fn list_tasks_filtered(
@@ -174,15 +203,12 @@ impl TaskV2Store {
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
         self.ensure_recovered()?;
-        let mut tasks = match self.indexed_tasks(TaskIndexFilter {
+        let mut tasks = self.tasks_for_index_filter(TaskIndexFilter {
             statuses: status.into_iter().collect(),
             priority,
             job_run_id: job_run_id.map(ToOwned::to_owned),
             ..Default::default()
-        })? {
-            Some(tasks) => tasks,
-            None => self.list_tasks()?,
-        };
+        })?;
         tasks.retain(|task| {
             status.is_none_or(|value| task.status == value)
                 && priority.is_none_or(|value| task.priority == value)
@@ -208,13 +234,12 @@ impl TaskV2Store {
         if required_tags.is_empty() {
             return self.list_tasks();
         }
-        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
+        // The index answers the tag filter itself; a bundle scan returns
+        // every task, so the predicate is re-applied either way.
+        let mut tasks = self.tasks_for_index_filter(TaskIndexFilter {
             tags: required_tags.clone(),
             ..Default::default()
-        })? {
-            return Ok(tasks);
-        }
-        let mut tasks = self.list_tasks()?;
+        })?;
         tasks.retain(|task| {
             required_tags
                 .iter()

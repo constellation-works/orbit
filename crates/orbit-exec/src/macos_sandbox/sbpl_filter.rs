@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use orbit_common::OrbitError;
+use regex::Regex;
 
 pub(crate) fn sbpl_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
@@ -24,6 +27,35 @@ pub(super) fn sbpl_filter_for_allow_rule(rule: &str) -> String {
         let regex = glob_rule_to_regex(&rule);
         format!("(regex \"{}\")", sbpl_escape(&regex))
     }
+}
+
+/// The physical directory every path an absolute `rule` matches sits at or
+/// beneath, and whether that directory is itself matched. A literal or
+/// trailing-`**` rule compiles to `(subpath ROOT)`, which matches `ROOT`; a
+/// glob rule's regex matches only entries strictly below its literal prefix.
+pub(super) fn rule_anchor(rule: &str) -> (PathBuf, bool) {
+    let rule = physical_rule(rule);
+    (
+        PathBuf::from(subpath_root(&rule)),
+        rule_can_use_subpath(&rule),
+    )
+}
+
+/// The regex [`sbpl_filter_for_deny_rule`] emits for an absolute glob `rule`,
+/// compiled for matching paths on disk, or `None` when the rule compiles to a
+/// `(subpath ...)` clause instead. Matching here and in Seatbelt uses the same
+/// pattern text, so both agree on which existing paths the deny reaches.
+pub(super) fn glob_deny_matcher(rule: &str) -> Result<Option<Regex>, OrbitError> {
+    let rule = physical_rule(rule);
+    if rule_can_use_subpath(&rule) {
+        return Ok(None);
+    }
+    let pattern = glob_rule_to_regex(&rule);
+    Regex::new(&pattern).map(Some).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "macOS sandbox glob `{rule}` compiled to an invalid regex `{pattern}`: {error}"
+        ))
+    })
 }
 
 /// Whether the deny clause compiled from `rule` reaches `path` itself — that

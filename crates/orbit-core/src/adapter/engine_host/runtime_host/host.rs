@@ -7,8 +7,9 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     CrewConfig, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
     FinalRecoveryApplication, FinalRecoveryApplied, PluginBrokerHandle, PluginBrokerRun,
-    ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
-    RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
+    ResolvedShellExecutor, RuntimeHost, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -20,7 +21,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
-use orbit_types::telemetry::InvocationTrace;
+use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation};
 use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState};
 use serde_json::Value;
 
@@ -80,6 +81,13 @@ impl RuntimeHost for OrbitRuntime {
         request: &orbit_types::workflow::automation::DirectLandingRequest,
     ) -> Result<(), OrbitError> {
         crate::application::automation::record_direct_landing_intent(self, request)
+    }
+
+    fn accepted_automation_coverage(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<orbit_types::workflow::automation::CoverageEvidence>, OrbitError> {
+        crate::application::automation::accepted_action_coverage(self, task_id, Utc::now())
     }
 
     fn insert_job_run(
@@ -260,15 +268,15 @@ impl RuntimeHost for OrbitRuntime {
                     update.calling_run_id.as_deref(),
                 )?;
             }
-            self.route_worker_tool("orbit.task.update", serde_json::json!({
+            self.route_worker_host_tool("orbit.task.update", serde_json::json!({
                 "id": task_id,
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: Some(update.status), expected_status: Some(update.expected_status),
                     status_note: update.note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, final_recovery: None},
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, forge_hold: None},
                     ..Default::default()
                 }
-            }), Default::default())?;
+            }))?;
             return self.get_task(task_id);
         }
         OrbitRuntime::update_task_from_activity(self, task_id, update)
@@ -307,8 +315,15 @@ impl RuntimeHost for OrbitRuntime {
     fn record_reviewer_invocation(
         &self,
         request: &orbit_engine::ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Option<u64>, OrbitError> {
         crate::application::review::record_reviewer_invocation(self, request)
+    }
+
+    fn review_report_correction(
+        &self,
+        request: &orbit_engine::ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        crate::application::review::review_report_correction(self, request)
     }
 
     fn handoff_landing_context(
@@ -323,6 +338,22 @@ impl RuntimeHost for OrbitRuntime {
         update: &orbit_engine::HandoffLandingUpdate,
     ) -> Result<(), OrbitError> {
         OrbitRuntime::record_handoff_landing(self, update)
+    }
+
+    fn local_machine_id(&self) -> Option<String> {
+        self.automation_machine_identity().map(str::to_string)
+    }
+
+    fn kept_claim_candidate(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
+        // Without an identity this host is no machine a candidate lives on,
+        // so only a durable one is offered.
+        self.stores().tasks().kept_claim_candidate(
+            task_id,
+            self.automation_machine_identity().unwrap_or_default(),
+        )
     }
 
     fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
@@ -464,15 +495,15 @@ impl RuntimeHost for OrbitRuntime {
                     .collect::<Vec<_>>()
                     .join("\n")
             });
-            self.route_worker_tool("orbit.task.update", serde_json::json!({
+            self.route_worker_host_tool("orbit.task.update", serde_json::json!({
                 "id": task_id,
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                     status: update.status, plan: update.plan, context_files: update.context_files,
                     external_refs: update.external_refs, status_note: update.status_note,
-                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, final_recovery: None},
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, forge_hold: None},
                     ..Default::default()
                 }
-            }), Default::default())?;
+            }))?;
             return Ok(());
         }
         apply_locked_task_automation_update(self, task_id, update)
@@ -502,6 +533,10 @@ impl RuntimeHost for OrbitRuntime {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         self.execution_env_policy()
             .agent_subprocess_env(required_env_vars)
+    }
+
+    fn requires_claude_worker_credential(&self) -> bool {
+        cfg!(target_os = "macos")
     }
 
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
@@ -542,6 +577,10 @@ impl RuntimeHost for OrbitRuntime {
         self.list_job_runs_for_worktree_gc()
     }
 
+    fn worktree_reclaim_patterns(&self) -> Vec<String> {
+        self.context.settings().worktree_reclaim().to_vec()
+    }
+
     fn lookup_task_for_worktree_gc(
         &self,
         run_id: &str,
@@ -556,6 +595,13 @@ impl RuntimeHost for OrbitRuntime {
 
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
         self.worktree_gc_settled_claim(run_id)
+    }
+
+    fn gc_scratch(
+        &self,
+        retention_hours: u64,
+    ) -> Result<Option<orbit_engine::ScratchGcReport>, OrbitError> {
+        self.gc_scratch_by_age(retention_hours).map(Some)
     }
 
     fn data_root(&self) -> &std::path::Path {
@@ -575,6 +621,13 @@ impl RuntimeHost for OrbitRuntime {
         query: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
         OrbitRuntime::invocation_records(self, query)
+    }
+
+    fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::record_provider_limit(self, observation).map(|_| ())
     }
 
     fn activity_implementer_identity(
@@ -728,6 +781,12 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(self
+            .read_pipeline_worker_log(run_id)?
+            .and_then(|snapshot| snapshot.content))
+    }
+
     fn admit_final_recovery(
         &self,
         run_id: &str,
@@ -742,6 +801,29 @@ impl RuntimeHost for OrbitRuntime {
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         self.apply_run_final_recovery(run_id, application)
+    }
+
+    fn allocate_step_recovery_decision(
+        &self,
+        request: &StepRecoveryDecisionRequest,
+    ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
+        crate::runtime::recovery_decision::allocate(request).map(Some)
+    }
+
+    fn read_step_recovery_decision(
+        &self,
+        slot: &StepRecoveryDecisionSlot,
+    ) -> Result<StepRecoveryDecisionRead, OrbitError> {
+        crate::runtime::recovery_decision::read(slot)
+    }
+
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError> {
+        checkpoints::begin_rebase_recovery_attempt(self, run_id, step_id, scope)
     }
 
     fn checkpoint_rebase_recovery(
@@ -760,6 +842,14 @@ impl RuntimeHost for OrbitRuntime {
         checkpoint: &Value,
     ) -> Result<bool, OrbitError> {
         checkpoints::verify_rebase_recovery(self, run_id, step_id, checkpoint)
+    }
+
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
+        checkpoints::rebase_recovery_attempts(self, run_id, step_id)
     }
 
     fn tool_context_for_activity(

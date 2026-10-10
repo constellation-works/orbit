@@ -82,10 +82,9 @@ pub enum ServeMode {
     /// one non-PTY SSH process.
     Remote,
     /// Present one stdio MCP surface over this machine's workspaces plus every
-    /// SSH destination configured in `~/.orbit/mcp-destinations.toml`.
+    /// host registered with `orbit host add`.
     ///
-    /// Local workspaces are included automatically and need no destination
-    /// row. This mode binds to no single workspace. It lists each destination's
+    /// Local workspaces are included automatically and need no host entry. This mode binds to no single workspace. It lists each destination's
     /// workspaces as live descriptors, probing remotes on every call, and
     /// includes remotes that are unreachable right now rather than hiding
     /// them. Workspace-scoped tools take the host-qualified `selector` copied
@@ -101,16 +100,16 @@ pub struct ServeArgs {
     ///
     /// `remote` proxies one chosen SSH destination and requires it as an
     /// argument. `federated` includes this machine automatically and muxes
-    /// additional destinations configured in `~/.orbit/mcp-destinations.toml`;
-    /// it takes no argument.
+    /// every host registered with `orbit host add`; it takes no argument.
     #[arg(long, value_name = "MODE")]
     pub mode: Option<ServeMode>,
     /// SSH destination for `--mode remote`, such as a host, `user@host`, or a
     /// configured alias.
     #[arg(value_name = "SSH_HOST", requires = "mode")]
     pub ssh_host: Option<String>,
-    /// Audit identity supplied only by Orbit's direct SSH proxy command.
-    /// Presence also marks the server session's transport as SSH MCP.
+    /// Caller-chosen machine label forwarded by Orbit's SSH routes.
+    /// Marks the session as SSH MCP and supplies audit/receipt/claim fences;
+    /// it grants no capability and does not prove SSH origination.
     #[arg(long, value_name = "MACHINE_ID", hide = true, conflicts_with = "mode")]
     pub remote_caller_machine_id: Option<String>,
     /// Deterministic owner/follower RPC; selected by Orbit's runtime SSH argv.
@@ -121,6 +120,14 @@ pub struct ServeArgs {
         requires = "remote_caller_machine_id"
     )]
     pub internal_drain: bool,
+    /// Host-owned worker projections; selected only by the runtime SSH route.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["mode", "internal_drain", "operator"],
+        requires = "remote_caller_machine_id"
+    )]
+    pub worker_host: bool,
     /// Serve sessions with operator authority, so they may perform governed
     /// operations such as dispatching a workflow or deleting a task.
     ///
@@ -187,6 +194,7 @@ impl ServeArgs {
         if worker.is_some()
             && (self.operator
                 || self.internal_drain
+                || self.worker_host
                 || matches!(self.mode, Some(ServeMode::Remote)))
         {
             return Err(OrbitError::PolicyDenied(
@@ -215,8 +223,7 @@ impl ServeArgs {
                 if let Some(ssh_host) = self.ssh_host {
                     return Err(OrbitError::InvalidInput(format!(
                         "`orbit mcp serve --mode federated` takes no SSH destination, but got \
-                         '{ssh_host}'; destinations are configured in \
-                         `~/.orbit/mcp-destinations.toml`"
+                         '{ssh_host}'; register remote hosts with `orbit host add <ssh-target>`"
                     )));
                 }
                 super::server::serve_mcp_federated_stdio(
@@ -231,6 +238,7 @@ impl ServeArgs {
                     .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
                 self.orchestrator,
                 self.internal_drain,
+                self.worker_host,
             )?,
         }
         Ok(CommandOutput::Silent)

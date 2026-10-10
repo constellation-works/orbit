@@ -26,19 +26,18 @@ pub(super) fn apply_invocation_telemetry_columns(conn: &Connection) -> Result<()
     {
         return Ok(());
     }
+    add_column_if_missing(conn, "invocations", "provider_cost_usd", "REAL")?;
     add_column_if_missing(
         conn,
-        "ALTER TABLE invocations ADD COLUMN provider_cost_usd REAL",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE invocations ADD COLUMN cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0",
+        "invocations",
+        "cache_create_1h_tokens",
+        "INTEGER NOT NULL DEFAULT 0",
     )?;
     ensure_invocation_schema_v1(conn)
 }
 
 pub(super) fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
-    add_column_if_missing(conn, "ALTER TABLE invocations ADD COLUMN slot TEXT")?;
+    add_column_if_missing(conn, "invocations", "slot", "TEXT")?;
     conn.execute_batch(
         r#"
             CREATE INDEX IF NOT EXISTS idx_invocations_job_run_id
@@ -76,4 +75,111 @@ pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitE
         "#,
     )
     .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// v36 `invocation_workspace_scope`: record the workspace each invocation
+/// belongs to.
+///
+/// Run ids are minted per workspace, so two workspaces submitting in the same
+/// minute hold the same id and an invocation keyed by `job_run_id` alone was
+/// read by both. The backfill attributes a legacy row only when exactly one
+/// workspace ever held its run id (`job_run_id_allocations`, plus `job_runs`);
+/// an ambiguous or orphaned row stays `NULL` and no workspace-scoped read
+/// matches it.
+pub(super) fn apply_invocation_workspace_scope(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "invocations", "workspace_id", "TEXT")?;
+
+    let mut owners = Vec::new();
+    if table_has_column(conn, "job_run_id_allocations", "workspace_id")? {
+        owners.push("SELECT workspace_id, run_id FROM job_run_id_allocations");
+    }
+    if table_has_column(conn, "job_runs", "workspace_id")? {
+        owners.push("SELECT workspace_id, run_id FROM job_runs");
+    }
+    if !owners.is_empty() {
+        let owners = owners.join(" UNION ");
+        conn.execute_batch(&format!(
+            r#"
+                UPDATE invocations
+                SET workspace_id = (
+                    SELECT CASE WHEN COUNT(DISTINCT owner.workspace_id) = 1
+                                THEN MIN(owner.workspace_id) END
+                    FROM ({owners}) owner
+                    WHERE owner.run_id = invocations.job_run_id
+                )
+                WHERE workspace_id IS NULL;
+            "#
+        ))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_invocations_workspace_job_run_id
+            ON invocations(workspace_id, job_run_id);
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// v40 `provider_limit_observations` [ORB-14695]: the host's provider usage
+/// limits, beside the invocation ledger in the host-global database, since a
+/// limit belongs to the provider login on this host.
+///
+/// One row per provider, model scope and window; the empty string stands for
+/// an account-wide scope or an unlabelled window so the key stays unique.
+/// Purely additive: an older binary never reads the table.
+pub(super) fn apply_provider_limit_observations(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS provider_limit_observations (
+                provider TEXT NOT NULL,
+                model_scope TEXT NOT NULL DEFAULT '',
+                window_label TEXT NOT NULL DEFAULT '',
+                exhausted INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                resets_at TEXT,
+                observed_at TEXT NOT NULL,
+                run_id TEXT,
+                crew TEXT,
+                detail TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (provider, model_scope, window_label)
+            );
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// v41 `provider_limit_readings` [ORB-14696]: a provider's own reading of a
+/// usage window, recorded after every Codex or Claude run: the percent used,
+/// the window's length, and whether the window gates the account (an overage
+/// window does not).
+///
+/// Additive: an older binary still inserts and updates the v40 columns. Its
+/// update of an existing row leaves these columns from the earlier reading,
+/// so a reader trusts them only on a row whose `source` is `event`.
+pub(super) fn apply_provider_limit_readings(conn: &Connection) -> Result<(), OrbitError> {
+    for (column, definition) in [
+        ("used_percent", "REAL"),
+        ("window_minutes", "INTEGER"),
+        ("gating", "INTEGER NOT NULL DEFAULT 1"),
+    ] {
+        add_column_if_missing(conn, "provider_limit_observations", column, definition)?;
+    }
+    Ok(())
+}
+
+/// v42 `invocation_provider` [ORB-14699]: the canonical provider an
+/// invocation ran on, so a provider budget can read its spend from the
+/// ledger. `agent` is the model's family, which is not the provider for
+/// every lane (an Antigravity run is attributed to its Gemini model).
+///
+/// A nullable column only: an older binary keeps inserting without it, and a
+/// reader attributes such a row, and every row recorded before this
+/// migration, by its `agent`.
+pub(super) fn apply_invocation_provider(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "invocations", "provider", "TEXT")
 }

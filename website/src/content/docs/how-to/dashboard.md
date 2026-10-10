@@ -7,9 +7,10 @@ sidebar:
 
 The Orbit dashboard is the browser UI for the host it runs on: tasks, runs,
 errors, automation, and settings. It has no login and binds to loopback only.
-To use another machine's dashboard, tunnel to it over SSH.
+To use another machine's dashboard, tunnel to it over SSH, or switch to a
+registered host with the host picker.
 
-![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
+![The dashboard's Tasks list with status groups, the load, memory, and disk host chips, and the 24-hour refresh clock.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
@@ -60,6 +61,64 @@ orbit web connect my-server
 attaches to one running without it, it prints a notice. Restart that server
 with `orbit web serve --operator`, or stop it and reconnect.
 
+`connect` opens a separate tab, and its own port, for each machine. If the
+machine is already registered with `orbit host add`, you can instead stay in
+one dashboard and [switch hosts](#switch-hosts). Use `connect` when the
+machine is not registered, when you want to choose its operator capability
+with `--no-operator` or a different `--remote-port`, or when you want a
+dashboard that does not depend on a machine in between. Use the host picker
+to move between machines you have already registered.
+
+## Switch hosts
+
+When the serving machine has registered other hosts (see
+[Run Orbit across hosts](../multi-host/)), the left rail shows a **Host**
+picker above the workspace picker. It lists the serving host first, marked
+`(serving host)`, then each registered host by name. Choose one and every
+panel, action, log tail, and the load, memory, and disk chips show that host.
+The chips are labelled with its name. The workspace picker then lists that
+host's workspaces: the workspace you had stays selected if the host also
+lists it, **All workspaces** stays the aggregate of that host's workspaces,
+and anything else falls back to that host's default.
+
+The serving dashboard reaches the host over SSH, with the SSH identity of the
+machine that serves the dashboard, not your browser's machine. It opens a
+tunnel when you first select a host, attaches to a dashboard already running
+there or starts one, and closes the tunnel after five minutes without use.
+The remote host stays authoritative: it answers from its own stores and
+enforces its own gates. SSH runs without a prompt here, so a host that needs a
+passphrase or password reports as unreachable. The remote dashboard is
+expected on the default port, `7878`.
+
+- **`?host=`** names the host in the URL, by registered name (any case) or
+  machine ID, so a reload or copied link opens the same host. The URL always
+  wins. Choosing the serving host removes the parameter.
+- **Remembered choice.** The browser remembers the last host you picked and
+  uses it when the URL has no `?host=`. It forgets a host that is no longer
+  registered. Choosing the serving host clears it.
+- **Skew banner.** A host on a different Orbit version or protocol than the
+  serving host shows a persistent note above the panels, naming both. It is a
+  warning, not a refusal: views and actions follow what that host supports.
+- **Unreachable state.** A host that cannot be shown replaces every panel
+  with one state naming the host, an error code, and its message. The codes
+  are `unknown_host` (a `?host=` that is not registered, listed in the picker
+  as `(not registered)`), `unreachable_destination`, `process_timeout`,
+  `host_identity_mismatch`, and `host_too_old`. **Retry** tries the host again
+  and **Back to** the serving host returns. The picker stays available. The
+  dashboard asks the host again on each refresh and shows its panels once it
+  answers.
+- **Remote-run links.** Where a task's execution line says which machine ran
+  it (`on build-box`) and that machine is registered on the serving host, the
+  name links to that run on that host, as `?host=<name>&workspace=<workspace>#runs?run_id=<run>`.
+  An unregistered machine stays plain text.
+- **Read-only.** Writes to another host go through the serving dashboard's
+  [operator session](#authorization). Without one, a note reads `Read-only on
+  <host>: <reason>` and write controls are disabled with the same reason.
+
+**Settings › Hosts** is not forwarded. With another host selected, it still
+edits the serving host's registry, and says so. The picker reads that same
+registry.
+
 ## Workspace scope
 
 With more than one workspace registered, the left rail has a workspace picker.
@@ -71,8 +130,8 @@ the current directory, else the first active workspace.
   Task actions still work on a row that names its owning workspace and are
   sent to that owner. A row without an owner stays read-only.
 - Inactive workspaces show as `<name> (unavailable)` and cannot be selected.
-- The URL holds the workspace and time window, so a reload or copied link
-  opens the same view.
+- The URL holds the host, workspace, and time window, so a reload or copied
+  link opens the same view.
 - **Health → Reliability** covers every workspace, whatever is selected.
 
 Confirm the selected workspace before you act. A count or metric does not
@@ -86,13 +145,16 @@ prove that a particular task or run succeeded.
 | **Runs** | Job runs, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Health** | Incidents, errors, reliability, step metrics, and the scoreboard. |
-| **Automation** | **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
+| **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
 | **Settings** | The workspace's `config.toml`. |
 
-The top bar counts failed runs, policy denials, long-running runs, and audited
-events in the selected window. Click a count to open the view behind it.
+The top bar shows live load, memory, and disk readings for the serving host,
+the drain state when a delivery window is active, and **Refresh**. Counts in
+the selected window sit on the rail: failed, timed-out, and interrupted runs
+under **Runs**, and audited events under **Audit**. Click a rail count to open
+the view behind it.
 
 View URLs keep older section names: `#diagnostics/…` is Health,
 `#operations/…` is Automation, and `#config/…` is Settings.
@@ -173,7 +235,7 @@ approved backlog tasks in parallel. It sits at the top of the Tasks dock's
 **Drain** mode; `#auto-drain` and `#operations/auto-drain` open it. It needs a
 single active workspace.
 
-![The Drain card: running and free slots, eligible and blocked tasks, window length, parallel tasks, Stop at review or Mark done, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Drain card with delivery state and capacity, pool readiness counts, window length, parallel tasks, completion mode, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
@@ -183,21 +245,23 @@ The card shows:
   here too.
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
-- **Eligible now** and **Blocked by running.** Counts from a read-only
-  readiness snapshot. Up to three blocked tasks are listed as
-  `ABC-1 waits on ABC-2`, with the lock they contend for.
+- **Pool.** Counts for **Pool: eligible**, **Pool: waiting on locks**,
+  **Pool: waiting on capacity**, and **Pool: waiting, other** from a read-only
+  readiness snapshot. Up to three tasks waiting on another task or run are
+  listed as `ABC-1 waits on ABC-2`, with the lock they contend for.
 
 | Control | Effect |
 |---|---|
 | **Window length** | `15m` to `8h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
-| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those eligible now. **Mark done** needs an operator session. |
+| **When a task finishes** | **Stop at review** (default) leaves shipped tasks in `review`. **Mark done** moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. **Mark done** needs an operator session. |
+| **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
 | **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Settle pending** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 
 Without operator capability you can still start a window that stops at
-review; **Mark done** stays disabled and says why. Nothing is reserved or
+review; **Mark done** and **Approve qualifying** stay disabled and say why. Nothing is reserved or
 started until you click **Start**. Results appear in the card's status line.
 
 On a replica, a live pull drain counts as a window. The header reads **Pull
@@ -215,7 +279,7 @@ interrupted run opens on the step it stopped at and the error it recorded.
 | Action | Available for | Effect |
 |---|---|---|
 | **cancel** | `pending` or `running` | Cancels the run. |
-| **Resume** | `failed`, `interrupted`, or `timeout` | Restarts from the first step that did not succeed. |
+| **Resume** | `failed`, `interrupted`, or `timeout` | Restarts from the first step that did not succeed. A run authorized to mark tasks done requires an operator session to resume. |
 | **Replay run** | Any run (asks first if it is still running) | Submits a new run of the same job. |
 
 A refused action shows its error above the list until you dismiss it or start
@@ -230,20 +294,32 @@ the confirmation names. The run detail shows the claim (`pull_claim`), and a
 pull drain's detail lists the crews its window can run and those it excluded,
 with the reason.
 
-Three failure counts answer different questions:
+These counts answer different questions:
 
 | Where | Counts |
 |---|---|
-| Top-bar **failed runs** | Job runs that failed, timed out, or were interrupted in the selected window. |
+| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the selected window. |
 | Runs **Failed** filter | Runs in the `Failed` state, with no time window. |
-| **Health → Errors** | Step and event failures this month. |
+| **Audit** rail count | Audited events in the selected window. |
+| **Health → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
 
+The Audit **Failure categories**, **Unexpected Failures by Callable Tool**,
+and **Lifecycle diagnostics** views, plus the Health scoreboard, use the capped
+incident scan. When the scan reaches its limit, each view marks its counts as
+**capped** and shows partial coverage. These counts cover only the newest
+non-success audit rows in the selected window; older failures and affected runs
+may be omitted. Per-tool unexpected-failure rates use the scanned failure
+counts with successful-call counts from the full window, so rates may be
+understated. A zero in the scoreboard means no incidents in that scanned
+sample. Total audited events and raw tool-call counts still cover the full
+window.
+
 ## Automation
 
-**Automation** has three views: **Routines** (with the sweep clock),
+**Automation** has three views: **Routines** (with the host scheduler clock),
 **Auto-tasks**, and **Jobs**. Its controls need a single active workspace and
 an [operator session](#authorization). In **All workspaces** they are
 read-only and say why. For what routines and auto-tasks are, see
@@ -262,11 +338,11 @@ will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.
 
 Each row's switch writes the routine's `enabled` field. It does not start or
-stop the sweep clock.
+stop the host scheduler clock.
 
-### Sweep clock
+### Scheduler clock
 
-The bar above the routines shows this host's sweep clock (`orbit clock tick`):
+The bar above the routines shows this host's scheduler clock (`orbit clock tick`):
 health, provider, whether the service is enabled, cadence, and the last and
 next tick.
 
@@ -280,7 +356,7 @@ The CLI equivalents are `orbit clock status`, `orbit clock pause`,
 
 ### Auto-tasks
 
-Definitions live in `.orbit/auto_tasks/` and are checked on every sweep clock
+Definitions live in `.orbit/auto_tasks/` and are checked on every scheduler clock
 tick, so pausing the clock pauses scheduled mints. Rows are grouped **On a
 schedule**, **On delivery** (minted after landed deliveries), and
 **Disabled**. The stats strip counts definitions with an open duplicate, and
@@ -318,6 +394,7 @@ layering and descriptions as `orbit config show`.
 | **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
 | **Crews** | The crew table. |
 | **Keys** | Every settable key with its type, section, description, and accepted values. |
+| **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
 
 **Effective** opens with a strip naming both files, then one panel per section
 (Delivery, Crews, Execution, Review, Housekeeping) and a read-only **Paths**
@@ -370,21 +447,65 @@ with two refusals:
   with no default crew is refused.
 
 Routines, auto-task definitions, and the workspace registry are not editable
-here. Settings shows one workspace at a time.
+here. Workspace settings show one workspace at a time; **Hosts** also works
+in **All workspaces**.
+
+### Hosts
+
+Open **Settings › Hosts** (`#config/hosts`) to manage the serving machine's
+[`hosts.toml`](../../reference/config/#host-registry). Through
+`orbit web connect`, this is the remote machine's registry.
+
+![Settings › Hosts: Add host, the local host labelled local · edited here, and an unreachable remote with its error code, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
+
+Captured from Orbit 0.28.0 on 2026-10-08 with an isolated demo registry.
+`build-box.invalid` is an intentionally unreachable example SSH target.
+
+The local host comes first, labelled **local · edited here**. Remote rows
+show their SSH target, task prefix, reachability, Orbit version, protocol,
+skew, and workspace roles. An unreachable host stays visible with its typed
+error. Opening the view and **Reload** probe every host. Periodic refreshes
+reread the file and retain the last probe results; they open no background
+SSH sessions. A CLI-added host appears on the next refresh.
+
+- **Add host** opens an inline form for an SSH target and an optional name.
+  Saving probes the host and registers its identity here, as `orbit host add`
+  does. It writes nothing on the remote.
+- **Rename** edits the local entry name; the machine ID and SSH route stay
+  the same.
+- **Remove** asks for confirmation inline. A `host_in_use` refusal lists
+  dependent replica checkouts and pull drains and offers a separate force
+  confirmation, which removes their route.
+
+Edits need an [operator session](#authorization). Without one, this view is
+read-only. The local host cannot be removed or renamed here. If a newer
+host file fails validation, a banner shows the error and the last valid
+snapshot stays visible until you repair the file. Mutations always validate
+the current file.
+
+For host setup and typed errors, see [Run Orbit across hosts](../multi-host/).
 
 ## Authorization
 
-The dashboard has **no login** and binds loopback only. Origin checks reduce
-browser CSRF but do not control access. Anyone who can reach the port,
-including a forwarded port, can call the same write endpoints the browser uses,
-with the server process's authority. Keep that port inside your operator
+The dashboard has **no login** and binds loopback only. Origin and Fetch
+Metadata checks reduce browser CSRF but do not control access. When a request
+includes `Sec-Fetch-Site`, the server accepts only `same-origin` and `none`;
+it refuses `same-site`, `cross-site` and unknown values. The header is absent
+for direct CLI/curl requests and some older browsers. Anyone who can reach the
+port, including a forwarded port, can call the same write endpoints the browser
+uses, with the server process's authority. Keep that port inside your operator
 boundary.
+
+Older browsers that omit Fetch Metadata do not get this additional request
+check; their requests rely on the loopback Host and Origin checks. In
+particular, an old browser's GET without an Origin is not distinguished from a
+direct command-line request.
 
 Two gates apply:
 
 1. **Workspace scope.** **All workspaces** and inactive workspaces are
    read-only, even for an operator. The exception is task actions on rows that
-   name their owner.
+   name their owner, and the machine-global **Settings › Hosts** view.
 2. **Operator capability.** Needed for routine and auto-task switches,
    **Mint now**, **Run ▸**, clock controls, **Mark done**, **Stop** and
    **Settle pending**, settings writes, plugin enable and disable, and the
@@ -399,16 +520,34 @@ The dashboard server has operator capability when:
   read-only remote); or
 - its process has `ORBIT_OPERATOR=1`, which the audit trail records.
 
+When you [switch to another host](#switch-hosts), a write is forwarded only
+if the dashboard you are using, the serving one, has operator capability.
+Operator access on the remote machine is not enough on its own, and a
+dashboard without it is read-only for every other host. The forward refuses
+the write with `403` and `code: authorization_denied`, naming the
+`host.forward` operation, before it opens an SSH connection. Operator
+capability on the serving dashboard reaches every registered host its SSH
+identity can log in to: a dashboard it starts there gets `--operator`, while a
+dashboard already running there keeps its own capability. The remote host's
+own authorization still applies to each request.
+
 MCP is separate: `orbit mcp serve --operator` is its only operator path.
 
 An unauthorized control is disabled and shows the reason, and the panel says
 how to get operator access. A request that reaches the API anyway gets `403`
 with `code: authorization_denied`.
 
-Task **ship**, **approve**, **reject**, and **archive**, and run **cancel**,
-**Resume**, and **Replay run**, do not need operator capability. They need a
+Task **ship**, **approve**, **reject**, and **archive**, plus run **cancel**
+and review-only **Resume**, do not need operator capability. They need a
 concrete active workspace, and they fail closed on conflicts such as an
 in-flight ship or a held workspace claim.
+
+**Resume** keeps the source run's completion policy. If that policy marks
+tasks done, resuming requires operator capability and otherwise returns
+`403` with `code: authorization_denied` and `operation: auto_drain.complete`.
+Starting a window with `approve_proposed` set without operator capability
+returns the same `403` with `operation: auto_drain.approve_proposed`.
+**Replay run** requires operator capability for any source run.
 
 ## Troubleshooting
 
@@ -421,7 +560,7 @@ in-flight ship or a held workspace claim.
 | Automation buttons disabled | Select one active workspace. If the reason mentions operator authority, see [Authorization](#authorization). `connect` cannot upgrade a remote server it did not start. |
 | Ship returns `409` `ship_run_in_flight` | The task already has an unfinished ship run. Open the named `run_id`. |
 | `409` `workspace_claim_held` | Another operator holds the workspace claim. Wait for it to expire or inspect the holder; do not retry in a loop. |
-| Top-bar **failed runs** disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
+| **Runs** rail count disagrees with **Health → Errors** | They count different things. See [Runs and errors](#runs-and-errors). |
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
@@ -441,7 +580,7 @@ It returns `200` when every check passes and `503` when any fails. Plain
 
 - [First Task](../../getting-started/first-task/): take one task from your
   agent's request to a reviewed pull request.
-- [Schedule Recurring Work](../recurring-work/): routines, the sweep clock,
+- [Schedule Recurring Work](../recurring-work/): routines, the host scheduler clock,
   and auto-task definitions.
 - [Run a Delivery Window](../continuous-delivery/): prepare, start, stop, and
   recover a bounded drain.

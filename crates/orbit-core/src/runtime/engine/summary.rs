@@ -15,14 +15,24 @@ const RECENT_WINDOW_DAYS: i64 = 7;
 const TOP_TOOLS_LIMIT: usize = 50;
 
 impl OrbitRuntime {
-    /// Build a scoreboard summary for the workspace.
+    /// Build and persist a scoreboard summary for the workspace.
+    pub fn generate_scoreboard_summary(
+        &self,
+        window: Option<ScoreboardWindow>,
+    ) -> Result<orbit_store::scoreboard_summary::ScoreboardSummary, OrbitError> {
+        let summary = self.build_scoreboard_summary(window)?;
+        orbit_store::scoreboard_summary::write_summary(&self.paths().scoreboard_dir, &summary)?;
+        Ok(summary)
+    }
+
+    /// Build a scoreboard summary without writing `summary.json`.
     ///
     /// `window`: `None` (or `Some(ScoreboardWindow::All)`) preserves the
     /// legacy lifetime view. A finite window scopes audit-sourced fields
     /// to the matching SQL cutoff and zeroes snapshot-sourced fields
     /// (see [`ScoreboardWindow`] for per-source semantics). `recent_7d`
     /// stays fixed at 7d regardless of `window`.
-    pub fn generate_scoreboard_summary(
+    pub fn build_scoreboard_summary(
         &self,
         window: Option<ScoreboardWindow>,
     ) -> Result<orbit_store::scoreboard_summary::ScoreboardSummary, OrbitError> {
@@ -49,11 +59,15 @@ impl OrbitRuntime {
         let audit_tool_calls_by_surface_recent =
             self.audit_tool_call_counts_by_surface_and_role(Some(&since_recent))?;
         let top_tool_calls = self.audit_top_tool_calls(since_window.as_ref(), TOP_TOOLS_LIMIT)?;
-        let job_runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            state: Some(JobRunState::Success),
-            include_steps: false,
-            ..JobRunQuery::default()
-        })?;
+        // Two columns per successful run: hydrating whole runs parsed every
+        // run's input JSON on each dashboard poll.
+        let job_runs = self
+            .stores()
+            .jobs()
+            .list_job_run_completions_filtered(&JobRunQuery {
+                state: Some(JobRunState::Success),
+                ..JobRunQuery::default()
+            })?;
         // Same cutoff `generate_summary_with_inputs` derives internally, applied
         // in SQL so the scoreboard never materializes the friction corpus
         // (ORB-10680).
@@ -96,8 +110,6 @@ impl OrbitRuntime {
                 Err(error) => Err(error),
             },
         )?;
-        let _ =
-            orbit_store::scoreboard_summary::write_summary(&self.paths().scoreboard_dir, &summary)?;
         Ok(summary)
     }
 }

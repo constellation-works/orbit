@@ -303,9 +303,14 @@ impl PluginBackendSpec {
     }
 
     /// The child environment for one call: the allowlisted baseline, the
-    /// granted `env_pass` names copied from this process, and the Orbit
+    /// granted `env_pass` names admitted by the caller, and the Orbit
     /// plugin variables (design §4.2). `tool_name` is absent for a
     /// long-lived `mcp` child, which serves every tool.
+    ///
+    /// A supplied caller environment is the source of available values,
+    /// not a plugin grant: provider credentials admitted there must still
+    /// be requested and granted by this plugin. Without that snapshot,
+    /// available values come from this process.
     ///
     /// `env_pass` is composed through the same admission path as the
     /// baseline (`allowlisted_child_env_from`), not a raw name lookup: a
@@ -321,25 +326,15 @@ impl PluginBackendSpec {
         cwd: &str,
         tool_name: Option<&str>,
     ) -> Vec<(String, String)> {
-        let mut env_pairs = ctx
-            .proc_spawn_environment
-            .clone()
-            .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
-        if self.granted(PluginGrant::EnvPass) {
-            let parent = ctx
-                .proc_spawn_environment
-                .clone()
-                .unwrap_or_else(|| std::env::vars().collect());
-            let admitted = allowlisted_child_env_from(&parent, &self.permissions.env_pass, &[]);
-            for name in &self.permissions.env_pass {
-                if let Some((_, value)) = admitted
-                    .iter()
-                    .find(|(admitted_name, _)| admitted_name == name)
-                {
-                    upsert_env(&mut env_pairs, name, value.clone());
-                }
-            }
-        }
+        let env_pass = if self.granted(PluginGrant::EnvPass) {
+            self.permissions.env_pass.as_slice()
+        } else {
+            &[]
+        };
+        let mut env_pairs = match ctx.proc_spawn_environment.as_deref() {
+            Some(parent) => allowlisted_child_env_from(parent, env_pass, &[]),
+            None => allowlisted_child_env(env_pass, &[]),
+        };
         let mut set = |key: &str, value: String| upsert_env(&mut env_pairs, key, value);
         set("ORBIT_HOST_API", PLUGIN_HOST_API.to_string());
         set("ORBIT_VERSION", env!("CARGO_PKG_VERSION").to_string());
@@ -401,7 +396,7 @@ impl PluginBackendSpec {
     /// (an activity-scoped run) bounds it: every program the manifest declares
     /// must be on the caller's list, checked through the same gate
     /// `proc.spawn` uses. A deterministic step has no agent to bound, so the
-    /// operator's grant does instead ([`Self::enforce_granted_programs`]).
+    /// operator's grant does instead (`Self::enforce_granted_programs`).
     pub fn enforce_programs(&self, ctx: &ToolContext, tool_name: &str) -> Result<(), OrbitError> {
         match &ctx.caller {
             ToolCaller::Agent => {

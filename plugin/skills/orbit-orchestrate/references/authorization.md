@@ -39,6 +39,13 @@ review-only run, or use a local shadow store. See
 - It does not promote proposed tasks, bypass repository protections, or
   authorize another window. Enabling GitHub auto-merge is not proof of merge.
 
+`orbit run auto --approve-proposed` (MCP `approve_proposed: true`) is the
+separate, default-off authorization for that drain to approve qualifying
+`proposed` tasks into the backlog on every pass, including tasks filed during
+the window. Use it only when the user authorized promotion as well as delivery.
+It cannot be combined with `--pull`. Tag a task `no-auto-approve` to keep it out
+of every automatic approval, the CI sweep's included.
+
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
 overrides. Never replace a user's branch choice with a hardcoded convention.
@@ -61,14 +68,23 @@ Sustained host pressure throttles admissions on its own: readiness tasks read
 start/ship responses name the resource, value, threshold and since-when.
 Running workers continue. Report the throttle and wait for it to clear; do not
 raise `--concurrency`, start another drain, or disable
-`workflow.resource_throttle` to push work through unless the user asks.
+`workflow.resource_throttle` to push work through unless the user asks. While
+CPU alone is held, `no-diff-expected` auto-tasks (marked `cpu-light`) still
+start within `workflow.resource_throttle.cpu_light_leaves`, and one waiting on
+that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery
+batch is within two hours of its deadline already sorts ahead of same-priority
+backlog, so do not raise it to critical just to beat the throttle.
 
 `--allow-crew` is an **allowlist**: it permits the named configured crews and
 excludes others. On an explicit `ship`, an excluded task is refused before its
 run is created; on an auto drain, excluded backlog tasks are skipped. Neither
 path automatically remaps a task.
 It is scoped to the run and checked against resolved crew identity, including
-system activities; it does not cancel already-running workers. Diagnose with:
+system activities; it does not cancel already-running workers. On a replica
+pull drain (`--pull <selector> --allow-crew ...`) it limits the crews the drain
+declares to the owner for its whole life, resume included; the owner's
+before-PR reviewer is not restricted but must still run on that host.
+Diagnose with:
 
 ```bash
 orbit run readiness --allow-crew <crew-a>,<crew-b> --json
@@ -94,7 +110,7 @@ target only the intended run:
 
 ```bash
 orbit run show <run-id> --json
-orbit run cancel <run-id>
+orbit run cancel <run-id> --confirm
 ```
 
 Cancelling a parent may affect children. Inspect that behavior before replacing

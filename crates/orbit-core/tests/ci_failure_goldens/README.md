@@ -27,6 +27,13 @@ deadline, with kill/reap on exit. There was no existing CI-filing integration
 binary to extend. `parsed.json` records signatures, retained log bodies,
 fallback/note flags, filed counts and dedupe keys, omitting allocated task IDs.
 
+The same integration target also checks compiler-owner continuity across
+checkout and source-coordinate changes, observation-comment idempotency,
+closed owners, and equality of complete code/message/file-path diagnostic
+sets. Open-owner identity is retained separately from the bounded description
+excerpt; legacy excerpts are accepted only when they reproduce the stored
+exact-cause digest. These behavioral cases do not require snapshot updates.
+
 The log-signature unit tests were retired; these goldens are their only
 guard. The mapping records which fixture replaced each one.
 

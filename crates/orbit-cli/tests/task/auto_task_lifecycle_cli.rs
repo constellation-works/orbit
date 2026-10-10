@@ -211,10 +211,237 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
 }
 
+#[test]
+fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
+    use orbit_common::security::release::sha256_hex;
+    use orbit_core::application::auto_tasks::{
+        AutoTaskCursor, cursor_state_path, load_cursor_state,
+    };
+    use orbit_core::application::automation::consumer_key;
+    use orbit_types::workflow::AutoTaskPendingClaim;
+
+    let fixture = Fixture::new();
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let name = definition.name.as_str();
+    let consumer = consumer_key(&runtime, "auto-task", name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_state(&consumer).unwrap().is_some());
+
+    // A pin whose ref lock is held cannot be deleted, so teardown fails after
+    // the consumer reset has already applied.
+    let pin = format!(
+        "refs/orbit/automation/{}/fixture-pin",
+        sha256_hex(consumer.as_bytes())
+    );
+    git(&fixture, &["update-ref", &pin, "HEAD"]);
+    let ref_lock = fixture.repo.join(git(
+        &fixture,
+        &["rev-parse", "--git-path", &format!("{pin}.lock")],
+    ));
+    fs::write(&ref_lock, "").unwrap();
+
+    let cursor_path = cursor_state_path(&runtime.paths().state_dir);
+    let mut cursors = load_cursor_state(&cursor_path).unwrap();
+    cursors.definitions.insert(
+        name.to_string(),
+        AutoTaskCursor {
+            baseline_at: "2026-01-01T00:00:00Z".to_string(),
+            last_slot: None,
+            last_fired_at: None,
+            last_task_id: None,
+            pending: Some(AutoTaskPendingClaim {
+                slot: "2026-01-01T01:00:00Z".to_string(),
+                task_id: None,
+            }),
+            last_skip: None,
+        },
+    );
+    fs::write(
+        &cursor_path,
+        serde_json::to_string_pretty(&cursors).unwrap(),
+    )
+    .unwrap();
+    // `automation` reports the consumer state, which the reset drops.
+    let show_definition = || {
+        let mut shown = fixture.json(&["auto-task", "show", name, "--json"]);
+        shown.as_object_mut().unwrap().remove("automation");
+        shown
+    };
+    let definition_before = show_definition();
+
+    fixture
+        .command(&[
+            "auto-task",
+            "delete",
+            name,
+            "--reason",
+            "Disposable failing delete",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    assert!(
+        store.automation_state(&consumer).unwrap().is_none(),
+        "the failure must come after teardown applied the consumer reset"
+    );
+    assert_eq!(
+        load_cursor_state(&cursor_path).unwrap(),
+        cursors,
+        "a failed delete must leave the scheduler cursor, pending claim included"
+    );
+    assert_eq!(show_definition(), definition_before);
+
+    fs::remove_file(&ref_lock).unwrap();
+    let removed = fixture.json(&[
+        "auto-task",
+        "delete",
+        name,
+        "--reason",
+        "Disposable delete",
+        "--json",
+    ]);
+    assert_eq!(removed["cursor_removed"], true);
+    assert_eq!(
+        removed["consumer"]["released_refs"],
+        serde_json::json!([pin])
+    );
+    assert!(
+        !load_cursor_state(&cursor_path)
+            .unwrap()
+            .definitions
+            .contains_key(name)
+    );
+    assert!(git(&fixture, &["for-each-ref", &pin]).is_empty());
+}
+
+#[test]
+fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
+    use chrono::Utc;
+    use orbit_core::application::automation::consumer_key;
+    use orbit_types::workflow::automation::{
+        BatchAttempt, BatchState, CoverageBatch, CoverageClass,
+    };
+
+    const UNREGISTERED: &str = "orbit.fixture_unregistered_tool";
+    let fixture = Fixture::new();
+    let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
+    let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
+    let name = definition.name.as_str();
+    let consumer = consumer_key(&runtime, "auto-task", name).unwrap();
+    let store = runtime.automation_store().unwrap();
+
+    // Name a tool the registry does not hold. The definition write is refused
+    // by the edit path, so the file is changed directly, as an operator would
+    // after a plugin was removed.
+    let shown = fixture.json(&["auto-task", "show", name, "--json"]);
+    let path = PathBuf::from(shown["definition_source"]["path"].as_str().unwrap());
+    let mut edited =
+        orbit_common::protocol::yaml::parse_auto_task_yaml(&fs::read_to_string(&path).unwrap())
+            .unwrap();
+    edited.template.required_tools.push(UNREGISTERED.into());
+    fs::write(&path, serde_yaml::to_string(&edited).unwrap()).unwrap();
+
+    // Settle a failed active batch: the only state a waiver can apply to. A
+    // real batch needs observed commits, so the consumer row is written
+    // directly, as the tick fixtures do.
+    let fail_active_batch = |batch_id: &str| {
+        let mut state = store.automation_state(&consumer).unwrap().unwrap();
+        state.active = Some(BatchAttempt {
+            batch: CoverageBatch {
+                schema_version: 1,
+                id: batch_id.into(),
+                consumer: consumer.clone(),
+                epoch: state.epoch.clone(),
+                repository: state.repository.clone(),
+                branch: "fixture-delivery".into(),
+                coverage: CoverageClass::LandedCodeReviewV1,
+                from_exclusive: state.baseline.clone(),
+                through_inclusive: state.observed.clone(),
+                commits: vec![],
+                deliveries: vec![],
+                exclusions: vec![],
+                created_at: Utc::now(),
+                max_attempts: 1,
+                retry_until: Utc::now(),
+            },
+            input_digest: format!("{batch_id}-input"),
+            attempt: 1,
+            action_key: format!("{batch_id}-action"),
+            action_id: None,
+            state: BatchState::Failed,
+            reason: Some("fixture failure".into()),
+            retry_after: None,
+            reissue: None,
+        });
+        let raw = serde_json::to_string(&state).unwrap();
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .with_transaction(|tx| {
+                tx.connection()
+                    .execute(
+                        "UPDATE automation_consumers SET state_json=?1 WHERE consumer=?2",
+                        [raw.as_str(), consumer.as_str()],
+                    )
+                    .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                Ok(())
+            })
+            .unwrap();
+    };
+    let assert_waived_with_warning = |output: &serde_json::Value, batch_id: &str| {
+        let warnings = output["warnings"]
+            .as_array()
+            .expect("the unregistered tool is reported as a warning");
+        assert!(
+            warnings.iter().any(|warning| warning
+                .as_str()
+                .is_some_and(|text| text.contains(UNREGISTERED))),
+            "{warnings:?}"
+        );
+        let waivers = store.automation_waivers(&consumer, 100).unwrap();
+        assert!(
+            waivers.iter().any(|waiver| waiver.batch_id == batch_id),
+            "the waiver is recorded even though the command reports a warning"
+        );
+    };
+
+    // CLI: the waiver exits zero and carries the tool problem as a warning.
+    fail_active_batch("fixture-failed-batch");
+    let cli = fixture.json(&[
+        "auto-task",
+        "update",
+        name,
+        "--waive-batch",
+        "fixture-failed-batch",
+        "--waiver-reason",
+        "Fixture waiver",
+        "--json",
+    ]);
+    assert_waived_with_warning(&cli, "fixture-failed-batch");
+
+    // MCP adapter, reached through the same tool host: same behaviour.
+    fail_active_batch("fixture-failed-batch-mcp");
+    let input = serde_json::json!({
+        "name": name,
+        "waive_batch": {"batch_id": "fixture-failed-batch-mcp", "reason": "Fixture waiver"},
+    });
+    let mcp = fixture.json(&[
+        "tool",
+        "run",
+        "orbit.auto_task.update",
+        "--input",
+        &input.to_string(),
+        "--format",
+        "json",
+    ]);
+    assert_waived_with_warning(&mcp, "fixture-failed-batch-mcp");
+}
+
 /// Run one git command in the fixture repository, isolated from the caller's
 /// configuration, and return its trimmed stdout.
 pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
-    let result = std::process::Command::new("git")
+    let result = crate::git_repo::command()
         .args([
             "-c",
             "core.hooksPath=/dev/null",
@@ -229,9 +456,6 @@ pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
         .current_dir(&fixture.repo)
         .env("HOME", &fixture.home)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_CONFIG_GLOBAL")
         .env_remove("GIT_CONFIG_SYSTEM")
         .output()
@@ -242,6 +466,30 @@ pub(crate) fn git(fixture: &Fixture, args: &[&str]) -> String {
         String::from_utf8_lossy(&result.stderr)
     );
     String::from_utf8_lossy(&result.stdout).trim().to_string()
+}
+
+// Also re-executed by the decoy regression: avoid opening an in-process runtime
+// so the hostile environment reaches only these fixture command builders.
+#[test]
+#[ignore = "child entry point for the Git authority decoy regression"]
+fn fixture_git_commits_and_refs_stay_in_the_fixture() {
+    let fixture = Fixture::new();
+    fs::write(fixture.repo.join("fixture.txt"), "initial\n").unwrap();
+    git(&fixture, &["add", "fixture.txt"]);
+    git(&fixture, &["commit", "-m", "Fixture initial"]);
+    let initial = git(&fixture, &["rev-parse", "HEAD"]);
+    let pin = "refs/fixture/pin";
+    git(&fixture, &["update-ref", pin, "HEAD"]);
+    assert_eq!(git(&fixture, &["rev-parse", pin]), initial);
+    fs::write(fixture.repo.join("fixture.txt"), "updated\n").unwrap();
+    git(&fixture, &["commit", "-am", "Fixture update"]);
+    assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), initial);
+    assert_eq!(git(&fixture, &["show", "HEAD:fixture.txt"]), "updated");
+    assert_eq!(git(&fixture, &["rev-parse", pin]), initial);
+    assert_eq!(
+        git(&fixture, &["for-each-ref", "--format=%(refname)", pin]),
+        pin
+    );
 }
 
 #[test]
@@ -352,8 +600,46 @@ fn baselined_delivery_consumer(
         .auto_task_show("fixture-delivery-consumer")
         .unwrap()
         .unwrap();
+    // A configured origin is observed by fetching it. Publish the branch first
+    // so the baseline is that remote head rather than a fetch failure.
+    publish_origin_if_configured(fixture);
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     (runtime, definition)
+}
+
+/// Mirror `origin` at a bare repo beside the fixture and push `HEAD` there.
+///
+/// The origin URL is left as configured. Fetch and push follow
+/// `url.<bare>.insteadOf`, which is how a GitHub identity stays intact while
+/// the objects live on disk.
+pub(crate) fn publish_origin_if_configured(fixture: &Fixture) {
+    let remotes = git(fixture, &["remote"]);
+    if !remotes.split_whitespace().any(|name| name == "origin") {
+        return;
+    }
+    let url = git(fixture, &["config", "--get", "remote.origin.url"]);
+    let bare = fixture.repo.with_file_name("origin.git");
+    let bare_path = bare.display().to_string();
+    if !bare.join("HEAD").exists() {
+        git(fixture, &["init", "--bare", "-q", &bare_path]);
+    }
+    let branch = git(fixture, &["branch", "--show-current"]);
+    git(
+        fixture,
+        &[
+            "--git-dir",
+            &bare_path,
+            "symbolic-ref",
+            "HEAD",
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+    let key = format!("url.{bare_path}.insteadOf");
+    git(fixture, &["config", &key, &url]);
+    git(
+        fixture,
+        &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+    );
 }
 
 #[test]
@@ -599,7 +885,7 @@ fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
     };
     fs::create_dir_all(&fixture.home).unwrap();
     fs::create_dir_all(&fixture.repo).unwrap();
-    let output = std::process::Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&fixture.repo)
         .output()
@@ -822,6 +1108,7 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
     )
     .unwrap();
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    publish_origin_if_configured(&fixture);
     let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))

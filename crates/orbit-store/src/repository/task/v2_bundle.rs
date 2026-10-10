@@ -20,7 +20,7 @@ pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, 
 use crate::driver::file::task_bundle::{
     append_jsonl_row, cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
     read_bundle_at, read_bundle_lightweight_at, read_envelope_at, read_search_docs_at,
-    write_bundle_at,
+    recover_pending_write, write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
@@ -69,29 +69,35 @@ impl TaskBundleStoreV2 {
     /// unit to a reader that observes the same lock. This store owns the lock
     /// target for both sides ([`bundle_lock_target`]) precisely so a reader and
     /// a writer cannot drift onto different files (ORB-11349).
+    ///
+    /// A leftover `.pending-write.yaml` is settled before `op` runs. Reads
+    /// hide an aborted write's rows while the files still hold them, so a
+    /// writer that skipped recovery would number new rows from the hidden
+    /// view, append after the aborted ones, and republish the envelope —
+    /// which recovery then takes as proof the aborted write committed.
     pub(crate) fn with_bundle_write_lock<T, F>(&self, task_id: &str, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        with_exclusive_file_lock(
-            &bundle_lock_target(&self.bundle_path(task_id)?),
-            "task artifact v2",
-            || {
-                // A queued writer may resume after deletion. Check under the
-                // stable lock before any helper can create parent directories.
-                read_envelope_at(&self.bundle_path(task_id)?)?;
-                op()
-            },
-        )
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_exclusive_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+            // A queued writer may resume after deletion. Check under the
+            // stable lock before any helper can create parent directories.
+            read_envelope_at(&bundle_dir)?;
+            recover_pending_write(&bundle_dir)?;
+            op()
+        })
     }
 
     /// The caller has durably reserved this ID for one action and input digest.
     /// Re-enter after a crash under the canonical bundle lock. A readable bundle
     /// wins; unreadable bytes are retained for explicit recovery.
+    /// The replay flag is decided under the lock, so concurrent creators
+    /// cannot both report publishing the same bundle.
     pub(crate) fn create_or_recover_action_bundle(
         &self,
         proposed: &TaskBundleV2,
-    ) -> Result<TaskBundleV2, OrbitError> {
+    ) -> Result<(TaskBundleV2, bool), OrbitError> {
         let id = &proposed.envelope.id;
         let path = self.bundle_path(id)?;
         with_exclusive_file_lock(&bundle_lock_target(&path), "task action admission", || {
@@ -99,7 +105,7 @@ impl TaskBundleStoreV2 {
             if let Ok(existing) = read_bundle_consistently(&path) {
                 self.registry
                     .register_task_bundle(id, &self.workspace_id, &path)?;
-                return Ok(existing);
+                return Ok((existing, true));
             }
             if path.exists() {
                 return Err(OrbitError::Store(
@@ -108,7 +114,7 @@ impl TaskBundleStoreV2 {
                 ));
             }
             self.create_bundle_locked(id, &path, proposed)?;
-            Ok(proposed.clone())
+            Ok((proposed.clone(), false))
         })
     }
 
@@ -399,6 +405,8 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
         return read_bundle_at(bundle_dir);
     }
 
+    #[cfg(test)]
+    CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
         read_bundle_at(bundle_dir)
     })
@@ -406,6 +414,8 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
 /// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
 fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    #[cfg(test)]
+    LIGHTWEIGHT_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     if !bundle_dir.try_exists()? {
         return read_bundle_lightweight_at(bundle_dir);
     }
@@ -415,7 +425,21 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Listing-path bundle reads on this thread, so tests can bound what a
+    /// read costs while the generated index is degraded.
+    pub(crate) static LISTING_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Every lightweight bundle read on this thread, listing or by id, so
+    /// tests can bound how many bundles an admission section opens.
+    pub(crate) static LIGHTWEIGHT_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Canonical (artifact-hashing) bundle reads on this thread.
+    pub(crate) static CANONICAL_BUNDLE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {
+    #[cfg(test)]
+    LISTING_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     match read_bundle_lightweight_consistently(bundle_dir) {
         Ok(bundle) => Ok(Some(bundle)),
         Err(err) => skip_if_in_flight(bundle_dir, err),

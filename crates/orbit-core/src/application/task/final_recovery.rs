@@ -7,10 +7,12 @@
 //! module, so a decision means the same thing whichever path produced it.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
+use orbit_common::fs::git::{GIT_REMOTE_TIMEOUT, run_git, with_git_fetch_lock};
+use orbit_common::process::run_bounded_capped;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskComment, TaskStatus};
 use orbit_types::workflow::FinalRecoveryDecision;
@@ -26,6 +28,7 @@ const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
 const ARCHIVED_EVENT: &str = "final_recovery_archived";
 const ESCALATED_EVENT: &str = "final_recovery_escalated";
+const REMOTE_REF_REFRESH_OUTPUT_LIMIT: usize = 16 * 1024;
 
 /// The task as it stood when the failure was recorded.
 ///
@@ -206,6 +209,7 @@ impl OrbitRuntime {
             )
         })?;
         if !replayed
+            && let Some((previous_status, _)) = &transition
             && matches!(
                 outcome,
                 FinalRecoveryOutcome::Completed {
@@ -214,7 +218,7 @@ impl OrbitRuntime {
                 }
             )
         {
-            self.record_resolves_side_effects(&self.get_task(&request.task_id)?)?;
+            self.record_resolves_side_effects(*previous_status, &self.get_task(&request.task_id)?);
         }
         if let Some((previous_status, note)) = transition {
             self.close_task_prs_after_transition(
@@ -563,7 +567,9 @@ fn comment_header(request: &FinalRecoveryRequest, decision: &FinalRecoveryDecisi
 fn verify_on_base(repo_root: &Path, base_ref: &str, commit: &str) -> Result<String, String> {
     let base_ref = base_ref.trim();
     if base_ref.is_empty() || base_ref.starts_with('-') {
-        return Err(format!("base ref '{base_ref}' is not a usable ref"));
+        return Err(format!(
+            "base ref '{base_ref}' is not a usable ref; no refresh fetch was performed"
+        ));
     }
     let resolve = |rev: &str, what: &str| -> Result<String, String> {
         let spec = format!("{rev}^{{commit}}");
@@ -576,15 +582,156 @@ fn verify_on_base(repo_root: &Path, base_ref: &str, commit: &str) -> Result<Stri
             Err(format!("{what} '{rev}' does not resolve to a commit"))
         }
     };
-    let commit = resolve(commit.trim(), "evidence commit")?;
-    let base = resolve(base_ref, "base ref")?;
+    let commit = resolve(commit.trim(), "evidence commit")
+        .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
+    let base = resolve(base_ref, "base ref")
+        .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
     let ancestor = run_git(repo_root, &["merge-base", "--is-ancestor", &commit, &base])
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
     if ancestor.success {
         Ok(commit)
     } else {
+        let unreachable =
+            || format!("evidence commit {commit} is not reachable from '{base_ref}' ({base})");
+        let target = match remote_tracking_target(repo_root, base_ref) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                return Err(format!(
+                    "{}; no refresh fetch was performed because the base ref is not a remote-tracking ref",
+                    unreachable()
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "{}; no refresh fetch was performed because the remote-tracking ref could not be identified: {error}",
+                    unreachable()
+                ));
+            }
+        };
+        let (remote, branch) = target;
+        let fetch = refresh_remote_tracking_ref(repo_root, &remote, &branch);
+        let refreshed_base = resolve(base_ref, "base ref").map_err(|error| {
+            format!(
+                "{}; one refresh fetch was attempted for '{base_ref}' but the base ref did not resolve afterward: {error}",
+                unreachable()
+            )
+        })?;
+        let retried = run_git(
+            repo_root,
+            &["merge-base", "--is-ancestor", &commit, &refreshed_base],
+        )
+        .map_err(|error| {
+            format!(
+                "{}; one refresh fetch was attempted for '{base_ref}' but the ancestry retry failed: {error}",
+                unreachable()
+            )
+        })?;
+        if retried.success {
+            return Ok(commit);
+        }
+        let refresh_result = match fetch {
+            Ok(()) => format!("remote-tracking ref '{base_ref}' was refreshed by one fetch"),
+            Err(error) => format!(
+                "one refresh fetch was attempted for remote-tracking ref '{base_ref}' but failed: {error}"
+            ),
+        };
         Err(format!(
-            "evidence commit {commit} is not reachable from '{base_ref}' ({base})"
+            "evidence commit {commit} is not reachable from '{base_ref}' ({refreshed_base}) after {refresh_result}"
         ))
     }
+}
+
+/// Identify a configured remote and branch only when `base_ref` names a
+/// remote-tracking ref directly. Revision expressions are deliberately not
+/// treated as fetch targets.
+fn remote_tracking_target(
+    repo_root: &Path,
+    base_ref: &str,
+) -> Result<Option<(String, String)>, String> {
+    let ref_name = base_ref.strip_prefix("refs/remotes/").unwrap_or(base_ref);
+    let remotes = run_git(repo_root, &["remote"]).map_err(|error| error.to_string())?;
+    if !remotes.success {
+        return Ok(None);
+    }
+    let mut names = remotes
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+    for remote in names {
+        let prefix = format!("{remote}/");
+        let Some(branch) = ref_name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if branch == "HEAD" {
+            let full_ref = format!("refs/remotes/{remote}/HEAD");
+            let symbolic = run_git(
+                repo_root,
+                &["symbolic-ref", "--quiet", "--short", &full_ref],
+            )
+            .map_err(|error| error.to_string())?;
+            if symbolic.success {
+                return remote_tracking_target(repo_root, symbolic.stdout.trim());
+            }
+            return Ok(None);
+        }
+        if is_fetchable_remote_branch(branch) {
+            return Ok(Some((remote, branch.to_owned())));
+        }
+        return Ok(None);
+    }
+    Ok(None)
+}
+
+fn is_fetchable_remote_branch(branch: &str) -> bool {
+    !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.starts_with('/')
+        && !branch.ends_with('/')
+        && !branch.ends_with('.')
+        && !branch.contains("//")
+        && !branch.contains("..")
+        && !branch.contains("@{")
+        && !branch.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(character, '~' | '^' | ':' | '?' | '*' | '[' | '\\')
+        })
+}
+
+/// Refresh just one remote-tracking branch while holding Orbit's shared fetch
+/// lock. The process runner bounds both the wait and captured output.
+fn refresh_remote_tracking_ref(repo_root: &Path, remote: &str, branch: &str) -> Result<(), String> {
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    with_git_fetch_lock(repo_root, || {
+        let mut command = Command::new("git");
+        command
+            .current_dir(repo_root)
+            .args([
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                remote,
+                &refspec,
+            ])
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let output = run_bounded_capped(
+            &mut command,
+            GIT_REMOTE_TIMEOUT,
+            REMOTE_REF_REFRESH_OUTPUT_LIMIT,
+        )
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(std::io::Error::other(format!(
+            "git fetch exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    })
+    .map_err(|error| error.to_string())
 }

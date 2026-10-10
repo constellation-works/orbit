@@ -2,7 +2,7 @@
 title: Federated MCP — Overview
 owner: grok
 last_updated: 2026-08-29
-last_validated: 2026-09-19
+last_validated: 2026-10-06
 status: Draft
 feature: federated-mcp
 doc_role: overview
@@ -16,7 +16,7 @@ related_artifacts: [ORB-11044, ORB-11016, ORB-11017, ORB-11015, ORB-11014, ORB-1
 
 # Federated MCP — Overview
 
-Federated MCP is a caller-facing mux: one Orbit MCP namespace in front of the accepting machine plus operator-configured SSH stdio remotes. Local workspaces are included automatically and need no destination row. It is not v1 local/remote MCP, not a host-registry evolution, and not a fleet inventory. Direct SSH stdio to one chosen host remains the v1 remote path (`--mode remote`). The mux is `orbit mcp serve --mode federated` ([ORB-11014] list, [ORB-11015] routing, [ORB-11044] implicit local membership). [ORB-11008] recorded the policy; this folder is the implementable contract from [ORB-11009] (PR #1139), with review holes closed in [ORB-11010].
+Federated MCP is a caller-facing mux: one Orbit MCP namespace in front of the accepting machine plus the SSH stdio remotes registered with `orbit host add`. Local workspaces are included automatically and need no host entry. It is not v1 local/remote MCP, not a host-registry evolution, and not a fleet inventory. Direct SSH stdio to one chosen host remains the v1 remote path (`--mode remote`). The mux is `orbit mcp serve --mode federated` ([ORB-11014] list, [ORB-11015] routing, [ORB-11044] implicit local membership). [ORB-11008] recorded the policy; this folder is the implementable contract from [ORB-11009] (PR #1139), with review holes closed in [ORB-11010].
 
 ## 1. Motivation
 

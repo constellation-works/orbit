@@ -4,10 +4,10 @@ use orbit_types::identity::OrbitId;
 use orbit_types::plugin::InstalledPlugin;
 use orbit_types::policy::PolicyDef;
 use orbit_types::task::{
-    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
-    TaskPriority, TaskStatus, normalize_task_tags, task_matches_tags,
+    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskEnvelopeV2,
+    TaskHistoryEntry, TaskPriority, TaskStatus, normalize_task_tags, task_matches_tags,
 };
-use orbit_types::telemetry::AuditEvent;
+use orbit_types::telemetry::{AuditEvent, ProviderLimitObservation};
 use orbit_types::tool::StoredTool;
 use orbit_types::workflow::ExecutorDef;
 use serde_json::Value;
@@ -20,7 +20,7 @@ use super::friction::{
 use super::invocation::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    TaskInvocationMetrics, ToolInvocationMetrics,
+    ProviderLedgerEntry, TaskInvocationMetrics, ToolInvocationMetrics,
 };
 use super::params::*;
 use super::routine::{
@@ -51,6 +51,26 @@ pub trait TaskStoreBackend: Send + Sync {
         Err(OrbitError::Store("handoff outbox unavailable".into()))
     }
 
+    /// Every handoff this owner accepted. A store without a claim journal has
+    /// accepted none, which is an answer rather than a failure: delivery
+    /// attribution reads it on every workspace.
+    fn accepted_handoffs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    /// [ORB-14603] The candidate the task's latest claim settlement kept, as
+    /// offered to a run of it on `machine_id`, or why that run implements
+    /// afresh. A store without a claim journal kept none.
+    fn kept_claim_candidate(
+        &self,
+        _task_id: &str,
+        _machine_id: &str,
+    ) -> Result<Option<super::KeptClaimCandidate>, OrbitError> {
+        Ok(None)
+    }
+
     /// The owner's landing attempts, one per handoff. Read-only inspection.
     fn landing_attempts(
         &self,
@@ -65,6 +85,11 @@ pub trait TaskStoreBackend: Send + Sync {
         _mutation_id: &str,
         _mutation: &super::ClaimMutation,
     ) -> Result<super::ClaimMutationResult, OrbitError> {
+        Err(OrbitError::Store("claim lifecycle unavailable".into()))
+    }
+    /// Refuse a worker invocation whose claim no longer carries the authority
+    /// its next claim update would need. Unavailable backends fail closed.
+    fn verify_worker_claim(&self, _context: &super::ClaimInvocation) -> Result<(), OrbitError> {
         Err(OrbitError::Store("claim lifecycle unavailable".into()))
     }
     fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
@@ -91,6 +116,13 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &super::TaskListFilter,
         limit: usize,
     ) -> Result<super::TaskCandidates, OrbitError>;
+    /// Select a fully indexed page from the generated index alone, reading no
+    /// envelope; `None` when the filter or the index cannot answer that way.
+    fn task_candidate_keys(
+        &self,
+        filter: &super::TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<super::TaskCandidateKeys>, OrbitError>;
     fn query_task_rows(
         &self,
         filter: &super::TaskListFilter,
@@ -100,15 +132,31 @@ pub trait TaskStoreBackend: Send + Sync {
     /// Direct reads remain strict; list reads tolerate concurrent creation/deletion.
     fn get_task_row(&self, id: &str, list_read: bool)
     -> Result<Option<super::TaskRow>, OrbitError>;
+    /// Envelopes of the listed `ids`, one keyed read per id: no index
+    /// validation and no body documents. An id with no settled bundle is absent.
+    fn task_envelopes_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<TaskEnvelopeV2>, OrbitError>;
     fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError>;
     /// Durable key admission for automation, sharing ordinary bundle creation.
+    /// Returns `(task, replayed)`: true only when a readable bundle already
+    /// existed. A reserved key whose bundle is first published returns false.
     fn create_task_idempotent(
         &self,
         _params: TaskCreateParams,
         _key: &str,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, bool), OrbitError> {
         Err(OrbitError::Store(
             "idempotent task creation unavailable".into(),
+        ))
+    }
+
+    /// Read the published task for an automation action key in this workspace.
+    /// A reservation without a readable bundle is not proof of a minted task.
+    fn automation_task_for_key(&self, _key: &str) -> Result<Option<Task>, OrbitError> {
+        Err(OrbitError::Store(
+            "automation task lookup unavailable".into(),
         ))
     }
 
@@ -388,6 +436,15 @@ pub trait FrictionStoreBackend: Send + Sync {
         id: &str,
         params: FrictionUpdateParams,
     ) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Raise, without writing, every refusal [`Self::rehome`] can make that
+    /// does not need the write lock, as it would after `edits` land. Lets a
+    /// caller that applies `edits` first learn that the move will be refused.
+    fn preflight_rehome(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+        edits: &FrictionUpdateParams,
+    ) -> Result<(), OrbitError>;
     /// Move `id` into its owning workspace on this host and resolve the
     /// source with a pointer to the new record, atomically.
     fn rehome(
@@ -423,9 +480,29 @@ pub trait FrictionStoreBackend: Send + Sync {
     fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError>;
 }
 
+/// [ORB-14695] This host's provider usage limits, kept in the host-global
+/// database because a limit belongs to the provider login on this host.
+pub trait ProviderLimitStoreBackend: Send + Sync {
+    /// Record `observation` as the latest for its provider, model scope and
+    /// window, unless a newer one is stored. Concurrent drains write the same
+    /// rows, so an older observation never replaces a newer one. Returns
+    /// whether `observation` was stored.
+    fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<bool, OrbitError>;
+    /// The latest observation per provider, model scope and window, newest
+    /// first.
+    fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError>;
+}
+
 pub trait InvocationStoreBackend: Send + Sync {
+    /// Records one invocation under `workspace_id`, the workspace whose run
+    /// produced it. The caller supplies it from its own runtime binding, never
+    /// from `params`, which can arrive over the metrics ingest endpoint.
     fn insert_invocation_trace_record(
         &self,
+        workspace_id: &str,
         params: &InvocationInsertParams,
     ) -> Result<(), OrbitError>;
     fn list_invocation_records(
@@ -436,6 +513,16 @@ pub trait InvocationStoreBackend: Send + Sync {
         &self,
         query: &InvocationAccountingQuery,
     ) -> Result<Vec<InvocationAccountingFact>, OrbitError>;
+    /// Every invocation of the provider recorded at or after `since`,
+    /// oldest first, across every workspace on this host [ORB-14699].
+    /// `provider_names` are the names the provider goes by: its canonical
+    /// name and aliases. An invocation recorded without a provider is
+    /// attributed by its agent.
+    fn list_provider_ledger_entries(
+        &self,
+        provider_names: &[String],
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ProviderLedgerEntry>, OrbitError>;
     fn list_activity_invocation_metrics(
         &self,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError>;
@@ -639,6 +726,11 @@ pub trait PluginStoreBackend: Send + Sync {
 pub trait AuditEventStoreBackend: Send + Sync {
     fn insert_audit_event_record(&self, params: &AuditEventInsertParams) -> Result<(), OrbitError>;
     fn list_audit_events(&self, filter: &AuditEventFilter) -> Result<Vec<AuditEvent>, OrbitError>;
+    fn list_audit_events_by_ids(
+        &self,
+        ids: &[i64],
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<AuditEvent>, OrbitError>;
     fn get_audit_event(&self, id: i64) -> Result<Option<AuditEvent>, OrbitError>;
     fn get_audit_event_stats(
         &self,
@@ -649,10 +741,6 @@ pub trait AuditEventStoreBackend: Send + Sync {
         &self,
         since: Option<&DateTime<Utc>>,
         tool: Option<&str>,
-    ) -> Result<Vec<i64>, OrbitError>;
-    fn get_audit_event_durations_null_tool(
-        &self,
-        since: &DateTime<Utc>,
     ) -> Result<Vec<i64>, OrbitError>;
     fn get_audit_event_hourly_buckets(
         &self,

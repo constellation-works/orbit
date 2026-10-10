@@ -421,7 +421,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     #[cfg(not(unix))]
     let logs_dir = {
         let logs_dir = validated_pipeline_worker_log_directory(logs_dir)?;
-        std::fs::create_dir_all(&logs_dir).map_err(|error| {
+        orbit_common::fs::io::create_private_dir_all(&logs_dir).map_err(|error| {
             OrbitError::Io(format!(
                 "create pipeline worker log directory '{}': {error}",
                 logs_dir.display()

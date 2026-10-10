@@ -1,25 +1,26 @@
 ---
 title: "Remote Access — Overview"
 owner: codex
-last_updated: 2026-08-15
-last_validated: 2026-09-27
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 status: Accepted
 feature: remote-access
 doc_role: overview
 type: design
 summary: "Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward."
 tags: [remote-access, orbit-web, ssh]
-paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/web.rs", "crates/orbit-cli/src/command/operation.rs"]
+paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/web.rs", "crates/orbit-cli/src/command/operation/spec.rs"]
 related_features: [remote-access, user-interface, host-registry]
 related_artifacts: []
 ---
 
 # Remote Access — Overview
 
-Remote access has two Web-owned surfaces:
+Remote access has three Web-owned surfaces:
 
 - orbit web serve exposes one loopback dashboard over the machine's registered local workspaces.
 - orbit web connect <ssh-host> opens a local SSH forward to a remote machine's loopback dashboard.
+- `/api/on/<host>/<path>` on a serving dashboard forwards a request to a registered host's own dashboard, over an SSH forward that dashboard opens on demand.
 
 Both commands are runtime-free CLI entry points, so they can start outside a workspace. The remote machine remains authoritative for every workspace and mutation it serves.
 
@@ -37,10 +38,14 @@ Web's SSH transport is a local port forward. It first probes for an existing rem
 
 This tunnel belongs to orbit-web. It is separate from MCP remote mode: MCP uses direct non-PTY SSH stdio and no local-forward listener.
 
+## Host forward
+
+A serving dashboard reaches the hosts in its host file through `/api/on/<host>/<path>`. It keeps one tunnel per host, opened on the first request with the same attach-first establish, checked against the host's own `machine_id`, and closed when idle or at shutdown. Reads are forwarded for any session; writes need the operator session. See [specs/host-forward.md](./specs/host-forward.md).
+
 ## Security boundary
 
 Orbit Web refuses non-loopback binds and has no application authentication. Its Origin check is browser-CSRF mitigation, not access control. SSH supplies remote authentication, encryption, and host verification.
 
-The Web API includes mutations. Anyone who can reach the forwarded local port can act with the authority of the remote Orbit process. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
+The Web API includes mutations. Anyone who can reach the forwarded local port can act with the authority of the remote Orbit process. Through the host forward, an operator session on the serving dashboard can act as operator on every registered host the serving host's SSH identity can reach. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
 
-See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for evolution gates, [4_decisions.md](./4_decisions.md) for current choices, and [specs/ssh-tunnel.md](./specs/ssh-tunnel.md) for the tunnel contract.
+See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for evolution gates, [4_decisions.md](./4_decisions.md) for current choices, [specs/ssh-tunnel.md](./specs/ssh-tunnel.md) for the tunnel contract, and [specs/host-forward.md](./specs/host-forward.md) for the host forward.

@@ -6,7 +6,9 @@
 //! forward is this operation, not a hand-edited state file: it adopts the new
 //! configuration identity when the change cannot alter what the retained debt
 //! means, and it reissues an action that settled without accepted evidence
-//! over the exact obligations already frozen for it.
+//! over the exact obligations already frozen for it. For a delivery auto-task
+//! the evaluator runs the adoption itself (see `adopt`), so an operator is
+//! needed only for an edit it refuses.
 //!
 //! History replay follows the same invariant: it changes source identities only
 //! after deterministic source/provider proof and adds newly inserted debt.
@@ -22,11 +24,15 @@ use orbit_types::workflow::automation::*;
 /// How many audited recoveries a preview reports.
 pub(super) const HISTORY_LIMIT: usize = 10;
 
+/// Maximum first-parent commits per side admitted to a history replay.
+pub const HISTORY_REPLAY_COMMIT_LIMIT: usize = 1000;
+
 /// One additional attempt is authorized for the same window the frozen batch
 /// budget grants, so a reissue never quietly widens the retry deadline policy.
 const REISSUE_WINDOW_HOURS: i64 = 24;
 
 /// One recovery request against one consumer, already resolved by the host.
+#[derive(Clone)]
 pub struct Recovery<'a> {
     pub consumer: &'a str,
     /// Epoch the definition resolves to now.
@@ -44,12 +50,18 @@ pub struct Recovery<'a> {
     pub now: DateTime<Utc>,
     /// Host-proven canonical page and audit proof for an explicit replay.
     pub replay: Option<HistoryReplayInput>,
-    /// The host proved the admitted action's task or run is terminal.
+    /// The host resolved a minted action before its claim recorded the id.
+    pub resolved_action_id: Option<&'a str>,
+    /// Generation whose action the host inspected. A concurrent admission
+    /// must not inherit a terminal proof about the previous action.
+    pub expected_generation: Option<u64>,
+    /// The host proved the claimed or admitted action's task or run is terminal.
     pub action_terminal: bool,
     /// The terminal action stopped without acceptable evidence.
     pub action_failed_without_evidence: bool,
 }
 
+#[derive(Clone)]
 pub struct HistoryReplayInput {
     pub page: SourcePage,
     pub record: HistoryReplayRecord,
@@ -64,7 +76,7 @@ pub fn preview(
     store: &dyn AutomationStoreBackend,
     request: &Recovery<'_>,
 ) -> Result<RecoveryPreview, AutomationError> {
-    let state = load(store, request.consumer)?;
+    let state = load_inspected(store, request)?;
     let (projected, replay) = if request.request.replay_history {
         let (next, replay) = replay_plan(&state, request.replay.as_ref())?;
         (next, Some(replay))
@@ -82,7 +94,7 @@ pub fn apply(
     store: &dyn AutomationStoreBackend,
     request: &Recovery<'_>,
 ) -> Result<RecoveryPreview, AutomationError> {
-    let state = load(store, request.consumer)?;
+    let state = load_inspected(store, request)?;
 
     if !request.request.mutates() {
         return project(store, request, request.request, &state, vec![], None);
@@ -112,14 +124,35 @@ pub fn apply(
 
     // The applied document reports the position the recovery left behind, so
     // its refusals describe the consumer rather than the request just settled.
+    let projection = Recovery {
+        action_terminal: request.action_terminal && record.reissued.is_none(),
+        action_failed_without_evidence: request.action_failed_without_evidence
+            && record.reissued.is_none(),
+        resolved_action_id: None,
+        ..request.clone()
+    };
     project(
         store,
-        request,
+        &projection,
         &RecoveryRequest::default(),
         &next,
         applied,
         record.replayed_history.clone(),
     )
+}
+
+fn load_inspected(
+    store: &dyn AutomationStoreBackend,
+    request: &Recovery<'_>,
+) -> Result<AutomationState, AutomationError> {
+    let state = load(store, request.consumer)?;
+    if request
+        .expected_generation
+        .is_some_and(|generation| generation != state.generation)
+    {
+        return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+    }
+    Ok(state)
 }
 
 pub(super) fn load(
@@ -215,7 +248,10 @@ fn reissue(
         .as_mut()
         .ok_or_else(|| AutomationError::Refused(refusal::NO_SETTLED_ACTION.into()))?;
 
-    let from_action_id = attempt.action_id.take();
+    let from_action_id = attempt
+        .action_id
+        .take()
+        .or_else(|| request.resolved_action_id.map(str::to_owned));
     let from_attempt = attempt.attempt;
     let from_state = attempt.state;
     let from_reason = attempt.reason.take();
@@ -250,7 +286,7 @@ fn reissue(
 /// Everything that forbids `requested`, named deterministically. Refusals that
 /// block any recovery of this consumer are always reported; the ones specific
 /// to an operation only when it was asked for.
-fn refusals(
+pub(super) fn refusals(
     store: &dyn AutomationStoreBackend,
     request: &Recovery<'_>,
     requested: &RecoveryRequest,
@@ -362,24 +398,23 @@ pub(super) fn debt(
 }
 
 /// Whether the consumer's active attempt is still executing. A claim awaiting
-/// admission is; an admitted action is unless the host proved it stopped.
+/// admission is; a minted action is unless the host proved it stopped.
 pub(super) fn executing(state: &AutomationState, action_terminal: bool) -> bool {
     state
         .active
         .as_ref()
         .is_some_and(|active| match active.state {
-            BatchState::Claimed => true,
-            BatchState::Admitted => !action_terminal,
+            BatchState::Claimed | BatchState::Admitted => !action_terminal,
             _ => false,
         })
 }
 
 /// Whether the attempt closed without accepted evidence: settled failed or
-/// exhausted, or admitted to an action the host proved stopped.
+/// exhausted, or claimed/admitted to an action the host proved stopped.
 fn settled(active: &BatchAttempt, action_failed_without_evidence: bool) -> bool {
     match active.state {
         BatchState::Failed | BatchState::Exhausted => true,
-        BatchState::Admitted => action_failed_without_evidence,
+        BatchState::Claimed | BatchState::Admitted => action_failed_without_evidence,
         _ => false,
     }
 }
@@ -419,6 +454,13 @@ fn project(
     applied: Vec<String>,
     history_replay: Option<HistoryReplayRecord>,
 ) -> Result<RecoveryPreview, AutomationError> {
+    let mut action = stalled_action(store, state, request.action_failed_without_evidence)?;
+    if let Some(action) = &mut action
+        && action.action_id.is_none()
+        && applied.is_empty()
+    {
+        action.action_id = request.resolved_action_id.map(str::to_owned);
+    }
     Ok(RecoveryPreview {
         consumer: state.consumer.clone(),
         reason: scheduling_reason(
@@ -435,7 +477,7 @@ fn project(
             configured_trigger: request.trigger.clone(),
         },
         debt: debt(store, state)?,
-        action: stalled_action(store, state, request.action_failed_without_evidence)?,
+        action,
         history_replay,
         refusals: refusals(store, request, requested, state)?,
         applied,
@@ -469,13 +511,15 @@ fn replay_plan(
     canonical_seed.excluded.clear();
     canonical_seed.unresolved.clear();
     canonical_seed.associations.clear();
+    canonical_seed.lookup_retries.clear();
     canonical_seed.active = None;
-    let canonical = super::observe::apply(
+    let canonical = super::observe::apply_with_commit_limit(
         &canonical_seed,
         input.page.clone(),
         recorded_coverage(state)
             .ok_or_else(|| AutomationError::Refused(refusal::COVERAGE_UNVERIFIABLE.into()))?,
         DateTime::<Utc>::UNIX_EPOCH,
+        HISTORY_REPLAY_COMMIT_LIMIT,
     )?;
     let mapped_unresolved = input
         .record
@@ -576,6 +620,12 @@ fn replay_plan(
     next.associations
         .retain(|commit, _| !mapped.contains(commit.as_str()));
     next.associations.extend(canonical.associations);
+    next.lookup_retries
+        .retain(|commit, _| !mapped.contains(commit.as_str()));
+    next.lookup_retries.extend(canonical.lookup_retries);
+    next.lookup_retries.retain(|commit, _| {
+        next.unresolved.contains_key(commit) && !next.associations.contains_key(commit)
+    });
     next.observed = input.record.new_observed.clone();
 
     let mut record = input.record.clone();
@@ -610,7 +660,7 @@ pub(super) fn scheduling_reason(
 
 /// Name each configured setting that differs from the recorded one. A consumer
 /// that never recorded its trigger can only report that the identity differs.
-fn changes(state: &AutomationState, request: &Recovery<'_>) -> Vec<String> {
+pub(super) fn changes(state: &AutomationState, request: &Recovery<'_>) -> Vec<String> {
     let Some(recorded) = state.trigger.as_ref() else {
         return if state.epoch == request.epoch {
             vec![]

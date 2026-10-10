@@ -26,7 +26,7 @@ Options:
           Exact agent model for provenance attribution (overrides ORBIT_AGENT_MODEL)
 
       --dry-run
-          Validate without executing
+          Check tool admission and required parameters without executing
 
       --fields <FIELDS>
           Comma-separated top-level fields to keep from object output. For an envelope-shaped result (e.g. `orbit.task.list`'s `{tasks, total, truncated}`), fields project each record inside the envelope's record array instead of the envelope's own top-level keys. Task writes (add/update/reject) return the record without append-heavy `comments` and `history`; naming those fields here requests them from the tool
@@ -34,14 +34,21 @@ Options:
       --full
           Return the tool's full unfiltered JSON output. This still expands compact list and artifact.put output. Task writes still omit `comments` and `history`; request them with `--input '{"fields":["comments","history"]}'`
 
+      --host <HOST>
+          Host that the input's `workspace` (or `--workspace`) names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and delivers the call to the selector it lists
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
 
   -h, --help
           Print help (see a summary with '-h')

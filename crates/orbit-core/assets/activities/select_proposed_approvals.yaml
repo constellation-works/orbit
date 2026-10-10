@@ -1,0 +1,72 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: select_proposed_approvals
+spec:
+  type: deterministic
+  description: >
+    Select the `proposed` tasks one `orbit run auto --approve-proposed` pass
+    pilots for approval. A task qualifies when it carries `no-diff-expected`,
+    or when it has non-empty `context_files` and an assessed complexity
+    (`unassessed` and unset do not count). A qualifying task is skipped while
+    its newest history entry is a drain-approval hold the pilot recorded, or
+    while a task-pilot run this drain already finished covered it and the
+    task has not changed since; editing the task makes it eligible again.
+    The creation-grant entry a write re-seals after its own entry is not a
+    change and never hides a hold.
+    At most ten candidates are returned per pass, oldest first, all sharing
+    the first candidate's resolved crew (or all lacking a crew); candidates
+    for other crews are deferred to later passes. Selection is
+    a cost filter, not the gate: approval happens only in
+    `apply_task_pilot_results` under the returned `drain_promotion` record,
+    which that step verifies against this drain. Without `approve_proposed`
+    the step is a no-op, and a drain whose admissions were stopped selects
+    nothing. Every held task is reported with its reason, and the held view
+    is written to the drain run's `drain_approvals` report. A task whose
+    current pilot assessment is `verified_no_diff` (and is not tagged
+    `no-diff-expected`) is held as `pilot_verified_no_diff` with the pilot's
+    evidence and cited commits, never by a readiness gap. When the task was
+    filed by Orbit automation (`ci-failure-sweep`, `delivery-code-review` or
+    `auto-task:*`), not tagged `no-auto-approve`, and every cited commit
+    exists with at least one an ancestor of the base branch, the pass
+    archives it with a system comment naming the commits and the assessment
+    (`closed`) instead; a stopped drain closes nothing.
+  input_schema_json:
+    type: object
+    properties:
+      approve_proposed:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [approve_proposed, task_ids, candidate_count, drain_promotion]
+    properties:
+      approve_proposed:
+        type: boolean
+      admissions_stopped:
+        type: boolean
+      task_ids:
+        type: array
+        items:
+          type: string
+      candidate_count:
+        type: number
+      deferred_candidates:
+        type: number
+      drain_promotion:
+        oneOf:
+          - type: object
+          - type: "null"
+      held:
+        type: array
+        items:
+          type: object
+      held_total:
+        type: number
+      held_by_reason:
+        type: object
+      closed:
+        type: array
+        items:
+          type: string
+  action: select_proposed_approvals
+  config: {}

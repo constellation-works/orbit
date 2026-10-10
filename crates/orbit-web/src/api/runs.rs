@@ -5,7 +5,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP,
+    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_STOP, DASHBOARD_JOB_RUN,
 };
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_common::security::redaction::redact_all;
@@ -18,10 +19,12 @@ use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
-use super::routines::{authorization_denied, authorized_caller};
+use super::routines::{
+    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
+};
 use super::{
-    HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, blocking, bounded_limit,
-    map_runtime_error, validate_id,
+    HISTORY_DEFAULT_LIMIT, LimitQuery, OptionalJson, RunEventsQuery, bad_request, blocking,
+    bounded_limit, map_runtime_error, validate_id,
 };
 
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
@@ -32,11 +35,17 @@ pub(super) const RUN_EVENTS_MAX_SCAN_LINES: usize = 50_000;
 /// request input, regardless of how large a `limit` a caller requests.
 const RUN_EVENTS_PAGE_CAPACITY_HINT: usize = 64;
 /// Maximum bytes included in stdout/stderr previews returned by run-log APIs.
-const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
+pub(super) const RUN_LOG_PREVIEW_MAX_BYTES: usize = 8192;
 /// Maximum lines included in stdout/stderr previews returned by run-log APIs.
 const RUN_LOG_PREVIEW_MAX_LINES: usize = 120;
 
+/// Request body for `POST /workflows/ship`.
+///
+/// Unknown keys are rejected. A misspelled selector such as `task_id` must
+/// not deserialize as an empty `task_ids`: an empty selection is
+/// backlog-discovery mode and would ship every eligible task.
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ShipBody {
     /// Explicit task selection; empty selects auto (backlog-discovery) mode.
     #[serde(default)]
@@ -74,9 +83,8 @@ pub(super) struct ShipBody {
 /// and is unaffected.
 pub(super) async fn ship_workflow_action(
     Ws(runtime): Ws,
-    body: Option<Json<ShipBody>>,
+    OptionalJson(body): OptionalJson<ShipBody>,
 ) -> Response {
-    let Json(body) = body.unwrap_or_default();
     let mode = match body.mode.as_deref() {
         Some(raw) => match orbit_core::ShipMode::parse(raw) {
             Ok(mode) => mode,
@@ -137,6 +145,11 @@ pub(super) struct AutoDrainBody {
     /// `review`, same as an omitted `--complete`.
     #[serde(default)]
     complete: bool,
+    /// Opt-in to approving qualifying `proposed` tasks on every pass of this
+    /// window, mirroring CLI `--approve-proposed`. Default leaves proposed
+    /// tasks for the operator, same as an omitted flag.
+    #[serde(default)]
+    approve_proposed: bool,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another
     /// operator holds one.
     #[serde(default)]
@@ -173,20 +186,27 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// (`POST /workflows/auto?workspace=<id>`).
 ///
 /// Dashboard counterpart to `orbit run auto --for <duration> [--concurrency
-/// N] [--complete]`, reusing the same `submit_workspace_auto_run` runtime
-/// path: a concrete workspace only (the `Ws` extractor refuses all-workspace
-/// mode the same way `ship_workflow_action` does, and `submit_workspace_auto_run`
-/// enforces the workspace claim), a required bounded duration, and an
-/// explicit, separately-governed opt-in to `CompletionPolicy::Done` — opting
-/// in authorizes `review -> done` for every task the window ships, not only
-/// the ones visible now, so it is gated the same way `auto_task.mint`'s
-/// unconditional mint is.
+/// N] [--complete] [--approve-proposed]`, reusing the same drain-submission
+/// runtime path the CLI does. `?workspace` is required: a missing or blank selector returns 400
+/// `workspace_required` and starts nothing, including when the server has a
+/// default workspace (`Ws` would otherwise select that default).
+/// `submit_workspace_auto_run` still enforces the workspace claim. The
+/// duration must be a bounded window, and opting into `CompletionPolicy::Done`
+/// is explicit and separately governed — it authorizes `review -> done` for
+/// every task the window ships, not only the ones visible now, so it is gated
+/// the same way `auto_task.mint`'s unconditional mint is. `approve_proposed`
+/// (CLI `--approve-proposed`) is likewise explicit and operator-gated: it lets
+/// the window approve qualifying proposed tasks, including ones filed after
+/// submission. A non-boolean value fails body parsing like any other bad field.
 pub(super) async fn auto_drain_workflow_action(
     State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    body: Option<Json<AutoDrainBody>>,
+    OptionalJson(body): OptionalJson<AutoDrainBody>,
 ) -> Response {
-    let Json(body) = body.unwrap_or_default();
+    if let Err(rejection) = explicit_workspace(&query) {
+        return rejection.into_response();
+    }
     let for_seconds = match parse_drain_duration_seconds(&body.for_duration) {
         Ok(seconds) => seconds,
         Err(message) => return bad_request(message),
@@ -199,8 +219,17 @@ pub(super) async fn auto_drain_workflow_action(
     } else {
         orbit_core::CompletionPolicy::Review
     };
+    let approve_proposed = body.approve_proposed;
+    if approve_proposed
+        && let Err(denial) = authorized_caller(
+            &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+            state.operator_session(),
+        )
+    {
+        return authorization_denied(denial);
+    }
     match blocking("auto-drain workflow", move || {
-        runtime.submit_workspace_auto_run(
+        runtime.submit_workspace_auto_run_with_containment(
             Some(for_seconds),
             body.concurrency,
             completion,
@@ -211,6 +240,9 @@ pub(super) async fn auto_drain_workflow_action(
             Some("dashboard"),
             body.claim_token.as_deref(),
             JobRunTrigger::dashboard(),
+            // Strict worker containment is a CLI-only flag.
+            false,
+            approve_proposed,
         )
     })
     .await
@@ -222,6 +254,7 @@ pub(super) async fn auto_drain_workflow_action(
             "state": if invoke.queued { "queued" } else { "submitted" },
             "submitted_at": invoke.submitted_at,
             "completion": completion.as_input_value(),
+            "approve_proposed": approve_proposed,
         }))
         .into_response(),
         Err(response) => *response,
@@ -239,8 +272,13 @@ pub(super) struct AutoDrainStopBody {
     claim_token: Option<String>,
 }
 
-/// Stop new admissions for the workspace's live `auto` window
+/// Stop new admissions for one workspace's live `auto` window
 /// (`POST /workflows/auto/stop?workspace=<id>`) [ORB-12728].
+///
+/// `?workspace` is required. A missing or blank selector returns 400
+/// `workspace_required` and stops nothing, including when the server has a
+/// default workspace. `Ws` would otherwise fall back to that default; this
+/// handler does not.
 ///
 /// Dashboard counterpart to `orbit run auto --stop`, reusing
 /// `stop_workspace_auto_admissions`: every live coordinator in this concrete
@@ -253,10 +291,13 @@ pub(super) struct AutoDrainStopBody {
 /// runtime call.
 pub(super) async fn auto_drain_stop_action(
     State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    body: Option<Json<AutoDrainStopBody>>,
+    OptionalJson(body): OptionalJson<AutoDrainStopBody>,
 ) -> Response {
-    let Json(body) = body.unwrap_or_default();
+    if let Err(rejection) = explicit_workspace(&query) {
+        return rejection.into_response();
+    }
     if let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, state.operator_session()) {
         return authorization_denied(denial);
     }
@@ -325,21 +366,42 @@ pub(super) async fn auto_drain_readiness(
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
     match blocking("auto-drain readiness", move || {
-        runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+        let mut payload = runtime.workspace_auto_readiness(
+            &[],
+            query.concurrency,
+            AUTO_DRAIN_READINESS_LIMIT,
+            &[],
+        )?;
+        // A replica executes through a pull drain, which cannot approve
+        // proposed tasks (`--pull` conflicts with `--approve-proposed`), so the
+        // form withholds that opt-in there.
+        if let Some(object) = payload.as_object_mut() {
+            object.insert(
+                "replica".to_string(),
+                Value::Bool(runtime.replica_owner_machine().is_some()),
+            );
+        }
+        Ok(payload)
     })
     .await
     {
         Ok(mut payload) => {
-            // So the form can hide/disable the `complete` opt-in and the
-            // stop control before the operator ever hits the
-            // separately-governed 403 at submission. Both operations admit
-            // the same operator capability, so one flag describes both.
+            // So the form can hide/disable the `complete` and
+            // `approve_proposed` opt-ins and the stop control before the
+            // operator ever hits the separately-governed 403 at submission.
+            // All three operations admit the same operator capability, so one
+            // flag describes them.
             if let Some(object) = payload.as_object_mut() {
                 let operator_session = state.operator_session();
                 object.insert(
                     "controls_authorized".to_string(),
                     Value::Bool(
                         authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator_session).is_ok()
+                            && authorized_caller(
+                                &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+                                operator_session,
+                            )
+                            .is_ok()
                             && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
                                 .is_ok(),
                     ),
@@ -374,25 +436,28 @@ pub(super) struct CancelRunBody {
     /// Stop a drain's in-flight leaves instead of waiting for them.
     #[serde(default)]
     force: bool,
+    /// Keep a cancelled task leaf blocked instead of returning it to backlog.
+    #[serde(default)]
+    block: bool,
 }
 
 pub(super) async fn cancel_run_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<CancelRunBody>>,
+    OptionalJson(body): OptionalJson<CancelRunBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let Json(body) = body.unwrap_or_default();
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_options(
+        Ok(runtime.cancel_job_run_with_options_and_policy(
             &id,
             "dashboard",
             "web",
             body.reason.as_deref(),
             body.force,
+            body.block,
         ))
     })
     .await
@@ -429,13 +494,61 @@ pub(super) async fn cancel_run_action(
     }
 }
 
-pub(super) async fn replay_run_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReplayBody {
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+pub(super) async fn replay_run_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    Query(query): Query<OperationsQuery>,
+    OptionalJson(body): OptionalJson<ReplayBody>,
+) -> Response {
+    if let Err(response) = explicit_workspace(&query) {
+        return response.into_response();
+    }
+    if let Err(denial) = authorized_caller(&DASHBOARD_JOB_RUN, state.operator_session()) {
+        return authorization_denied(denial);
+    }
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    match blocking("replay run", move || runtime.replay_job_run(&id)).await {
-        Ok(result) => Json(json!({ "run_id": result.run_id })).into_response(),
+    let completion_authority =
+        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
+    match blocking("replay run", move || {
+        let source = runtime.show_job_run(&id)?;
+        if source
+            .input
+            .as_ref()
+            .and_then(|input| input.get("completion"))
+            .and_then(Value::as_str)
+            == Some("done")
+            && let Err(denial) = completion_authority
+        {
+            return Ok(Err(denial));
+        }
+        runtime
+            .submit_replay_run(
+                &id,
+                Some("dashboard"),
+                body.claim_token.as_deref(),
+                JobRunTrigger::dashboard(),
+            )
+            .map(Ok)
+    })
+    .await
+    {
+        Ok(Ok(result)) => Json(json!({
+            "run_id": result.run_id,
+            "state": if result.queued { "queued" } else { "submitted" },
+        }))
+        .into_response(),
+        Ok(Err(denial)) => authorization_denied(denial),
         Err(response) => *response,
     }
 }
@@ -463,6 +576,48 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     })
     .collect::<Vec<_>>();
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
+    // Child dispatches persist lineage rather than task input. Resolve their
+    // runs first, then share one task-title lookup with the parent header.
+    let children = state
+        .iter()
+        .flat_map(|state| &state.child_dispatches)
+        .filter_map(|dispatch| {
+            runtime.show_job_run(&dispatch.child_run_id).map_or_else(
+                |error| {
+                    tracing::warn!(child_run_id = %dispatch.child_run_id, %error, "child run task labels unavailable");
+                    None
+                },
+                Some,
+            )
+        })
+        .collect::<Vec<_>>();
+    let titles = or_warn(
+        super::run_tasks::task_titles(runtime, std::iter::once(run).chain(&children)),
+        run_id,
+        "task titles",
+    );
+    super::run_tasks::add_tasks(&mut full, run, &titles);
+    if let Some(dispatches) = full["child_dispatches"].as_array_mut() {
+        for dispatch in dispatches {
+            if let Some(child) = children
+                .iter()
+                .find(|child| dispatch["child_run_id"] == child.run_id)
+            {
+                super::run_tasks::add_tasks(dispatch, child, &titles);
+            } else {
+                dispatch["task_ids"] = Value::Null;
+                dispatch["tasks"] = Value::Null;
+            }
+        }
+    }
+    // Keep pass health visible after terminalization, independently of the
+    // live waiting-state fields the shared run projection omits then.
+    full["drain_last_pass"] = serde_json::to_value(
+        state
+            .as_ref()
+            .and_then(|state| state.drain_last_pass.as_ref()),
+    )
+    .unwrap_or(Value::Null);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
     let stored_steps = full
@@ -749,12 +904,14 @@ fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Preview {
-    text: String,
-    truncated: bool,
+pub(super) struct Preview {
+    pub(super) text: String,
+    pub(super) truncated: bool,
 }
 
-fn bounded_preview(raw: &str) -> Preview {
+// Shared with audit-derived friction rows so dashboard stderr previews use
+// the same byte/line bounds and defensive redaction.
+pub(super) fn bounded_preview(raw: &str) -> Preview {
     let mut out = String::new();
     let mut truncated = false;
     for (index, line) in raw.lines().enumerate() {

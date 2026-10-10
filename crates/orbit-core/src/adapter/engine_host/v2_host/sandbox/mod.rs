@@ -1,7 +1,7 @@
 //! Executor sandbox resolution: the executor's declared sandbox kind plus the
 //! activity's fsProfile become the `ResolvedSandbox` the CLI runner enforces,
-//! with Orbit runtime stores, provider state roots, and the active worktree
-//! granted around the policy's own rules.
+//! anchored at the active worktree where one applies, with Orbit runtime
+//! stores and provider state roots granted around the policy's own rules.
 
 #[cfg(target_os = "linux")]
 mod provider_state;

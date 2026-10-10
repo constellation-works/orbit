@@ -1,12 +1,13 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
 const AUDIT_LIMIT = positiveIntParam("audit", 50);
-const AUDIT_STATUSES = ["success", "failure", "denied"];
+const INCIDENT_ID_BATCH_SIZE = 500;
+const AUDIT_STATUSES = ["success", "failure", "denied", "non_success"];
 const AUDIT_SUBTABS = ["events", "policy"];
 
 // Audit tab state (moved from app.js)
@@ -16,11 +17,14 @@ let auditFilter = {
   q: "",
   tool: null,
   role: null,
+  agent_family: null,
   // Filters audit Events by `execution_id` (the orbit invocation id). The CLI
   // SQLite audit table has no real `run_id` field, so this never identifies a
   // JobRun — see T20260427-26.
   execution_id: null,
   profile: null,
+  // Exact persisted row IDs from an incident evidence drilldown.
+  eventIds: [],
   // Time-window filter for the Events sub-tab. Accepts the same shorthands as
   // the API (`24h`, `7d`, `1w`, RFC3339); null means the API-side default.
   since: null,
@@ -43,35 +47,35 @@ let policySort = {
 const POLICY_TABLES = [
   {
     id: "by_profile",
-    label: "By Profile",
+    label: "By profile",
     nameField: "name",
     header: "profile",
     filterKey: "profile",
   },
   {
     id: "by_target",
-    label: "By Target",
+    label: "By target",
     nameField: "name",
     header: "target",
     filterKey: null,
   },
   {
     id: "by_run",
-    label: "By JobRun",
+    label: "By job run",
     nameField: "run_id",
     header: "job_run_id",
     navigateTo: "job_run",
   },
   {
     id: "by_execution",
-    label: "By Audit Invocation",
+    label: "By audit invocation",
     nameField: "execution_id",
     header: "execution_id",
     navigateTo: "audit_execution",
   },
   {
     id: "by_agent",
-    label: "By Agent",
+    label: "By agent",
     nameField: "agent",
     header: "agent",
     filterKey: "role",
@@ -80,13 +84,12 @@ const POLICY_TABLES = [
 
 const AUDIT_COLUMNS = [
   { key: "time", label: "time" },
-  { key: "role", label: "role" },
-  { key: "tool", label: "tool" },
-  { key: "command", label: "command" },
-  { key: "target", label: "target" },
   { key: "status", label: "status" },
-  { key: "exit", label: "exit", num: true },
+  { key: "role", label: "actor", title: "Recorded role: unverified = MCP caller without a trusted managed identity; unknown = unattributed CLI caller; agent names identify the recorded process; admin = operator; hook = hook process." },
+  { key: "command", label: "tool / command" },
+  { key: "target", label: "target" },
   { key: "duration", label: "duration", num: true },
+  { key: "exit", label: "exit", num: true },
 ];
 
 // Context injection helpers (mirror tasks.js pattern; ctx as last arg on public entry points)
@@ -142,11 +145,14 @@ function buildAuditHash() {
     if (auditFilter.policyKind) sp.set("kind", auditFilter.policyKind);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.role) sp.set("role", auditFilter.role);
+  } else if (auditFilter.eventIds.length > 0) {
+    sp.set("ids", auditFilter.eventIds.join(","));
   } else {
     if (auditFilter.since) sp.set("since", auditFilter.since);
     if (auditFilter.status) sp.set("status", auditFilter.status);
     if (auditFilter.tool) sp.set("tool", auditFilter.tool);
     if (auditFilter.role) sp.set("role", auditFilter.role);
+    if (auditFilter.agent_family) sp.set("agent_family", auditFilter.agent_family);
     if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
     if (auditFilter.profile) sp.set("profile", auditFilter.profile);
     if (auditFilter.q) sp.set("q", auditFilter.q);
@@ -172,7 +178,7 @@ function setAuditSubtab(name) {
   if (eventsBody) eventsBody.style.display = name === "events" ? "" : "none";
   if (policyBody) policyBody.style.display = name === "policy" ? "" : "none";
   const title = $("audit-title");
-  if (title) title.textContent = name === "policy" ? "Policy Denials" : "Audit Events";
+  if (title) title.textContent = name === "policy" ? "Policy denials" : "Audit events";
 }
 
 function syncAuditControls() {
@@ -187,20 +193,22 @@ function syncAuditControls() {
   renderScopeChips();
 }
 
-function removableChip(label, value, onRemove) {
-  const chip = el("button", {
+function scopeChip(label, value, onRemove) {
+  const chip = el(onRemove ? "button" : "span", {
     class: "scope-chip",
-    title: `Remove ${label} filter`,
+    title: onRemove ? `Remove ${label} filter` : `${label}: ${value}`,
   });
-  chip.type = "button";
+  if (onRemove) chip.type = "button";
   chip.dataset.chip = label;
   chip.appendChild(el("span", { class: "scope-chip-k", text: label }));
   chip.appendChild(el("span", { class: "scope-chip-v", text: value }));
-  chip.appendChild(el("span", { class: "scope-chip-x", text: "×" }));
-  chip.addEventListener("click", (event) => {
-    event.preventDefault();
-    onRemove();
-  });
+  if (onRemove) {
+    chip.appendChild(el("span", { class: "scope-chip-x", text: "×" }));
+    chip.addEventListener("click", (event) => {
+      event.preventDefault();
+      onRemove();
+    });
+  }
   return chip;
 }
 
@@ -210,17 +218,18 @@ function renderScopeChips() {
   host.innerHTML = "";
   const workspace = getWorkspace();
   if (workspace) {
-    host.appendChild(removableChip("workspace", workspace, () => {
+    // Single-workspace mode has no picker to restore a cleared action scope.
+    host.appendChild(scopeChip("workspace", workspace, isMultiWorkspace() ? () => {
       setWorkspace(null);
       persistScopeToUrl();
       const select = $("workspace-select");
       if (select) select.value = "";
       window.location.hash = buildAuditHash();
-    }));
+    } : null));
   }
   const windowLabel = effectiveAuditWindow();
   if (windowLabel) {
-    const chip = removableChip("window", windowLabel, () => {
+    const chip = scopeChip("window", windowLabel, () => {
       auditFilter.since = null;
       setWindow(DEFAULT_DASHBOARD_WINDOW);
       persistScopeToUrl();
@@ -230,19 +239,33 @@ function renderScopeChips() {
     host.appendChild(chip);
   }
   if (auditFilter.role) {
-    host.appendChild(removableChip("actor", auditFilter.role, () => {
+    const chip = scopeChip("actor", auditActorLabel(auditFilter.role), () => {
       auditFilter.role = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Recorded role: ${auditFilter.role}`;
+    host.appendChild(chip);
+  }
+  if (auditFilter.agent_family) {
+    host.appendChild(scopeChip("agent family", auditFilter.agent_family, () => {
+      auditFilter.agent_family = null;
       window.location.hash = buildAuditHash();
     }));
   }
   if (auditFilter.status) {
-    host.appendChild(removableChip("status", auditFilter.status, () => {
+    host.appendChild(scopeChip("status", auditFilter.status === "non_success" ? "failure + denied" : auditFilter.status, () => {
       auditFilter.status = null;
       window.location.hash = buildAuditHash();
     }));
   }
+  if (auditFilter.eventIds.length > 0) {
+    host.appendChild(scopeChip("incident events", `${auditFilter.eventIds.length} rows`, () => {
+      auditFilter.eventIds = [];
+      window.location.hash = buildAuditHash();
+    }));
+  }
   if (auditFilter.metric) {
-    host.appendChild(removableChip("metric", auditFilter.metric, () => {
+    host.appendChild(scopeChip("metric", auditFilter.metric, () => {
       auditFilter.metric = null;
       window.location.hash = buildAuditHash();
     }));
@@ -255,9 +278,14 @@ function applyAuditHashQuery(query) {
   auditFilter.status = query.get("status") || null;
   auditFilter.tool = query.get("tool") || null;
   auditFilter.role = query.get("role") || null;
+  auditFilter.agent_family = query.get("agent_family") || null;
   auditFilter.execution_id =
     query.get("execution_id") || query.get("run_id") || null;
   auditFilter.profile = query.get("profile") || null;
+  auditFilter.eventIds = (query.get("ids") || "")
+    .split(",")
+    .map(value => Number(value))
+    .filter(value => Number.isSafeInteger(value) && value > 0);
   auditFilter.q = query.get("q") || "";
   auditFilter.since = query.get("since") || (getWindow() === "all" ? null : getWindow());
   auditFilter.metric = query.get("metric") || null;
@@ -275,28 +303,59 @@ function setActiveAuditSubtabFromButton(name) {
   setAuditSubtab(name);
 }
 
+function placeholdAuditAggregate() {
+  renderPanelPlaceholder("audit-body");
+  renderPanelPlaceholder("audit-policy-body");
+  lastAudit = [];
+  lastAuditPolicy = null;
+  const count = $("audit-count");
+  if (count) count.textContent = "—";
+}
+
 function fetchAndRenderAudit(ctx) {
   // ORB-00040: /api/audit is per-workspace and 400s without a concrete
   // workspace. In the aggregate ("All workspaces") view render the placeholder
   // and skip the fetch — covers both the auto-refresh and audit-search paths.
   if (isAggregateView()) {
-    renderPanelPlaceholder("audit-body");
+    placeholdAuditAggregate();
     return Promise.resolve();
   }
+  const eventIds = auditFilter.eventIds.slice();
   const sp = new URLSearchParams();
   sp.set("limit", String(AUDIT_LIMIT));
-  const since = effectiveAuditWindow();
-  if (since) sp.set("since", since);
-  if (auditFilter.status) sp.set("status", auditFilter.status);
-  if (auditFilter.tool) sp.set("tool", auditFilter.tool);
-  if (auditFilter.role) sp.set("role", auditFilter.role);
-  if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
-  if (auditFilter.profile) sp.set("profile", auditFilter.profile);
-  if (auditFilter.q) sp.set("q", auditFilter.q);
-  return fetchJson(`/api/audit?${sp.toString()}`).then((events) => {
+  if (auditFilter.eventIds.length > 0) {
+    sp.set("ids", auditFilter.eventIds.join(","));
+  } else {
+    const since = effectiveAuditWindow();
+    if (since) sp.set("since", since);
+    if (auditFilter.status) sp.set("status", auditFilter.status);
+    if (auditFilter.tool) sp.set("tool", auditFilter.tool);
+    if (auditFilter.role) sp.set("role", auditFilter.role);
+    if (auditFilter.agent_family) sp.set("agent_family", auditFilter.agent_family);
+    if (auditFilter.execution_id) sp.set("execution_id", auditFilter.execution_id);
+    if (auditFilter.profile) sp.set("profile", auditFilter.profile);
+    if (auditFilter.q) sp.set("q", auditFilter.q);
+  }
+  const path = `/api/audit?${sp.toString()}`;
+  const requestEvents = eventIds.length > 0
+    ? async () => {
+      const events = [];
+      for (let start = 0; start < eventIds.length; start += INCIDENT_ID_BATCH_SIZE) {
+        const batch = new URLSearchParams();
+        batch.set("limit", String(AUDIT_LIMIT));
+        batch.set("ids", eventIds.slice(start, start + INCIDENT_ID_BATCH_SIZE).join(","));
+        events.push(...await fetchJson(`/api/audit?${batch.toString()}`));
+      }
+      // Each batch is newest-first; restore that order across batches.
+      return events.sort((a, b) => b.id - a.id);
+    }
+    : () => fetchJson(path);
+  // A slower search or the previous workspace must not paint over the visit
+  // now on screen, and must not become the snapshot row expansion re-renders.
+  return requestPanel("audit-body", path, requestEvents, (events) => {
     lastAudit = events;
     renderAudit(events, ctx);
-  });
+  }, "audit-count");
 }
 
 function isNamedTool(name) {
@@ -308,13 +367,21 @@ function formatFailureRatePct(rate) {
   return `${((Number(rate) || 0) * 100).toFixed(1)}%`;
 }
 
+function incidentScanPartialCoverageNote(scanLimit) {
+  const limit = Number(scanLimit) || 0;
+  const scannedRows = limit > 0
+    ? `the newest ${limit.toLocaleString()} non-success audit rows`
+    : "the capped non-success audit sample";
+  return `Partial coverage: counts include only ${scannedRows} in this window. Older failures and affected runs may be omitted.`;
+}
+
 function renderToolCallFailureRateCard(stats, window = "24h") {
   const failed = Number(stats && stats.failed) || 0;
   const total = Number(stats && stats.total) || 0;
   const rate = stats && stats.rate != null ? Number(stats.rate) : (total ? failed / total : 0);
   const card = el("div", { class: "audit-summary-card" });
   card.appendChild(el("div", {
-    class: "card-title",
+    class: "card-title section-title",
     text: `Tool call failure rate · window ${window}`,
   }));
   const body = el("div", { class: "card-body" });
@@ -330,7 +397,7 @@ function renderToolCallFailureRateCard(stats, window = "24h") {
   return card;
 }
 
-function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h") {
+function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h", capped = false, scanLimit = 0) {
   const failByTool = new Map();
   for (const f of failuresRows) {
     if (isNamedTool(f.tool)) failByTool.set(f.tool, f);
@@ -338,9 +405,15 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
   const container = el("div", { class: "audit-summary-container" });
   container.appendChild(el("h3", {
-    class: "summary-title",
-    text: `Unexpected Failures by Callable Tool (${String(window).toUpperCase()})`,
+    class: "summary-title section-title",
+    text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
   }));
+  if (capped) {
+    container.appendChild(el("div", {
+      class: "metric-trend",
+      text: `${incidentScanPartialCoverageNote(scanLimit)} Unexpected-failure counts are scanned, while successful-call counts cover the full window; rates can be understated.`,
+    }));
+  }
   const grid = el("div", { class: "tool-health-grid" });
 
   for (const row of rateRows) {
@@ -350,7 +423,7 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     const card = el("div", { class: `health-card ${severity}` });
 
     const header = el("div", { class: "card-header" });
-    header.appendChild(el("span", { class: "tool-name", text: row.tool }));
+    header.appendChild(el("span", { class: "tool-name", text: row.tool, title: row.tool }));
     header.appendChild(el("span", {
       class: "status-badge",
       text: `${(rate * 100).toFixed(1)}% Unexpected Failure Rate`,
@@ -391,10 +464,15 @@ function renderAuditSummary(data, ctx) {
     cards.push(card);
   };
 
-  const createCard = (title, renderBody) => {
+  const createCard = (title, renderBody, scrollableBody = false) => {
     const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title", text: title }));
+    card.appendChild(el("div", { class: "card-title section-title", text: title }));
     const body = el("div", { class: "card-body" });
+    if (scrollableBody) {
+      body.tabIndex = 0;
+      body.setAttribute("role", "region");
+      body.setAttribute("aria-label", title);
+    }
     renderBody(body);
     card.appendChild(body);
     return card;
@@ -409,7 +487,11 @@ function renderAuditSummary(data, ctx) {
       const table = el("table", { class: "summary-table" });
       const thead = el("thead");
       const tr = el("tr");
-      for (const c of cols) tr.appendChild(el("th", { class: c.num ? "num" : "", text: c.label, title: c.title }));
+      for (const c of cols) {
+        const th = el("th", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: c.label, title: c.title });
+        th.dataset.column = c.key;
+        tr.appendChild(th);
+      }
       thead.appendChild(tr);
       table.appendChild(thead);
 
@@ -422,7 +504,14 @@ function renderAuditSummary(data, ctx) {
         }
         for (const c of cols) {
           const val = c.format ? c.format(item[c.key]) : item[c.key];
-          row.appendChild(el("td", { class: c.num ? "num" : "", text: val }));
+          const title = c.num ? String(val ?? "") : cols.map(col => {
+            const value = col.format ? col.format(item[col.key]) : item[col.key];
+            return `${col.title || col.label}: ${value ?? "-"}`;
+          }).join("; ");
+          const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
+          if (c.render) td.textContent = c.render(item[c.key], item, td);
+          td.dataset.column = c.key;
+          row.appendChild(td);
         }
         tbody.appendChild(row);
       }
@@ -439,7 +528,7 @@ function renderAuditSummary(data, ctx) {
 
   const windowLabel = data.window || "24h";
   const title = $("audit-summary-title");
-  if (title) title.textContent = `Audit Summary ${windowLabel}`;
+  if (title) title.textContent = `Audit summary ${windowLabel}`;
 
   if (data.tool_call_failure_rate) {
     addCard(
@@ -456,23 +545,28 @@ function renderAuditSummary(data, ctx) {
       renderTable(namedToolFailures, [
         { key: "tool", label: "tool" },
         { key: "failed", label: "failed", num: true },
-        { key: "total", label: "total", num: true, title: "Successful + failed calls; denied calls excluded" },
+        { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
         { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
-        { key: "unexpected", label: "unexpected", num: true, title: "Failed calls classified as unexpected" },
+        { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
         { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
       ], filterByTool),
+      true,
     ), [namedToolFailures, windowLabel]);
   }
 
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
   const namedFailures = (data.failures_by_tool || []).filter((row) => isNamedTool(row.tool));
+  const incidentScanCapped = data.failure_incidents_truncated === true;
+  const incidentScanLimit = Number(data.failure_incidents_scan_limit) || 0;
   if (namedRates.length) {
     addCard("failures-by-tool", renderFailuresByToolCard(
       namedRates,
       namedFailures,
       filterByTool,
       windowLabel,
-    ), [namedRates, namedFailures, windowLabel]);
+      incidentScanCapped,
+      incidentScanLimit,
+    ), [namedRates, namedFailures, windowLabel, incidentScanCapped, incidentScanLimit]);
   }
 
   const categoryOrder = ["unexpected", "expected", "denied", "diagnostic"];
@@ -485,15 +579,27 @@ function renderAuditSummary(data, ctx) {
     affected_runs: Number(categories[key] && categories[key].affected_runs) || 0,
   }));
   if (categoryRows.some((row) => row.incidents || row.raw_events)) {
-    addCard("failure-categories", createCard(
-      `Failure categories · window ${data.window || "24h"}`,
+    const capped = incidentScanCapped;
+    const scanLimit = incidentScanLimit;
+    const card = createCard(
+      `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
-        { key: "label", label: "classification" },
-        { key: "incidents", label: "incidents", num: true },
-        { key: "raw_events", label: "raw events", num: true },
-        { key: "affected_runs", label: "affected runs", num: true },
+        { key: "label", label: "class", title: "Failure classification", render: (value, row, td) => {
+          td.title = value;
+          return incidentClassLabel(row.key, value);
+        } },
+        { key: "incidents", label: "inc.", num: true, title: "Incidents" },
+        { key: "raw_events", label: "events", num: true, title: "Raw events" },
+        { key: "affected_runs", label: "runs", num: true, title: "Affected runs" },
       ]),
-    ), [categoryRows, data.window || "24h"]);
+    );
+    if (capped) {
+      card.appendChild(el("div", {
+        class: "metric-trend",
+        text: incidentScanPartialCoverageNote(scanLimit),
+      }));
+    }
+    addCard("failure-categories", card, [categoryRows, data.window || "24h", capped, scanLimit]);
   }
 
   const lifecycleFailures = Number(data.lifecycle_diagnostic_events) || 0;
@@ -501,8 +607,9 @@ function renderAuditSummary(data, ctx) {
   if (lifecycleFailures > 0 || lifecycleIncidents > 0) {
     const label = data.lifecycle_diagnostic_label || "lifecycle diagnostics";
     const window = data.window || "24h";
+    const lifecycleTitle = `${label}${incidentScanCapped ? " · capped counts" : ""}`;
     const lifecycleCard = el("div", { class: "audit-summary-card lifecycle-failure-card" });
-    lifecycleCard.appendChild(el("div", { class: "card-title", text: label }));
+    lifecycleCard.appendChild(el("div", { class: "card-title section-title", text: lifecycleTitle }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", {
       class: "lifecycle-failure-counts",
@@ -512,6 +619,12 @@ function renderAuditSummary(data, ctx) {
       class: "metric-trend",
       text: `Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates · window ${window}`,
     }));
+    if (incidentScanCapped) {
+      body.appendChild(el("div", {
+        class: "metric-trend",
+        text: incidentScanPartialCoverageNote(incidentScanLimit),
+      }));
+    }
     lifecycleCard.appendChild(body);
     addCard("lifecycle-diagnostics", lifecycleCard, [
       label,
@@ -519,12 +632,15 @@ function renderAuditSummary(data, ctx) {
       lifecycleIncidents,
       lifecycleFailures,
       Number(data.lifecycle_diagnostic_affected_run_count) || 0,
+      incidentScanCapped,
+      incidentScanLimit,
     ]);
   }
 
   if (data.duration_by_tool) {
+    const durations = data.duration_by_tool.filter(row => isNamedTool(row.tool));
     addCard("duration-by-tool", createCard("Top duration (avg)", renderTable(
-      data.duration_by_tool,
+      durations,
       [
         { key: "tool", label: "tool" },
         { key: "count", label: "count", num: true },
@@ -532,12 +648,12 @@ function renderAuditSummary(data, ctx) {
         { key: "p95", label: "p95", num: true, format: (v) => fmtDurationValue(ctx, v) }
       ],
       filterByTool
-    )), data.duration_by_tool);
+    )), durations);
   }
 
   if (data.denials_by_tool || data.denials_by_reason) {
     const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title", text: "Denials" }));
+    card.appendChild(el("div", { class: "card-title section-title", text: "Denials" }));
     const body = el("div", { class: "card-body" });
     const sectionLabel = (txt) => {
       const lbl = el("div", { class: "card-subtitle", text: txt });
@@ -566,12 +682,15 @@ function renderAuditSummary(data, ctx) {
     addCard("role-split", createCard("Role split", renderTable(
       data.role_split,
       [
-        { key: "label", label: "role" },
+        { key: "label", label: "role", render: (value, _row, td) => {
+          td.title = `Recorded role: ${value}`;
+          return auditActorLabel(value);
+        } },
         { key: "count", label: "events", num: true, title: "All audit events in the window" },
         { key: "mcp", label: "mcp", num: true, title: "Tool calls via MCP (subcommand = run-mcp)" },
         { key: "cli", label: "cli", num: true, title: "Tool calls via CLI (subcommand = run)" },
-        { key: "other", label: "other", num: true, title: "Other CLI subcommands (non-tool, e.g. show/list)" },
-        { key: "no_subcommand", label: "internal", num: true, title: "Internal/system events with no subcommand (e.g. lock reservations)" },
+        { key: "other", label: "other", num: true, secondary: true, title: "Other CLI subcommands (non-tool, e.g. show/list)" },
+        { key: "no_subcommand", label: "internal", num: true, secondary: true, title: "Internal/system events with no subcommand (e.g. lock reservations)" },
       ],
       (item) => {
         auditFilter.role = auditFilter.role === item.label ? null : item.label;
@@ -597,7 +716,7 @@ function fetchAndRenderPolicy(ctx) {
   // also per-workspace (the `Ws` extractor 400s without a concrete workspace),
   // so guard it the same way as the events subtab.
   if (isAggregateView()) {
-    renderPanelPlaceholder("audit-policy-body");
+    placeholdAuditAggregate();
     return Promise.resolve();
   }
   const sp = new URLSearchParams();
@@ -605,26 +724,59 @@ function fetchAndRenderPolicy(ctx) {
   if (auditFilter.policyKind) sp.set("kind", auditFilter.policyKind);
   if (auditFilter.profile) sp.set("profile", auditFilter.profile);
   if (auditFilter.role) sp.set("agent", auditFilter.role);
-  return fetchJson(`/api/diagnostics/denials?${sp.toString()}`).then((data) => {
+  const path = `/api/diagnostics/denials?${sp.toString()}`;
+  // Same visit guard as events: a late denial report must not replace the
+  // policy tables or the snapshot their column sort re-renders.
+  return requestPanel("audit-policy-body", path, () => fetchJson(path), (data) => {
     lastAuditPolicy = data;
     renderPolicy(data, ctx);
-  });
+  }, "audit-count");
 }
+
+onWorkspaceChange(() => {
+  lastAudit = [];
+  lastAuditPolicy = null;
+});
 
 function renderPolicy(data, ctx) {
   const body = $("audit-policy-body");
   if (!body) return;
   $("audit-count").textContent = `${data && data.total ? data.total : 0}`;
 
+  const sections = [];
+  if (data && data.policy_decisions) {
+    const decisions = data.policy_decisions;
+    const filtered = auditFilter.policyKind || auditFilter.profile || auditFilter.role;
+    const window = effectiveAuditWindow() || "24h";
+    const scope = window === getWindow()
+      ? ""
+      : `; this view has its own window, the rest of the dashboard uses ${getWindow()}`;
+    const note = el("div", { class: "policy-count-note" });
+    const extra = !filtered && data.total < data.evidence_scan_limit && data.total >= decisions.total
+      ? ` (${data.total - decisions.total} additional evidence rows beyond the canonical decisions)`
+      : "";
+    note.appendChild(el("p", {
+      text: `${decisions.total} canonical policy decisions in ${window} (${decisions.sql} invocation decisions + ${decisions.v2} envelope decisions)${scope}.`,
+    }));
+    note.appendChild(el("p", {
+      text: `${data.total} denial evidence rows${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
+    }));
+    note.appendChild(el("p", {
+      class: "muted",
+      text: `Recent Denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
+    }));
+    sections.push(note);
+  }
+
   if (!data || (data.total || 0) === 0) {
-    syncNodes(body, [el("div", { class: "empty-state" }, [
+    sections.push(el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
       el("div", { class: "text", text: `No denials in the last ${effectiveAuditWindow() || "24h"}.` }),
-    ])]);
+    ]));
+    syncNodes(body, sections);
     return;
   }
 
-  const sections = [];
   const recent = buildRecentDenials(data.recent_denials || [], ctx);
   const causes = buildTopCauses(data.top_causes || [], ctx);
   if (recent) sections.push(recent);
@@ -633,7 +785,7 @@ function renderPolicy(data, ctx) {
   const grid = el("div", { class: "policy-grid" });
   for (const tbl of POLICY_TABLES) {
     const cell = el("div", { class: "policy-cell" });
-    cell.appendChild(el("h5", { text: tbl.label }));
+    cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
     const rawRows = (data[tbl.id] || []).slice();
     const sortMode = policySort[tbl.id] || "count";
     rawRows.sort((a, b) => {
@@ -713,7 +865,7 @@ function buildPolicyTable(spec, rows, sortMode, ctx) {
 function buildTopCauses(rows, ctx) {
   if (!rows.length) return null;
   const section = el("div", { class: "policy-section" });
-  section.appendChild(el("h5", { text: "Top Causes" }));
+  section.appendChild(el("h5", { class: "section-title", text: "Top causes" }));
   const table = el("table", { class: "policy-table policy-cause-table" });
   const thead = el("thead");
   const headRow = el("tr");
@@ -739,6 +891,7 @@ function buildTopCauses(rows, ctx) {
     tr.appendChild(el("td", {
       class: "muted mono",
       text: row.latest_ts ? fmtRelativeValue(ctx, row.latest_ts) : "-",
+      title: row.latest_ts ? formatDateTime(row.latest_ts) : "",
     }));
     tbody.appendChild(tr);
   }
@@ -750,7 +903,7 @@ function buildTopCauses(rows, ctx) {
 function buildRecentDenials(rows, ctx) {
   if (!rows.length) return null;
   const section = el("div", { class: "policy-section" });
-  section.appendChild(el("h5", { text: "Recent Denials" }));
+  section.appendChild(el("h5", { class: "section-title", text: "Recent denials" }));
   const table = el("table", { class: "policy-table policy-recent-table" });
   const thead = el("thead");
   const headRow = el("tr");
@@ -765,6 +918,7 @@ function buildRecentDenials(rows, ctx) {
     tr.appendChild(el("td", {
       class: "muted mono",
       text: row.timestamp ? fmtRelativeValue(ctx, row.timestamp) : "-",
+      title: row.timestamp ? formatDateTime(row.timestamp) : "",
     }));
     tr.appendChild(el("td", {
       class: "value-name",
@@ -836,8 +990,10 @@ function emptyAuditFilter() {
     q: "",
     tool: null,
     role: null,
+    agent_family: null,
     execution_id: null,
     profile: null,
+    eventIds: [],
     since: getWindow() === "all" ? null : getWindow(),
     metric: null,
     policyKind: null,
@@ -852,8 +1008,8 @@ function navigateToAuditExecution(executionId, ctx) {
   window.location.hash = buildAuditHash();
 }
 
-/// Navigates to the Audit tab pre-filtered by `role` (audit `role` ≈ scoreboard
-/// agent name). Clears unrelated filters so the landing page is the role view.
+/// Navigates to the Audit tab pre-filtered by the exact recorded `role`.
+/// Clears unrelated filters so the landing page is the role view.
 function navigateToRole(role, ctx) {
   navigateToDrilldown({ role }, ctx);
 }
@@ -862,13 +1018,16 @@ function navigateToRole(role, ctx) {
 /// and records the source metric so the landing chips explain the scope.
 function navigateToDrilldown(opts = {}, ctx) {
   auditFilter = emptyAuditFilter();
-  auditFilter.role = opts.role || null;
-  auditFilter.metric = opts.metric || null;
-  auditFilter.status = opts.status || null;
-  // ORB-10871: an incident names one surface, so its "open raw events" link
-  // lands on exactly the rows the incident collapsed rather than every failure
-  // by that actor.
-  auditFilter.tool = opts.tool || null;
+  auditFilter.eventIds = Array.isArray(opts.eventIds)
+    ? [...new Set(opts.eventIds.filter(id => Number.isSafeInteger(id) && id > 0))]
+    : [];
+  auditFilter.role = auditFilter.eventIds.length > 0 ? null : (opts.role || null);
+  auditFilter.agent_family = auditFilter.eventIds.length > 0 ? null : (opts.agent_family || null);
+  auditFilter.metric = auditFilter.eventIds.length > 0 ? null : (opts.metric || null);
+  auditFilter.status = auditFilter.eventIds.length > 0 ? null : (opts.status || null);
+  // Surface and status filters remain useful for ordinary metric drilldowns.
+  // Incident drilldowns supply exact event IDs and clear these broader filters.
+  auditFilter.tool = auditFilter.eventIds.length > 0 ? null : (opts.tool || null);
   if (opts.window) auditFilter.since = opts.window === "all" ? null : opts.window;
   activeAuditSubtab = "events";
   syncAuditControls();
@@ -887,7 +1046,7 @@ function buildAuditChips(ctx) {
   });
   container.appendChild(allChip);
   for (const status of AUDIT_STATUSES) {
-    const chip = el("button", { class: "chip", text: status });
+    const chip = el("button", { class: "chip", text: status === "non_success" ? "failure + denied" : status });
     chip.dataset.status = status;
     chip.addEventListener("click", () => {
       auditFilter.status = auditFilter.status === status ? null : status;
@@ -934,11 +1093,11 @@ function renderAudit(events, ctx) {
   let table = body.querySelector("table.scoreboard-table");
   let tbody;
   if (!table) {
-    table = el("table", { class: "scoreboard-table" });
+    table = el("table", { class: "scoreboard-table card-table audit-table" });
     const thead = el("thead");
     const headRow = el("tr");
     for (const col of AUDIT_COLUMNS) {
-      headRow.appendChild(el("th", { class: col.num ? "num" : "", text: col.label }));
+      headRow.appendChild(el("th", { class: col.num ? "num" : "", text: col.label, title: col.title }));
     }
     thead.appendChild(headRow);
     table.appendChild(thead);
@@ -953,8 +1112,8 @@ function renderAudit(events, ctx) {
   for (const ev of events) {
     const exit = ev.exit_code;
     const exitClass = exit != null && exit !== 0 ? "num exit-fail" : "num";
-    const tool = ev.tool_name || "-";
-    const target = ev.target_id || ev.target_type || "-";
+    const targetValue = ev.target_id || ev.target_type || "";
+    const target = targetValue === ev.tool_name ? "" : targetValue;
     const cmd = ev.subcommand ? `${ev.command} ${ev.subcommand}` : ev.command;
     const tr = el("tr", { class: "audit-row", title: `event ${ev.id}` });
     tr.dataset.key = `audit-${ev.id}`;
@@ -962,16 +1121,15 @@ function renderAudit(events, ctx) {
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
     tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
-    tr.appendChild(el("td", { text: fmtTimestampValue(ctx, ev.timestamp) }));
-    tr.appendChild(el("td", { text: ev.role || "-" }));
-    tr.appendChild(el("td", { text: tool }));
-    tr.appendChild(el("td", { text: cmd }));
-    tr.appendChild(el("td", { text: target, title: target }));
-    const statusTd = el("td");
+    tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp), title: fmtAbsTimeValue(ctx, ev.timestamp) }));
+    const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
-    tr.appendChild(el("td", { class: exitClass, text: exit == null ? "-" : String(exit) }));
-    tr.appendChild(el("td", { class: "num", text: fmtDurationValue(ctx, ev.duration_ms) }));
+    tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
+    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: cmd || "" }));
+    tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
+    tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
+    tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
     makeToggleRow(tr, {
       expanded: expandedAuditIds.has(ev.id),

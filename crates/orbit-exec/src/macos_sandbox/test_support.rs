@@ -105,35 +105,6 @@ pub(super) fn can_read_under_profile(profile_text: &str, path: &Path) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn sandbox_exec_can_apply() -> bool {
-    if !super::spawn::sandbox_exec_available() {
-        return false;
-    }
-
-    let mut profile_file = tempfile::Builder::new()
-        .prefix("orbit-sandbox-probe-")
-        .suffix(".sb")
-        .tempfile()
-        .expect("probe profile tempfile");
-    use std::io::Write;
-    profile_file
-        .write_all(b"(version 1)\n(allow default)\n")
-        .expect("write probe profile");
-    profile_file.flush().expect("flush probe profile");
-
-    std::process::Command::new(sandbox_exec_path_for_test())
-        .arg("-f")
-        .arg(profile_file.path())
-        .arg("/usr/bin/true")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "macos")]
 static SANDBOX_TEST_PARENT_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 

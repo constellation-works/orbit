@@ -2,7 +2,7 @@
 title: Automation Triggers — Design
 owner: codex
 last_updated: 2026-09-25
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -59,7 +59,7 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `cron` / `interval` | One UTC slot identity; missed slots collapse or skip according to explicit policy. | Accepted action outcome; legacy definitions keep legacy semantics. |
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
 | `preparation_eligible` | Proposed/backlog task has no fresh assessment for its material fingerprint. | Per-task accepted assessment, including an unready verdict. |
-| `execution_failed` | A settled failure incident crosses into retry-exhausted, diagnosis-eligible state. | Accepted incident disposition or explicit escalation. |
+| `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
 
 The last two are the v1 state-transition/eligibility vocabulary. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata
@@ -148,7 +148,17 @@ batch; otherwise it enters pending work. Force-push/non-ancestral history pauses
 range advancement with `history_diverged`. The supported replay is an explicit,
 audited recovery: it captures the configured head and consumer generation,
 walks at most 1,000 first-parent commits, and maps each orphan uniquely by its
-exact parent-relative binary patch plus `.orbit` tree. It then obtains ordinary
+exact parent-relative binary patch plus `.orbit` tree. The fetch that resolved
+the head keeps the shared source deadline; the proof runs on a fresh one and
+batches those git reads, so an admitted range is not failed by the fetch's
+leftover time. The provider observation after proof uses its own source pass,
+including its provider lookups, so neither fetch spends the signature proof's
+budget. A deadline or command budget while signing canonical commits is
+returned as that deferral. A canonical commit that simply has no signature is
+still skipped. Replay observes and applies the entire admitted range in one
+page, up to the same 1,000-commit bound; ordinary observation keeps its
+200-commit pages. A range over the replay bound is refused as
+`history_traversal_limit` before proof or provider observation. It then obtains ordinary
 provider associations for inserted commits and reconciles debt by delivery key.
 Missing objects, ambiguous content, unreachable covered/frozen boundaries,
 provider gaps, contract drift, or a changed head/generation fail closed. Never
@@ -159,6 +169,19 @@ debt. When the exact mapping proof uniquely identifies its canonical replacement
 replay moves the same unresolved reason to that replacement without inventing a
 provider identity. This exception applies only to the mapped pre-existing debt;
 every inserted canonical commit still requires ordinary provider proof.
+
+When the checkout has an `origin` remote, each observation pass fetches only
+the configured branch (`git fetch --no-tags --no-recurse-submodules`,
+non-interactive, refspec `+refs/heads/<branch>:refs/remotes/origin/<branch>`,
+within the source command deadline) and pins the head from that remote-tracking
+ref. The fetch does not touch the worktree, index, or local branch, so a pull
+request merged on the remote is observed even when nobody has fast-forwarded
+the checkout. A failed fetch defers as `source_fetch_failed` and does not fall
+back to `refs/heads/<branch>`. That reason retries rather than stalling the
+consumer; `orbit doctor` reports when the observed cursor trails, or has
+diverged from, the remote-tracking head. A repository with no remote still
+resolves `refs/heads/<branch>`. The ancestry check runs against the same head
+the pass just resolved, so a force-push still defers as `history_diverged`.
 
 Batch input contains batch/consumer/epoch IDs, ordered delivery IDs and evidence
 digests, exact `from_exclusive`/`through_inclusive` revisions and trees, full
@@ -180,6 +203,13 @@ and consumed as `excluded` state and batch `exclusions`; see
 [Operations](./5_operations.md#before-pr-coverage-exclusions-orb-11333).
 
 ## 4. Observation, dispatch, and successful coverage
+
+Keyed task mint retries return the existing task without appending creation
+crew provenance or emitting another `TaskAdded` session event. They preserve
+the task's current crew and revision, including operator changes after minting.
+A durable key reservation whose bundle has not yet been published still counts
+as a new creation when recovery publishes it; replay is determined under the
+bundle lock.
 
 Three separate checkpoints are essential:
 
@@ -256,11 +286,18 @@ references. Forward-only store migrations and a recoverable cross-store protocol
 are required: task bundles and scheduler SQLite are not one current transaction.
 
 The Automation boundary claims pending members through Store and writes batch intent with compare-
-and-swap plus unique keys. It releases database locks before external I/O. A
-routine's job submit and the common task creation path must accept a durable
-action key `(consumer, epoch, batch, attempt)` and return the previously created
-identity on replay. This is a prerequisite change, not a guarantee supplied by
-today's file lock, provenance tag, or routine fire intent.
+and-swap plus unique keys. It releases database locks before external I/O. Routine job submission
+and common task creation now use durable action keys: the job store maps a key and input to one run
+identity, while the task registry reserves a key, input digest and task ID before bundle I/O.
+Replaying the same input returns the existing identity; changing input under the same key is
+refused. This makes action admission idempotent, but does not make arbitrary worker side effects
+exactly once. The scheduler SQLite state and task bundles remain separate commit domains.
+
+SQLite consumer writes match the generation and decoded prior snapshot inside
+the write transaction, then use the raw stored JSON as the compare-and-swap
+fence. Commit, waiver, recovery, stall and reset therefore accept legacy rows
+with omitted defaulted fields or different JSON formatting without accepting
+a stale generation or a changed prior snapshot.
 
 Creation must reserve and persist key-to-ID mapping before launch, or recover
 that mapping from an atomically written canonical bundle. Store operations must
@@ -336,11 +373,65 @@ The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are
 part of the certified *post-apply* fingerprint, with the pre-apply fingerprint
 retained for audit. They do not invalidate their own assessment. External edits
-still do. A blocked-by-decision, duplicate, or low-utility verdict is a fresh
+still do. Apply owns the prepared `context_files_before` snapshot and fills it
+into the persisted assessment; an agent need only return `context_files_after`.
+Legacy before echoes are ignored, so ordering, selector spelling, or an omitted
+echo cannot invalidate a fresh assessment or change its replay receipt.
+A durable task edit or ownership change settles as a typed `superseded` skip,
+with no pilot write. A context edit is named `material_changed` with a selectors
+component, or `context_files_changed` when selectors are outside the configured
+freshness fields. The run
+succeeds when every partition applied or was superseded, and records each skip
+in `partition_decisions` and `task_outcomes`. The state consumer releases these
+members for observation and preparation under their current eligibility and
+fingerprint, without a failure record or spending retry budget. Retired or
+active tasks therefore leave the eligible set; an edited eligible task is
+prepared afresh. Invalid assessments and unresolved write failures still fail.
+A blocked-by-decision, duplicate, or low-utility verdict is a fresh
 assessment with `ready=false`; do not rerun it every clock tick. Invalid or failed
 assessments retry within budget, then wait for material change or explicit reset.
-If a pinned source became stale, retain its evidence but do not certify current
-readiness. A continuously moving base may require escalation rather than churn.
+
+A claim freezes its members' source, and the branch head can move under it
+while the pilot runs: a drain lands every few minutes, an operator pull or
+deploy jumps many commits. Prepare and apply, and the write boundary again
+under task locks, judge each claimed task on its own [ORB-14476]. A task is
+stale when a changed path lies under one of its selectors (current, prepared,
+or the ones apply is about to write), when a changed `AGENTS.md`/`CLAUDE.md`
+sits in a selector's directory or an ancestor, or when a selector has no
+filesystem anchor to compare. `source_sensitivity: any` makes every move
+stale, `instructions` as a material field makes any instruction change stale,
+and a rewritten branch or unreadable diff makes every task stale. This
+selector-path check is the floor under `ignore` and `context_files` alike: the
+pilot read those files at the frozen source. A stale task settles
+`superseded_by_source` without a write; its disjoint siblings still apply.
+Prepare sets stale tasks aside before any pilot runs, and a run that stopped
+before apply after its source moved settles with every member superseded
+instead of retrying. A superseded member gets no failure record, spends no
+retry budget and is not retired at its fingerprint. Its pending entry moves to
+the head with its timestamps, so the next admission claims it there, as a
+first attempt. A member whose input changed while it ran keeps its newer
+pending entry. One that is back at the frozen source leaves pending and is
+observed again.
+
+A preparation state routine best-effort fetches `origin/<branch>` under the
+shared `orbit-git-fetch` lock once per evaluation and pins that revision. A
+local branch already ahead of origin stays current. Fetch failure falls back
+to the local head captured before fetching, including when the fetch exhausts
+its deadline. Fetching never moves primary HEAD, the local branch, index or
+working files. Other local-head callers, including delivery intents and
+inspection, remain network-free. A local branch still behind the fetched pin
+does not supersede the pilot; local advances beyond it and rewritten histories
+retain the stale-claim checks above. Preparation records `source_age`
+(`committed_at`, `age_seconds`) of the pinned revision and apply carries it,
+including for a local fallback.
+
+Before supersession, a task stale this way failed, retried against the same
+source and was retired at its fingerprint, shelved until someone edited it.
+Automation store schema v4 releases such members once: an exhausted
+preparation failure record at the fingerprint the member is still pending at,
+while pending at another source, is removed and the consumer's generation
+advances. Persisted state does not record why an attempt failed, so a member
+that failed for another reason costs at most one more pilot attempt.
 
 The routine passes explicit batch task IDs and expected fingerprints to the
 existing pilot job, which today only accepts IDs/source preparation inputs and
@@ -348,66 +439,9 @@ needs a small contract extension. A trigger never bypasses domain eligibility.
 Mode-driven promotion must consume a fresh accepted readiness record and its
 separate grant; populated selectors or a successful wrapper are insufficient.
 
-## 7. Triage incidents, cancellation, and recursion
+## 7. Retired: failed-run triage
 
-> **Retired.** Terminal failed-run triage — the `task_triage_pipeline` this
-> section's `execution_failed` trigger fires — is gone
-> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
-> A failed run parks its task in `blocked` with the failure attached and waits
-> for a reader; re-backlogging is a deliberate human transition. The
-> `execution_failed` trigger kind and its incident semantics remain in the code
-> for persisted state, but they have no shipped target job, so an existing
-> definition loads as retired and fires nothing. The recursion guard described
-> below is removed with the pipeline that made it necessary. The rest of this
-> section records the contract as authored.
-
-Observe the transition into **settled execution failure after applicable retry
-exhaustion**, not every failed step. Engine retry/recovery and authorized resumes
-remain the owners of recovery. A durable episode records attempts consumed,
-remaining budgets, scheduled retry, active descendants, and whether the failure
-is settled. Triage defers while any applicable retry or causally related child is
-active. Do not wait for the entire unrelated workspace coordinator to finish.
-
-Incident identity is `(workspace, execution episode, causal failing step/child)`.
-A wrapper failure explicitly caused by that child shares its incident; unrelated
-sibling failures remain separate. Run IDs, persisted child dispatches and error
-references establish causality; close timestamps or similar messages do not.
-Resumes preserve episode identity; a new authorized execution after a diagnosis
-starts a new episode, while per-task re-backlog budgets survive both. Missing
-lineage yields `incident_unresolved`, not guessed duplicate suppression.
-
-Filter intentional operator cancellation, withdrawal, admissions stop, known
-supersession, and cancellation cascaded solely from those causes. Admissions stop
-is not itself a run failure. An unrelated child failure that preceded an operator
-stop remains diagnosable only if current task intent permits it. Current generic
-`cancelled` state is insufficient: require typed cancellation cause/provenance;
-unknown cancellations are held for inspection, never auto-rebacklogged.
-Interrupted/dead-owner runs take existing deterministic reconciliation/resume
-first; a proven exhausted execution failure can later create an incident.
-
-Candidate tasks must still be blocked by that exact episode with no later human
-block/withdrawal. Check the failure history event and current coupling, not just
-the existence of `job_run_id`. For a bundle diagnose the cause once, then apply
-per-task dispositions after rechecking each task's status/revision/coupling and
-durable re-backlog budget. A failure before task admission can receive a run-level
-diagnosis/escalation; it cannot authorize task lifecycle writes.
-
-Keep deterministic recovery (stopped-owner reconciliation, recorded retry state,
-verified stale reservations) before model diagnosis. Preserve the current narrow
-evidence-gated already-landed reconciliation; triggers grant no new done/merge
-rights. Model diagnosis returns environmental/task/code/unknown findings; only
-the existing authorized deterministic boundary may re-backlog environmental
-failures within budget. Unknown or unresolved product intent remains blocked
-for human/Astra judgment. Moving already-landed work to backlog is prohibited.
-
-Every diagnostic action carries `origin=triage` and a root incident reference;
-propagate that ancestry into children and tasks it creates. Exclude triage's own
-execution failures and automation-generated diagnostic descendants from automatic
-triage. Retry the original diagnostic batch within a small separate budget, then
-record one escalation on the original incident. Do not spawn a triage of triage.
-Ordinary approved implementation of a resulting repair is a new execution episode
-and can be triaged normally; ancestry suppression is scoped to diagnostic work,
-not a permanent ban on every descendant task.
+Terminal failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): a failed run parks its task in `blocked` with the failure attached. The `execution_failed` trigger kind still parses for persisted state but has no shipped target job and fires nothing.
 
 ## 8. Proposed YAML examples
 
@@ -499,40 +533,22 @@ persisted complexity remains `unassessed`. Task-pilot records the bounded
 repair's certainty, behavioral change, coupling, validation difficulty,
 rationale, confidence, evidence gaps, validation approach, and reassessment
 triggers. Its apply step commits concrete selectors, complexity, audit evidence,
-and the idempotency receipt at one task-bundle boundary. Automatic admission
-then rejects any still-unassessed task, including urgent security work, except
+and the idempotency receipt at one task-bundle boundary. `context_files` are
+optional for admission: local auto, ship (including explicit selection), and
+owner pull admit selector-free backlog tasks on the next pass without holding
+a context lock. Task-pilot can supply selectors, but empty context alone does
+not exclude work or produce a readiness reason. A live pilot's successful
+preparation checkpoint still holds its tasks until that run settles.
+Local automatic admission rejects any
+still-unassessed task, including urgent security work, except
 one tagged exactly `no-diff-expected`, which is admitted without an assessment
 because an implementation lane sizes no diff for it [ORB-12118]; missing
 validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.
 
-The triage routine below is retired (see the note in §7); it is kept as the
-authored example of a state trigger's shape, not as a definition to write.
-
-```yaml
-# Retired routine: one diagnosis per settled causal incident.
-schemaVersion: 2
-name: task_triage
-enabled: false
-target: job:task_triage_pipeline
-trigger:
-  kind: execution_failed
-  after: retry_exhaustion
-  settle_minutes: 2
-batch:
-  max_items: 20
-  max_active: 1
-policy:
-  overlap: forbid
-  timeout_minutes: 30
-  retries: {max: 1, backoff_minutes: 5}
-```
-
-Triage cancellation/recursion filters are mandatory domain rules, not disableable
-YAML flags. `settle_minutes` is a coalescing delay, never proof of exhaustion.
-For both routine examples Core supplies a reserved `trigger_batch` input plus
-explicit `task_ids`/incident members; templates or arbitrary run input cannot
+For the routine example Core supplies a reserved `trigger_batch` input plus
+explicit `task_ids` members; templates or arbitrary run input cannot
 override the server-issued batch. Auto-task creation attaches the same manifest
 as task input evidence without invoking a job. These input paths need implementation.
 Time alternatives are `trigger: {kind: cron, cron: "0 6 * * *", missed_run: catch_up_once}`
@@ -550,8 +566,7 @@ drift from task completion time. No OR/AND trigger language is proposed.
 | D6 arrives / max pending age expires | Freeze B2 for D4–D6 / D4–D5 respectively; never silently include them in B1's receipt. |
 | Crash after T1 creation before scheduler acknowledgement | Action-key lookup recovers T1. A second evaluator cannot mint T2 for B1. |
 | Pilot captures task fingerprint F1, user changes criteria to F2 | F1 apply is stale; F2 stays pending. Successful F2 selector write certifies its post-apply fingerprint and does not loop. |
-| Child fails, wrapper propagates failure, retry remains | One unsettled incident, no diagnosis. Final retry exhaustion settles it; one triage batch includes affected tasks. |
-| Operator intentionally cancels instead / triage itself fails | Intentional cancellation is filtered; triage failure retries or escalates the original incident without recursive diagnosis. |
+| Pilot claims T1 and T2 at H0; a pull moves the head to H1 through T1's selector file | T1 settles `superseded_by_source` with no failure record and is claimed afresh at H1 as a first attempt; T2 applies and is certified. |
 
 ## 10. Compatibility and migration
 
@@ -628,7 +643,10 @@ older binaries must not reinterpret schema v2 as time-only work.
 Implement tests at the shared domain/store boundaries using existing sibling
 test layouts and fake clocks/providers; add no generic harness. Include end-to-end
 fixtures exercising actual job/task creation and crash recovery, not only due math.
-Required repository gates remain `make ci-fast` and `make ci-lint`; full `make ci`
+Required repository gates are `make ci-fast`, `make ci-test-affected`,
+`make ci-lint` and `make goldens`; `make ci-fast` runs no Rust tests, while
+the affected-test gate covers changed crates and their workspace dependents
+([validation and CI](../../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
 is the PR merge gate. Documentation validation checks metadata, source/relative
 links, index generation, YAML consistency and timeline invariants.
 

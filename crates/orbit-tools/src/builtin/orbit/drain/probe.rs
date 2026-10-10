@@ -32,13 +32,19 @@ impl Tool for OrbitDrainProbeTool {
                 required: false,
             },
             ToolParam {
-                name: "caller_review_policy".to_string(),
-                description:
-                    "Optional. The executor's effective review policy. Only `none` is supported \
-                     in v1; `before-pr` and `after-landing` are reported as refusals rather than \
-                     silently downgraded."
-                        .to_string(),
+                name: "caller_fingerprint".to_string(),
+                description: "Optional. Type-derived pull request schema fingerprint. Discover the owner's protocol_fingerprint before declaring this field; a mismatch raises protocol_skew before any pull.".to_string(),
                 param_type: "string".to_string(),
+                required: false,
+            },
+            ToolParam {
+                name: "caller_before_pr".to_string(),
+                description:
+                    "Optional. The executor's `review.before_pr`. Diagnostic only: a claimed \
+                     leaf runs the before-PR review the owner's ship contract captures, never \
+                     the executor's own. After-landing review never affects admission."
+                        .to_string(),
+                param_type: "boolean".to_string(),
                 required: false,
             },
         ];
@@ -48,8 +54,9 @@ impl Tool for OrbitDrainProbeTool {
                 "Read-only preflight for the distributed drain, served by the workspace owner. \
                  Reports the owner machine, binary version, distributed-drain protocol schema, \
                  the capabilities this session holds, the diagnostic caller machine, the \
-                 owner-resolved ship configuration, and the review policy. Declaring \
-                 `caller_version`, `caller_schema`, or `caller_review_policy` also reports the \
+                 owner-resolved ship configuration, and both review switches (`review.before_pr` \
+                 and the after-landing auto-task). Declaring `caller_version`, \
+                 `caller_schema`, or `caller_before_pr` also reports the \
                  first refusal an admission would raise, in the order admission applies it. It \
                  creates no request receipt, reservation, claim, or task transition, and it is \
                  never a health check for admission itself."

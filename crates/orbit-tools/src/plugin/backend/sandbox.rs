@@ -11,7 +11,7 @@ pub struct PluginSandboxProfile {
     pub read: Vec<PathBuf>,
     /// Host-owned trees carved out of [`Self::read`] however it was composed:
     /// the live callback sessions, the grant witnesses and every plugin's
-    /// state ([`PLUGIN_GLOBAL_READ_DENY_DIRS`]). Neither platform lets a
+    /// state (`PLUGIN_GLOBAL_READ_DENY_DIRS`). Neither platform lets a
     /// manifest buy them back: the carve-out is applied after the granted
     /// paths rather than beside them, and a manifest read root inside one of
     /// them never reaches [`Self::read`].
@@ -298,7 +298,7 @@ fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::create_dir(&current) {
+                match orbit_common::fs::io::create_private_dir(&current) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                         let metadata = std::fs::symlink_metadata(&current).map_err(|error| {
@@ -340,9 +340,18 @@ fn spawn_confined(
     req: &ExecRequest,
     inherited_fds: &[InheritedFd],
 ) -> Result<Child, OrbitError> {
+    // The macOS compiler keeps every default credential deny for a plugin.
+    // Landlock has no such base, so the boundary carries them, which also
+    // carves them out of the host tool state grants (`~/.config/gh`).
+    let mut read_denies = profile.read_denies.clone();
+    for credential in orbit_exec::default_credential_read_denies() {
+        if !read_denies.contains(&credential) {
+            read_denies.push(credential);
+        }
+    }
     let boundary = orbit_exec::LandlockBoundary {
         read: profile.read.clone(),
-        read_denies: profile.read_denies.clone(),
+        read_denies,
         read_exclusions: profile.caller_read_exclusions.clone(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),

@@ -112,9 +112,20 @@ impl OrbitRuntime {
         &self,
         session_context: &ToolSessionContext,
     ) -> Result<AgentInvokeAuthorizer, OrbitError> {
-        let operation = governed_tool(AGENT_INVOKE_OPERATION_ID).ok_or_else(|| {
+        self.admit_operator_operation(AGENT_INVOKE_OPERATION_ID, session_context)
+    }
+
+    /// Admit one governed operator operation against the process envelope as
+    /// well as the session, so a managed run shelling out to the CLI resolves
+    /// as `agent` and is refused. Returns how the operator was identified.
+    pub(crate) fn admit_operator_operation(
+        &self,
+        operation_id: &str,
+        session_context: &ToolSessionContext,
+    ) -> Result<AgentInvokeAuthorizer, OrbitError> {
+        let operation = governed_tool(operation_id).ok_or_else(|| {
             OrbitError::Execution(format!(
-                "'{AGENT_INVOKE_OPERATION_ID}' is missing from the governed operation registry"
+                "'{operation_id}' is missing from the governed operation registry"
             ))
         })?;
         let envelope = CallerEnvelope::from_process_env(session_context);

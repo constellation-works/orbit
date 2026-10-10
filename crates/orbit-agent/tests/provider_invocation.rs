@@ -1,33 +1,22 @@
-//! Public provider boundaries: subprocess input and HTTP wire contracts.
+//! Public provider boundaries: CLI invocation and retained audit contracts.
 #![cfg(unix)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "provider_invocation/audit.rs"]
+mod audit;
 mod support;
 
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use orbit_agent::loop_engine::{
-    AgentLoop, AgentLoopConfig, AgentLoopError, CacheHint, ContentBlock, LoopTransport, Message,
-    NullSink, Session, TurnRequest,
-};
-use orbit_agent::providers::{
-    anthropic::AnthropicMessagesTransport, gemini_http::GeminiHttpTransport,
-    openai_compat::OpenAiCompatTransport,
-};
 use orbit_agent::{Agent, AgentConfig, AgentRequest};
-use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
-use orbit_tools::{Tool, ToolContext, ToolRegistry};
 use orbit_types::identity::ReasoningEffort;
-use orbit_types::tool::ToolSchema;
 use orbit_types::workflow::Provider;
 use serde_json::{Value, json};
-use support::{ChildGuard, HOSTILE_ENV, Server, WAIT, isolated, scratch};
+use support::{ChildGuard, HOSTILE_ENV, WAIT, isolated, scratch};
 
 struct CliCase {
     provider: &'static str,
@@ -140,10 +129,15 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
         "cli_registry_adapters_deliver_stdin_flags_and_safe_environment",
         || {
             // Provider::ALL is the public registry. A newly shipped provider must
-            // acquire a CLI fixture, or be explicitly exercised by the HTTP case.
+            // acquire a CLI fixture, or fail structurally as an unsupported provider.
             for provider in Provider::ALL {
                 if provider == Provider::OpenaiCompat {
-                    continue; // exercised by http_transports_keep_keys_in_headers
+                    assert!(matches!(
+                        AgentConfig::cli(provider.as_str()),
+                        Err(orbit_common::OrbitError::UnsupportedAgentProvider(key))
+                            if key == provider.as_str()
+                    ));
+                    continue;
                 }
                 assert!(
                     CLI_CASES
@@ -283,6 +277,16 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                             vars.contains(&("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")),
                             "Claude background task disable must reach subprocess (ORB-13664)"
                         );
+                        assert!(
+                            vars.contains(&("CLAUDE_CODE_DISABLE_CRON", "1")),
+                            "Claude cron disable must reach subprocess; without it a scheduled \
+                             wake-up turn emits a second result over the envelope (ORB-14815)"
+                        );
+                        assert!(
+                            vars.contains(&("BASH_MAX_TIMEOUT_MS", "3600000")),
+                            "Claude must be able to wait on a long gate in the foreground; at \
+                             the 10-minute default it detaches the gate and ends (ORB-15130)"
+                        );
                     }
                     if let Some(model) = model {
                         assert!(
@@ -318,241 +322,6 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         }
                     }
                 }
-            }
-        },
-    );
-}
-
-const API_KEY: &str = "synthetic-http-key";
-
-fn assert_header_key(request: &support::RecordedRequest, header: &str, value: &str) {
-    assert_eq!(
-        request.header(header),
-        Some(value),
-        "API key must reach authentication header"
-    );
-    assert!(
-        !request.target.contains('?') && !request.target.contains(API_KEY),
-        "API key must never enter request URL: {}",
-        request.target
-    );
-    assert!(
-        !request.body.to_string().contains(API_KEY),
-        "API key must never enter request body"
-    );
-}
-
-#[test]
-fn http_transports_keep_keys_in_headers() {
-    isolated("http_transports_keep_keys_in_headers", || {
-        let messages = vec![Message::user_text("wire prompt")];
-        let request = TurnRequest {
-            system: Some("system instruction"),
-            messages: &messages,
-            tools: &[],
-            cache_hint: CacheHint::None,
-            max_response_tokens: 32,
-        };
-        let server = Server::new(vec![
-            json!({"content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}),
-        ]);
-        let transport = AnthropicMessagesTransport::new(API_KEY, "fixture-model")
-            .unwrap()
-            .with_endpoint(format!("{}/v1/messages", server.base_url))
-            .with_timeout(WAIT)
-            .unwrap();
-        let response = transport
-            .send_turn(&request)
-            .expect("Anthropic wire response");
-        assert!(matches!(&response.content[..], [ContentBlock::Text { text }] if text == "answer"));
-        let recorded = server.request();
-        assert_header_key(&recorded, "x-api-key", API_KEY);
-        assert_eq!(recorded.body["model"], "fixture-model");
-        assert_eq!(
-            recorded.body["messages"][0]["content"][0]["text"],
-            "wire prompt"
-        );
-        server.finish();
-
-        let server = Server::new(vec![
-            json!({"choices":[{"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}]}),
-        ]);
-        let transport =
-            OpenAiCompatTransport::new(&server.base_url, API_KEY, "fixture-model", vec![])
-                .unwrap()
-                .with_timeout(WAIT)
-                .unwrap();
-        let response = transport
-            .send_turn(&request)
-            .expect("OpenAI-compatible wire response");
-        assert!(matches!(&response.content[..], [ContentBlock::Text { text }] if text == "answer"));
-        let recorded = server.request();
-        assert_header_key(&recorded, "authorization", &format!("Bearer {API_KEY}"));
-        assert_eq!(recorded.body["model"], "fixture-model");
-        assert_eq!(recorded.body["messages"][1]["content"], "wire prompt");
-        server.finish();
-
-        // Gemini authenticates both cachedContents and generateContent. Cover
-        // uncached generation too, so the cache path cannot mask a leak.
-        let history = vec![
-            Message::user_text("cache me"),
-            Message::assistant(vec![ContentBlock::Text {
-                text: "history".into(),
-            }]),
-            Message::user_text("wire prompt"),
-        ];
-        let gemini_request = TurnRequest {
-            messages: &history,
-            ..request
-        };
-        for cached in [false, true] {
-            let answer = json!({"candidates":[{"content":{"role":"model","parts":[{"text":"answer"}]},"finishReason":"STOP"}]});
-            let responses = if cached {
-                vec![json!({"name":"cachedContents/fixture"}), answer]
-            } else {
-                vec![answer]
-            };
-            let server = Server::new(responses);
-            let transport = GeminiHttpTransport::new(API_KEY, "fixture-model", cached.then_some(2))
-                .unwrap()
-                .with_base_url(&server.base_url)
-                .with_timeout(WAIT)
-                .unwrap();
-            let response = transport
-                .send_turn(&gemini_request)
-                .expect("Gemini wire response");
-            assert!(
-                matches!(&response.content[..], [ContentBlock::Text { text }] if text == "answer")
-            );
-            if cached {
-                let recorded = server.request();
-                assert_header_key(&recorded, "x-goog-api-key", API_KEY);
-                assert_eq!(recorded.target, "POST /v1beta/cachedContents HTTP/1.1");
-                assert_eq!(recorded.body["contents"][0]["parts"][0]["text"], "cache me");
-            }
-            let recorded = server.request();
-            assert_header_key(&recorded, "x-goog-api-key", API_KEY);
-            assert_eq!(
-                recorded.target,
-                "POST /v1beta/models/fixture-model:generateContent HTTP/1.1"
-            );
-            if cached {
-                assert_eq!(recorded.body["cachedContent"], "cachedContents/fixture");
-                assert_eq!(
-                    recorded.body["contents"][0]["parts"][0]["text"],
-                    "wire prompt"
-                );
-            } else {
-                assert_eq!(
-                    recorded.body["contents"][2]["parts"][0]["text"],
-                    "wire prompt"
-                );
-            }
-            server.finish();
-        }
-    });
-}
-
-struct SlowTool(Arc<Mutex<Vec<Value>>>);
-
-impl Tool for SlowTool {
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "fixture.pause".into(),
-            description: "Record a dispatch and exhaust its budget".into(),
-            parameters: vec![],
-            builtin: false,
-        }
-    }
-
-    fn execute(&self, _ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        self.0.lock().unwrap().push(input.clone());
-        std::thread::sleep(Duration::from_millis(1100));
-        Ok(input)
-    }
-}
-
-#[test]
-fn expired_budget_stops_later_dispatch_and_pairs_skipped_results() {
-    isolated(
-        "expired_budget_stops_later_dispatch_and_pairs_skipped_results",
-        || {
-            // ORB-13486: a running tool can finish, but no later tool or turn may
-            // start after expiry, even when the provider calls this its final turn.
-            for (finish_reason, count) in [("tool_calls", 2), ("stop", 2), ("stop", 1)] {
-                let calls: Vec<_> = (0..count)
-                    .map(|index| {
-                        json!({"id":format!("call-{index}"),"type":"function",
-                "function":{"name":"fixture.pause","arguments":format!("{{\"index\":{index}}}")}})
-                    })
-                    .collect();
-                let server = Server::new(vec![
-                    json!({"choices":[{"message":{"role":"assistant","tool_calls":calls},"finish_reason":finish_reason}]}),
-                ]);
-                let transport =
-                    OpenAiCompatTransport::new(&server.base_url, API_KEY, "fixture-model", vec![])
-                        .unwrap()
-                        .with_timeout(WAIT)
-                        .unwrap();
-                let executed = Arc::new(Mutex::new(Vec::new()));
-                let mut registry = ToolRegistry::new();
-                registry.register(SlowTool(Arc::clone(&executed)));
-                let mut session = Session::new("openai_compat", "fixture-model", "", None);
-                let cfg = AgentLoopConfig::new_for_run("fixture-run")
-                    .with_allowlist(vec!["fixture.pause".into()])
-                    .with_wall_clock_timeout(Duration::from_secs(1));
-                let ctx = ToolContext {
-                    allowed_tools: vec!["fixture.pause".into()],
-                    ..Default::default()
-                };
-                let result = AgentLoop::run(
-                    &mut session,
-                    &cfg,
-                    &transport,
-                    &registry,
-                    &ctx,
-                    &NullSink,
-                    "exhaust budget",
-                );
-                assert_eq!(
-                    *executed.lock().unwrap(),
-                    vec![json!({"index":0})],
-                    "ORB-13486: no later dispatch after budget expiry"
-                );
-                assert!(
-                    matches!(result, Err(AgentLoopError::Timeout { .. })),
-                    "ORB-13486: must return Timeout: {result:?}"
-                );
-                let results = &session
-                    .history()
-                    .last()
-                    .expect("paired tool results")
-                    .content;
-                assert_eq!(
-                    results.len(),
-                    count,
-                    "ORB-13486: every tool_use needs a paired result"
-                );
-                for (index, block) in results.iter().enumerate() {
-                    let ContentBlock::ToolResult {
-                        tool_use_id,
-                        content,
-                        is_error,
-                    } = block
-                    else {
-                        panic!("expected tool result")
-                    };
-                    assert_eq!(tool_use_id, &format!("call-{index}"));
-                    assert_eq!(*is_error, index != 0);
-                    let payload: Value = serde_json::from_str(content).unwrap();
-                    if index == 0 {
-                        assert_eq!(payload, json!({"index":0}));
-                    } else {
-                        assert_eq!(payload["error"]["code"], "wall_clock_timeout");
-                    }
-                }
-                server.request();
-                server.finish();
             }
         },
     );

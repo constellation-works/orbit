@@ -95,15 +95,49 @@ pub fn handover_target(capability: Option<&str>) -> Option<PathBuf> {
 /// Whether the executable at `path` implements this admission protocol and,
 /// when named, the resume `capability` the handover needs.
 pub fn candidate_supports(path: &Path, capability: Option<&str>) -> bool {
-    let Some(report) = contract_report(path) else {
-        return false;
-    };
-    report["admission_contract"] == super::GENERATION_CONTRACT
-        && capability.is_none_or(|capability| {
-            report["resume"]
-                .as_array()
-                .is_some_and(|resume| resume.iter().any(|entry| entry == capability))
-        })
+    HandoverCandidate::probe(path)
+        .is_some_and(|candidate| capability.is_none_or(|capability| candidate.resumes(capability)))
+}
+
+/// A candidate executable, as a long-lived process would judge it before
+/// handing over: the resume capabilities its `update --contract` reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoverCandidate {
+    resume: Vec<String>,
+}
+
+impl HandoverCandidate {
+    /// Ask the executable at `path` for its contract, as [`handover_target`]
+    /// does. `None` when it does not answer within the probe timeout or does
+    /// not implement this admission protocol.
+    pub fn probe(path: &Path) -> Option<Self> {
+        let report = contract_report(path)?;
+        if report["admission_contract"] != super::GENERATION_CONTRACT {
+            return None;
+        }
+        let resume = report["resume"]
+            .as_array()
+            .map(|resume| {
+                resume
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self { resume })
+    }
+
+    /// A candidate already known to report `resume`.
+    pub fn reporting(resume: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            resume: resume.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Whether a process handing over with `capability` can resume on it.
+    pub fn resumes(&self, capability: &str) -> bool {
+        self.resume.iter().any(|entry| entry == capability)
+    }
 }
 
 fn contract_report(path: &Path) -> Option<serde_json::Value> {

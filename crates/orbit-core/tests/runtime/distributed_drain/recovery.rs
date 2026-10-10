@@ -2,11 +2,12 @@
 
 use super::*;
 
-/// [ORB-13964] The owner can execute final recovery after a follower settles
-/// its failed claim, without importing the follower's run or pipeline state.
+/// [ORB-13964, ORB-14635] The owner recovers the settled follower failure,
+/// even when an unrelated local run has the same machine-local ID. Explicit
+/// local and legacy bindings still use their own recorded run evidence.
 #[test]
 #[cfg(unix)]
-fn a_settled_follower_failure_is_recovered_with_the_recovery_runs_own_crew_draw() {
+fn recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw() {
     use std::os::unix::fs::PermissionsExt;
 
     use orbit_core::application::task::{
@@ -17,7 +18,7 @@ fn a_settled_follower_failure_is_recovered_with_the_recovery_runs_own_crew_draw(
 
     if !isolated(
         module_path!(),
-        "a_settled_follower_failure_is_recovered_with_the_recovery_runs_own_crew_draw",
+        "recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw",
     ) {
         return;
     }
@@ -81,16 +82,70 @@ model = "fixture-b"
         },
     )
     .expect("seed shipped recovery job and activities");
-    let owner =
+    let owner = calm_host(
         OrbitRuntime::from_roots(&pair.wire.owner.global_root(), &owner_repo.join(".orbit"))
             .unwrap()
-            .with_automation_machine_identity(Some(OWNER.into()));
+            .with_automation_machine_identity(Some(OWNER.into())),
+    );
     assert!(owner.read_run_state(&leaf).unwrap().is_none());
     let jobs = orbit_store::compose::workspace_job_run_store(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );
     assert!(jobs.get_job_run(&leaf).unwrap().is_none());
+    let unrelated = jobs
+        .insert_job_run("owner_unrelated_job", 1, Utc::now(), None, None)
+        .unwrap();
+    let workspace_id = owner.workspace_id().unwrap();
+    owner.sqlite_store().unwrap().with_transaction(|tx| {
+        tx.connection().execute(
+            "UPDATE job_runs SET run_id = ?1, resolved_crew = 'owner_only_crew', crew_model = 'gpt-6-sol' WHERE workspace_id = ?2 AND run_id = ?3",
+            [leaf.as_str(), workspace_id.as_str(), unrelated.run_id.as_str()],
+        ).unwrap();
+        Ok(())
+    }).unwrap();
+    jobs.mark_job_run_running(&leaf, Utc::now(), std::process::id())
+        .unwrap();
+    let now = Utc::now();
+    jobs.complete_job_run_step(
+        &leaf,
+        &JobRunStepParams {
+            step_index: 0,
+            target_type: JobTargetType::Activity,
+            target_id: "owner_only_step".into(),
+            started_at: now,
+            finished_at: now,
+            duration_ms: None,
+            exit_code: Some(1),
+            agent_response_json: None,
+            state: JobRunState::Failed,
+            error_code: Some("owner_only_error".into()),
+            error_message: Some("unrelated owner diagnostic".into()),
+        },
+    )
+    .unwrap();
+    jobs.finalize_job_run(&leaf, JobRunState::Failed, now, None)
+        .unwrap();
+
+    let shown = owner
+        .run_tool("orbit.task.show", json!({"id": task_id}))
+        .unwrap();
+    assert_eq!(shown["job_run_machine"]["machine_id"], FOLLOWER);
+    assert_eq!(
+        shown["resolved_crew"], "sol",
+        "ORB-14635: task show must not project the colliding owner's crew"
+    );
+    assert_eq!(shown["crew_model"], "fixture-task");
+    for input in [
+        json!({"task_id": task_id}),
+        json!({"task_id": task_id, "run_id": leaf}),
+    ] {
+        assert_eq!(
+            owner.activity_implementer_identity(&input).unwrap(),
+            (None, None),
+            "ORB-14635: task-derived attribution must not read a foreign run locally"
+        );
+    }
 
     // The real dispatcher selects the crew and injects execution identity;
     // only the provider's decision is deterministic in this fixture.
@@ -128,12 +183,23 @@ model = "fixture-b"
     assert!(recovery.success, "{recovery:#?}");
     let prepared = &recovery.pipeline["prepare"]["recovery"];
     assert_eq!(prepared["run_id"], leaf);
+    assert_eq!(prepared["failed_step_id"], "claim_failed");
+    assert_eq!(prepared["activity_name"], "");
     assert!(
         prepared["error_message"]
             .as_str()
             .unwrap()
             .contains(failure),
         "the owner supplies the settled diagnostic, including available candidate evidence: {prepared}"
+    );
+    let diagnostic = prepared["error_message"].as_str().unwrap();
+    assert!(
+        diagnostic.contains(FOLLOWER),
+        "ORB-14635: recovery must name the foreign execution machine: {prepared}"
+    );
+    assert!(
+        !diagnostic.contains("unrelated owner diagnostic"),
+        "ORB-14635: recovery must not read the colliding local failure: {prepared}"
     );
     assert!(!Path::new(prepared["workspace_path"].as_str().unwrap()).exists());
     let state = owner.read_run_state(&recovery.run_id).unwrap().unwrap();
@@ -170,13 +236,232 @@ model = "fixture-b"
     assert_eq!(record.decision, "requeue");
     assert_eq!(record.outcome, "requeued");
     assert!(owner.read_run_state(&leaf).unwrap().is_none());
-    assert!(jobs.get_job_run(&leaf).unwrap().is_none());
+    assert_eq!(
+        jobs.get_job_run(&leaf).unwrap().unwrap().job_id,
+        "owner_unrelated_job"
+    );
     let candidate =
         orbit_common::fs::git::run_git(&owner_repo, &["rev-parse", "fixture/candidate"]).unwrap();
     assert!(candidate.success, "candidate evidence is preserved");
     assert_eq!(
         candidate.stdout.trim(),
         prepared["base_sha"].as_str().unwrap()
+    );
+
+    // Exercise the same preparation and task-show boundaries for explicit
+    // local and absent legacy locations. The settled diagnostic deliberately
+    // differs from the local step, so the evidence source is observable.
+    for location in [
+        Some(orbit_types::task::ExecutionLocation {
+            machine_id: OWNER.into(),
+            machine_name: Some("owner fixture".into()),
+        }),
+        None,
+    ] {
+        let local_jobs = jobs.with_execution_location(location.clone());
+        let run = local_jobs
+            .insert_job_run("local_failure_job", 1, Utc::now(), None, None)
+            .unwrap();
+        owner.sqlite_store().unwrap().with_transaction(|tx| {
+            tx.connection().execute(
+                "UPDATE job_runs SET resolved_crew = 'recorded_local_crew', crew_model = 'gpt-6-sol' WHERE workspace_id = ?1 AND run_id = ?2",
+                [workspace_id.as_str(), run.run_id.as_str()],
+            ).unwrap();
+            Ok(())
+        }).unwrap();
+        local_jobs
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        local_jobs
+            .complete_job_run_step(
+                &run.run_id,
+                &JobRunStepParams {
+                    step_index: 0,
+                    target_type: JobTargetType::Activity,
+                    target_id: "local_failure_step".into(),
+                    started_at: now,
+                    finished_at: now,
+                    duration_ms: None,
+                    exit_code: Some(1),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: Some("local_failure".into()),
+                    error_message: Some("local step diagnostic".into()),
+                },
+            )
+            .unwrap();
+        local_jobs
+            .finalize_job_run(&run.run_id, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
+        let task = owner
+            .add_task(orbit_core::application::task::TaskAddParams {
+                title: "Local recovery evidence".into(),
+                plan: "Exercise recorded run evidence".into(),
+                crew: Some("sol".into()),
+                complexity: orbit_types::task::TaskComplexity::Low,
+                ..Default::default()
+            })
+            .unwrap();
+        owner
+            .apply_task_automation_update(
+                &task.id,
+                orbit_engine::TaskAutomationUpdate {
+                    status: Some(orbit_types::task::TaskStatus::InProgress),
+                    job_run_id: Some(run.run_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        owner
+            .apply_task_automation_update(
+                &task.id,
+                orbit_engine::TaskAutomationUpdate {
+                    status: Some(orbit_types::task::TaskStatus::Blocked),
+                    status_event: Some("claim_failed".into()),
+                    execution_summary: Some("settled fallback diagnostic".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let task = owner.get_task(&task.id).unwrap();
+        assert_eq!(task.job_run_machine, location);
+        let shown = owner
+            .run_tool("orbit.task.show", json!({"id": task.id}))
+            .unwrap();
+        assert_eq!(shown["resolved_crew"], "recorded_local_crew");
+        assert_eq!(shown["crew_model"], "gpt-6-sol");
+        assert_eq!(
+            owner
+                .activity_implementer_identity(&json!({"task_id": task.id}))
+                .unwrap(),
+            (Some("codex".into()), Some("codex".into()))
+        );
+        let view = owner
+            .blocked_recovery_view(Utc::now())
+            .unwrap()
+            .into_iter()
+            .find(|view| view.episode.task_id == task.id)
+            .unwrap();
+        let input = BlockedRecoveryInput {
+            task_id: task.id.clone(),
+            episode_key: view.episode.key(),
+            block_source: view.episode.source.as_str().into(),
+            failed_run_id: view.episode.failed_run_id,
+            observed: FinalRecoveryTaskRevision::of(&task),
+        };
+        let recovery = owner
+            .run_job_v2_from_yaml(&job.path, input.to_json())
+            .unwrap();
+        assert!(recovery.success, "{recovery:#?}");
+        let prepared = &recovery.pipeline["prepare"]["recovery"];
+        assert_eq!(prepared["failed_step_id"], "local_failure_step");
+        assert_eq!(prepared["activity_name"], "local_failure_job");
+        assert_eq!(prepared["error_message"], "local step diagnostic");
+    }
+}
+
+/// [ORB-14635] A foreign binding must neither borrow completion evidence
+/// from a successful local collision nor be vetoed by its live process.
+#[test]
+fn a_foreign_run_cannot_supply_or_veto_completion_evidence() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::task::TaskStatus;
+
+    if !isolated(
+        module_path!(),
+        "a_foreign_run_cannot_supply_or_veto_completion_evidence",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_fails_with(&leaf, "follower stopped");
+    pair.pass(&drain);
+    let owner = &pair.wire.owner;
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run("unrelated_delivery", 1, Utc::now(), None, None)
+        .unwrap();
+    let workspace = owner.workspace_id().unwrap();
+    owner
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE job_runs SET run_id = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
+                    [leaf.as_str(), workspace.as_str(), run.run_id.as_str()],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    jobs.mark_job_run_running(&leaf, Utc::now(), std::process::id())
+        .unwrap();
+    jobs.finalize_job_run(&leaf, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+    for status in [TaskStatus::InProgress, TaskStatus::Review] {
+        owner
+            .update_task_as_human(
+                &task,
+                TaskUpdateParams {
+                    status: Some(status),
+                    plan: Some("Verify completion evidence".into()),
+                    execution_summary: Some(String::new()),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+    }
+    assert!(
+        owner
+            .update_task_as_human(
+                &task,
+                TaskUpdateParams {
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                },
+                "human:fixture".into()
+            )
+            .is_err(),
+        "ORB-14635: a successful local collision must not supply evidence for a foreign task"
+    );
+    assert_eq!(owner.get_task(&task).unwrap().status, TaskStatus::Review);
+
+    // Seed the other collision shape with the same verified live process.
+    // Re-delivering Start to a terminal run is deliberately a no-op.
+    owner.sqlite_store().unwrap().with_transaction(|tx| {
+        tx.connection().execute(
+            "UPDATE job_runs SET state = 'running', finished_at = NULL, duration_ms = NULL WHERE workspace_id = ?1 AND run_id = ?2",
+            [workspace.as_str(), leaf.as_str()],
+        ).unwrap();
+        Ok(())
+    }).unwrap();
+    assert_eq!(
+        jobs.get_job_run(&leaf).unwrap().unwrap().state,
+        JobRunState::Running
+    );
+    owner
+        .update_task_as_human(
+            &task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                execution_summary: Some("Follower stopped; work independently verified".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("ORB-14635: an unrelated live local run must not veto foreign completion");
+    assert_eq!(owner.get_task(&task).unwrap().status, TaskStatus::Done);
+    assert_eq!(
+        jobs.get_job_run(&leaf).unwrap().unwrap().state,
+        JobRunState::Running
     );
 }
 
@@ -209,6 +494,7 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
         failed_step_id: "implement".into(),
         task_id: task.clone(),
         observed: None,
+        repair_commit: None,
         base_ref: Some("main".into()),
         admitted_at: Utc::now(),
         decision: Some(FinalRecoveryDecision::Reject {
@@ -232,6 +518,10 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
     let carried = &settles[0]["settlement"]["Fail"]["final_recovery"];
     assert_eq!(carried["run_id"], leaf.as_str(), "{settles:?}");
     assert_eq!(carried["decision"]["decision"], "reject", "{settles:?}");
+    assert_eq!(
+        settles[0]["settlement"]["Fail"]["failure"]["class"], "task_input",
+        "a rejected task is the task's own failure: {settles:?}"
+    );
     assert_ne!(
         before["status"], "rejected",
         "the follower wrote nothing to the owner's task"

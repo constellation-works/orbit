@@ -22,9 +22,9 @@ pub enum ExecutorType {
     /// re-serialized under the canonical `local_shell` name.
     #[serde(alias = "cli_command")]
     LocalShell,
-    /// Retired External Executor Protocol v1 (see
-    /// `docs/design/executors/specs/external-executor-protocol.md`). Still
-    /// deserializes so pre-existing defs load, but nothing dispatches it.
+    /// The former `external` transport was retired by the External Executor
+    /// Protocol retirement decision (ORB-10395). This variant remains so old
+    /// executor defs still deserialize, but no external transport is dispatched.
     External,
 }
 
@@ -152,6 +152,9 @@ pub struct ExecutorDef {
     pub model_flag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+    /// Optional real model call used only to recover an auth-excluded provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_probe: Option<AuthProbe>,
     #[serde(default)]
     pub env: HashMap<String, String>,
     /// Sandbox choice. `Off` persistently disables outer and provider-inner
@@ -206,6 +209,7 @@ impl ExecutorDef {
             model_pair_override,
             model_flag,
             timeout_seconds,
+            auth_probe,
             env,
             sandbox,
             allow_fallback,
@@ -222,6 +226,7 @@ impl ExecutorDef {
             model_pair_override,
             model_flag,
             timeout_seconds,
+            auth_probe,
             env,
             sandbox,
             allow_fallback,
@@ -233,4 +238,28 @@ impl ExecutorDef {
     pub fn model_pair_override(&self) -> Option<&ModelPairOverride> {
         self.model_pair_override.as_ref()
     }
+}
+
+/// A bounded authentication recovery call using the executor's launcher.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthProbe {
+    /// Arguments replacing the executor's normal activity arguments.
+    pub args: Vec<String>,
+    /// Minimal prompt sent on stdin, never on the process command line.
+    pub stdin: String,
+    /// Wall-clock limit, between 1 and 120 seconds.
+    pub timeout_seconds: u64,
+    /// A zero exit is required in addition to this success check.
+    pub success: AuthProbeSuccess,
+    /// Operator action to renew this provider's credentials.
+    pub relogin_hint: String,
+}
+
+/// How a successful authentication recovery call is recognized.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuthProbeSuccess {
+    ExitZero,
+    StdoutContains { text: String },
 }

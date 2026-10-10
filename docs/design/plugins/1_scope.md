@@ -2,8 +2,8 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-04
-last_validated: 2026-09-22
+last_updated: 2026-10-08
+last_validated: 2026-10-08
 ---
 
 # Scope: Orbit plugin standard
@@ -18,7 +18,7 @@ Orbit binary.
 
 Before this standard a "plugin" was three unrelated things: an **external tool** (executable
 plus sidecar, registered by `orbit tool add`, unsandboxed, absent from MCP —
-`orbit-tools/src/external.rs`); the **Claude Code plugin mirror** under `plugin/`; and a
+`crates/orbit-tools/src/external.rs`); the **Claude Code plugin mirror** under `plugin/`; and a
 **separate product** (orbit-research, orbit-graph) shelling out to `orbit tool run`. Nothing
 let one artifact declare tools, CLI, schedules, panels and skills together, or record what it
 is *allowed* to do; a first-party surface cost up to nine hand edits [ORB-12724].
@@ -188,7 +188,7 @@ Rules:
 orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins/<ns>/<version>/)
 orbit plugin add <git+url#commit> --allow-build
                                               →  installed   (spec.build ran in the build sandbox; build recorded)
-orbit plugin upgrade <ns> [source] [--grant …] [--allow-build]
+orbit plugin upgrade <ns> <source> [--grant …] [--allow-build]
                                               →  upgraded    (permission diff printed; widening requires re-consent)
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
@@ -262,7 +262,11 @@ still prevents the write.
 discovery roots that are siblings of the active global root (`~/.orbit` →
 `~/.agents/skills`, `~/.claude/skills`; `--root /path/to/root` → `/path/to/.agents/skills`,
 `/path/to/.claude/skills`). Disable removes only links whose targets are inside the global
-root's `plugins/<ns>/`.
+root's `plugins/<ns>/`. An enabled install or upgrade removes links into older
+version directories before linking the current manifest's skills, including when
+the manifest drops or renames a skill. Links into the current install and links
+outside the namespace are preserved. `plugin doctor` reports dangling skill links
+into any version directory in the namespace, including versions already pruned.
 
 **One version directory per namespace, swapped whole.** The `plugins` row's `install_path` is
 the only authority for where a plugin lives: the loader reads it, every lifecycle verb verifies
@@ -468,7 +472,7 @@ links, refuse the enable without writing schedule files or plugin provenance in 
 The manifest says *where* a tool appears (`mcp_scope`, `execution_kind`, CLI shape), never
 *who* may call it. Plugin tools resolve to one of two generic governed rows
 (`PLUGIN_TOOL_READ_ONLY`, `PLUGIN_TOOL_MUTATING` in
-`orbit-common/src/governance/authorization.rs`): `read_only` tools are callable by `Agent |
+`orbit-common/src/governance/authorization/mod.rs`): `read_only` tools are callable by `Agent |
 Operator | Runner`; `mutating` tools by `Operator | Runner`, and by `Agent` only when the
 task's `required_tools` or the activity allowlist names them.
 
@@ -500,11 +504,21 @@ set that fails its witness (§3) grants nothing on every surface.
 - `orbit plugin add --grant …` without `--enable` is rejected.
 
 **Upgrade and widening.** On a manifest digest change, `add` and `upgrade` compare filesystem
-roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Unchanged or narrower
-keeps the enable/grant state. Any widening disables the plugin, clears its grants and witness,
-prints the widened requests, and names the full `orbit plugin enable <ns> --grant …` command.
-`plugin upgrade <ns> [source]` defaults to the recorded source and always prints the diff; its
-own `--grant …` is explicit re-consent.
+roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Filesystem roots are
+compared after `{{config.<key>}}` renders against global `[plugins.<ns>]` over that manifest's
+`spec.config.defaults` (a workspace override is not host-wide, so it cannot hide a default
+another workspace would open) and each root is physically resolved the way the sandbox opens
+it. A rendered root that is unchanged, or that lies inside a root the previous manifest already
+opened, is not widening; a parent, a sibling, or any other new directory is. Unchanged or
+narrower keeps the enable/grant state. Any widening disables the plugin, clears its grants and
+witness, prints the widened requests, and names the full `orbit plugin enable <ns> --grant …`
+command.
+`plugin upgrade <ns> <source>` requires an explicit, non-empty source and always prints the
+diff; its own `--grant …` is explicit re-consent. Omitting the source refuses before any
+fetch or install. The recorded `plugins.source` field is informational: a backend with
+`orbit_tools` can rewrite the database, and the host-owned grant witness does not bind that
+field. Review and supply the intended source on every upgrade rather than copying it from
+the database without checking it.
 
 **Manifest digest binding.** Every load hashes the on-disk `plugin.yaml` and compares it to
 the row's install-time `manifest_digest`. A mismatch registers the plugin inactive with a
@@ -542,7 +556,13 @@ when present (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`,
 `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_SCRATCH_DIR`,
 `ORBIT_BIN`, `ORBIT_STEP_INDEX`, `ORBIT_TASK_ACTOR_KIND` and `ORBIT_ACTIVITY_*`). Any
 `permissions.env_pass` names the operator grants are copied when available. Other ambient
-variables are cleared. Orbit then sets:
+variables are cleared. Both `exec` and `mcp` apply this admission rule to the caller's
+supplied environment: `[execution.env].pass` or `inherit = true` makes a value available
+to the caller, but the plugin still needs its own request and `env_pass` grant. A name
+omitted by caller policy cannot be recovered from the host environment; the host process
+is the source only when no caller environment was supplied. Privilege-bearing Orbit names
+such as `ORBIT_OPERATOR` and `ORBIT_WORKSPACE_CLAIM_TOKEN` are excluded even if a legacy
+manifest requests them. Orbit then sets:
 
 ```
 ORBIT_HOST_API=1  ORBIT_VERSION=0.24.0  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
@@ -678,6 +698,11 @@ enforce the recorded install. `ORBIT_PLUGIN` is not the gate.
 
 **The session carries the caller's ceiling.** One plugin is reachable from callers with
 different allowlists, so a name-only gate would admit the whole manifest list [ORB-12801].
+Both workspace-scoped and global-scoped plugin calls enforce the managed caller's activity
+allowlist or deny policy inside the audit boundary. A global call needs no workspace runtime:
+it carries the trusted activity policy into its execution context and records policy refusals
+in the global audit store. The backend's callback ceiling intersects its manifest permissions
+with that same allowlist and removes tools the activity denies, including wildcard matches.
 Every callback is decided by **recorded allowlist ∩ session ceiling**, both consulted per
 call, neither read from the child's environment:
 
@@ -732,7 +757,7 @@ reliability view.
 
 | Manifest | Grant | Linux (`spawn_under_linux_landlock_boundary`) | macOS (`compile_macos_sandbox_profile` + `append_macos_network_access`) |
 |---|---|---|---|
-| (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the shared Landlock host table; the unreadable trees below get no grant | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
+| (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the shared Landlock host table; the default credential paths (`~/.config/gh`, `~/.ssh`, …) and the unreadable trees below get no grant, carved out of the host grants as well as the granted roots | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
 | `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only. The plugin write boundary handles standalone truncate and requires Landlock ABI 3 even if no write path is granted; older kernels refuse the spawn | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
@@ -986,6 +1011,9 @@ removed. A typed task field would do the same job as the tag but change the pers
 - A property whose flag would collide with a CLI-owned flag (`--input`, `--input-file`,
   `--dry-run`, `--explain`, `--format`, `--root`, `--workspace`, `--help`, `--version`) gets no
   flag and stays reachable through `--input`.
+- The global `--json` shorthand selects pretty JSON output. A plugin-derived `--json`
+  tool-input flag keeps its own meaning; select output JSON before the verb or with
+  `--format json` on that leaf.
 - `--input '<json>'` and `--input-file` are always accepted and win. The group declares the
   same `CommandOperation` and dispatches through the same `ToolRunArgs` as `orbit tool run`, so
   both spellings are one audited operation. `--dry-run` is accepted.

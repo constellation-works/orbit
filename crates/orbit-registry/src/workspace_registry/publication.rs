@@ -394,7 +394,8 @@ fn build_binding(
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.to_string()))?;
     let Some(fingerprint) = workspace.git_remote.as_deref() else {
         return Err(publication_error(format!(
-            "workspace '{workspace_id}' has no registered source-repository identity"
+            "workspace '{workspace_id}' has no registered source-repository identity; set a portable Git origin on the declared owner's checkout, then run `orbit workspace init --name {} --force` there before binding publication",
+            workspace.name
         )));
     };
     let Some(authority) = workspace.owner_machine_id.as_deref() else {

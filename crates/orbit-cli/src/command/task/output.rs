@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_core::{
     OrbitError, OrbitRuntime, TaskCrewRead, TaskStatus, resolve_task_dependencies,
     resolve_task_relations,
@@ -19,6 +19,22 @@ use crate::output::color::Domain;
 /// history projections keep every event for backward compatibility.
 pub(crate) fn is_human_visible_history_event(event: &str) -> bool {
     event != "commented"
+}
+
+pub(super) fn format_task_show_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+pub(super) fn format_task_history_event(entry: &TaskHistoryEntry) -> String {
+    match (
+        entry.event.as_str(),
+        entry.from_status.as_ref(),
+        entry.to_status.as_ref(),
+    ) {
+        ("status_changed", Some(from), Some(to)) => format!("status {from} → {to}"),
+        ("started", Some(from), Some(to)) => format!("started {from} → {to}"),
+        _ => entry.event.clone(),
+    }
 }
 
 pub(crate) fn task_to_signal_json(task: &orbit_core::Task) -> Value {
@@ -63,6 +79,7 @@ pub(crate) fn task_to_json(
         "source_task_id": task.source_task_id(),
         "job_run_id": task.job_run_id,
         "crew": task.crew,
+        "crew_source": task.crew_source,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
         "updated_at": task.updated_at.to_rfc3339(),
@@ -104,6 +121,9 @@ pub(crate) fn task_to_json_with_sidecars(
     );
     if let Some(requirement) = orbit_types::task::task_os_requirement_json(task) {
         object.insert("os_requirement".to_string(), requirement);
+    }
+    if let Some(readiness) = orbit_types::task::task_readiness_json(task) {
+        object.insert("readiness".to_string(), readiness);
     }
     let artifacts = runtime.get_task_artifact_manifest(&task.id)?;
     object.insert(
@@ -395,9 +415,9 @@ fn write_single_task_field(
                 let _ = writeln!(
                     text,
                     "{} {}: {}",
-                    dimmed(&format!("[{}]", comment.at.to_rfc3339())),
+                    dimmed(&format!("[{}]", format_task_show_timestamp(comment.at))),
                     comment.by,
-                    comment.message
+                    super::pilot_comment::comment_presentation(&comment)
                 );
             }
             Ok(())
@@ -476,18 +496,18 @@ fn write_single_task_field(
                     let _ = writeln!(
                         text,
                         "{} {}: {} ({})",
-                        dimmed(&format!("[{}]", entry.at.to_rfc3339())),
+                        dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
                         entry.by,
-                        entry.event,
+                        format_task_history_event(&entry),
                         note
                     );
                 } else {
                     let _ = writeln!(
                         text,
                         "{} {}: {}",
-                        dimmed(&format!("[{}]", entry.at.to_rfc3339())),
+                        dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
                         entry.by,
-                        entry.event
+                        format_task_history_event(&entry)
                     );
                 }
             }
@@ -505,6 +525,12 @@ fn write_single_task_field(
         }
         "orchestrator" => {
             text.push_str(task.orchestrator.as_deref().unwrap_or_default());
+            Ok(())
+        }
+        "readiness" => {
+            if let Some(readiness) = format_task_readiness(task) {
+                text.push_str(&readiness);
+            }
             Ok(())
         }
         "artifacts" => {
@@ -542,6 +568,29 @@ fn write_single_task_field(
             ))),
         },
     }
+}
+
+/// The human readiness readout of a `proposed` or `backlog` task: `ready` or
+/// `not ready`, then one indented line per gap with its fix. `None` for any
+/// other status.
+pub(crate) fn format_task_readiness(task: &orbit_core::Task) -> Option<String> {
+    let readiness = orbit_types::task::task_readiness(task)?;
+    let mut text = String::from(if readiness.ready() {
+        "ready"
+    } else {
+        "not ready"
+    });
+    for gap in &readiness.gaps {
+        let _ = write!(
+            text,
+            "\n  - {} [{}]: {} Fix: {}.",
+            gap.code.as_str(),
+            gap.severity.as_str(),
+            gap.message,
+            gap.fix
+        );
+    }
+    Some(text)
 }
 
 pub(crate) fn task_artifact_manifest_to_json(files: &[ArtifactManifestFileV2]) -> Value {

@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow } from './common.js';
+import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime, listItems } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -27,9 +27,36 @@ const $ = (id) => document.getElementById(id);
 // audit.js's expandedAuditIds) so a refresh tick does not collapse the row
 // someone is reading.
 const expandedIncidents = new Set();
+let incidentClass = "unexpected";
+export function getIncidentClass() { return incidentClass; }
+let agentDiagnosticsOpen = false;
+
+function shortenWorktreePaths(message) {
+  return String(message || "").replace(/(?:\/[\w.@~+-]+)+\/\.orbit\/state\/worktrees\/[^\s/:"'<>]+\/?/g, "[worktree]/");
+}
+
+function recoverableAgentDiagnostic(row) {
+  if (row.source !== "agent-stderr") return false;
+  const lines = String(row.message || "").split("\n").filter(Boolean);
+  // Codex logs patch verification under `codex_core::tools::router` (the tool
+  // name only appears in the message) and model refresh timeouts under
+  // `codex_models_manager::manager`.
+  const target = row.target || "";
+  const patchTarget = /tools::router|apply_patch/i.test(target);
+  const modelTarget = /models?_manager/i.test(target);
+  return lines.length > 0 && lines.every(message =>
+    (patchTarget && /apply_patch verification failed|Failed to find expected lines/i.test(message))
+    || (modelTarget && /request timed out/i.test(message)));
+}
 
 function hasCtx(ctx, key) {
   return ctx && typeof ctx[key] === "function";
+}
+
+// A relative age names its absolute instant in the cell's title.
+function relativeCell(ctx, v, td) {
+  if (td && v) td.title = formatDateTime(v);
+  return fmtRelativeValue(ctx, v);
 }
 
 function fmtRelativeValue(ctx, v) {
@@ -57,7 +84,7 @@ function actorIdentityLabel(v) {
 
 function getDiagMetricsColumns(ctx) {
   return [
-    { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
+    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
     { key: "step", label: "step", num: false },
     {
       key: "actor_identity",
@@ -69,7 +96,7 @@ function getDiagMetricsColumns(ctx) {
       key: "token_usage",
       label: "tokens",
       num: true,
-      render: (v) => (v == null ? "-" : String(v)),
+      render: (v) => (v == null ? "-" : Number(v).toLocaleString("en-US")),
     },
     { key: "tool_invocations", label: "tools", num: true },
     {
@@ -90,7 +117,7 @@ function errorRunLabel(row) {
 
 function getDiagErrorsColumns(ctx) {
   return [
-    { key: "ts", label: "time", num: false, render: (v) => fmtRelativeValue(ctx, v) },
+    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
     { key: "source", label: "source", num: false },
     {
       key: "job_run",
@@ -100,6 +127,8 @@ function getDiagErrorsColumns(ctx) {
     },
     { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
     { key: "step", label: "step", num: false, render: (v) => v || "-" },
+    { key: "target", label: "target", num: false, render: (v) => v || "-" },
+    { key: "recovered", label: "recovery", num: false, render: (v) => v ? "recovered — run succeeded" : "-" },
     {
       key: "message",
       label: "message",
@@ -108,28 +137,28 @@ function getDiagErrorsColumns(ctx) {
       render: (v, row, td) => {
         const full = v || "";
         td.title = row.target ? `${row.target}: ${full}` : full;
-        return truncateValue(ctx, full, 220);
+        return truncateValue(ctx, shortenWorktreePaths(full), 220);
       },
     },
   ];
 }
 
-function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
-  const body = $("diag-body");
+function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, body = $("diag-body") } = {}) {
   
   if (!rows || rows.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: emptyText || "No entries this month." })
+      el("div", { class: "text", text: emptyText || "No entries in this window." })
     ])]);
     return;
   }
   
   let table = body.querySelector("table.scoreboard-table");
   let tbody;
-  const tableSig = columns.map(c => c.key).join("-");
+  const tableSig = `${cards ? "cards:" : ""}${columns.map(c => c.key).join("-")}`;
   if (!table || table.dataset.sig !== tableSig) {
-    table = el("table", { class: "scoreboard-table" });
+    // `cards` tables restack each row as a card on narrow screens (health.css).
+    table = el("table", { class: `scoreboard-table${cards ? " card-table diag-table" : ""}` });
     table.dataset.sig = tableSig;
     const thead = el("thead");
     const headRow = el("tr");
@@ -151,7 +180,7 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText) {
     const tr = el("tr");
     for (const col of columns) {
       const baseClass =
-        (col.num ? "num" : "") + (col.cellClass ? ` ${col.cellClass}` : "");
+        (col.num ? "num" : "") + (col.cellClass ? ` ${col.cellClass}` : "") + ` c-${col.key}`;
       const td = el("td", { class: baseClass });
       const v = row[col.key];
       const text = col.render ? col.render(v, row, td) : v == null ? "" : String(v);
@@ -198,7 +227,7 @@ function eventCountLabel(value) {
 
 const INCIDENT_CLASS_ORDER = ["unexpected", "expected", "denied", "diagnostic"];
 
-function incidentSummaryNode(payload) {
+function incidentSummaryNode(payload, ctx) {
   const incidents = asCount(payload.incident_count);
   const failed = asCount(payload.raw_failed_events);
   const total = asCount(payload.total_events);
@@ -226,18 +255,27 @@ function incidentSummaryNode(payload) {
   const byClass = payload.incidents_by_class || {};
   const eventsByClass = payload.raw_events_by_class || {};
   const labels = payload.class_labels || {};
-  const chips = el("div", { class: "incident-class-chips" });
-  for (const key of INCIDENT_CLASS_ORDER) {
+  const chips = el("div", { class: "incident-class-chips", role: "group", "aria-label": "Incident class" });
+  for (const key of ["all", ...INCIDENT_CLASS_ORDER]) {
     const count = asCount(byClass[key]);
     const events = asCount(eventsByClass[key]);
     const category = categories[key] || {};
     const categoryRuns = asCount(category.affected_runs);
-    if (count === 0 && events === 0) continue;
-    chips.appendChild(el("span", {
+    const chip = el("button", {
       class: `incident-class-chip ${key}`,
-      title: `${labels[key] || key}: ${count} incidents from ${events} raw events affecting ${categoryRuns} runs (window ${window})`,
-      text: `${labels[key] || key}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
-    }));
+      type: "button",
+      "aria-pressed": incidentClass === key ? "true" : "false",
+      title: `${labels[key] || key}: ${key === "all" ? incidents : count} incidents (window ${window})`,
+      text: key === "all" ? `All: ${incidents}` : `${incidentClassLabel(key, labels[key])}: ${count} incidents · ${events} raw · ${categoryRuns} runs`,
+    });
+    chip.dataset.class = key;
+    chip.addEventListener("click", () => {
+      if (incidentClass === key) return;
+      incidentClass = key;
+      renderIncidents(payload, ctx);
+      if (hasCtx(ctx, "refreshDiagnostics")) ctx.refreshDiagnostics();
+    });
+    chips.appendChild(chip);
   }
 
   const children = [head];
@@ -288,17 +326,25 @@ function incidentEvidenceTable(events, ctx) {
   return table;
 }
 
+// The grouping signature is an internal key (`unexpected|role=…|msg=…`), so a
+// row with no recorded message says so rather than showing it; the signature
+// stays in the expanded details.
+function incidentMessageText(row) {
+  const message = typeof row.message === "string" ? row.message.trim() : "";
+  return message || `${row.surface || "unknown surface"} failed; no message recorded`;
+}
+
 function incidentDetailNode(incident, ctx) {
   const detail = el("div", { class: "incident-detail" });
 
   const facts = el("dl", { class: "incident-facts" });
-  const fact = (label, value) => {
+  const fact = (label, value, title = "") => {
     facts.appendChild(el("dt", { text: label }));
-    facts.appendChild(el("dd", { class: "mono", text: value }));
+    facts.appendChild(el("dd", { class: "mono", text: value, title }));
   };
   fact("grouping signature", incident.signature || "-");
-  fact("classification", incident.class_label || incident.class || "-");
-  fact("actor", incident.actor || "-");
+  fact("classification", incidentClassLabel(incident.class, incident.class_label), incident.class_label || incident.class);
+  fact("actor", auditActorLabel(incident.actor), incident.actor);
   fact("surface", incident.surface || "-");
   if (incident.activity_id) fact("step", incident.activity_id);
   fact("first seen", ctx.fmtAbsTime ? ctx.fmtAbsTime(incident.first_ts) : incident.first_ts || "-");
@@ -325,7 +371,7 @@ function incidentDetailNode(incident, ctx) {
         el("span", { class: "chain-mark", text: "↳" }),
         el("span", { class: "chain-surface mono", text: link.surface || "-" }),
         el("span", { class: "chain-count", text: eventCountLabel(link.event_count) }),
-        el("span", { class: "chain-message", text: truncateValue(ctx, link.message || link.signature || "", 140) }),
+        el("span", { class: "chain-message", text: truncateValue(ctx, incidentMessageText(link), 140) }),
       ]));
     }
     detail.appendChild(chain);
@@ -353,11 +399,21 @@ function incidentDetailNode(incident, ctx) {
     title: "Every underlying event stays in the raw Audit view",
   });
   rawButton.type = "button";
-  rawButton.addEventListener("click", () => navigateToDrilldown({
-    role: incident.actor || null,
-    tool: incident.surface || null,
-    status: incident.class === "denied" ? "denied" : "failure",
-  }));
+  rawButton.addEventListener("click", () => {
+    const eventIds = Array.isArray(incident.events)
+      ? incident.events
+        .map(event => event.id)
+        .filter(id => Number.isSafeInteger(id) && id > 0)
+      : [];
+    const completeEventIds = eventIds.length > 0 && eventIds.length === asCount(incident.event_count)
+      ? eventIds
+      : null;
+    navigateToDrilldown({
+      role: completeEventIds ? null : (incident.actor || null),
+      tool: completeEventIds || incident.has_tool_identity === false ? null : (incident.surface || null),
+      eventIds: completeEventIds,
+    });
+  });
   actions.appendChild(rawButton);
   if (runIds.length > 0 && hasCtx(ctx, "setActiveTab")) {
     const runButton = el("button", { class: "chip", text: `Open run ${runIds[0]}` });
@@ -386,15 +442,15 @@ function incidentRowNode(incident, ctx) {
     title: "Show the exact audit events behind this incident",
   }, [
     el("span", { class: "incident-caret", text: expanded ? "▾" : "▸" }),
-    el("span", { class: `incident-class ${incident.class || "unexpected"}`, text: incident.class_label || incident.class || "failure" }),
+    el("span", { class: `incident-class ${incident.class || "unexpected"}`, text: incidentClassLabel(incident.class, incident.class_label), title: incident.class_label || incident.class }),
     el("span", { class: "incident-surface mono", text: incident.surface || "-" }),
-    el("span", { class: "incident-actor", text: incident.actor || "unknown actor" }),
+    el("span", { class: "incident-actor", text: incident.actor ? auditActorLabel(incident.actor) : "unknown actor", title: incident.actor }),
     el("span", {
       class: "incident-count",
       title: `${asCount(incident.event_count)} raw audit events collapsed into this incident`,
       text: eventCountLabel(incident.event_count),
     }),
-    el("span", { class: "incident-when", text: fmtRelativeValue(ctx, incident.last_ts) }),
+    el("span", { class: "incident-when", text: fmtRelativeValue(ctx, incident.last_ts), title: formatDateTime(incident.last_ts) }),
   ]);
   header.type = "button";
   header.setAttribute("aria-expanded", expanded ? "true" : "false");
@@ -406,7 +462,7 @@ function incidentRowNode(incident, ctx) {
   article.appendChild(header);
   article.appendChild(el("div", {
     class: "incident-message",
-    text: truncateValue(ctx, incident.message || incident.signature || "", 220),
+    text: truncateValue(ctx, incidentMessageText(incident), 220),
   }));
   if (expanded) article.appendChild(incidentDetailNode(incident, ctx));
   return article;
@@ -414,8 +470,9 @@ function incidentRowNode(incident, ctx) {
 
 function renderIncidents(payload, ctx) {
   const body = $("diag-body");
-  const incidents = Array.isArray(payload && payload.incidents) ? payload.incidents : [];
-  const summary = incidentSummaryNode(payload || {});
+  const incidents = (Array.isArray(payload && payload.incidents) ? payload.incidents : [])
+    .filter(incident => incidentClass === "all" || incident.class === incidentClass);
+  const summary = incidentSummaryNode(payload || {}, ctx);
   if (incidents.length === 0) {
     syncNodes(body, [summary, el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
@@ -426,6 +483,17 @@ function renderIncidents(payload, ctx) {
   const list = el("div", { class: "incident-list" });
   for (const incident of incidents) list.appendChild(incidentRowNode(incident, ctx));
   syncNodes(body, [summary, list]);
+}
+
+// The Errors feed reports where its sources were actually read from. When that
+// is later than the window start (or the window is `all`), the header says so
+// instead of implying the whole window was searched.
+function errorsCoverageLabel(payload) {
+  const coverage = Date.parse(payload && payload.coverage_since);
+  if (Number.isNaN(coverage)) return "";
+  const since = Date.parse(payload.since);
+  if (!Number.isNaN(since) && coverage <= since) return "";
+  return `covers since ${formatDateTime(payload.coverage_since)}`;
 }
 
 function renderDiagnostics(ctx = {}) {
@@ -440,34 +508,53 @@ function renderDiagnostics(ctx = {}) {
 
   if (sub === "incidents") {
     const payload = last.incidents || {};
-    // Both counts in the header: grouped incidents, and the raw failed events
-    // they were derived from. Neither is inferable from the other.
+    // Full denominators live in the summary; the header names the displayed range.
     $("diag-count").textContent =
-      `${asCount(payload.failure_categories && payload.failure_categories.unexpected && payload.failure_categories.unexpected.incidents)} unexpected / ${asCount(payload.incident_count)} all incidents / ${asCount(payload.raw_failed_events)} failed events`;
+      `Newest ${asCount(payload.shown_incident_count)} of ${asCount(payload.matching_incident_count)} incidents · window ${payload.window || getWindow()}`;
     renderIncidents(payload, ctx);
     return;
   }
 
-  const rows = last[sub] || [];
+  const rows = sub === "errors" ? listItems(last.errors) : (last[sub] || []);
   const count = $("diag-count");
   if (sub === "errors") {
-    count.textContent = `${rows.length} error events this month`;
-    count.title = `Step and event failures for the current month, capped at the diag URL parameter (default 50). Distinct from header Failed runs (${getWindow()} Failed, Timeout, and Interrupted job runs) and Recent Runs' failed filter (durable Failed job runs, no window).`;
+    const coverage = errorsCoverageLabel(last.errors);
+    count.textContent = `${rows.length} error events · window ${getWindow()}${coverage ? ` · ${coverage}` : ""}`;
+    count.title = coverage
+      ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
+      : "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
   } else {
-    count.textContent = `${rows.length} metric entries this month`;
-    count.title = "Invocation metrics for the current month.";
+    count.textContent = `${rows.length} metric entries · window ${getWindow()}`;
+    count.title = "Most recent invocation metrics in the selected window; capped by the diag URL parameter (default 50).";
   }
   const columns =
     sub === "metrics"
       ? getDiagMetricsColumns(ctx)
       : getDiagErrorsColumns(ctx);
+  if (sub === "errors") {
+    const main = el("div", { class: "diagnostics-errors-main" });
+    const internal = rows.filter(recoverableAgentDiagnostic);
+    renderDiagnosticsTable(rows.filter(row => !recoverableAgentDiagnostic(row)), columns, ctx,
+      rows.length ? "No other error events in this window." : "No error events in this window.", { cards: true, body: main });
+    const children = [main];
+    if (internal.length) {
+      const details = el("details", { class: "agent-diagnostics" });
+      details.open = agentDiagnosticsOpen;
+      details.addEventListener("toggle", () => { if (details.isConnected) agentDiagnosticsOpen = details.open; });
+      details.appendChild(el("summary", { text: `Agent diagnostics (${internal.length}) · patch verification and model timeouts` }));
+      const content = el("div");
+      renderDiagnosticsTable(internal, columns, ctx, "", { cards: true, body: content });
+      details.appendChild(content);
+      children.push(details);
+    }
+    syncNodes($("diag-body"), children);
+    return;
+  }
   renderDiagnosticsTable(
     rows,
     columns,
     ctx,
-    sub === "errors"
-      ? "No error events this month (step/event failures, not job-run states)."
-      : "No metric entries this month.",
+    "No metric entries in this window.",
   );
 }
 
@@ -491,7 +578,7 @@ function keyed(node, key, source) {
 
 function metricsCard(title, rows, cols) {
   const card = el("div", { class: "audit-summary-card" });
-  card.appendChild(el("div", { class: "card-title", text: title }));
+  card.appendChild(el("div", { class: "card-title section-title", text: title }));
   const body = el("div", { class: "card-body" });
   
   const table = el("table", { class: "summary-table" });
@@ -530,7 +617,7 @@ function complexityLabel(value) {
 function completionByComplexityCard(rows) {
   if (!rows.length) {
     const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title", text: "Task completion by complexity" }));
+    card.appendChild(el("div", { class: "card-title section-title", text: "Task completion by complexity" }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", { class: "empty", text: "No tasks." }));
     card.appendChild(body);

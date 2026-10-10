@@ -92,9 +92,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "arrayref"
@@ -223,16 +223,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
 dependencies = [
- "bit-vec 0.6.3",
-]
-
-[[package]]
-name = "bit-set"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
-dependencies = [
- "bit-vec 0.8.0",
+ "bit-vec",
 ]
 
 [[package]]
@@ -240,12 +231,6 @@ name = "bit-vec"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
-
-[[package]]
-name = "bit-vec"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bitflags"
@@ -558,7 +543,7 @@ dependencies = [
  "cpubits",
  "ctutils",
  "num-traits",
- "rand_core 0.10.1",
+ "rand_core",
  "serdect",
  "zeroize",
 ]
@@ -589,7 +574,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"
 dependencies = [
  "crypto-bigint",
- "rand_core 0.10.1",
+ "rand_core",
 ]
 
 [[package]]
@@ -804,18 +789,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "531e46835a22af56d1e3b66f04844bed63158bc094a628bec1d321d9b4c44bf2"
 dependencies = [
- "bit-set 0.5.3",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
-name = "fancy-regex"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
-dependencies = [
- "bit-set 0.8.0",
+ "bit-set",
  "regex-automata",
  "regex-syntax",
 ]
@@ -1439,7 +1413,7 @@ dependencies = [
  "anyhow",
  "base64",
  "bytecount",
- "fancy-regex 0.13.0",
+ "fancy-regex",
  "fraction",
  "getrandom 0.2.17",
  "iso8601",
@@ -1750,26 +1724,21 @@ dependencies = [
 
 [[package]]
 name = "orbit-agent"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "orbit-common",
- "orbit-tools",
  "orbit-types",
- "regex",
- "reqwest",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
- "tiktoken-rs",
  "tracing",
- "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-automation"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1783,11 +1752,12 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "orbit-cli"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1810,6 +1780,7 @@ dependencies = [
  "orbit-web",
  "predicates",
  "regex",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1819,15 +1790,13 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
- "tower",
  "tracing",
- "url",
  "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-cmd"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -1836,7 +1805,6 @@ dependencies = [
  "orbit-common",
  "orbit-config",
  "orbit-core",
- "orbit-engine",
  "orbit-mcp",
  "orbit-registry",
  "orbit-store",
@@ -1855,14 +1823,13 @@ dependencies = [
 
 [[package]]
 name = "orbit-common"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "fs2",
  "getrandom 0.3.4",
  "libc",
  "orbit-types",
- "proptest",
  "regex",
  "rsa",
  "rusqlite",
@@ -1875,14 +1842,13 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "unicode-normalization",
  "url",
  "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-config"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "jsonschema",
  "orbit-common",
@@ -1898,18 +1864,18 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "base64",
  "blake3",
  "chrono",
- "croner",
  "fs2",
  "getrandom 0.3.4",
  "libc",
  "orbit-automation",
  "orbit-common",
  "orbit-config",
+ "orbit-core",
  "orbit-engine",
  "orbit-exec",
  "orbit-policy",
@@ -1917,13 +1883,13 @@ dependencies = [
  "orbit-store",
  "orbit-tools",
  "orbit-types",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "toml",
- "toml_edit",
  "tracing",
  "tracing-subscriber",
  "yaml_serde",
@@ -1931,9 +1897,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-engine"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "jsonschema",
  "libc",
  "orbit-agent",
@@ -1956,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-exec"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "libc",
  "orbit-common",
@@ -1969,11 +1936,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-mcp"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "base64",
  "chrono",
- "getrandom 0.3.4",
  "libc",
  "orbit-common",
  "orbit-registry",
@@ -1982,28 +1948,25 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
 name = "orbit-policy"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "orbit-common",
  "orbit-types",
- "serde",
  "tempfile",
 ]
 
 [[package]]
 name = "orbit-registry"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "hostname",
@@ -2019,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-search"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "orbit-common",
  "orbit-types",
@@ -2031,17 +1994,16 @@ dependencies = [
 
 [[package]]
 name = "orbit-store"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "blake3",
  "chrono",
- "fs2",
  "jsonschema",
  "libc",
  "orbit-common",
  "orbit-types",
- "regex",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2055,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-tools"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -2067,7 +2029,6 @@ dependencies = [
  "orbit-policy",
  "orbit-types",
  "regex",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2082,16 +2043,15 @@ dependencies = [
 
 [[package]]
 name = "orbit-types"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "chrono",
  "clap",
- "proptest",
  "regex",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tempfile",
  "thiserror",
  "url",
  "yaml_serde",
@@ -2099,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-web"
-version = "0.26.0"
+version = "0.28.1"
 dependencies = [
  "axum",
  "base64",
@@ -2108,11 +2068,14 @@ dependencies = [
  "clap",
  "flate2",
  "futures-core",
+ "hyper",
+ "hyper-util",
  "libc",
  "orbit-cmd",
  "orbit-common",
  "orbit-core",
  "orbit-registry",
+ "orbit-store",
  "orbit-types",
  "reqwest",
  "serde",
@@ -2123,7 +2086,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "wait-timeout",
  "yaml_serde",
 ]
 
@@ -2243,15 +2205,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
-name = "ppv-lite86"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
-dependencies = [
- "zerocopy",
-]
-
-[[package]]
 name = "predicates"
 version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2291,31 +2244,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proptest"
-version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
-dependencies = [
- "bit-set 0.8.0",
- "bit-vec 0.8.0",
- "bitflags",
- "num-traits",
- "rand",
- "rand_chacha",
- "rand_xorshift",
- "regex-syntax",
- "rusty-fork",
- "tempfile",
- "unarray",
-]
-
-[[package]]
-name = "quick-error"
-version = "1.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
-
-[[package]]
 name = "quote"
 version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2331,48 +2259,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
-name = "rand"
-version = "0.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
-dependencies = [
- "rand_chacha",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
-dependencies = [
- "getrandom 0.3.4",
-]
-
-[[package]]
 name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
-
-[[package]]
-name = "rand_xorshift"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
-dependencies = [
- "rand_core 0.9.5",
-]
 
 [[package]]
 name = "redox_syscall"
@@ -2521,7 +2411,7 @@ dependencies = [
  "digest 0.11.3",
  "pkcs1",
  "pkcs8",
- "rand_core 0.10.1",
+ "rand_core",
  "sha2 0.11.0",
  "signature",
  "spki",
@@ -2544,12 +2434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc-hash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
-
-[[package]]
 name = "rustix"
 version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2564,9 +2448,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.37"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "rustls-pki-types",
@@ -2586,9 +2470,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2600,18 +2484,6 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
-
-[[package]]
-name = "rusty-fork"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
-dependencies = [
- "fnv",
- "quick-error",
- "tempfile",
- "wait-timeout",
-]
 
 [[package]]
 name = "ryu"
@@ -2834,7 +2706,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
  "digest 0.11.3",
- "rand_core 0.10.1",
+ "rand_core",
 ]
 
 [[package]]
@@ -3038,21 +2910,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tiktoken-rs"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fac4a168cfc1d8ed65bf17a6ee0843ad9a68f863c63c0fb2fa7eab67838782ee"
-dependencies = [
- "anyhow",
- "base64",
- "bstr",
- "fancy-regex 0.17.0",
- "lazy_static",
- "regex",
- "rustc-hash",
-]
-
-[[package]]
 name = "time"
 version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3092,21 +2949,6 @@ dependencies = [
  "displaydoc",
  "zerovec",
 ]
-
-[[package]]
-name = "tinyvec"
-version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e61e67053d25a4e82c844e8424039d9745781b3fc4f32b8d55ed50f5f667ef3"
-dependencies = [
- "tinyvec_macros",
-]
-
-[[package]]
-name = "tinyvec_macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
@@ -3371,25 +3213,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
-name = "unarray"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
-
-[[package]]
-name = "unicode-normalization"
-version = "0.1.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
-dependencies = [
- "tinyvec",
-]
 
 [[package]]
 name = "unicode-segmentation"

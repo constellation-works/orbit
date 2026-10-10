@@ -78,6 +78,32 @@ const UNBOUND_SESSION_SELECTOR_DESCRIPTION: &str = "Workspace selector for the a
 const FEDERATED_SELECTOR_DESCRIPTION: &str = "Copy the `selector` field from federated `orbit.workspace.list` to address a workspace. \
      Do not parse or construct the token. A call without a host-qualified selector is refused.";
 
+/// An id-routed task tool on a bound authoritative session: the binding is
+/// the default, and a remote prefix is refused rather than relayed.
+const ID_ROUTED_BOUND_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
+     workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this \
+     session, which is already bound to a workspace — by `orbit mcp serve --workspace` at \
+     launch or `_meta.orbit.workspace` at initialize. Pass it to address a different \
+     registered workspace. An id whose prefix belongs to another registered host is refused \
+     with `task_prefix_remote`, naming that host; this server does not relay. Never inferred \
+     from the server process cwd.";
+
+/// An id-routed task tool on an unbound authoritative session: the id
+/// addresses the task, so the selector is optional.
+const ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION: &str = "Optional workspace selector for the authoritative server: a registered workspace \
+     name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. \
+     Omitted, this session, which is bound to no workspace, resolves the task id through this \
+     server's task registry. An id whose prefix belongs to another registered host is refused \
+     with `task_prefix_remote`, naming that host; this server does not relay. Never inferred \
+     from the server process cwd.";
+
+/// An id-routed task tool on the federated mux: an id-only call goes to the
+/// host the id's prefix names.
+const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional. Omit it to deliver the call to the host the task id's prefix names. To address \
+     a specific workspace instead, copy the `selector` field from federated \
+     `orbit.workspace.list`; do not parse or construct the token. A read there may be another \
+     host's mirror, and that host refuses a write to a task it does not hold.";
+
 /// How this session advertises the workspace selector on workspace-scoped tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SelectorAdvertisement {
@@ -88,10 +114,12 @@ pub(crate) enum SelectorAdvertisement {
 }
 
 impl WorkspaceBinding {
-    fn selector_description(self) -> &'static str {
-        match self {
-            Self::Bound => BOUND_SESSION_SELECTOR_DESCRIPTION,
-            Self::Unbound => UNBOUND_SESSION_SELECTOR_DESCRIPTION,
+    fn selector_description(self, id_routed: bool) -> &'static str {
+        match (self, id_routed) {
+            (Self::Bound, false) => BOUND_SESSION_SELECTOR_DESCRIPTION,
+            (Self::Unbound, false) => UNBOUND_SESSION_SELECTOR_DESCRIPTION,
+            (Self::Bound, true) => ID_ROUTED_BOUND_SELECTOR_DESCRIPTION,
+            (Self::Unbound, true) => ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION,
         }
     }
 }
@@ -105,11 +133,12 @@ pub(super) fn ensure_workspace_selector(
     if definition.scope != McpToolScope::WorkspaceRequired {
         return;
     }
+    let id_routed = crate::federated::is_id_routed_tool(&definition.schema.name);
     match advertisement {
         SelectorAdvertisement::Authoritative(binding) => {
-            ensure_authoritative_selector(schema, definition, binding);
+            ensure_authoritative_selector(schema, definition, binding, id_routed);
         }
-        SelectorAdvertisement::Federated => ensure_federated_selector(schema),
+        SelectorAdvertisement::Federated => ensure_federated_selector(schema, id_routed),
     }
 }
 
@@ -129,6 +158,7 @@ fn ensure_authoritative_selector(
     schema: &mut JsonObject,
     definition: &McpToolDefinition,
     binding: WorkspaceBinding,
+    id_routed: bool,
 ) {
     // `orbit.task.show` still opens a workspace runtime, but `id` is globally
     // resolved by default [ORB-10961]. The generic selector text would make
@@ -145,30 +175,41 @@ fn ensure_authoritative_selector(
             WORKSPACE_SELECTOR_PARAM.to_string(),
             json!({
                 "type": "string",
-                "description": binding.selector_description(),
+                "description": binding.selector_description(id_routed),
             }),
         );
     }
-    if binding == WorkspaceBinding::Unbound {
+    if binding == WorkspaceBinding::Unbound && !id_routed {
         require_property(schema, WORKSPACE_SELECTOR_PARAM);
     }
 }
 
-fn ensure_federated_selector(schema: &mut JsonObject) {
+fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool) {
     let Some(properties) = selector_properties(schema) else {
         return;
     };
-    // Replace any v1 local wording a tool declared itself — including
-    // `orbit.task.show`'s optional id-only filter. Federated callers must copy
-    // the list token; id-only default does not survive two machines.
+    // Replace any v1 local wording a tool declared itself. Federated callers
+    // copy the list token; an id-routed task tool may instead omit it and
+    // route by the id's prefix.
+    let description = if id_routed {
+        FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION
+    } else {
+        FEDERATED_SELECTOR_DESCRIPTION
+    };
     properties.insert(
         WORKSPACE_SELECTOR_PARAM.to_string(),
         json!({
             "type": "string",
-            "description": FEDERATED_SELECTOR_DESCRIPTION,
+            "description": description,
         }),
     );
-    require_property(schema, WORKSPACE_SELECTOR_PARAM);
+    if id_routed {
+        // A tool that declared its own selector as required is still
+        // addressable by id here.
+        unrequire_property(schema, WORKSPACE_SELECTOR_PARAM);
+    } else {
+        require_property(schema, WORKSPACE_SELECTOR_PARAM);
+    }
 }
 
 /// The `properties` map the selector joins. A declared schema may name no
@@ -186,6 +227,12 @@ fn require_property(schema: &mut JsonObject, property: &str) {
         && !required.iter().any(|name| name == property)
     {
         required.push(json!(property));
+    }
+}
+
+fn unrequire_property(schema: &mut JsonObject, property: &str) {
+    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+        required.retain(|name| name != property);
     }
 }
 

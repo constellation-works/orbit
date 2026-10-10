@@ -103,6 +103,14 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         self.store.list_audit_events(filter)
     }
 
+    fn list_audit_events_by_ids(
+        &self,
+        ids: &[i64],
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<AuditEvent>, OrbitError> {
+        self.store.list_audit_events_by_ids(ids, workspace_id)
+    }
+
     fn get_audit_event(&self, id: i64) -> Result<Option<AuditEvent>, OrbitError> {
         // Audit events use the GlobalOnly strategy per `CLAUDE.md`. The key is
         // stringified so the canonical `resolve` helper can handle it; the
@@ -124,13 +132,6 @@ impl AuditEventStoreBackend for SqliteAuditEventStoreBackend {
         tool: Option<&str>,
     ) -> Result<Vec<i64>, OrbitError> {
         self.store.get_audit_event_durations(since, tool)
-    }
-
-    fn get_audit_event_durations_null_tool(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<i64>, OrbitError> {
-        self.store.get_audit_event_durations_null_tool(since)
     }
 
     fn get_audit_event_hourly_buckets(
@@ -247,6 +248,7 @@ pub(crate) struct SqliteTaskReservationStoreBackend {
 }
 
 impl SqliteTaskReservationStoreBackend {
+    #[track_caller]
     fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,

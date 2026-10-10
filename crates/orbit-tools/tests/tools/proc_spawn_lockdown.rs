@@ -331,11 +331,166 @@ fn policy_with_profile(name: &str, read: Vec<String>) -> PolicyDef {
     }
 }
 
-/// `git` is on shipped activity program lists and runs a `!` alias through a
-/// shell. That child sees exactly the parent's read view. The outer OS sandbox
-/// supplies any masks; this fixture runs without one. [ORB-13689]
+/// Command-line aliases must not disguise writes to the primary checkout's
+/// shared Git configuration. [ORB-14114]
 #[test]
-fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
+fn command_line_options_cannot_hide_persistent_git_config_writes() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let ctx = workspace_activity_context(workspace.path(), &["git"]);
+    let registry = registry();
+    // A regression must fail in an isolated repository, without letting the
+    // now-allowed write reach the developer's or runner's shared Git config.
+    let init = registry
+        .execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "git", "args": ["init", "-q"] }),
+        )
+        .expect("initialize isolated Git fixture");
+    assert_eq!(init["exit_code"], json!(0), "{init:?}");
+    let config = workspace.path().join(".git/config");
+    let original = fs::read(&config).expect("read initial Git config");
+    let cases: &[&[&str]] = &[
+        &[
+            "-c",
+            "alias.x=config",
+            "x",
+            "remote.origin.url",
+            "https://example.invalid/repo",
+        ],
+        &["-c", "alias.x=remote", "x", "add", "a", "b"],
+        &[
+            "-calias.x=config",
+            "x",
+            "remote.origin.url",
+            "https://example.invalid/repo",
+        ],
+        &["-calias.x=remote", "x", "add", "a", "b"],
+        &[
+            "-c",
+            "alias.x=!git config remote.origin.url https://example.invalid/repo",
+            "x",
+        ],
+        &[
+            "-c",
+            "core.bare=false",
+            "-c",
+            "ALIAS.x=config",
+            "x",
+            "remote.origin.url",
+            "x",
+        ],
+        &[
+            "--config-env",
+            "alias.x=ORBIT_GIT_ALIAS",
+            "x",
+            "remote.origin.url",
+            "x",
+        ],
+        &["--config-env=alias.x=ORBIT_GIT_ALIAS", "x", "add", "a", "b"],
+        &["--config-env=ALIAS.x=ORBIT_GIT_ALIAS", "x"],
+        &["-c", "alias.x", "x"],
+        &["-c", "alias.x=status", "status"],
+        &[
+            "--config-env",
+            "core.bare=ORBIT_GIT_BARE",
+            "config",
+            "remote.origin.url",
+            "x",
+        ],
+    ];
+    for args in cases {
+        let result = registry.execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "git", "args": args }),
+        );
+        assert!(
+            matches!(result, Err(OrbitError::PolicyDenied(_))),
+            "command-line options must not bypass the persistent Git config guard: {args:?}: {result:?}"
+        );
+    }
+    assert_eq!(fs::read(config).expect("read final Git config"), original);
+}
+
+#[test]
+fn direct_git_config_and_remote_reads_remain_available() {
+    assert!(
+        on_path("git"),
+        "Git is required to exercise read-only queries"
+    );
+    let workspace = tempdir().expect("workspace tempdir");
+    let workspace_root = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let mut ctx = workspace_activity_context(&workspace_root, &["git"]);
+    ctx.proc_spawn_environment
+        .as_mut()
+        .expect("explicit child environment")
+        .push(("ORBIT_GIT_BARE".to_string(), "false".to_string()));
+    let registry = registry();
+    let init = registry
+        .execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": "git", "args": ["init", "-q"] }),
+        )
+        .expect("initialize isolated Git fixture");
+    assert_eq!(init["exit_code"], json!(0), "{init:?}");
+    let config = workspace_root.join(".git/config");
+    let original =
+        "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://example.invalid/repo\n";
+    fs::write(&config, original).expect("seed isolated Git config");
+
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["config", "--get", "remote.origin.url"],
+            "https://example.invalid/repo",
+        ),
+        (&["remote", "-v"], "https://example.invalid/repo"),
+        (
+            &[
+                "-c",
+                "core.bare=false",
+                "config",
+                "--get",
+                "remote.origin.url",
+            ],
+            "https://example.invalid/repo",
+        ),
+        (
+            &[
+                "--config-env=core.bare=ORBIT_GIT_BARE",
+                "config",
+                "--get",
+                "core.bare",
+            ],
+            "false",
+        ),
+    ];
+    for &(args, expected) in cases {
+        let value = registry
+            .execute(
+                "proc.spawn",
+                &ctx,
+                json!({ "program": "git", "args": args }),
+            )
+            .expect("direct read-only queries must remain available");
+        assert_eq!(value["exit_code"], json!(0), "{args:?}: {value:?}");
+        assert!(stdout_of(&value).contains(expected), "{args:?}: {value:?}");
+    }
+    assert_eq!(
+        fs::read_to_string(config).expect("read Git config"),
+        original
+    );
+}
+
+/// `git` is on shipped activity program lists. Its child sees exactly the
+/// parent's read view. The outer OS sandbox supplies any masks; this fixture
+/// runs without one. [ORB-13689]
+#[test]
+fn git_can_read_a_benign_host_file_visible_to_its_parent() {
     if !on_path("git") {
         return;
     }
@@ -360,14 +515,15 @@ fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
             json!({
                 "program": "git",
                 "args": [
-                    "-c",
-                    format!("alias.orbitsecurityprobe=!cat {}", sentinel.display()),
-                    "orbitsecurityprobe",
+                    "diff",
+                    "--no-index",
+                    "/dev/null",
+                    sentinel,
                 ],
                 "timeout_ms": 10000,
             }),
         )
-        .expect("the alias may run");
+        .expect("Git may read a file visible to its parent");
 
     assert!(
         stdout_of(&value).contains("HOST_SENTINEL_ORB11514"),
@@ -378,7 +534,7 @@ fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
 /// Without an enclosing OS read mask, the activity's `denyRead` no longer
 /// governs a subprocess. Other filesystem tools still use that profile.
 #[test]
-fn a_git_shell_alias_inherits_parent_access_to_a_deny_read_file() {
+fn git_inherits_parent_access_to_a_deny_read_file() {
     if !on_path("git") {
         return;
     }
@@ -391,32 +547,28 @@ fn a_git_shell_alias_inherits_parent_access_to_a_deny_read_file() {
     fs::write(workspace_root.join("notes.txt"), "ALLOWED_CONTENT").expect("write allowed");
 
     let ctx = workspace_activity_context(&workspace_root, &["git"]);
-    let alias = |target: &str| {
+    let diff = |target: &str| {
         registry()
             .execute(
                 "proc.spawn",
                 &ctx,
                 json!({
                     "program": "git",
-                    "args": [
-                        "-c",
-                        format!("alias.orbitsecurityprobe=!cat {target}"),
-                        "orbitsecurityprobe",
-                    ],
+                    "args": ["diff", "--no-index", "/dev/null", target],
                     "timeout_ms": 10000,
                 }),
             )
-            .expect("the alias may run")
+            .expect("Git may read a file visible to its parent")
     };
 
-    // The trampoline itself works for ordinary files and for paths denied by
+    // Git reads ordinary files and paths denied by
     // the separate activity read profile when no outer mask covers them.
     assert!(
-        stdout_of(&alias("notes.txt")).contains("ALLOWED_CONTENT"),
-        "the alias mechanism should still reach an allowed file"
+        stdout_of(&diff("notes.txt")).contains("ALLOWED_CONTENT"),
+        "Git should still reach an allowed file"
     );
     assert!(
-        stdout_of(&alias(".env")).contains("DENY_READ_SECRET"),
+        stdout_of(&diff(".env")).contains("DENY_READ_SECRET"),
         "the child did not inherit the parent's read access"
     );
 }
@@ -487,5 +639,492 @@ fn allowlisted_git_and_rg_still_work_inside_the_workspace() {
             )
             .expect("rg should run");
         assert!(stdout_of(&value).contains("needle"), "{value:?}");
+    }
+}
+
+/// A fake rustup that writes `macro.env.html` when a real default-profile
+/// install would. `--profile minimal` and an already-present toolchain do not.
+#[cfg(unix)]
+const FAKE_RUSTUP: &str = r#"#!/bin/sh
+set -eu
+home="${RUSTUP_HOME:?}"
+mkdir -p "$home"
+printf '%s\n' "$@" > "$home/invoked-args"
+case "${1:-}" in
+  show|which|help|completions) exit 0 ;;
+esac
+profile=""
+docs=0
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    --profile) profile=$arg ;;
+    --component|-c)
+      case "$arg" in
+        *rust-docs*) docs=1 ;;
+      esac
+      ;;
+  esac
+  case "$arg" in
+    --profile=*) profile=${arg#--profile=} ;;
+  esac
+  prev=$arg
+done
+if [ -z "$profile" ] && [ -f "$home/settings.toml" ]; then
+  profile=$(awk -F= '/^profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$home/settings.toml")
+fi
+if [ -z "$profile" ]; then
+  dir=$(pwd)
+  while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+    file=""
+    if [ -f "$dir/rust-toolchain" ]; then
+      file="$dir/rust-toolchain"
+    elif [ -f "$dir/rust-toolchain.toml" ]; then
+      file="$dir/rust-toolchain.toml"
+    fi
+    if [ -n "$file" ]; then
+      profile=$(awk -F= '/^[[:space:]]*profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$file")
+      break
+    fi
+    dir=$(dirname "$dir")
+  done
+fi
+install=0
+if [ "${1:-}" = "toolchain" ] && [ "${2:-}" = "install" ]; then install=1; fi
+if [ "${1:-}" = "install" ] || [ "${1:-}" = "update" ] || [ "${1:-}" = "default" ]; then install=1; fi
+if [ "${1:-}" = "component" ] && [ "${2:-}" = "add" ]; then install=1; fi
+if [ "${1:-}" = "run" ]; then install=1; fi
+if [ "$profile" = "minimal" ] && [ "$docs" = "0" ]; then
+  exit 0
+fi
+if [ "$install" = "0" ]; then
+  for dir in "$home/toolchains"/*; do
+    if [ -e "$dir" ]; then
+      exit 0
+    fi
+  done
+fi
+marker="$home/toolchains/fake/share/doc/rust/html/core"
+mkdir -p "$marker"
+printf docs > "$marker/macro.env.html"
+"#;
+
+#[cfg(unix)]
+fn install_fake_rustup(dir: &std::path::Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(dir).expect("bin dir");
+    let rustup = dir.join("rustup");
+    fs::write(&rustup, FAKE_RUSTUP).expect("fake rustup");
+    let mut permissions = fs::metadata(&rustup).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&rustup, permissions).expect("executable");
+    rustup
+}
+
+#[cfg(unix)]
+fn docs_marker(home: &std::path::Path) -> PathBuf {
+    home.join("toolchains/fake/share/doc/rust/html/core/macro.env.html")
+}
+
+#[cfg(unix)]
+fn rustup_env(home: &std::path::Path, path: &std::path::Path) -> Vec<(String, String)> {
+    vec![
+        (
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin", path.display()),
+        ),
+        ("RUSTUP_HOME".to_string(), home.display().to_string()),
+        ("HOME".to_string(), path.display().to_string()),
+    ]
+}
+
+#[cfg(unix)]
+fn rustup_context(
+    workspace: &std::path::Path,
+    program: &std::path::Path,
+    env: Vec<(String, String)>,
+) -> ToolContext {
+    ToolContext {
+        workspace_root: Some(workspace.to_path_buf()),
+        proc_allowed_programs: vec![program.display().to_string()],
+        proc_spawn_activity_scoped: true,
+        proc_spawn_environment: Some(env),
+        ..Default::default()
+    }
+}
+
+#[cfg(unix)]
+fn assert_install_refused(err: OrbitError) {
+    let message = err.to_string();
+    assert!(
+        matches!(err, OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {message}"
+    );
+    assert!(
+        message.contains("default-profile rustup toolchain install"),
+        "error must name the install: {message}"
+    );
+    assert!(
+        message.contains("denyModify") && message.contains("**/*.env.*"),
+        "error must name the denyModify rule **/*.env.*: {message}"
+    );
+}
+
+#[cfg(unix)]
+fn host_triple() -> String {
+    // Keep this in step with `rustup_host_triple` in `proc/rustup_install.rs`.
+    let arch = std::env::consts::ARCH;
+    match std::env::consts::OS {
+        "linux" => {
+            let abi = if cfg!(target_env = "musl") {
+                "musl"
+            } else {
+                "gnu"
+            };
+            format!("{arch}-unknown-linux-{abi}")
+        }
+        "macos" => format!("{arch}-apple-darwin"),
+        other => format!("{arch}-unknown-{other}"),
+    }
+}
+
+/// [ORB-14337] A default-profile install rooted in the workspace is refused
+/// before rust-docs can create `macro.env.html`. The same fake rustup writes
+/// that file when it is actually executed.
+#[cfg(unix)]
+#[test]
+fn default_profile_rustup_install_inside_workspace_is_refused_before_rust_docs() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let control = workspace.join("control-home");
+    fs::create_dir_all(&control).expect("control home");
+    let status = std::process::Command::new(&rustup)
+        .args(["toolchain", "install", "1.96.0"])
+        .env("RUSTUP_HOME", &control)
+        .status()
+        .expect("control install");
+    assert!(status.success(), "control install failed: {status}");
+    assert!(
+        docs_marker(&control).is_file(),
+        "the fixture must write macro.env.html when the install runs"
+    );
+
+    let home = workspace.join(".orbit/tmp/cross-target-rustup");
+    fs::create_dir_all(&home).expect("rustup home");
+    let err = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": ["toolchain", "install", "1.96.0"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect_err("default-profile install inside the workspace must be refused");
+    assert_install_refused(err);
+    assert!(
+        !docs_marker(&home).exists(),
+        "refusal must happen before macro.env.html is created"
+    );
+    assert!(
+        !home.join("invoked-args").exists(),
+        "the rustup child must not start"
+    );
+}
+
+/// The CodeQL scratch install stays allowed: absolute `RUSTUP_HOME` under the
+/// workspace, `--profile minimal`, and no rust-docs component.
+#[cfg(unix)]
+#[test]
+fn minimal_profile_install_on_codeql_scratch_path_succeeds() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let home = workspace.join(".orbit/tmp/codeql-rust-local.abc123/rustup");
+    fs::create_dir_all(&home).expect("scratch rustup home");
+    let args = [
+        "toolchain",
+        "install",
+        "1.97.0",
+        "--profile",
+        "minimal",
+        "--component",
+        "rust-src",
+        "--no-self-update",
+    ];
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": args,
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("minimal install must run");
+    assert_eq!(value["exit_code"], json!(0), "{value:?}");
+    assert!(
+        !docs_marker(&home).exists(),
+        "minimal install must not write rust-docs"
+    );
+    let invoked = fs::read_to_string(home.join("invoked-args")).expect("rustup ran");
+    assert_eq!(invoked, args.join("\n") + "\n");
+
+    let err = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": ["toolchain", "install", "1.97.0", "--profile", "minimal", "--component", "rust-docs"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect_err("minimal profile plus rust-docs still writes macro.env.html");
+    assert_install_refused(err);
+}
+
+/// Cargo's rustup proxy auto-installs a missing toolchain with the default
+/// profile. That path is the one that wrote `macro.env.html` under the worktree.
+#[cfg(unix)]
+#[test]
+fn rustup_proxy_auto_install_inside_workspace_is_refused_until_toolchain_exists() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let cargo = bin.join("cargo");
+    std::os::unix::fs::symlink(&rustup, &cargo).expect("cargo proxy");
+    let home = workspace.join(".orbit/tmp/proxy-rustup");
+    fs::create_dir_all(&home).expect("rustup home");
+
+    let control = workspace.join("proxy-control");
+    fs::create_dir_all(&control).expect("control");
+    let status = std::process::Command::new(&cargo)
+        .args(["+1.96.0", "clippy"])
+        .env("RUSTUP_HOME", &control)
+        .status()
+        .expect("control proxy");
+    assert!(status.success(), "control proxy failed: {status}");
+    assert!(
+        docs_marker(&control).is_file(),
+        "proxy fixture must write docs"
+    );
+
+    let err = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &cargo, rustup_env(&home, &bin)),
+            json!({
+                "program": cargo.display().to_string(),
+                "args": ["+1.96.0", "clippy"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect_err("missing-toolchain proxy auto-install must be refused");
+    assert_install_refused(err);
+    assert!(!docs_marker(&home).exists());
+    assert!(!home.join("invoked-args").exists());
+
+    let installed = home
+        .join("toolchains")
+        .join(format!("1.96.0-{}", host_triple()));
+    fs::create_dir_all(&installed).expect("preprovisioned toolchain");
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &cargo, rustup_env(&home, &bin)),
+            json!({
+                "program": cargo.display().to_string(),
+                "args": ["+1.96.0", "clippy"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("already installed minimal toolchain must run");
+    assert_eq!(value["exit_code"], json!(0), "{value:?}");
+    assert!(!docs_marker(&home).exists());
+    assert!(home.join("invoked-args").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn minimal_settings_profile_auto_install_inside_workspace_succeeds() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let home = workspace.join(".orbit/tmp/minimal-profile");
+    fs::create_dir_all(&home).expect("rustup home");
+    fs::write(
+        home.join("settings.toml"),
+        "profile = \"minimal\" # rust-docs are not needed\n",
+    )
+    .expect("settings");
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": ["toolchain", "install", "1.97.0", "--no-self-update"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("settings profile minimal must run");
+    assert_eq!(value["exit_code"], json!(0), "{value:?}");
+    assert!(!docs_marker(&home).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rooted_outside_the_workspace_is_not_refused() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let outside = tempdir().expect("outside");
+    let outside = outside.path().canonicalize().expect("canonical outside");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let home = outside.join("rustup");
+    fs::create_dir_all(&home).expect("outside home");
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": ["toolchain", "install", "stable"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("install outside the workspace must run");
+    assert_eq!(value["exit_code"], json!(0), "{value:?}");
+    assert!(docs_marker(&home).is_file());
+    assert!(!docs_marker(&workspace).exists());
+
+    let link_home = workspace.join(".orbit/tmp/escaped");
+    fs::create_dir_all(link_home.parent().expect("parent")).expect("tmp");
+    std::os::unix::fs::symlink(&home, &link_home).expect("symlink home outside");
+    fs::remove_file(docs_marker(&home)).expect("clear docs");
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&link_home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": ["toolchain", "install", "stable"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("a symlink whose target is outside the workspace must run");
+    assert_eq!(value["exit_code"], json!(0), "{value:?}");
+    assert!(
+        docs_marker(&home).is_file(),
+        "the install follows the symlink and writes outside the workspace"
+    );
+    assert!(!docs_marker(&workspace).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn toolchain_file_minimal_profile_allows_proxy_auto_install() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let cargo = bin.join("cargo");
+    std::os::unix::fs::symlink(&rustup, &cargo).expect("cargo proxy");
+    fs::write(
+        workspace.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97.0\"\nprofile = \"minimal\"\ncomponents = [\"rust-src\"]\n",
+    )
+    .expect("toolchain file");
+    let home = workspace.join(".orbit/tmp/file-profile");
+    fs::create_dir_all(&home).expect("rustup home");
+    let value = registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &cargo, rustup_env(&home, &bin)),
+            json!({
+                "program": cargo.display().to_string(),
+                "args": ["build"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("toolchain-file minimal profile must run");
+    assert_eq!(value["exit_code"], json!(0), "{value:?}");
+    assert!(!docs_marker(&home).exists());
+    assert!(home.join("invoked-args").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn valid_toml_table_comments_do_not_bypass_workspace_install_refusal() {
+    for scenario in ["toolchain-file", "settings-overrides"] {
+        let workspace = tempdir().expect("workspace");
+        let workspace = workspace
+            .path()
+            .canonicalize()
+            .expect("canonical workspace");
+        let bin = workspace.join("bin");
+        let rustup = install_fake_rustup(&bin);
+        let cargo = bin.join("cargo");
+        std::os::unix::fs::symlink(&rustup, &cargo).expect("cargo proxy");
+
+        let home = workspace.join(format!(".orbit/tmp/toml-{scenario}"));
+        fs::create_dir_all(&home).expect("rustup home");
+        match scenario {
+            "toolchain-file" => fs::write(
+                workspace.join("rust-toolchain.toml"),
+                "[ toolchain ] # valid TOML comment\nchannel = \"1.97.0\"\nprofile = \"default\"\n",
+            )
+            .expect("toolchain file"),
+            "settings-overrides" => fs::write(
+                home.join("settings.toml"),
+                format!(
+                    "profile = \"default\"\n[ overrides ] # valid TOML comment\n\"{}\" = \"1.97.0\"\n",
+                    workspace.display()
+                ),
+            )
+            .expect("settings"),
+            _ => unreachable!("known scenario"),
+        }
+
+        let err = registry()
+            .execute(
+                "proc.spawn",
+                &rustup_context(&workspace, &cargo, rustup_env(&home, &bin)),
+                json!({
+                    "program": cargo.display().to_string(),
+                    "args": ["build"],
+                    "timeout_ms": 5000,
+                }),
+            )
+            .expect_err("valid rustup settings must not bypass the default-profile refusal");
+        assert_install_refused(err);
+        assert!(!docs_marker(&home).exists());
+        assert!(!home.join("invoked-args").exists());
     }
 }

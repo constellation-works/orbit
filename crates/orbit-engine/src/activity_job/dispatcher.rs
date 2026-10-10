@@ -19,7 +19,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::audit_writer::V2AuditWriter;
-use super::cli_runner::{run_cli_backend, task_id_from_input};
+use super::cli_runner::{run_cli_backend_for_step, task_id_from_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCliExecutor {
@@ -160,12 +160,28 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// Pull request contracts differ. Retrying or recovery cannot repair the
+    /// running binaries, so the drain must end visibly as failed.
+    #[error("protocol_skew: {0}")]
+    ProtocolSkew(String),
+
     /// A deterministic action reached a decision rather than a fault — a
     /// settled non-pass review verdict, an exhausted budget, a refused
     /// policy. Repeating the action reaches the same decision, so neither
     /// retry nor a recovery activity runs; the failure handoff owns it.
     #[error("deterministic action `{action}` refused: {message}")]
     DeterministicActionRefused { action: String, message: String },
+
+    /// A settled review needs named external evidence. End the delivery run
+    /// without retry, recovery, or the failure handoff; receipt queues review.
+    #[error("review_awaiting_evidence: named external checks are pending")]
+    ReviewEvidenceHold(Box<orbit_types::workflow::ReviewEvidenceHold>),
+
+    /// The forge kept refusing a delivery push for a server-side reason past
+    /// the push's own backoff [ORB-14617]. End the run held at this step,
+    /// without retry, recovery, or the failure handoff; the clock resumes it.
+    #[error("forge_unavailable: the forge refused the push of {} to {} {} times", .0.head_sha, .0.target_ref, .0.attempts)]
+    ForgeUnavailableHold(Box<orbit_types::workflow::ForgeUnavailableHold>),
 
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
@@ -189,6 +205,11 @@ pub enum DispatchError {
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
 
+    /// An inspection cannot start without a supported native read and
+    /// command surface. Configuration errors never spend a provider session.
+    #[error("inspection_tools_unavailable: provider `{provider}`: {reason}")]
+    InspectionToolsUnavailable { provider: String, reason: String },
+
     /// A host-owned Git child exceeded its finite budget. The supervisor has
     /// terminated its process group; recovery state must be inspected as-is.
     #[error("git {operation} timed out after {timeout_ms}ms in '{}': {diagnostic}", root.display())]
@@ -211,8 +232,9 @@ pub enum DispatchError {
 
     /// A deterministic VCS action proved that it stopped on actual unmerged
     /// index entries and supplied the pinned base evidence needed for one
-    /// bounded repair. This bypasses ordinary retry so the configured conflict
-    /// recovery agent is the only additional attempt.
+    /// bounded repair. This bypasses ordinary retry: the configured conflict
+    /// recovery agent repairs the stop and the step is retried, again for each
+    /// later commit of the same rebase that stops, within a fixed round bound.
     #[error(
         "recoverable VCS conflict during '{operation}': original base '{original_base_sha}', target base '{target_base_sha}'; {diagnostic}; conflicting paths: {}",
         conflicting_paths.join(", ")
@@ -279,11 +301,15 @@ impl DispatchError {
                 | DispatchError::RetryConfigInvalid { .. }
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
+                | DispatchError::InspectionToolsUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict { .. }
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
+                | DispatchError::ReviewEvidenceHold(_)
+                | DispatchError::ForgeUnavailableHold(_)
+                | DispatchError::ProtocolSkew(_)
         )
     }
 
@@ -314,6 +340,7 @@ impl DispatchError {
 /// `docs/design-patterns/error_translation.md` [ORB-10013].
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
     match error {
+        DispatchError::ProtocolSkew(message) => OrbitError::ProtocolSkew(message),
         DispatchError::JobValidation(message) => OrbitError::JobValidation(message),
         unavailable @ DispatchError::DeterministicActionUnavailable { .. } => {
             OrbitError::JobValidation(unavailable.to_string())
@@ -341,17 +368,34 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
 /// Dispatch a v2 activity by type. Emits §7 activity.started/finished
 /// events around the per-type runner and nests the runner's events beneath.
 pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, true)
+    dispatch_v2_activity_inner(input, None, true)
+}
+
+/// Dispatch a pipeline step whose id may differ from the catalog activity it
+/// targets.
+///
+/// `input.activity_name` stays the step id, which labels the activity events
+/// and failure messages. `target_activity` is the catalog name: an agent
+/// loop's tool policy, `ORBIT_ACTIVITY_NAME`, tool denials and plugin broker
+/// identity are keyed by it, so a step `review` targeting
+/// `agent_review_repair` is authorized as the reviewer. `None` (an inline
+/// spec, which has no catalog name) falls back to the step id.
+pub(crate) fn dispatch_v2_target_activity(
+    input: V2DispatchInput<'_>,
+    target_activity: Option<&str>,
+) -> Result<DispatchOutcome, DispatchError> {
+    dispatch_v2_activity_inner(input, target_activity, true)
 }
 
 pub(crate) fn dispatch_v2_activity_without_run_id_injection(
     input: V2DispatchInput<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, false)
+    dispatch_v2_activity_inner(input, None, false)
 }
 
 fn dispatch_v2_activity_inner(
     input: V2DispatchInput<'_>,
+    target_activity: Option<&str>,
     inject_run_id_into_input: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let activity_input = if inject_run_id_into_input {
@@ -381,6 +425,7 @@ fn dispatch_v2_activity_inner(
             Some(host) => run_agent_loop_activity(
                 host,
                 input.activity_name,
+                target_activity.unwrap_or(input.activity_name),
                 spec,
                 input.run_id,
                 input.audit.clone(),
@@ -407,6 +452,9 @@ fn dispatch_v2_activity_inner(
     let outcome_str = match &result {
         Ok(o) if o.success => "success",
         Ok(_) => "failed",
+        Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::ForgeUnavailableHold(_)) => {
+            "held"
+        }
         Err(_) => "error",
     };
     input.audit.emit_lossy(
@@ -525,10 +573,20 @@ fn run_deterministic(
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
                 }
-                error => DispatchError::DeterministicActionFailed {
-                    action: spec.action.clone(),
-                    message: error.to_string(),
-                },
+                // Only the delivery push writes this hold; a refusal text
+                // that merely quotes the marker carries no parseable hold.
+                // A nested match, not an `if let` guard: guards need a newer
+                // toolchain than the workspace MSRV.
+                error => {
+                    let message = error.to_string();
+                    match orbit_types::workflow::ForgeUnavailableHold::from_text(&message) {
+                        Some(hold) => DispatchError::ForgeUnavailableHold(Box::new(hold)),
+                        None => DispatchError::DeterministicActionFailed {
+                            action: spec.action.clone(),
+                            message,
+                        },
+                    }
+                }
             })?
         }
         Some(DeterministicAction::Core(_)) | None => host.run_deterministic(
@@ -546,17 +604,28 @@ fn run_deterministic(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_agent_loop_activity(
     host: &dyn RuntimeHost,
-    activity_name: &str,
+    step_id: &str,
+    target_activity: &str,
     spec: &AgentLoopSpec,
     run_id: &str,
     audit: Arc<V2AuditWriter>,
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    run_cli_backend(host, spec, activity_name, run_id, audit, input, fs_profile)
-        .map(|outcome| label_failure_with_step(activity_name, outcome))
+    run_cli_backend_for_step(
+        host,
+        spec,
+        step_id,
+        target_activity,
+        run_id,
+        audit,
+        input,
+        fs_profile,
+    )
+    .map(|outcome| label_failure_with_step(step_id, outcome))
 }
 
 /// [ORB-10449] Prefix a failing CLI agent-loop message with the step that

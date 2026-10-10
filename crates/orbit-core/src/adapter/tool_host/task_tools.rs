@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskAddParams, TaskEligibilityQuery, TaskUpdateParams, compute_task_add_warnings,
+    ContextCreationAuthorization, TaskAddParams, TaskEligibilityQuery, TaskUpdateParams,
+    compute_task_add_warnings, is_operator_rescue_close,
 };
 
 use super::input::{
@@ -30,11 +31,14 @@ pub(super) struct TaskWriteOutput {
     pub persisted_id: String,
 }
 
+/// Create a task. One a claimed worker files carries, as its first comment,
+/// the claim and run that filed it [ORB-14792].
 pub(super) fn add(
     runtime: &OrbitRuntime,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    filed_by: Option<&orbit_types::tool::WorkerInvocation>,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let title = required_string(&input, &["title"], "title")?;
     let description = required_string(&input, &["description"], "description")?;
@@ -45,9 +49,12 @@ pub(super) fn add(
     let _ = required_string(&input, &["workspace"], "workspace")?;
     let raw_context_files =
         optional_csv_or_string_list_alias(&input, &["context_files"])?.unwrap_or_default();
-    if !allows_missing_context(&input)? {
+    let context_creation = if allows_missing_context(&input)? {
+        runtime.authorize_missing_context(&raw_context_files)?
+    } else {
         runtime.ensure_context_selectors_exist(&raw_context_files)?;
-    }
+        ContextCreationAuthorization::default()
+    };
     let raw_required_tools = optional_csv_or_string_list_alias(
         &input,
         &["required_tools", "requiredTools", "required-tool"],
@@ -73,7 +80,12 @@ pub(super) fn add(
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default(),
             required_tools: raw_required_tools,
             plan: String::new(),
-            comment: None,
+            comment: filed_by.map(|binding| {
+                format!(
+                    "Filed by a claimed worker: claim {}, run {} on machine {}.",
+                    binding.claim_id, binding.bound_run_id, binding.execution.machine_id
+                )
+            }),
             context_files: raw_context_files.clone(),
             priority: optional_string(&input, "priority")?
                 .map(|value| parse_task_priority("priority", &value))
@@ -92,6 +104,7 @@ pub(super) fn add(
             source_task_id: None,
             crew: optional_string(&input, "crew")?,
             orchestrator: optional_string(&input, "orchestrator")?,
+            context_creation,
         },
         agent,
         model,
@@ -341,7 +354,14 @@ fn delivery(
 /// that owns it.
 pub(super) fn artifact_get(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
-    let path = required_string(&input, &["path", "artifact_path", "artifactPath"], "path")?;
+    let listing_hint = "list available artifacts with orbit.task.show and field: \"artifacts\"";
+    let path = required_string(&input, &["path", "artifact_path", "artifactPath"], "path")
+        .map_err(|error| OrbitError::InvalidInput(format!("{error}; {listing_hint}")))?;
+    if path == "." {
+        return Err(OrbitError::InvalidInput(format!(
+            "`path` must name one artifact, not a directory; {listing_hint}"
+        )));
+    }
     validate_relative_artifact_path(&path)
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
     // Resolve the task first so an unknown or foreign id fails as not-found
@@ -363,6 +383,7 @@ pub(super) fn update(
     model: Option<String>,
     owner: Option<orbit_tools::ReservationOwnerContext>,
     origin: Option<orbit_types::task::ExecutionLocation>,
+    operator: bool,
 ) -> Result<TaskWriteOutput, OrbitError> {
     if ["required_tools", "requiredTools", "required-tool"]
         .iter()
@@ -388,7 +409,7 @@ pub(super) fn update(
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
         let current = runtime.get_task(&id)?;
-        if let Some(kind) = guarded_lifecycle_write(current.status, target, &input)? {
+        if let Some(kind) = guarded_lifecycle_write(current.status, target, &input, operator)? {
             let (task, unverified) = match kind {
                 GuardedLifecycleWrite::Approve => (
                     runtime.transition_task_to_backlog_with_identity(
@@ -407,7 +428,7 @@ pub(super) fn update(
                         runtime,
                         &id,
                         &input,
-                        &params,
+                        &mut params,
                         owner.as_ref(),
                     )?;
                     let task = runtime.start_task_with_identity_and_crew(
@@ -441,7 +462,7 @@ pub(super) fn update(
     let mut params = task_update_params_from_input(&input, requested_status)?;
     params.trusted_artifact_origin = origin.clone();
     let unverified =
-        ensure_context_selectors_if_required(runtime, &id, &input, &params, owner.as_ref())?;
+        ensure_context_selectors_if_required(runtime, &id, &input, &mut params, owner.as_ref())?;
     let task = runtime.update_task_with_owner(
         &id,
         params,
@@ -515,18 +536,31 @@ const APPROVAL_ALLOWED_FIELDS: &[&str] = &[
 /// `proposed → backlog` is approval. Every `in-progress` write goes through
 /// `start_task` so crew resolution and `TaskStarted` survive, and so a
 /// non-pickup source is refused the same way with or without extra fields.
-/// Field edits on a start write are absorbed by the start body. Any other
-/// `backlog` combination — including `someday → backlog` plus a field edit —
-/// falls through to the ordinary governed update.
+/// Field edits on a start write are absorbed by the start body. The one
+/// exception is an operator's rescue close of a `blocked` task, which starts
+/// no work and takes the ordinary governed update. Any other `backlog`
+/// combination — including `someday → backlog` plus a field edit — falls
+/// through to the ordinary governed update.
 fn guarded_lifecycle_write(
     from: TaskStatus,
     to: TaskStatus,
     input: &Value,
+    operator: bool,
 ) -> Result<Option<GuardedLifecycleWrite>, OrbitError> {
     match (from, to) {
         (TaskStatus::Proposed, TaskStatus::Backlog) => {
             reject_fields_for_approval_transition(input)?;
             Ok(Some(GuardedLifecycleWrite::Approve))
+        }
+        (_, TaskStatus::InProgress)
+            if is_operator_rescue_close(
+                from,
+                to,
+                optional_raw_string(input, "execution_summary")?.as_deref(),
+                operator,
+            ) =>
+        {
+            Ok(None)
         }
         (_, TaskStatus::InProgress) => Ok(Some(GuardedLifecycleWrite::Start)),
         _ => Ok(None),
@@ -625,41 +659,62 @@ fn task_update_params_from_input(
         },
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
+        // Derived from the selector screening, never from tool input.
+        context_creation: ContextCreationAuthorization::default(),
         upsert_artifacts: parse_artifacts(input)?,
         // Discarding a preserved candidate is an operator decision taken
         // from the CLI (`orbit task update --discard-candidate`).
         discard_candidate: false,
+        allow_drop_system_tags: optional_bool_alias(
+            input,
+            &[
+                "allow_drop_system_tags",
+                "allowDropSystemTags",
+                "allow_drop_system_tag",
+                "allow_dropping_system_tags",
+            ],
+        )?
+        .unwrap_or(false),
     })
 }
 
-/// Run the operator-surface selector guard for an update unless the caller
-/// opted out, and return the selectors the owning worker's relaxation let
-/// through unverified (see
+/// Screen an update's replacement selectors, record the creation intent the
+/// screening established on `params`, and return the selectors the owning
+/// worker's relaxation let through unverified (see
 /// [`OrbitRuntime::ensure_context_selectors_exist_for_task_write`]).
+///
+/// With `allow_missing_context` every missing selector becomes a durable
+/// creation grant ([`OrbitRuntime::authorize_missing_context`]); otherwise
+/// the strict check runs, keeping selectors the task already holds a grant for.
 fn ensure_context_selectors_if_required(
     runtime: &OrbitRuntime,
     task_id: &str,
     input: &Value,
-    params: &TaskUpdateParams,
+    params: &mut TaskUpdateParams,
     owner: Option<&orbit_tools::ReservationOwnerContext>,
 ) -> Result<Vec<String>, OrbitError> {
-    if allows_missing_context(input)? {
-        return Ok(Vec::new());
-    }
+    let allow_missing = allows_missing_context(input)?;
     let Some(candidates) = params.context_files.as_deref() else {
         return Ok(Vec::new());
     };
-    runtime.ensure_context_selectors_exist_for_task_write(
+    if allow_missing {
+        params.context_creation = runtime.authorize_missing_context(candidates)?;
+        return Ok(Vec::new());
+    }
+    let (unverified, creation) = runtime.ensure_context_selectors_exist_for_task_write(
         task_id,
         owner.map(|owner| owner.owner_run_id.as_str()),
         candidates,
-    )
+    )?;
+    params.context_creation = creation;
+    Ok(unverified)
 }
 
-/// Whether the caller explicitly opted out of the operator-surface check that
-/// every `context_files` selector already exists. Internal callers never reach
-/// these handlers, so the escape is the only way for an agent to record a
-/// target the task is about to create.
+/// Whether the caller explicitly declared that missing `context_files`
+/// selectors are targets the task will create. Internal callers never reach
+/// these handlers, so the declaration is the only way for an agent to record
+/// a target the task is about to create; it is recorded as durable creation
+/// intent rather than skipping validation.
 fn allows_missing_context(input: &Value) -> Result<bool, OrbitError> {
     Ok(
         optional_bool_alias(input, &["allow_missing_context", "allowMissingContext"])?

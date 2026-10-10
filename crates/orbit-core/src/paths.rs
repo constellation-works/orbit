@@ -1,8 +1,8 @@
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::git::run_git;
 
 pub(crate) const ORBIT_ROOT_TOKEN: &str = "{{ORBIT_ROOT}}";
 
@@ -31,7 +31,10 @@ pub(crate) fn resolve_path_value(
                 "cannot expand '~' because HOME/USERPROFILE is not set".to_string(),
             )
         })?;
-        let suffix = value.trim_start_matches("~/");
+        let suffix = value.strip_prefix("~/").unwrap_or("");
+        // A second slash belongs to the suffix, but must not make `join`
+        // replace the home directory with an absolute path.
+        let suffix = suffix.trim_start_matches('/');
         return Ok(normalize_path_components(&home.join(suffix)));
     }
     let path = PathBuf::from(value);
@@ -148,19 +151,22 @@ fn find_git_main_worktree_root_with_git(start: &Path) -> Option<PathBuf> {
     main_root_from_common_git_dir(&common_dir).or_else(|| git_worktree_list_main_root(start))
 }
 
+/// `None` when Git cannot answer, including when it could not run or timed
+/// out (a timeout is logged); root resolution then falls back to reading the
+/// gitfile.
 fn git_rev_parse_path(start: &Path, flag: &str) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(start)
-        .args(["rev-parse", "--path-format=absolute", flag])
-        .output()
+    let output = run_git(start, &["rev-parse", "--path-format=absolute", flag])
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve Git {flag}: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
+    if !output.success {
         return None;
     }
 
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let raw_path = stdout.lines().next()?.trim();
+    let raw_path = output.stdout.lines().next()?.trim();
     if raw_path.is_empty() {
         return None;
     }
@@ -176,18 +182,19 @@ fn main_root_from_common_git_dir(common_dir: &Path) -> Option<PathBuf> {
 }
 
 fn git_worktree_list_main_root(start: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(start)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
+    let output = run_git(start, &["worktree", "list", "--porcelain"])
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot list Git worktrees: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
+    if !output.success {
         return None;
     }
 
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let first_worktree = stdout
+    let first_worktree = output
+        .stdout
         .lines()
         .find_map(|line| line.strip_prefix("worktree "))?;
     if first_worktree.trim().is_empty() {

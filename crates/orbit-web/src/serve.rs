@@ -1,5 +1,5 @@
 use std::future::{Future, IntoFuture};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +16,7 @@ use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
 
-use crate::{api, assets, health, state};
+use crate::{api, assets, health, heap, state};
 
 /// Conventional loopback port for the dashboard. Shared by `web serve`'s
 /// `--port` default and `web connect`'s local/remote port preference so the
@@ -27,7 +27,7 @@ pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;
 #[derive(Args, Clone)]
 #[command(about = "Run the Orbit dashboard")]
 pub struct ServeArgs {
-    /// Host or IP to bind to. Defaults to loopback for safety.
+    /// IP to bind to: 127.0.0.1 or ::1.
     #[arg(long, default_value = "127.0.0.1")]
     pub host: IpAddr,
 
@@ -41,10 +41,9 @@ pub struct ServeArgs {
 
     // ORB-10029: source provenance for the global-only dashboard mode.
     /// Deprecated, no-op: `orbit web serve` always serves every registered
-    /// workspace now (global mode is the only mode). Kept so
-    /// the flag keeps parsing for existing scripts, and because `orbit web
-    /// connect` unconditionally forwards it to the remote `orbit web serve`
-    /// — removing it would break tunnels against an old/new binary mix.
+    /// workspace now (global mode is the only mode). Kept for existing scripts
+    /// and `orbit web connect --global`, which forwards it when spawning a
+    /// remote dashboard for compatibility with older binaries.
     #[arg(long)]
     pub global: bool,
 
@@ -68,6 +67,7 @@ pub struct ServeArgs {
 /// from `orbit web serve` (see [`serve_from_env`], ORB-10029); this stays for
 /// callers that already hold an `OrbitRuntime` and want it embedded directly.
 pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> {
+    heap::configure();
     let state = state::DashboardState::single(Arc::new(runtime.clone()));
     state.set_operator_session(args.operator);
     run_server(&args, state)
@@ -89,6 +89,7 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// nothing from the machine-global registry (ORB-11388). Which workspace the
 /// dropdown opens on is a separate question, answered by `--workspace`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
+    heap::configure();
     let state = build_state(root_override, args.workspace.as_deref())?;
     state.set_operator_session(args.operator);
     run_server(&args, state)
@@ -274,6 +275,8 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let no_open = args.no_open || std::env::var_os(HANDOVER_ENV).is_some();
     let handover = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let handover_target = Arc::clone(&handover);
+    let host_tunnels = Arc::clone(state.host_tunnels());
+    let close_host_streams = Arc::clone(&host_tunnels);
     let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -281,7 +284,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .build()
         .map_err(|e| OrbitError::Execution(format!("tokio runtime: {e}")))?;
 
-    tokio_runtime.block_on(async move {
+    let serve_result = tokio_runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| OrbitError::Io(format!("bind {addr}: {e}")))?;
@@ -325,18 +328,26 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
                 }
             }
             // Ask cooperating long-lived connections (the `/api/log/stream`
-            // SSE handler) to close now, before the bounded drain deadline
-            // below is reached.
+            // SSE handler, and streams forwarded from another host) to close
+            // now, before the bounded drain deadline below is reached. New
+            // host tunnels are refused from here on.
             api::request_shutdown();
+            close_host_streams.begin_shutdown();
             notify_on_signal.notify_one();
         };
+        let app = heap::trim_after_requests(app);
         let drain = axum::serve(listener, app)
             .with_graceful_shutdown(shutdown)
             .into_future();
 
         drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await
-    })?;
-    drop(tokio_runtime);
+    });
+    // Both exits below — returning, and the handover exec, which keeps this
+    // process's children running unreaped under the new image — need every
+    // host tunnel child stopped first. Requests have drained, so none is in use.
+    host_tunnels.shutdown_all();
+    teardown_runtime(tokio_runtime);
+    serve_result?;
     let target = handover.lock().ok().and_then(|mut slot| slot.take());
     if let Some(executable) = target {
         // In-flight requests have drained and the listener is closed; the
@@ -349,6 +360,15 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         ));
     }
     Ok(())
+}
+
+/// Stop the runtime without waiting for in-flight blocking tasks to finish.
+///
+/// The server's connection drain is already bounded by
+/// [`SHUTDOWN_GRACE_PERIOD`]. Awaiting `Runtime`'s destructor afterward would
+/// reintroduce an unbounded wait when a `spawn_blocking` closure is stuck.
+pub(crate) fn teardown_runtime(runtime: tokio::runtime::Runtime) {
+    runtime.shutdown_background();
 }
 
 /// Set on a dashboard exec'd to take over from a replaced image.
@@ -432,7 +452,9 @@ pub(crate) async fn drain_with_grace_period(
     }
 }
 
-/// Reject binding the dashboard to anything other than a loopback address.
+/// Reject binds other than the loopback IPs approved by the Host gate:
+/// `127.0.0.1` and `::1`. Other loopback addresses would start a dashboard
+/// whose announced URL cannot pass the request-level Host check.
 ///
 /// SECURITY (ORB-00360): the dashboard has no authentication of its own.
 /// Request-level checks in [`api::require_localhost_origin`] mitigate browser
@@ -444,11 +466,12 @@ pub(crate) async fn drain_with_grace_period(
 /// access, bind loopback and front the dashboard with an authenticated
 /// tunnel/reverse proxy (e.g. `ssh -L`).
 pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitError> {
-    if host.is_loopback() {
+    if host == IpAddr::V4(Ipv4Addr::LOCALHOST) || host == IpAddr::V6(Ipv6Addr::LOCALHOST) {
         return Ok(());
     }
     Err(OrbitError::InvalidInput(format!(
-        "refusing to bind dashboard to non-loopback address {host}: the \
+        "refusing to bind dashboard to unsupported address {host}: only \
+         127.0.0.1 and ::1 are approved by the Host check. The \
          dashboard is unauthenticated and the Origin check is not an \
          access-control boundary. Bind a loopback address (127.0.0.1 or ::1) \
          and use an authenticated tunnel/reverse proxy (e.g. \

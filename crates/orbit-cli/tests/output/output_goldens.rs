@@ -7,7 +7,8 @@
 //! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571),
 //! plus the layer provenance `config show --json` reports.
 //!
-//! The "table" form (a real terminal, pinned width, truncation) cannot be
+//! Doctor also covers a terminal sink resolved at a pinned width in a child.
+//! The CLI "table" form (a real terminal, pinned width, truncation) cannot be
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
 //! so `std::io::stdout().is_terminal()` is always `false` inside the child
 //! process, and both `crate::output::table::sink_width` and comfy-table's own
@@ -587,12 +588,16 @@ spec:
     // Other readiness checks can fail on a host without provider CLIs;
     // the build section is independently required to report intact provenance.
     let doctor = parse_json_stdout(&doctor_output, "doctor");
-    let build_row = doctor
+    let mut build_row = doctor
         .as_array()
         .expect("doctor rows")
         .iter()
         .find(|row| row["check"] == "plugin-builds")
-        .expect("source builds row");
+        .expect("source builds row")
+        .clone();
+    // Wall-clock measurement is variable; preserve the JSON field contract in the golden.
+    assert!(build_row["duration_ms"].is_u64());
+    build_row["duration_ms"] = json!(0);
     assert_eq!(
         build_row["status"], "ok",
         "intact provenance is informational"
@@ -801,6 +806,50 @@ fn config_show_effective_provenance_matches_golden() {
         serde_json::to_string_pretty(&projection).expect("serialize projection")
     );
     assert_golden("config_show_effective.json", &fixture.redact(&rendered));
+}
+
+/// The configuration reference's "Settable keys" table promises to match
+/// `orbit config keys`. Compare the two as sets, in both directions, so a key
+/// added to the registry without a docs row (or a docs row for a key the
+/// registry no longer has) fails here instead of drifting.
+#[test]
+fn config_reference_lists_every_registry_key() {
+    let fixture = Fixture::new();
+    let listed = parse_json_stdout(
+        &fixture.run(&["config", "keys", "--json"], &[]),
+        "config keys",
+    );
+    let registry: std::collections::BTreeSet<String> = listed["keys"]
+        .as_array()
+        .expect("keys array")
+        .iter()
+        .map(|entry| entry["key"].as_str().expect("key name").to_string())
+        .collect();
+
+    let page = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../website/src/content/docs/reference/config.md");
+    let page = std::fs::read_to_string(&page)
+        .unwrap_or_else(|error| panic!("read {}: {error}", page.display()));
+    let table = page
+        .split("\n## Settable keys\n")
+        .nth(1)
+        .expect("config.md has a `## Settable keys` section")
+        .split("\n## ")
+        .next()
+        .expect("section body");
+    let row_key = Regex::new(r"(?m)^\| `([^`]+)` \|").expect("row regex");
+    let documented: std::collections::BTreeSet<String> = row_key
+        .captures_iter(table)
+        .map(|captures| captures[1].to_string())
+        .collect();
+
+    let missing: Vec<_> = registry.difference(&documented).collect();
+    let stale: Vec<_> = documented.difference(&registry).collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "reference/config.md `Settable keys` table diverges from `orbit config keys`: \
+         keys missing from the page {missing:?}; page rows with no registry key {stale:?}"
+    );
 }
 
 #[test]
@@ -1030,8 +1079,16 @@ fn tool_run_honors_format_ndjson_and_dry_run_json() {
         "tool run --dry-run --format json",
     );
     assert_eq!(dry["tool_name"], "orbit.task.show");
-    assert!(dry["policy_allowed"].is_boolean());
+    assert_eq!(dry["policy_allowed"], true);
+    assert!(dry["policy_denial_reason"].is_null());
     assert!(dry["missing_params"].is_array());
+    assert_golden(
+        "tool_dry_run.json",
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&dry).expect("dry-run JSON")
+        ),
+    );
     let dry_human = fixture.run(&["tool", "run", "orbit.task.show", "--dry-run"], &[]);
     let dry_text = String::from_utf8_lossy(&dry_human.stdout);
     assert!(dry_text.contains("Tool:"), "{dry_text}");
@@ -1079,16 +1136,16 @@ fn global_format_controls_tool_run_output() {
     let fixture = Fixture::new();
     let (task_id, title) = first_listed_task(&fixture);
 
-    let table_over_json = fixture.run(
+    let table_output = fixture.run(
         &[
-            "task", "show", &task_id, "--fields", "title", "--json", "--format", "table",
+            "task", "show", &task_id, "--fields", "title", "--format", "table",
         ],
         &[],
     );
-    let table_text = String::from_utf8_lossy(&table_over_json.stdout);
+    let table_text = String::from_utf8_lossy(&table_output.stdout);
     assert!(
-        serde_json::from_slice::<Value>(&table_over_json.stdout).is_err(),
-        "--format table must outrank --json:\n{table_text}"
+        serde_json::from_slice::<Value>(&table_output.stdout).is_err(),
+        "--format table must select the human view:\n{table_text}"
     );
     assert!(table_text.contains(&title), "{table_text}");
 
@@ -1109,4 +1166,18 @@ fn global_format_controls_tool_run_output() {
     );
     assert_eq!(config["key"], "workflow.base_branch");
     assert!(config.get("value").is_some(), "{config}");
+}
+
+#[test]
+fn doctor_terminal_findings_golden() {
+    let actual = super::doctor::render_fixture("mixed");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/output_goldens/doctor_terminal_findings.txt");
+    if std::env::var_os(UPDATE_ENV).is_some() {
+        std::fs::write(&path, &actual).expect("write doctor golden");
+    }
+    assert_eq!(
+        actual,
+        std::fs::read_to_string(path).expect("doctor golden")
+    );
 }

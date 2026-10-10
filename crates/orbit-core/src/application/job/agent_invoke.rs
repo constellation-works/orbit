@@ -35,6 +35,7 @@ use orbit_common::text::floor_char_boundary;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::JobRun;
+use orbit_types::workflow::PipelineState;
 use orbit_types::workflow::Provider;
 use orbit_types::workflow::activity_job::{
     DEFAULT_PROVIDER_SANDBOX, TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission,
@@ -45,6 +46,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::log_best_effort;
 use crate::application::job::pipeline::{
     PipelineInvokeResult, PipelineSubmission, RetryKey, input_hash,
 };
@@ -341,14 +343,9 @@ impl OrbitRuntime {
         let run = self.show_job_run(run_id)?;
         let state = self.read_run_state(run_id)?;
         let progress = self.collect_run_execution_progress(run_id)?;
-        agent_invoke_result(
-            &run,
-            state.as_ref().map(|state| &state.step_outputs),
-            progress.provider_processes.last(),
+        agent_invoke_result(&run, state.as_ref(), progress.provider_processes.last()).ok_or_else(
+            || OrbitError::InvalidInput(format!("run '{run_id}' is not an agent invocation")),
         )
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!("run '{run_id}' is not an agent invocation"))
-        })
     }
 
     /// Resolve the provider inner sandbox for this invocation.
@@ -377,9 +374,7 @@ impl OrbitRuntime {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            Some(requested) => admit_provider_sandbox_mode(provider, requested)
-                .map(str::to_string)
-                .map_err(OrbitError::InvalidInput)?,
+            Some(requested) => admit_provider_sandbox_mode(provider, requested)?.to_string(),
             None => default_mode,
         };
         let label = format_provider_sandbox(provider, &mode);
@@ -441,13 +436,15 @@ fn persisted_invocation_settings(
 /// only reference to its captured output.
 pub fn agent_invoke_result(
     run: &JobRun,
-    step_outputs: Option<&std::collections::BTreeMap<u32, Value>>,
+    state: Option<&PipelineState>,
     process: Option<&RunProviderProcess>,
 ) -> Option<AgentInvokeResult> {
     if run.job_id != AGENT_INVOKE_JOB_ID {
         return None;
     }
-    let output = step_outputs.and_then(|outputs| outputs.values().next_back());
+    let output = state
+        .and_then(|state| state.step_output_entries().next_back())
+        .map(|(_, output)| output);
     let field = |key: &str| output.and_then(|value| value.get(key));
     let stdout_blob_ref = field("stdout_blob_ref")
         .and_then(Value::as_str)
@@ -630,24 +627,32 @@ impl OrbitRuntime {
             }),
             ..PipelineSubmission::catalog(job_name, input.clone(), Some(actor))
         });
-        self.record_pipeline_audit(
-            "agent.invoke",
-            result.as_ref().ok().map(|(value, _)| value.run_id.as_str()),
-            Some(actor),
-            match &result {
-                Ok(_) => AuditEventStatus::Success,
-                Err(_) => AuditEventStatus::Failure,
-            },
-            json!({
-                "actor": actor,
-                "job_name": job_name,
-                "run_id": result.as_ref().ok().map(|(value, _)| value.run_id.clone()),
-                "idempotency_key": idempotency_key,
-                "deduplicated": result.as_ref().ok().map(|(_, deduplicated)| *deduplicated),
-                "input_hash": input_hash(&input),
-            }),
-            result.as_ref().err().map(|error| error.to_string()),
-        )?;
+        log_best_effort(
+            "record agent invocation audit",
+            result
+                .as_ref()
+                .ok()
+                .map(|(value, _)| value.run_id.as_str())
+                .unwrap_or_default(),
+            self.record_pipeline_audit(
+                "agent.invoke",
+                result.as_ref().ok().map(|(value, _)| value.run_id.as_str()),
+                Some(actor),
+                match &result {
+                    Ok(_) => AuditEventStatus::Success,
+                    Err(_) => AuditEventStatus::Failure,
+                },
+                json!({
+                    "actor": actor,
+                    "job_name": job_name,
+                    "run_id": result.as_ref().ok().map(|(value, _)| value.run_id.clone()),
+                    "idempotency_key": idempotency_key,
+                    "deduplicated": result.as_ref().ok().map(|(_, deduplicated)| *deduplicated),
+                    "input_hash": input_hash(&input),
+                }),
+                result.as_ref().err().map(|error| error.to_string()),
+            ),
+        );
         result
     }
 }

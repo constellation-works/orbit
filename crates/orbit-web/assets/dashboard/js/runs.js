@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,6 +23,7 @@ const RUN_FILTERS = new Set(["all", "active", "failed"]);
 const RUN_SORT_DEFAULT_DIR = {
   when: "desc",
   job: "asc",
+  task: "asc",
   run_id: "asc",
   denials: "desc",
   tool_fails: "desc",
@@ -109,14 +110,24 @@ function runActionLabel(verb, run) {
   return `${verb} run ${run && run.run_id}${workspace ? ` in ${workspace}` : ""}`;
 }
 
+// A selected host that refuses forwarded writes disables every run action
+// and says why, rather than letting the click fail.
+function refuseOnReadOnlyHost(btn) {
+  const refusal = hostWriteRefusal();
+  if (!refusal) return;
+  btn.disabled = true;
+  btn.title = refusal;
+}
+
 function buildCancelRunButton(run, host) {
   const btn = el("button", {
     class: "action reject run-cancel",
-    text: "cancel",
+    text: "Cancel",
     title: `Cancel ${run.run_id}`,
   });
   btn.disabled = !runIsCancellable(run) || cancelRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Cancel", run));
+  refuseOnReadOnlyHost(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     cancelRun(run, btn, host);
@@ -132,6 +143,7 @@ function buildReplayRunButton(run, host) {
   });
   btn.disabled = replayRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Replay", run));
+  refuseOnReadOnlyHost(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     replayRun(run, btn, host);
@@ -147,6 +159,7 @@ function buildResumeRunButton(run, host) {
   });
   btn.disabled = resumeRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Resume", run));
+  refuseOnReadOnlyHost(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     resumeRun(run, btn, host);
@@ -246,8 +259,8 @@ function confirmForceText(run) {
 // keyed nodes on every poll, and a node appended to it without a key is
 // dropped by the next one, so an error written straight into the host would
 // vanish within seconds, usually before it was read. It is held here and
-// rendered with the rows until dismissed or the next action starts. Other
-// hosts (the run detail) are rebuilt on their own terms and keep the node.
+// rendered with the rows until dismissed or the next action starts. Run detail
+// supplies a stable feedback host separate from its rebuilt header.
 let runActionError = null;
 const RUN_ACTION_ERROR_KEY = "run-action-error";
 
@@ -277,7 +290,8 @@ function showRunActionError(host, text, build = () => el("div", { class: "action
     return;
   }
   if (host) {
-    host.appendChild(runActionErrorNode(build, null));
+    const node = runActionErrorNode(build, () => node.remove());
+    host.appendChild(node);
   }
 }
 
@@ -653,6 +667,11 @@ function runFriction(run) {
   return run.diagnostics_friction || emptyRunFrictionSummary(run);
 }
 
+function runDurationInfo(run) {
+  const friction = runFriction(run);
+  return { ...elapsedDurationInfo(run, friction.durationMs), longRun: friction.longRun };
+}
+
 function runSortValue(run, key) {
   const friction = runFriction(run);
   switch (key) {
@@ -660,14 +679,18 @@ function runSortValue(run, key) {
       return runTimestampValue(run);
     case "job":
       return run.job_id || "";
+    case "task":
+      return (run.task_ids || []).join(" ");
     case "run_id":
       return run.run_id || "";
     case "denials":
       return friction.denials || 0;
     case "tool_fails":
       return friction.toolFails || 0;
-    case "duration":
-      return friction.durationMs || 0;
+    case "duration": {
+      const { durationMs } = runDurationInfo(run);
+      return durationMs || 0;
+    }
     case "state":
       return run.state || "";
     default:
@@ -693,7 +716,7 @@ function sortedRunsForDisplay(runs) {
 
 function runMatchesFilter(run) {
   if (runFilter === "active") return ACTIVE_RUN_STATES.has(run && run.state);
-  if (runFilter === "failed") return run && run.state === "failed";
+  if (runFilter === "failed") return RESUMABLE_RUN_STATES.has(run && run.state);
   return true;
 }
 
@@ -713,16 +736,18 @@ export function getRunFilter() {
 }
 
 export function formatRunCount(shown, fetched, meta) {
+  const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
+  const limit = `${capped ? "server limit" : "limit"} ${meta?.limit || fetched}`;
   if (meta && Number.isFinite(meta.total)) {
     const base = shown === fetched
       ? `${shown} shown`
       : `${shown} shown (of ${fetched} fetched)`;
     return meta.truncated
-      ? `${base} · ${meta.total} total · server limit ${meta.limit}`
+      ? `${base} · ${meta.total} total · ${limit}`
       : `${base} · ${meta.total} total`;
   }
   if (meta && meta.truncated) {
-    return `${shown} shown · server limit ${meta.limit || fetched} · older matching runs not loaded`;
+    return `${shown} shown · ${limit} · older matching runs not loaded`;
   }
   return shown === fetched
     ? `${shown} shown`
@@ -737,7 +762,7 @@ function runsAreLoading(runs, meta) {
 
 function runsEmptyText() {
   if (runFilter === "failed") {
-    return "No failed job runs (durable Failed state, no time window).";
+    return "No failed, timed-out, or interrupted job runs (no time window).";
   }
   if (runFilter === "active") {
     return "No pending or running job runs.";
@@ -748,17 +773,51 @@ function runsEmptyText() {
 function runsScopeNote() {
   return el("div", {
     class: "runs-scope-note",
-    text: "Every job run, newest first, with no time window. The top bar's failed-runs count covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures this month.",
+    text: "Every job run, newest first, with no time window.",
+    title: "The failed count beside Runs in the rail covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures in the selected window.",
   });
 }
 
 function runsLimitNote(meta) {
   if (!meta || !meta.truncated) return null;
   const total = Number.isFinite(meta.total) ? ` of ${meta.total}` : "";
-  return el("div", {
+  const container = el("div", {
     class: "runs-limit-note",
-    text: `Showing the newest ${meta.limit} matching runs${total}. Add ?runs=<n> to the address to load more.`,
   });
+  container.dataset.key = "runs-limit-note";
+  const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
+  const isLoading = hasCtx("getRunsLoading") && _runsCtx.getRunsLoading();
+  container.dataset.hash = `limit-note-${meta.limit}-${meta.total || ""}-${capped ? "capped" : ""}-${isLoading ? "loading" : ""}`;
+
+  const textSpan = el("span", {
+    class: "runs-limit-text",
+    text: `Showing newest ${meta.limit} matching runs${total}.`,
+  });
+  container.appendChild(textSpan);
+
+  // The server caps one request; past that cap Load more would return the same rows.
+  if (capped) {
+    textSpan.textContent = `Showing newest ${meta.limit} matching runs${total}, the most one request returns.`;
+    return container;
+  }
+
+  const button = el("button", {
+    class: "action runs-load-more",
+    text: isLoading ? "Loading…" : "Load more",
+    title: "Load more runs",
+  });
+  button.type = "button";
+  button.disabled = Boolean(isLoading);
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (hasCtx("loadMoreRuns")) {
+      button.disabled = true;
+      button.textContent = "Loading…";
+      _runsCtx.loadMoreRuns().catch((error) => console.error("Failed to load more runs", error));
+    }
+  });
+  container.appendChild(button);
+  return container;
 }
 
 function runsLoadingSkeleton() {
@@ -834,26 +893,49 @@ function runHeaderCell(label, key, opts = {}) {
   return cell;
 }
 
-function runCountCell(value) {
+function runCountCell(value, kind) {
   return el("span", {
-    class: `num${value > 0 ? " hot" : ""}`,
+    class: `num ${kind}${value > 0 ? " hot" : ""}`,
     text: String(value || 0),
   });
 }
 
 function runDurationCell(run) {
-  const friction = runFriction(run);
+  const { durationMs, isLive, longRun } = runDurationInfo(run);
+  const formatted = fmtDurationValue(durationMs);
+  const text = (isLive && formatted !== "-") ? `${formatted} ↻` : formatted;
   return el("span", { class: "duration" }, [
-    fmtDurationValue(friction.durationMs),
-    friction.longRun
+    text,
+    longRun
       ? el("span", { class: "long-run-flag", text: "!", title: "Long run" })
       : null,
   ]);
 }
 
+// Keep workspace scope in the URL, including when an aggregate row opens a task.
+export function runTaskLinks(run) {
+  const tasks = Array.isArray(run.tasks) ? run.tasks : (run.task_ids || []).map(id => ({ id }));
+  const cell = el("span", { class: "run-tasks" });
+  if (tasks.length === 0) cell.textContent = "—";
+  for (const task of tasks) {
+    const link = el("a", { class: "run-task-link", title: task.title ? `${task.id}: ${task.title}` : task.id }, [
+      el("span", { class: "run-task-id", text: task.id }),
+      task.title ? el("span", { class: "run-task-title", text: task.title }) : null,
+    ]);
+    const url = new URL(window.location.href);
+    url.searchParams.set("workspace", run.workspace_id || getWorkspace() || "");
+    url.hash = `tasks?status=all&q=${encodeURIComponent(task.id)}`;
+    link.href = `${url.search}${url.hash}`;
+    link.addEventListener("click", event => event.stopPropagation());
+    cell.appendChild(link);
+  }
+  return cell;
+}
+
 export function renderRuns(runs) {
   if (!panelCanRender("runs-body")) return;
   const body = $("runs-body");
+  enableRovingRows(body);
   const frag = document.createDocumentFragment();
   const unavailable = hasCtx("getRunSourcesUnavailable") ? _runsCtx.getRunSourcesUnavailable() : [];
   const meta = hasCtx("getRunsMeta") ? _runsCtx.getRunsMeta() : null;
@@ -900,22 +982,25 @@ export function renderRuns(runs) {
   }
   const headerCells = [
     runHeaderCell("State", "state"),
-    attributed ? el("span", { text: "Workspace" }) : null,
+    attributed ? el("span", { class: "runs-workspace-header", text: "Workspace" }) : null,
     runHeaderCell("Job", "job"),
+    runHeaderCell("Task", "task"),
     runHeaderCell("Run ID", "run_id"),
     runHeaderCell("When", "when"),
     runHeaderCell("Denials", "denials", { num: true }),
     runHeaderCell("Tool fails", "tool_fails", { num: true }),
-    runHeaderCell("Duration", "duration", { style: { textAlign: "right" } }),
-    el("span", { text: "" }),
+    runHeaderCell("Duration", "duration", { class: "duration", style: { textAlign: "right" } }),
+    el("span", { class: "run-actions-header", text: "Actions", style: { textAlign: "right" } }),
   ];
-  const header = el("div", { class: `runs-row runs-header${attributed ? " workspace-attributed" : ""}` }, headerCells);
+  const header = el("div", { class: `runs-row runs-header col-head${attributed ? " workspace-attributed" : ""}` }, headerCells);
   header.dataset.key = "runs-header";
   header.dataset.hash = `header-${runSort.key}-${runSort.dir}-${attributed ? "workspace" : "scoped"}`;
   frag.appendChild(header);
   for (const r of top) {
     const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
     const friction = runFriction(r);
+    const { durationMs, isLive } = runDurationInfo(r);
+    const formattedDuration = fmtDurationValue(durationMs);
     const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
     const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
     if (r.retry_source_run_id) {
@@ -944,14 +1029,18 @@ export function renderRuns(runs) {
       });
       runIdCell.appendChild(lineage);
     }
+    // The job cell is the row's button: the row also holds the copy-id,
+    // lineage and run actions, so it cannot be a button itself.
+    const openButton = el("button", { class: "id", text: r.job_id, title: `Open run ${r.run_id}` });
     const rowCells = [
       el("span", { class: "state" }, [stateCell(r.state)]),
       attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
-      el("span", { class: "id", text: r.job_id, title: r.job_id }),
+      openButton,
+      runTaskLinks(r),
       runIdCell,
-      el("span", { class: "when", text: fmtTimestampValue(ts) }),
-      runCountCell(friction.denials),
-      runCountCell(friction.toolFails),
+      el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+      runCountCell(friction.denials, "denials"),
+      runCountCell(friction.toolFails, "tool-fails"),
       runDurationCell(r),
       el("span", { class: "run-actions" }, [
         runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
@@ -960,11 +1049,12 @@ export function renderRuns(runs) {
     ];
     const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
     row.dataset.key = `run-${runIdentity(r)}`;
-    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
+    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}`;
     row.style.cursor = "pointer";
-    // A run row opens the run detail view rather than disclosing inline, so it
-    // gets button semantics with no expansion state.
-    makeToggleRow(row, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
+    row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
+    // A run row opens the run detail view rather than disclosing inline, so its
+    // button has no expansion state.
+    makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
     frag.appendChild(row);
   }
   syncNodes(body, Array.from(frag.children));

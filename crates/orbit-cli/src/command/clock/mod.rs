@@ -6,3 +6,6 @@ pub(crate) mod tick;
 
 pub use command::{ClockCommand, ClockSubcommand};
 pub use tick::ClockTickArgs;
+
+#[cfg(test)]
+mod tests;

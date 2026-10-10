@@ -227,6 +227,8 @@ fn replay(
         by: SYSTEM_ACTOR,
         now: request.now,
         replay: Some(proof),
+        resolved_action_id: None,
+        expected_generation: Some(state.generation),
         action_terminal: false,
         action_failed_without_evidence: false,
     };

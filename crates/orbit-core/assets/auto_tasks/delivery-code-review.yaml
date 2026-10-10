@@ -19,16 +19,28 @@ template:
     Attribute every finding to the task that introduced it: locate the commit
     that made the code wrong, then read its task from the frozen input — each
     `deliveries[]` entry lists its `commits` and the `task_ids` that landed them.
-    File each confirmed finding with `orbit.task.add` as a `bug` tagged
-    `delivery-code-review`, carrying `relations: [{"type": "regression_from",
-    "target": "<culprit task ID>"}]`. A defect in an unattributed neighbor
-    commit, or one that predates the batch and was merely exposed by it, is filed
-    without the relation and says so — never blame a bystander delivery. Name the
-    culprit task and commit in the finding's description and in the evidence
-    finding text.
+    File each confirmed finding with
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["delivery-code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    A defect in an unattributed neighbor commit, or one that predates the batch
+    and was merely exposed by it, is filed without the `regression_from` relation
+    and says so — never blame a bystander delivery. Name the culprit task and
+    commit in the finding's description and in the evidence finding text.
+    Derive canonical `file:` selectors from every evidenced source path, removing
+    the line suffix, and add the matching regression-test location. Use existing
+    paths where possible; for a test file that must be created, set
+    `allow_missing_context: true` and identify that intended path. Never file a
+    finding without context selectors.
+    Search for duplicates with `orbit.search` (`"kind":"task"`) before filing.
+    A claimed run on another machine cannot reach the owner's search: file
+    without it and record the skipped search in the evidence; the owner's
+    triage dedupes. A finding the owner still refuses goes in the step output's
+    `unfiled_findings`, which the handoff attaches to this task.
     Complete the supplied evidence template, replace action_id with this task ID,
-    and attach automation-coverage.json through orbit.task.artifact.put in this
-    task's assigned executor run. Supply actual checks (subject, method,
+    write it to `.orbit/tmp/automation-coverage.json`, and attach it in this
+    task's assigned executor run with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"<agent-family>"}'`.
+    `orbit tool show <tool.name>` prints the tool's schema.
+    Supply actual checks (subject, method,
     observation); set examination_complete only after all obligations are examined.
     Task status, summary prose and successful process exit do not certify coverage.
   acceptance_criteria:
@@ -40,6 +52,9 @@ template:
   tags:
   - delivery-code-review
   - no-diff-expected
+  required_tools:
+  - orbit.task.add
+  - orbit.task.artifact.put
   priority: medium
   complexity: hard
   crew: system

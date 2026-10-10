@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-09-20
+last_validated: 2026-10-08
 ---
 
 # Orbit Data Handling
@@ -41,12 +41,12 @@ data-handling review:
 | Task bundles (titles, descriptions, plans, review threads, status) | `~/.orbit/tasks/workspaces/<ws-id>/<task-id>/` | Authoritative. Plain files on disk; may contain whatever you or an agent wrote into a task. |
 | Audit events, job runs, step checkpoints, routine state | `~/.orbit/orbit.db` (SQLite) | Authoritative history of what each agent invocation did. |
 | Redacted agent output blobs | `<repo>/.orbit/state/audit/blobs/` | Content-addressed; secrets are redacted at write time (see below). |
-| Process logs | `~/.orbit/state/logs/orbit.jsonl` | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
+| Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
-| Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. |
+| Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. Operator settings for shipped auto-tasks live in `auto_tasks/.orbit-auto-task-settings.json`. |
 
 Nothing in this table is synchronised anywhere by default. If you want task
 history to leave the machine, you opt in explicitly through
@@ -60,7 +60,9 @@ choose, or through federated MCP over SSH to hosts you configure.
 | Traffic | When | Destination | What is sent |
 | --- | --- | --- | --- |
 | Release check and binary download | Only when you run `orbit update` | `api.github.com` / `github.com/constellation-works/orbit/releases` | A GitHub API request for the latest release; no identifiers, no payload. |
-| Direct HTTP model transports (Anthropic Messages, OpenAI-compatible, Gemini) | Never from the `orbit` CLI | `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com` by default | These transports live in the `orbit-agent` library crate for embedders and examples. Every `orbit` crew dispatches through a provider CLI; selecting an HTTP-only provider such as `openai_compat` fails structurally rather than making a request. |
+
+Every Orbit crew dispatches through a provider CLI. Selecting an HTTP-only
+provider such as `openai_compat` fails structurally before making a request.
 
 Orbit has no update check on startup, no crash reporter, no usage analytics,
 and no "phone home" of any kind. There is no network call you cannot trace to a

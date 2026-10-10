@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010]
-last_validated: 2026-10-03
+last_validated: 2026-10-05
 ---
 
 # Full pre-release QA sweep
@@ -148,6 +148,29 @@ bounded in advance and may not recursively dispatch agents or jobs from the
 sweep. Browser setup may use the documented disposable Playwright recipe; an
 unavailable browser is NOT_RUN, not a clean dashboard result.
 
+The local `npm-package` row runs
+`./scripts/smoke-npm-install.sh --local-package-check` from the candidate root.
+It checks the Cargo workspace, npm, server and registry-package versions and
+identities, then runs `npm pack ./npm --ignore-scripts --offline --json
+--pack-destination <candidate>/.orbit/tmp/npm-package-<unique>`.
+Lifecycle scripts are disabled, so this builds the proxy archive without
+downloading a release binary or publishing. It inspects the actual tarball for
+`package.json`, `bin/orbit.js`, the packaged installer at
+`./scripts/install-binary.js` inside the tarball (source:
+`npm/scripts/install-binary.js` in the checkout),
+`release-signing.pub`, `README.md`, and `LICENSE`, checking nonempty files,
+candidate contents, identity and the npm-reported file inventory.
+The JSON output retains the pack command/output, input hashes, versions, packed
+file hashes and archive hash/path. The harness rechecks that evidence against
+the candidate before earning either npm assertion; retain and attach the
+tarball named by `results[].retained_evidence` alongside the sweep report.
+Malformed metadata, version drift or missing/excluded runtime files fail the
+row. `python3 scripts/test-qa-full-sweep.py --self-test` exercises these isolated
+controls with real local packs. The older `--dry-run-version-assertion` only
+tests a narrow version predicate and cannot earn candidate packaging assertions.
+The no-argument smoke still exercises the published npm install chain and is
+reserved for the existing post-release workflow.
+
 Website deployment and npm publication are user-owned post-release handoffs.
 The pre-release sweep validates source builds, packaging, installers, and
 dry-run/version contracts but never deploys or publishes. Live website/npm
@@ -194,10 +217,26 @@ A retired case without equivalent admitted boundary coverage stays in the
 inventory as `kind: coverage-gap` with a concrete `coverage_gap` explanation
 and its original assertions. It has no executable command or passing cases:
 the harness emits `BLOCKED`, and even unrelated PASS evidence cannot make it
-earn release sign-off. `task-list-pagination` currently has this gap for
-exhaustive filtered pagination and invalid or cross-workspace cursor refusal.
-Browser page navigation does not replace those HTTP contracts. Add admitted
-HTTP coverage before converting the row back to `cargo-test`.
+earn release sign-off. Browser page navigation does not replace HTTP contracts.
+
+`task-list-pagination` runs `cargo test -p orbit-web --test http_api pagination::
+-- --nocapture`. Its two required cases exercise both `/api/tasks` and
+`/api/tasks/all` through a real server in isolated child processes:
+
+- `pagination::filtered_pages_reach_every_match_and_continue_stably_on_both_endpoints`
+  traverses multiple pages with combined status, tag, type, and search filters,
+  verifies exhaustive ordered results without duplicates across interleaved
+  workspaces, replays continuations, and confirms a newer matching insert does
+  not shift an existing continuation but appears on a fresh traversal.
+- `pagination::invalid_filter_workspace_and_endpoint_cursors_are_refused_without_state_changes`
+  verifies malformed and oversized cursors, changed filters or page size,
+  another workspace, the other endpoint, and a different aggregate workspace
+  set are refused with a structured HTTP client error. Refusals preserve task
+  records, history, comments, artifacts, and valid continuations.
+
+The row retains `pagination-reaches-every-match`, `invalid-cursor-refused`, and
+`cross-workspace-cursor-refused`; only passing named cases on the matching
+candidate earn those assertions.
 
 The command harness requires a POSIX host. It drains stdout and stderr while
 retaining at most one MiB per stream and marks truncated output. A disposable
@@ -209,8 +248,12 @@ timeout and lost-supervisor outcomes also fail.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
-Before task handoff, report `make ci-fast`, `make ci-lint`, and `make goldens`
-as passed, failed, or not run with reasons. Full `make ci` runs on PRs.
+Before task handoff, report `make ci-fast`, `make ci-test-affected`,
+`make ci-lint`, and `make goldens` as passed, failed, or not run with reasons.
+`make ci-fast` runs no Rust tests; the affected-test gate covers complete
+test targets of changed crates and their workspace dependents
+([validation and CI](../DEVELOPMENT.md#validation-and-ci)). Full `make ci`
+runs on PRs.
 
 For a subcommand grammar audit, run
 `python3 scripts/test-qa-full-sweep.py --orbit-bin target/debug/orbit --list-cli-paths`.

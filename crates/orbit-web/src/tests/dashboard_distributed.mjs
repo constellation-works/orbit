@@ -3,10 +3,10 @@
 //
 // The scenario drives the *shipped* `distributed.js` against a fetch stub, so
 // what is asserted is what the dashboard paints and what it sends — not an
-// implementation shape. It runs unchanged in two places: on the keyboard DOM
-// adapter under `cargo test`, and inside a real Chromium via
-// `dashboard_distributed_browser.mjs`, which is why every interaction goes
-// through `press()` and every lookup through class selectors both support.
+// implementation shape. It runs in Chromium via
+// `dashboard_distributed_browser.mjs`, the required dashboard-distributed-browser
+// scenario in the QA sweep inventory. Interactions go through `press()` and
+// lookups use class selectors.
 //
 // What it has to prove, in the order an operator meets it:
 //
@@ -28,8 +28,8 @@
 //    expires, a settled claim reads released rather than expired, and a failed
 //    read says so with a way to retry.
 
-// Runs against the shipped modules in both the Node DOM harness and Chromium,
-// so the assertions are plain functions rather than a Node import.
+// Assertions run inside the browser page, so they use plain functions rather
+// than a Node import.
 const fail = (message) => { throw new Error(message); };
 const assert = {
   ok: (condition, message) => { if (!condition) fail(message || "expected a truthy value"); },
@@ -154,7 +154,14 @@ globalThis.fetch = async (path, options = {}) => {
   const method = (options && options.method) || "GET";
   if (method === "GET") {
     const workspace = url.searchParams.get("workspace");
-    consoleReads.push({ path: url.pathname, workspace });
+    const task = url.searchParams.get("task");
+    consoleReads.push({
+      path: url.pathname,
+      workspace,
+      task,
+      state: url.searchParams.get("state"),
+      detail: url.searchParams.get("detail"),
+    });
     if (failConsoleReads > 0) {
       failConsoleReads -= 1;
       return respond({ error: "claims unavailable" }, 500);
@@ -179,7 +186,13 @@ globalThis.fetch = async (path, options = {}) => {
 };
 
 const distributed = await import("./js/distributed.js");
-const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation, CONSOLE_TTL_MS } = distributed;
+const {
+  buildDistributedBlock,
+  buildExecutionProvenance,
+  invalidateDistributedConsole,
+  formatExecutionLocation,
+  CONSOLE_TTL_MS,
+} = distributed;
 const { setWorkspace } = await import("./js/common.js");
 await import("./js/tasks.js");
 
@@ -210,11 +223,80 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   const unknown = formatExecutionLocation(null);
   assert.ok(unknown.includes("unknown"), unknown);
   assert.ok(!/owner/i.test(unknown), `unknown provenance must not name an owner: ${unknown}`);
-  assert.equal(formatExecutionLocation({ known: true, machine_id: "hm_a" }), "machine hm_a");
+  assert.equal(formatExecutionLocation({ known: true, machine_id: "hm_a" }), "on hm_a");
   assert.equal(
     formatExecutionLocation({ known: true, machine_id: "hm_a", machine_name: "box" }),
-    "machine hm_a · name box",
+    "on box",
   );
+  const fallbackId = "hm_ba054a1afbfb914";
+  const fallback = buildExecutionProvenance({ known: true, machine_id: fallbackId });
+  assert.equal(fallback.textContent, "on hm_ba05…");
+  assert.equal(fallback.title, `Execution machine id: ${fallbackId}`);
+  const named = buildExecutionProvenance({ known: true, machine_id: fallbackId, machine_name: "Mac follower" });
+  assert.equal(named.textContent, "on Mac follower");
+  assert.equal(named.title, `Execution machine: Mac follower (${fallbackId})`);
+}
+
+// The actual task renderer and shipped CSS keep remote execution provenance on
+// one line, so it cannot make an in-progress row taller than its neighbours.
+{
+  const { renderTasks } = await import("./js/tasks.js");
+  assert.equal(window.innerWidth, 1440, "the task-row height check uses the reported viewport");
+  document.querySelector('.tab-pane[data-tab="tasks"]').classList.add("active");
+  const machineId = "hm_ba054a1afbfb914";
+  const task = (id, machine, navigable) => ({
+    id,
+    title: `Task ${id}`,
+    status: "in-progress",
+    job_run_id: `run-${id}`,
+    job_run_navigable: navigable,
+    job_run_machine: machine,
+  });
+  const context = {
+    getActiveStatuses: () => new Set(["in-progress"]),
+    statusOrder: ["in-progress"],
+    getTaskPagination: () => ({}),
+  };
+  renderTasks([
+    task("ORB-1", { machine_id: machineId }, false),
+    task("ORB-2", { machine_id: machineId, machine_name: "Mac follower" }, false),
+    task("ORB-3", null, true),
+  ], context);
+  const rows = Array.from(document.querySelectorAll("#tasks-body .row:not(.header)"));
+  assert.equal(rows.length, 3, "the in-progress fixture rows are rendered");
+  const heights = rows.map((row) => row.getBoundingClientRect().height);
+  assert.ok(heights.every((height) => height === heights[0]), `remote rows must match neighbour heights at 1440px: ${heights.join(", ")}`);
+  const fallback = rows[0].querySelector(".task-quick-cell .exec-origin");
+  assert.equal(fallback.textContent, "on hm_ba05…");
+  assert.equal(fallback.title, `Execution machine id: ${machineId}`);
+  const named = rows[1].querySelector(".task-quick-cell .exec-origin");
+  assert.equal(named.textContent, "on Mac follower");
+  assert.equal(named.title, `Execution machine: Mac follower (${machineId})`);
+}
+
+// Run detail uses the same visible location and retains the name and full id.
+{
+  const runDetail = await import("./js/run-detail.js");
+  const machineId = "hm_ba054a1afbfb914";
+  runDetail.initRunDetail({
+    buildReplayRunButton: () => document.createElement("button"),
+    runIsCancellable: () => false,
+  });
+  for (const [location, label] of [
+    [{ machine_id: machineId }, "on hm_ba05…"],
+    [{ machine_id: machineId, machine_name: "Mac follower" }, "on Mac follower"],
+  ]) {
+    runDetail.setActiveRunDetail({
+      run: { run_id: "fixture-run", job_id: "fixture-job", state: "completed", attempt: 1, executed_on: location },
+      steps: [],
+    });
+    runDetail.renderRunDetailMeta();
+    const provenance = document.querySelector("#run-detail-meta .exec-origin");
+    assert.equal(provenance.textContent, label);
+    assert.equal(provenance.title, location.machine_name
+      ? `Execution machine: ${location.machine_name} (${machineId})`
+      : `Execution machine id: ${machineId}`);
+  }
 }
 
 {
@@ -223,7 +305,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
 
   assert.equal(block.style.display, "", "a task with a claim shows the block");
   assert.equal(block.querySelector("h4").getAttribute("aria-expanded"), "true");
-  assert.ok(text.includes("machine hm_follower · name runner-2"), "execution is machine-qualified");
+  assert.ok(text.includes("on runner-2"), "execution names the machine");
 
   // The bound run lives in the follower's job store: name the machine to inspect
   // rather than linking into this checkout.
@@ -231,7 +313,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(text.includes("inspect this run on machine hm_follower"), text);
 
   // An elapsed reservation is a diagnostic. Nothing here may read as revoked.
-  assert.ok(text.includes("expired 2026-09-19T00:00:00+00:00"), text);
+  assert.ok(text.includes("expired 2026-09-18 17:00 PDT"), text);
   assert.ok(text.includes("expiry is not revocation"), text);
   assert.ok(!/revoked/i.test(text), `an expired reservation must not read as revoked: ${text}`);
 
@@ -267,13 +349,21 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   // Several claims for one task (a retry after recovery) are told apart by id
   // and creation time.
   assert.ok(text.includes("claim claim-1"), text);
-  assert.ok(text.includes("created 2026-09-18T00:00:00+00:00"), text);
+  assert.ok(text.includes("created 2026-09-17 17:00 PDT"), text);
 }
 
 {
   // A task this workspace holds no claim for gets no block at all.
+  const readsBefore = consoleReads.length;
   const block = await mount("ORB-999");
   assert.equal(block.style.display, "none", "a task with no claim shows nothing");
+  assert.equal(consoleReads.length, readsBefore + 1, "the task panel makes one claim request");
+  assert.equal(consoleReads.at(-1).task, "ORB-999", "the request is scoped to the task being opened");
+  assert.equal(
+    [consoleReads.at(-1).state, consoleReads.at(-1).detail].join(),
+    "all,true",
+    "the panel shows the task's settled claims in full, not the endpoint's active-only default",
+  );
 }
 
 // --- workspace switching invalidates the distributed-console cache ---------
@@ -595,8 +685,7 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(buttons(block).length, 0, "an unauthorized session gets no action buttons");
   const denied = block.querySelector(".claim-action-denied");
   assert.ok(denied, "the reason is shown rather than the action silently vanishing");
-  // `title` is the reflected property in both harnesses; the stub DOM sets it
-  // as a property rather than an attribute.
+  // The tooltip and visible text both explain the denied action.
   assert.ok(String(denied.title).includes("operator"), String(denied.title));
   // ...and the reason is not tooltip-only: it is text an operator can read.
   assert.ok(denied.textContent.includes("requires operator"), denied.textContent);

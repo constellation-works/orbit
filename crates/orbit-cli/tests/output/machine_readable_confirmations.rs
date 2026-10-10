@@ -11,7 +11,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -40,7 +39,7 @@ impl Fixture {
             &["config", "commit.gpgsign", "false"],
             &["commit", "--quiet", "--allow-empty", "-m", "initial"],
         ] {
-            let output = StdCommand::new("git")
+            let output = crate::git_repo::command()
                 .arg("-C")
                 .arg(&work)
                 .args(args)
@@ -270,6 +269,43 @@ fn workspace_config_set_validates_crews_against_the_effective_config() {
 
     fixture
         .orbit()
+        .args([
+            "config",
+            "set",
+            "--global",
+            "workflow.base_branch",
+            "global-branch",
+        ])
+        .assert()
+        .success();
+    let shown = fixture.json(&["config", "show", "--scope", "workspace", "--json"]);
+    assert_eq!(shown["source"]["scope"], "workspace");
+    let pool = shown["settings"]["workflow.low_complexity_crews"]
+        .as_array()
+        .unwrap();
+    assert_eq!(pool.len(), 2);
+    assert!(
+        pool.contains(&serde_json::json!("global-only")),
+        "a workspace file view admits a global pool crew"
+    );
+    assert!(pool.contains(&serde_json::json!("sol")));
+    assert_ne!(
+        shown["settings"]["workflow.base_branch"], "global-branch",
+        "the scoped view must not import other global settings"
+    );
+    fixture
+        .orbit()
+        .args(["config", "show", "--scope", "workspace"])
+        .assert()
+        .success();
+
+    let partial_override =
+        format!("{workspace}\n[crews.global-only]\nmodel = \"workspace-model\"\n");
+    fs::write(&workspace_config, partial_override).expect("add partial crew override");
+    fixture.json(&["config", "show", "--scope", "workspace", "--json"]);
+
+    fixture
+        .orbit()
         .args(["config", "set", "workflow.base_branch", "qa"])
         .assert()
         .success();
@@ -285,6 +321,16 @@ fn workspace_config_set_validates_crews_against_the_effective_config() {
 
     let invalid_workspace = "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\", \"global-only\", \"missing\"]\nbase_branch = \"qa\"\n\n[crews.sol]\nenabled = true\nprovider = \"codex\"\nmodel = \"gpt-test\"\n";
     fs::write(&workspace_config, invalid_workspace).expect("add undefined pool crew");
+    let dangling = fixture
+        .orbit()
+        .args(["config", "show", "--scope", "workspace"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let reason = String::from_utf8_lossy(&dangling.stderr);
+    assert!(reason.contains("workflow.low_complexity_crews"), "{reason}");
+    assert!(reason.contains("missing"), "{reason}");
     let rejected = fixture
         .orbit()
         .args(["config", "set", "workflow.base_branch", "rejected"])
@@ -575,5 +621,51 @@ fn plain_search_rows_and_empty_plugin_doctor_have_no_dangling_separators() {
     assert!(
         !stdout.starts_with('\n'),
         "no rows means no separator before the summary: {stdout:?}"
+    );
+}
+
+/// Git location variables exported into the process outrank `-C`. A sibling
+/// test can hold them (`output_goldens`' managed-routing sentinel), so a
+/// fixture built under them must create its own repository and leave the
+/// exported one untouched.
+#[test]
+fn fixture_ignores_exported_git_location_variables() {
+    let temp = tempdir().expect("tempdir");
+    let sentinel = temp.path().join("sentinel");
+    crate::git_repo::init(&sentinel);
+    let sentinel_git = sentinel.join(".git");
+    let snapshot = || {
+        let refs = crate::git_repo::command()
+            .arg("-C")
+            .arg(&sentinel)
+            .arg("for-each-ref")
+            .output()
+            .expect("list sentinel refs");
+        (
+            fs::read(sentinel_git.join("HEAD")).expect("read sentinel HEAD"),
+            fs::read(sentinel_git.join("config")).expect("read sentinel config"),
+            refs.stdout,
+        )
+    };
+    let before = snapshot();
+    let sentinel_git_str = sentinel_git.to_str().expect("utf8 path");
+    let sentinel_work_str = sentinel.to_str().expect("utf8 path");
+
+    let fixture = {
+        let _exported = test_env::scoped([
+            ("GIT_DIR", Some(sentinel_git_str)),
+            ("GIT_COMMON_DIR", Some(sentinel_git_str)),
+            ("GIT_WORK_TREE", Some(sentinel_work_str)),
+        ]);
+        Fixture::new()
+    };
+
+    assert!(
+        fixture.work.join(".git").is_dir(),
+        "the fixture must create its own repository under exported Git variables"
+    );
+    assert!(
+        snapshot() == before,
+        "fixture setup must not write the exported repository's HEAD, config or refs"
     );
 }

@@ -5,12 +5,12 @@
 //! Binary-level coverage for `orbit update`.
 //!
 //! Routing, `--check`, and admission are exercised below. Integrity — checksums,
-//! signatures, archive shape, rollback, downgrade, the install lock, and a
-//! stale writer — is exercised through the same binary in the `integrity` module.
+//! signatures, archive shape, staged version checks, downgrade, the install
+//! lock, and a stale writer — is exercised through the same binary in the
+//! `integrity` module, and operator-built candidates in `local_candidate`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -21,9 +21,25 @@ use tempfile::tempdir;
 // directory named after the test file, so the path is explicit.
 #[cfg(unix)]
 mod integrity;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod local_candidate;
 
 fn orbit(cwd: &Path, home: &Path, mirror: &Path) -> assert_cmd::Command {
-    let mut command = cargo_bin_cmd!("orbit");
+    fixture_env(cargo_bin_cmd!("orbit"), cwd, home, mirror)
+}
+
+/// Run `executable`, a copy of the tested binary, as [`orbit`] runs the
+/// original.
+fn orbit_at(executable: &Path, cwd: &Path, home: &Path, mirror: &Path) -> assert_cmd::Command {
+    fixture_env(assert_cmd::Command::new(executable), cwd, home, mirror)
+}
+
+fn fixture_env(
+    mut command: assert_cmd::Command,
+    cwd: &Path,
+    home: &Path,
+    mirror: &Path,
+) -> assert_cmd::Command {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
@@ -48,7 +64,7 @@ fn mirror_publishing(version: &str) -> tempfile::TempDir {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -144,6 +160,15 @@ fn install_test_binary(directory: &Path) -> PathBuf {
     let executable = directory.join("orbit");
     fs::copy(env!("CARGO_BIN_EXE_orbit"), &executable).expect("copy tested Orbit binary");
     executable
+}
+
+/// A copy of the tested binary at a `cargo build` output path under
+/// `checkout`. The suite's own binary lives wherever `CARGO_TARGET_DIR`
+/// points, and a directory with no `target` component (a baseline replay's
+/// `.orbit/tmp/base-target`, say) is rightly not a local build, so fixtures
+/// about checkout builds run this copy instead.
+fn checkout_build(checkout: &Path) -> PathBuf {
+    install_test_binary(&checkout.join("target").join("debug"))
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -311,6 +336,9 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let scratch = temp.path().join("scratch");
     fs::create_dir_all(&home).expect("create home");
     init_git_repo(&repo);
+    // Keep cwd lookup local without adding an initialized workspace authority
+    // to the host-global preflight below.
+    fs::create_dir_all(repo.join(".orbit")).expect("uninitialized lookup boundary");
     let mirror = mirror_publishing("99.0.0");
     initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
 
@@ -332,11 +360,13 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     .expect("preflight against overridden root");
     assert_admission_refused(&preflight, "preflight --root");
 
+    // Request the installed version: the update downloads nothing and goes
+    // straight to the admission it takes before converging.
     let update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
-            "99.0.0",
+            env!("CARGO_PKG_VERSION"),
             "--json",
             "--root",
             scratch_arg.as_ref(),
@@ -361,7 +391,7 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let env_update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
-            .args(["update", "--version", "99.0.0", "--json"]),
+            .args(["update", "--version", env!("CARGO_PKG_VERSION"), "--json"]),
     )
     .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT");
@@ -450,11 +480,13 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let _client = GenerationGuard::acquire(&host_global, &digest).expect("live host-global pin");
     let before = fs::read(&executable).expect("installed bytes");
 
+    // Request the installed version: the update downloads nothing and goes
+    // straight to the admission it takes before converging.
     let root_update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
-            "99.0.0",
+            env!("CARGO_PKG_VERSION"),
             "--json",
             "--root",
             scratch_arg.as_ref(),
@@ -471,7 +503,7 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let env_update = output_of(
         installed_orbit(&executable, &repo, &home, mirror.path())
             .env("ORBIT_ROOT", &scratch)
-            .args(["update", "--version", "99.0.0", "--json"]),
+            .args(["update", "--version", env!("CARGO_PKG_VERSION"), "--json"]),
     )
     .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT under a host-global pin");
@@ -528,10 +560,12 @@ fn help_documents_both_latest_and_explicit_version_selection() {
 fn check_reports_the_available_release_and_exits_three() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
-    let output = orbit(home.path(), home.path(), mirror.path())
-        .args(["update", "--check", "--json"])
-        .output()
-        .expect("run update --check");
+    let executable = checkout_build(home.path());
+    let output = output_of(
+        orbit_at(&executable, home.path(), home.path(), mirror.path())
+            .args(["update", "--check", "--json"]),
+    )
+    .expect("run update --check");
 
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let report: Value =
@@ -540,8 +574,8 @@ fn check_reports_the_available_release_and_exits_three() {
     assert_eq!(report["target_version"], "9.9.9");
     assert_eq!(report["current_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(report["replaced"], false);
-    // This test binary is a checkout build, so the report names the channel
-    // and the command that actually upgrades it.
+    // A checkout build's report names the channel and the command that
+    // actually upgrades it.
     assert_eq!(report["install_channel"], "local-build");
     assert_eq!(report["updatable"], false);
     assert!(
@@ -564,10 +598,11 @@ fn check_reports_the_available_release_and_exits_three() {
 fn check_renders_a_prefix_free_remediation_sentence() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
-    let output = orbit(home.path(), home.path(), mirror.path())
-        .args(["update", "--check"])
-        .output()
-        .expect("run update --check");
+    let executable = checkout_build(home.path());
+    let output = output_of(
+        orbit_at(&executable, home.path(), home.path(), mirror.path()).args(["update", "--check"]),
+    )
+    .expect("run update --check");
 
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let text = String::from_utf8_lossy(&output.stdout);
@@ -596,13 +631,41 @@ fn check_is_quiet_and_succeeds_when_the_installed_release_is_current() {
 }
 
 #[test]
+fn check_succeeds_without_recommending_an_update_when_the_published_release_is_older() {
+    let home = tempdir().expect("home");
+    let mirror = mirror_publishing("0.0.0");
+    let output = orbit(home.path(), home.path(), mirror.path())
+        .args(["update", "--check", "--json"])
+        .output()
+        .expect("check an older published release");
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("check report");
+    assert_eq!(report["outcome"], "already_current");
+    assert_eq!(report["current_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(report["target_version"], "0.0.0");
+    assert_eq!(report["replaced"], false);
+    assert_eq!(report["steps"], serde_json::json!([]));
+
+    let output = orbit(home.path(), home.path(), mirror.path())
+        .args(["update", "--check"])
+        .output()
+        .expect("render a check of an older published release");
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains("An update is available"), "{text}");
+    assert!(!text.contains("`orbit update`"), "{text}");
+}
+
+#[test]
 fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works() {
     let home = tempdir().expect("home");
     let mirror = mirror_publishing("9.9.9");
-    let output = orbit(home.path(), home.path(), mirror.path())
-        .arg("update")
-        .output()
-        .expect("run update");
+    let executable = checkout_build(home.path());
+    let output =
+        output_of(orbit_at(&executable, home.path(), home.path(), mirror.path()).arg("update"))
+            .expect("run update");
 
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -612,6 +675,55 @@ fn applying_an_update_to_a_checkout_build_is_refused_with_the_command_that_works
         output.stdout.is_empty(),
         "a failed command emits no payload"
     );
+}
+
+/// Only a `target/{debug,release}` build output is a checkout build. The same
+/// binary installed by an installer, or somewhere no installer owns, is
+/// never offered the local-build remediation, and an unknown location is
+/// refused in place.
+#[test]
+fn installed_and_unknown_location_binaries_are_not_checkout_builds() {
+    let home = tempdir().expect("home");
+    let mirror = mirror_publishing("9.9.9");
+    let check = |executable: &Path| -> Value {
+        let output = output_of(
+            orbit_at(executable, home.path(), home.path(), mirror.path())
+                .args(["update", "--check", "--json"]),
+        )
+        .expect("run update --check");
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+        serde_json::from_slice(&output.stdout).expect("check report")
+    };
+
+    let unknown = install_test_binary(&home.path().join("tools"));
+    let report = check(&unknown);
+    assert_eq!(report["install_channel"], "unknown", "{report}");
+    assert_eq!(report["updatable"], false, "{report}");
+    let remediation = report["remediation"].as_str().expect("remediation");
+    assert!(
+        remediation.contains("does not recognize the installer")
+            && !remediation.contains("make install"),
+        "{report}"
+    );
+    let output =
+        output_of(orbit_at(&unknown, home.path(), home.path(), mirror.path()).arg("update"))
+            .expect("run update");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot update") && !stderr.contains("make install"),
+        "{stderr}"
+    );
+
+    let cargo = install_test_binary(&home.path().join(".cargo").join("bin"));
+    let report = check(&cargo);
+    assert_eq!(report["install_channel"], "cargo", "{report}");
+    assert_eq!(report["updatable"], false, "{report}");
+
+    let managed = install_test_binary(&home.path().join(".orbit").join("bin"));
+    let report = check(&managed);
+    assert_eq!(report["install_channel"], "managed", "{report}");
+    assert_eq!(report["updatable"], true, "{report}");
 }
 
 #[test]

@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-10-04
+last_validated: 2026-10-07
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -10,6 +10,23 @@ last_validated: 2026-10-04
 Delivery triggers are opt-in. The host clock tick evaluates routines and auto-task
 definitions in-process. Routines submit ordinary jobs, and auto-tasks create ordinary backlog tasks for the normal
 approval/admission lifecycle. There is no new daemon or coverage submission tool.
+
+Delivery observation reuses recorded provider results, including a confirmed
+absence of a PR. A lookup that fails or returns ambiguous identities retries
+after one minute, then five minutes, then every thirty minutes. The checkpoint
+stores each unresolved lookup's last attempt time and count; older checkpoints
+without this information remain readable and get an immediate first attempt.
+Grouping and owner evidence still run for recorded associations, so missing
+landing evidence can arrive without another provider lookup.
+
+Within one clock tick, routine and auto-task consumers share the fetched head
+for the same repository, branch and Git object store, and share each commit's
+provider response (or failure). Independent clones fetch their own objects.
+The cache ends with the tick, and each observation retains its own command
+deadline. Exhausted or failed delivery batches report `needs_attention` before
+observation, in both preview and live evaluation, while keeping their retained
+debt unchanged until recovery. Reconciliation and definition adoption still
+precede that hold.
 
 ## Configuration and migration
 
@@ -22,9 +39,12 @@ refresh. A locally modified copy stays in the catalog until that refresh, and
 `orbit doctor` warns that the default is no longer shipped; refresh then keeps
 the operator's bytes under `.orbit/.retired-managed/` instead of deleting them.
 Initialization
-does not overwrite existing workspace definitions. `operation.review_policy =
-after-landing` enables `delivery-code-review` without editing its file
-[ORB-13896]; see the [review gate](../review-gate/2_design.md). The shipped defaults carry a
+does not overwrite existing workspace definitions. After-landing review is
+`delivery-code-review`'s own `enabled` flag (`orbit auto-task toggle
+delivery-code-review on|off`) [ORB-13992]; the deprecated
+`operation.review_policy = after-landing` still enables it, without editing its
+file, while no operator has configured it. See the [review
+gate](../review-gate/2_design.md). The shipped defaults carry a
 `__ORBIT_BASE_BRANCH__` placeholder for `branch`; `orbit workspace init` and
 `orbit workspace sync` render it to the workspace's registered base branch, so a
 `main`-based workspace observes `main` rather than another repository's
@@ -80,12 +100,19 @@ debt and preview the new baseline first.
 
 A delivery review definition mints its tasks with the crew named in its own
 template, exactly like any other auto-task, with one exception: while
-`operation.review_policy` is `after-landing` and `operation.review_crew` is set,
-`delivery-code-review` mints with that crew instead [ORB-13896]. The crew is
-applied at mint time and is not part of the consumer's epoch. Under that policy
-`orbit doctor` also fails its `review-after-landing` row while this consumer is
-missing, unowned, wedged, stalled, held for an operator or on a branch or crew
-that does not resolve. See the [review gate](../review-gate/2_design.md).
+`operation.review_crew` is set, `delivery-code-review` mints with that crew
+instead [ORB-13896]. The crew is applied at mint time and is not part of the
+consumer's epoch. While this consumer is enabled, `orbit doctor` also fails its
+`review` row when the consumer is missing, unowned, wedged, stalled, held for
+an operator, on a branch or crew that does not resolve, or when its observed
+commit trails `refs/remotes/origin/<branch>` and the oldest unobserved
+first-parent commit has waited at least the batch's `max_wait_minutes`, even
+if newer pending commits are recent (or that remote history has diverged, or the remote-tracking
+ref is missing after a cursor exists). The row names the observed commit and
+the remote-tracking head. It does not fetch; the observation pass is what
+updates that ref. The same row, `orbit config show` and the drain probe report
+whether it is on and when its next batch is due. See the
+[review gate](../review-gate/2_design.md).
 
 The coverage a new delivery trigger may select is `landed_code_review_v1`.
 `integrated_qa_v1` is retired. Persisted batches, coverage evidence, automation
@@ -144,8 +171,12 @@ A no-diff PR, task completion or epic closure alone contributes zero.
 
 Each delivery's `task_ids` come from the landing record, never commit text. A PR
 delivery lists every task carrying its `github-pr:<number>` reference, which
-promotion stamps on each bundle member before the merge; a direct landing lists
-its run's submitted `task_ids`. When the record names no task, `task_ids` is
+promotion stamps on each bundle member before the merge. It also lists the task
+of every handoff the owner accepted for that exact repository, landing branch and
+PR number: a distributed-drain follower's PR carries no reference on the owner's
+task, so the accepted handoff is the record that names it. A direct landing lists
+its run's submitted `task_ids`; a handoff landing that fast-forwards an
+owner-local candidate lists the handoff's task. When the record names no task, `task_ids` is
 empty and `unattributed` says why (`no_landing_task`, or
 `task_records_unreadable` on a checkout that cannot read task records); a task
 store read failure defers the pass instead. `auto-task show` displays both
@@ -233,8 +264,11 @@ Read-only inspection reports persisted scheduling reasons including
 `awaiting_baseline`, `disabled`, `owned_elsewhere`, `ownership_unresolved`,
 `definition_changed`, `open_instance`, `threshold_reached`, `max_wait_reached`,
 `batch_pending`, `retry_backoff`, `retry_deadline_expired`, `needs_attention`,
-and `evidence_unavailable`. It does not fetch source or provider evidence: source
-history failures are reported by an evaluation run, not fabricated by inspection.
+and `evidence_unavailable`. A delivery auto-task whose edit the next tick would
+adopt automatically reports the reason it will have once adopted; one held at
+`definition_changed` also carries `refusals`, naming why it was not adopted. It
+does not fetch source or provider evidence: source history failures are reported
+by an evaluation run, not fabricated by inspection.
 The one source fact inspection does read is whether the configured branch
 resolves: a consumer that has no baseline yet and whose branch git cannot
 resolve reports that failure in place of `awaiting_baseline`, because no tick
@@ -253,11 +287,20 @@ workspace base branch, or create the branch). The same check reports every
 enabled definition whose resolved owner is not this host, naming the refusal
 (`owned_elsewhere` or `ownership_unresolved`), the owner machine and this host's,
 and pointing at `orbit auto-task show <name> --preview` for the coverage debt it
-is holding. It also reports a consumer *wedged* on an admitted action whose task
-closed without acceptable evidence, naming the action and its recorded
-validation reason. Evaluation settles such an action, so one still reported
+is holding. It also reports a consumer *wedged* on a claimed or admitted action whose task
+closed without acceptable evidence, reporting its terminal status and its recorded
+validation reason. Evaluation settles such an action even while its definition
+has changed, so one still reported
 means no evaluation is reaching it; the remediation names `orbit auto-task
 recover <name> --reissue-action --reason <why>` and `orbit auto-task reset`.
+An unminted retry can retain the closed task's failure reason while its own
+action ID is empty. Recovery checks the preceding attempt's durable action
+key and terminal outcome; it does not mistake that scheduled retry for a live
+task. Adoption alone preserves its attempt, backoff and frozen obligations,
+and explicit reissue remains available without discarding any debt. A minted
+retry is checked against its own task, and an unknown or open action still
+refuses recovery. These checks also apply when settings change on a later
+tick, after the original task was reconciled.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
 operation. State read failures are reported separately; corrupted delivery state is
@@ -285,16 +328,38 @@ orbit tool run orbit.auto_task.update --input '{"name":"delivery-code-review","w
 Only the current settled failed/exhausted batch may be waived. The archived
 disposition removes its landings from threshold eligibility, retains the full
 code gap and never advances coverage. A later examination can still cover that
-code as neighboring context.
+code as neighboring context. The waiver is recorded before the response is built,
+so the command exits zero even when the definition's `required_tools` names a
+tool that is no longer registered; that problem is reported as a `warnings`
+entry, not a failure.
 
 ### Recovering a consumer stalled by a settings change [ORB-12295]
 
-Retuning a threshold, wait, batch size, retry count, template or crew moves the
-definition's epoch, so the consumer reports `definition_changed` and admits
-nothing while every obligation it already holds stays retained. `orbit auto-task
-recover` is the supported way forward for a delivery auto-task. It never waives
-a batch, advances the covered cursor, reopens a terminal task or edits a state
-file.
+Retuning a threshold, wait, batch size, retry count, template, crew or dedupe
+moves the definition's epoch. For an enabled delivery auto-task owned here, the
+next evaluation adopts such a settings-only edit itself [ORB-14033]: it runs the
+same refusals and the same audited recovery as `--adopt-settings`, under a
+recovery record attributed to `system:automation` whose reason names the
+changed settings, and keeps every covered, pending, unresolved, waived and
+excluded landing and every receipt. It logs one warning (`<name>: settings
+changed (threshold) — adopted automatically, coverage debt retained`), files one
+friction deduplicated on the consumer and its old and new identity, and
+continues the same pass, so the consumer keeps admitting and `orbit doctor`
+stays healthy. Later ticks see the adopted identity and repeat nothing.
+
+The evaluator never adopts an edit `--adopt-settings` would refuse — a changed
+branch, repository, owner machine or coverage class, or an action still claimed
+or admitted whose task remains open or whose liveness is unknown — nor one it cannot judge alone: legacy state with no recorded
+trigger (`coverage_unverifiable`), a state-member consumer, or a consumer
+already stalled for an operator (`consumer_stalled`). Those still report
+`definition_changed` and admit nothing while every obligation stays retained.
+`orbit auto-task show --json` carries the refusals, and the `review` doctor row
+names them (`not adopted automatically: branch_changed`). Delivery routines are
+never adopted automatically.
+
+For those cases, `orbit auto-task recover` is the supported way forward for a
+delivery auto-task. It never waives a batch, advances the covered cursor,
+reopens a terminal task or edits a state file.
 
 Preview first; with neither operation flag the command only reads:
 
@@ -340,10 +405,24 @@ does not also adopt the identity it would run under) or `missing_authorization`
 (no reason or actor). A change of workspace, owner machine, repository, branch
 or coverage class is never adopted: those change what the retained debt means,
 so settle the old consumer's debt and preview a new baseline instead. An action
-that is claimed or admitted has to settle first. An admitted action whose task
+that is claimed or admitted and still live has to settle first. A claimed or admitted action whose task
 is already terminal without evidence its settlement would accept counts as
 settled: it is reissuable and does not refuse as `active_execution`, even
-before an evaluation has run.
+before an evaluation has run. This includes a task minted before a crash left
+its id unrecorded on the claim: the consumer looks up its permanent action key
+without replaying creation against the edited definition. Read failures keep
+liveness unknown and continue to refuse recovery.
+The liveness proof is tied to the inspected consumer generation: a concurrent
+admission defers recovery instead of treating the replacement action as closed.
+
+A tick reconciles the closed task before judging a compatible settings edit.
+When the frozen retry budget remains, it schedules the next attempt with its
+existing backoff and adopts the edit in the same pass. Pending deliveries,
+accepted receipts and frozen obligations remain unchanged; terminal tasks are
+never reopened. An exhausted batch still requires explicit reissue. Before
+that tick, doctor's review row reports the closed task's status and gives
+the recover command, adding `--adopt-settings` when the recorded identity is
+stale. Reset is not needed to retain the debt.
 
 Only this host, as the resolved owner, may recover its own consumer, and only
 delivery auto-tasks are covered: delivery routines and state-member consumers
@@ -419,9 +498,17 @@ Deferred reasons are classified rather than treated alike.
 `history_diverged`, `repository_changed`, `provider_identity_missing` and
 `state_missing` are *stuck*: they read identically on every future tick, so they
 stall the consumer instead of retrying. Everything else — `source_backpressure`,
-`concurrent_evaluation`, `source_deadline`, `source_budget`, a superseded claim —
-keeps the silent retry and writes nothing, because marking a transient deferral
-would put a fenced state write on the path of the pass that is making progress.
+`concurrent_evaluation`, `source_deadline`, `source_budget`, `source_fetch_failed`,
+a superseded claim — keeps the silent retry and writes nothing, because marking
+a transient deferral would put a fenced state write on the path of the pass
+that is making progress. `source_fetch_failed` is that retry: the pass does not
+fall back to the local branch, and it does not advance the cursor. A later
+doctor read still sees the remote-tracking ref from the last successful fetch,
+so a cursor that has fallen behind past `max_wait_minutes` is not reported `ok`.
+A fetch that keeps failing while that ref is missing, or still matches the
+cursor, is visible on each tick as `source_fetch_failed`; doctor does not
+contact the network to rediscover it.
+
 A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
 logged once at `warn` and filed once as friction; before that window it is
 recorded but quiet. A stall clears itself only when the orphaned revision is
@@ -485,6 +572,41 @@ audit window. Explicit retention cleanup after that window may delete the refs;
 no automatic GC policy is added here. `orbit auto-task reset` deletes the pins of
 the batches it forgets, and records which ones it released.
 
+State-member attempts pin their frozen source in a namespace owned by one
+Orbit root and workspace [ORB-14164]:
+`refs/orbit/pins/v1/<owner digest>/<attempt id>`. Several roots and workspaces
+can share one Git common directory while each keeps its consumers and runs in
+its own store, so only the owner's state can prove a pin unused. The owner is
+the canonical Orbit root, the workspace partition, the machine identity and the
+canonical Git common directory; the digest of that record names the namespace,
+and the record itself is written once, create-only, under
+`refs/orbit/pin-owners/v1/<owner digest>`. A canonical alias of a root resolves
+to the same owner; a copied or moved root or repository resolves to a new one
+and never adopts the pins it left behind. Attempt ids, receipts and action keys
+are unchanged.
+
+The checkpoint that settles, exhausts or retires the attempt releases its owned
+pin once it commits, except when the accepted result is a pre-upgrade
+`material_v1` assessment whose compatibility check still needs that revision; a
+retry keeps it, and a checkpoint that loses the generation fence releases
+nothing. Current `material_v2` results release at settlement. A release first
+requires the owner record to match, then deletes the ref only while it still
+names the attempt's commit; a refusal or failure is logged and leaves the pin.
+Admission refuses to pin into a namespace whose record names another owner, and
+never rebinds an existing pin to a different commit.
+
+Releases before owner scoping pinned every attempt at the shared top level,
+`refs/orbit/automation/<attempt id>`. Those pins carry no owner, and an earlier
+client or another root sharing the repository may still read one, so they are
+read only as an exact fallback and never deleted by settlement or cleanup.
+`orbit doctor --fix-automation-pins` reclaims this owner's leaked pins: under
+the routine sweep lock it lists the owned namespace, then inventories this
+owner's consumers and this workspace's live pilot runs, keeps every pin an
+in-flight attempt, a live run or an accepted assessment names, and deletes the
+rest at their listed commit. It reports legacy pins and other owners'
+namespaces as retained without listing their contents
+([health-checks runbook](../../runbooks/health-checks.md#release-leaked-automation-attempt-pins)).
+
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
 receipt exists. A history rewrite is replayed only on deterministic proof, and
@@ -515,23 +637,19 @@ objects, or an external landing race keeps the landing an ordinary
 obligation. Inspection surfaces and the dashboard list
 excluded landings with their certificate and assurance label.
 
-## State preparation and failure triage [ORB-11331]
+## State preparation [ORB-11331]
 
-> Terminal failed-run triage is retired
-> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
-> `kind: execution_failed` still parses — persisted member state and existing
-> definitions keep deserializing — but its target `task_triage_pipeline` is no
-> longer shipped, so such a definition loads as *retired* (the loader's
-> `RETIRED_ROUTINE_JOBS`) and fires nothing. Do not author a new one. The
-> incident semantics below are retained for that state; only
-> `kind: preparation_eligible` schedules work today.
+> Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
+> trigger kind still parses but has no shipped target and fires nothing. Only `preparation_eligible` schedules work.
 
 The same routine sweep now accepts `trigger.state` with one of two kinds. Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing
 consumer/coverage transaction and generation fence. No new database or clock is
-introduced. Source retention uses the existing `refs/orbit/automation/` namespace.
+introduced. Source retention uses an owner-scoped pin namespace: each admitted
+attempt pins its source until it settles, exhausts or is retired (see
+[Rollback and limits](#rollback-and-limits)).
 
 Since [ORB-12745] the shipped `task_pilot.yaml` default *is* this form:
 `orbit workspace init` renders `owner_machine` from the host's registered
@@ -617,11 +735,17 @@ Assessments accepted under the earlier `material_v1` fingerprint, which
 hashed every field and the source revision, are carried forward rather than
 re-piloted: a scheduled member stays fresh while the `material_v1` hash
 recomputed at the revision its receipt pinned still matches, and becomes due
-at the first edit that hash covers.
+at the first edit that hash covers. Settlement keeps the pin for a legacy result
+that still matches this hash; once its assessment is replaced, doctor cleanup
+can release the now-unreferenced pin. The pinned revision is read from that one
+attempt's owned ref, falling back to its exact legacy ref, never by listing a
+namespace, and a failure to recompute the
+hash is logged before the member is assessed again. Assessments accepted since
+the upgrade carry the current contract, so their attempt's pin is released at
+settlement; `orbit doctor --fix-automation-pins` keeps any legacy assessment
+pin still needed for carry-forward.
 
-`kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
-longer ships; the shape is recorded here for definitions written before the
-retirement. Cron, deliveries and state triggers are mutually exclusive; state kinds have
+Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are
 the minimum of the trigger and routine policy. `max_items` bounds the candidate
 admission checks in a pass, not worker concurrency. The source page contains at
@@ -662,19 +786,9 @@ and exact resulting assessment in immutable receipt bytes. A fresh unready resul
 is an assessment, and does not repeatedly dispatch. Changing a material input
 creates new work; the quiet period coalesces edits up to the maximum wait.
 
-Incident observation requires the current workflow-failure history event and
-coupling. Later human blocks, cancellations, active recovery and missing
-lineage are withheld; the diagnostic-origin (triage-of-triage) exclusion is
-removed with the pipeline that produced such runs. Retry roots and an explicitly recorded blocking child cause
-identify the incident; uncertain multiple-child causality is `incident_unresolved`.
-The source adapter follows exact indexed retry-child edges, bounds an episode at
-1,000 runs and reports a scan-budget limit rather than guessing when reached.
-Incident membership is gathered from at most 1,000 current blocked tasks, including
-wrappers sharing a child cause; any unsettled member withholds the whole incident.
-An incident can include at most 50 tasks. Larger inventories remain withheld.
 Normal stale-owner reconciliation and the existing evidence-gated already-landed
-path remain in place. No automatic disposition writes remain: with triage
-retired, a terminal failure leaves its task blocked until a human moves it.
+path remain in place. No automatic disposition writes remain: a terminal failure
+leaves its task blocked until a human moves it.
 
 Action-key lookup recovers a run admitted before its scheduler acknowledgement.
 Retries preserve consumed attempts and an absolute deadline across restarts;
@@ -684,15 +798,43 @@ step evidence is read independently of wrapper status. Pilot fan-in accepts any
 successful partition so apply can retain valid results before the final guard
 reports missing or invalid partitions.
 
-A consumer retains at most 1,000 pending, assessed and withheld entries. When an
-observation page does not fit, the evaluator asks the source by identity, not by
-page, which retained keys it still observes — a task while its status is one the
-consumer queries, an incident while the current inventory has it — and retires
-the working state of the rest. Their receipts stay durable, and a member that
-returns is assessed afresh. At capacity, a retained member's fresh fingerprint
-replaces its superseded assessment; a new member waits for room and the pass
-reports `source_backpressure`. The scan still advances, and due members are
-still admitted.
+A consumer retains at most 1,000 distinct members across its pending, assessed
+and withheld entries; a pending member's withheld reason or superseded
+assessment does not count again, so recording why a member waits or failed never
+needs room. When an observation page does not fit, the evaluator asks the source
+by identity, not by page, which retained keys it still observes — a task while
+its status is one the consumer queries, an incident while the current inventory
+has it — and retires the working state and failed records of the rest. Their
+receipts stay durable, and a member that returns is assessed afresh. At
+capacity, a retained member's fresh fingerprint replaces its superseded
+assessment; a new member waits for room and the pass reports
+`source_backpressure`. The scan still advances, and due members are still
+admitted.
+
+A consumer also keeps at most 1,000 failed records. A record holds only while it
+still withholds its member: one whose member is pending at a new fingerprint is
+dropped, and the store refuses dropping one whose member is in flight or pending
+at the fingerprint it failed at. When failed records leave no room for a full
+batch, the evaluator first retires those of members the source no longer
+observes. A member without a failed record then joins a batch only while there is
+room to record its failure, so retiring an attempt always commits; when none
+fits the pass reports `failure_capacity` until failed members change or leave
+the source. A consumer that claimed past the cap before that reservation existed
+retires the failed records of departed members when the attempt settles; if
+every failed member is still observed, moving those tasks out of the statuses
+the consumer queries frees the room.
+
+Each failed record holds only its own member: the exhausted attempt's identity,
+attempt number, budget, deadline and action with that one member at the
+fingerprint it failed at, so failed state grows with the members retained
+rather than with their batches. The store accepts a new record only as the
+exact record of the attempt the checkpoint retires, for a member that attempt
+carried and its receipt did not certify. The record keeps the single-member
+shape every release since batching reads as a batch of one, so a running older
+client decodes, honours and commits over it unchanged. A record an older
+release wrote with its whole batch still reads and suppresses as before; the
+next observation pass compacts it to its own member, a rewrite the store
+accepts only when it keeps that member exactly.
 
 `orbit routine show --json`, routine status and the dashboard expose the shared
 state projection: pending fingerprints, fresh/unready assessments, withheld
@@ -715,7 +857,9 @@ enabled one with nothing to prepare reports `fresh`. Timing and eligibility
 edits retain active budgets — an eligibility edit re-fingerprints pending
 members and withholds the ones it no longer admits. Changes to trigger kind,
 owner, target or branch return `definition_changed`; restore the original
-definition to settle it rather than deleting state. Rollback disables
+definition to settle it rather than deleting state. (Delivery auto-tasks, by
+contrast, adopt a settings-only edit automatically; see
+[Recovering a consumer stalled by a settings change](#recovering-a-consumer-stalled-by-a-settings-change-orb-12295).) Rollback disables
 new admissions and preserves receipts; a binary without state-trigger support
 rejects the unknown configuration key, and one that predates `batch_size`
 rejects that key. Automatic host/epoch transfer and automatic promotion are not

@@ -1,4 +1,27 @@
+use super::system::human_bytes;
 use super::*;
+
+pub(super) fn doctor_check_worktree_reclaim(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "worktree-reclaim";
+    if !runtime.paths().repo_root.join(".git").exists() {
+        return check(
+            CHECK,
+            WorkspaceDoctorStatus::Skipped,
+            "not a git checkout".into(),
+        );
+    }
+    match runtime.reclaimable_worktrees() {
+        Ok(result) if result.bytes_reclaimed > 10 * 1024 * 1024 * 1024 => actionable_check(
+            CHECK, WorkspaceDoctorStatus::Warning,
+            format!("{} reclaimable in kept run worktrees", human_bytes(result.bytes_reclaimed)),
+            "Inspect `orbit gc worktrees --reclaim`; run `ORBIT_OPERATOR=1 orbit gc worktrees --reclaim --confirm` to reclaim declared output.".into(),
+        ),
+        Ok(result) => check(CHECK, WorkspaceDoctorStatus::Ok,
+            format!("{} reclaimable in kept run worktrees", human_bytes(result.bytes_reclaimed))),
+        Err(error) => check(CHECK, WorkspaceDoctorStatus::Warning,
+            format!("cannot inspect kept worktree output: {error}")),
+    }
+}
 
 /// The plugin section's source-built rows: each plugin this host built from
 /// source at install time, with its command, consent, profile and artifact
@@ -39,6 +62,36 @@ pub(super) fn doctor_check_plugin_builds(runtime: &OrbitRuntime) -> WorkspaceDoc
     )
 }
 
+/// A workspace registered for PR delivery whose Git remotes name no network
+/// host would fail every shipped task at `pr_open`; admission refuses those
+/// tasks with the same verdict this row reports.
+pub(super) fn doctor_check_forge_remote(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "forge-remote";
+    if runtime.automatic_delivery_ship_mode() != orbit_core::ShipMode::Pr {
+        return check(
+            CHECK,
+            WorkspaceDoctorStatus::Skipped,
+            "workspace is not registered for PR delivery; no forge remote needed".to_string(),
+        );
+    }
+    match runtime.pr_forge_refusal() {
+        None => check(
+            CHECK,
+            WorkspaceDoctorStatus::Ok,
+            "PR delivery has a Git remote on a network host".to_string(),
+        ),
+        Some(refusal) => actionable_check(
+            CHECK,
+            WorkspaceDoctorStatus::Warning,
+            refusal.to_string(),
+            "Run `orbit workspace ship-mode local` to deliver locally, or add a Git remote on \
+             your forge host. A single task can ship locally with the \
+             `delivery:task_local_pipeline` tag."
+                .to_string(),
+        ),
+    }
+}
+
 /// Warn when git still tracks files under `.orbit/`. Sync rewrites the
 /// managed ignore block but never runs git; the operator untracks once.
 pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
@@ -51,11 +104,17 @@ pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> Worksp
         );
     }
 
-    let output = std::process::Command::new("git")
+    // `ls-files` is outside `run_git`'s admitted subcommands.
+    let mut command = std::process::Command::new("git");
+    command
         .args(["ls-files", "--", ".orbit"])
         .current_dir(repo_root)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output();
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    let output = orbit_common::process::run_bounded_capped(
+        &mut command,
+        orbit_common::fs::git::GIT_LOCAL_TIMEOUT,
+        orbit_common::fs::git::GIT_OUTPUT_LIMIT,
+    );
 
     match output {
         Ok(output) if output.status.success() => {
@@ -93,10 +152,10 @@ pub(super) fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> Worksp
                 },
             )
         }
-        Err(_) => check(
+        Err(error) => check(
             "tracked-orbit-files",
             WorkspaceDoctorStatus::Skipped,
-            "git is not available".to_string(),
+            format!("git ls-files could not run: {error}"),
         ),
     }
 }
@@ -155,8 +214,8 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
     }
 }
 
-/// `PRAGMA quick_check` plus migration-ledger schema version vs binary.
-pub(super) fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+/// Cheap database/header and schema-ledger checks; full page integrity is opt-in.
+pub(super) fn doctor_check_database(runtime: &OrbitRuntime, deep: bool) -> WorkspaceDoctorResult {
     let store = match runtime.sqlite_store_for_diagnostics() {
         Ok(store) => store,
         Err(error) => {
@@ -167,24 +226,29 @@ pub(super) fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
             );
         }
     };
-    if let Err(error) = store.quick_check() {
+    if deep && let Err(error) = store.quick_check() {
         return check(
             "database",
             WorkspaceDoctorStatus::Error,
             format!("integrity check failed: {error}"),
         );
     }
+    let probe = if deep {
+        "quick_check ok"
+    } else {
+        "database readable (integrity scan: orbit doctor --deep)"
+    };
     match store.schema_version() {
         Ok(version) if version == SUPPORTED_SCHEMA_VERSION => check(
             "database",
             WorkspaceDoctorStatus::Ok,
-            format!("quick_check ok; schema version {version} matches this binary"),
+            format!("{probe}; schema version {version} matches this binary"),
         ),
         Ok(version) if version < SUPPORTED_SCHEMA_VERSION => check(
             "database",
             WorkspaceDoctorStatus::Warning,
             format!(
-                "quick_check ok; schema version {version} is behind this binary \
+                "{probe}; schema version {version} is behind this binary \
                  ({SUPPORTED_SCHEMA_VERSION}) — migrations apply on next store open"
             ),
         ),
@@ -199,7 +263,7 @@ pub(super) fn doctor_check_database(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
         Err(error) => check(
             "database",
             WorkspaceDoctorStatus::Warning,
-            format!("quick_check ok; cannot read migration ledger: {error}"),
+            format!("{probe}; cannot read migration ledger: {error}"),
         ),
     }
 }
@@ -276,8 +340,7 @@ pub(super) fn doctor_check_stale_locks(runtime: &OrbitRuntime) -> WorkspaceDocto
             "stale-locks",
             WorkspaceDoctorStatus::Warning,
             format!(
-                "{} lock file(s) left by dead holders (the OS already released the \
-                 flock; safe to delete): {}",
+                "{} lock file(s) with dead holder records: {}",
                 stale.len(),
                 stale.join("; ")
             ),
@@ -335,5 +398,41 @@ pub(super) fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> Workspac
             stale.len()
         ),
         "Run `orbit doctor --fix-stale-task-locks`.".to_string(),
+    )
+}
+
+/// What store retention could reclaim now under `retention.audit_days` and
+/// `retention.runs_days`. Measured without the blob reference scan, so the
+/// blob figure is an upper bound; `orbit gc audit` reports the exact one.
+pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "store-retention";
+    let overview = match runtime.store_retention_overview() {
+        Ok(overview) => overview,
+        Err(error) => {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot measure reclaimable store space: {error}"),
+            );
+        }
+    };
+    check(
+        CHECK,
+        WorkspaceDoctorStatus::Ok,
+        format!(
+            "reclaimable: audit {} rows ({}) older than {} days; run state of {} terminal runs \
+             ({}) older than {} days; up to {} of {} audit blobs; store file {} with {} free. \
+             Plan with `orbit gc audit` and `orbit gc runs`, apply with `--apply`",
+            overview.audit_rows,
+            human_bytes(overview.audit_bytes),
+            overview.audit_days,
+            overview.run_states,
+            human_bytes(overview.run_state_bytes),
+            overview.runs_days,
+            human_bytes(overview.blob_bytes_past_cutoff),
+            human_bytes(overview.blob_bytes),
+            human_bytes(overview.store.file_bytes),
+            human_bytes(overview.store.freelist_bytes),
+        ),
     )
 }

@@ -20,7 +20,7 @@ use super::managed_assets::{
 /// References load on demand and may link across the bundled skill trees. The
 /// ordering below groups each skill's files under its router, in the order its
 /// reference table presents them.
-pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 31] = [
+pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 32] = [
     // Everyday task work: the router, then its references in table order.
     (
         "orbit/SKILL.md",
@@ -115,6 +115,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 31] = [
     (
         "orbit-setup/references/linux-sandbox.md",
         include_str!("../../assets/skills/orbit-setup/references/linux-sandbox.md"),
+    ),
+    (
+        "orbit-setup/references/windows-wsl2.md",
+        include_str!("../../assets/skills/orbit-setup/references/windows-wsl2.md"),
     ),
     (
         "orbit-setup/references/automation.md",
@@ -325,7 +329,36 @@ impl OrbitRuntime {
 pub(crate) fn doctor_client_skill_links(
     skills_links_dirs: &[PathBuf],
 ) -> Result<Vec<SkillDoctorResult>, OrbitError> {
-    let mut rows = Vec::new();
+    Ok(dangling_client_skill_links(skills_links_dirs)?
+        .into_iter()
+        .map(|path| SkillDoctorResult {
+            skill_name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("?")
+                .to_string(),
+            status: SkillDoctorStatus::Warning,
+            message: format!(
+                "dangling skill link at {} (target missing). {}",
+                path.display(),
+                skill_link_remediation(&path),
+            ),
+        })
+        .collect())
+}
+
+pub(crate) fn skill_link_remediation(path: &Path) -> String {
+    format!(
+        "Restore the skill target or manually remove the dangling symlink at `{}`.",
+        path.display(),
+    )
+}
+
+/// Inspect only immediate symlinks, without modifying discovery entries or targets.
+pub(crate) fn dangling_client_skill_links(
+    skills_links_dirs: &[PathBuf],
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let mut links = Vec::new();
     for dir in skills_links_dirs {
         if !dir.exists() {
             continue;
@@ -344,17 +377,8 @@ pub(crate) fn doctor_client_skill_links(
             if path.exists() {
                 continue;
             }
-            let skill_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("?")
-                .to_string();
-            rows.push(SkillDoctorResult {
-                skill_name,
-                status: SkillDoctorStatus::Error,
-                message: format!("dangling skill link at {} (target missing)", path.display()),
-            });
+            links.push(path);
         }
     }
-    Ok(rows)
+    Ok(links)
 }

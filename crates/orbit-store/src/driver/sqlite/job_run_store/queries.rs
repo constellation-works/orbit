@@ -5,12 +5,14 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
     JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState, RunIdRole, run_id_candidate,
     run_id_minute_stem,
 };
 
-use crate::contracts::{JobRunOrder, JobRunQuery};
+use super::state::write_state_json_conn;
+use crate::contracts::{JobRunCompletion, JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
 
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.
@@ -70,7 +72,12 @@ impl Store {
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        upsert_job_run_for_workspace_conn(&conn, workspace_id, run, pipeline_state)
+        // The run row and its state row commit together.
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(sqlite_store_error)?;
+        upsert_job_run_for_workspace_conn(&tx, workspace_id, run, pipeline_state)?;
+        tx.commit().map_err(sqlite_store_error)
     }
 
     pub fn upsert_job_run_step_for_workspace(
@@ -117,7 +124,7 @@ impl Store {
                 agent_response_json,
             ],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         Ok(())
     }
 
@@ -208,6 +215,37 @@ impl Store {
             .map_err(|e| OrbitError::Store(e.to_string()))
     }
 
+    /// Job and completion time of every run matching the filter, ignoring
+    /// `limit`. Selects two columns, so a rollup over all history never
+    /// decodes run inputs.
+    pub fn list_job_run_completions_for_workspace(
+        &self,
+        workspace_id: &str,
+        query: &JobRunQuery,
+    ) -> Result<Vec<JobRunCompletion>, OrbitError> {
+        let (where_clause, params) = job_run_filter_sql(workspace_id, query);
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|b| b.as_ref()).collect();
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT job_id, COALESCE(finished_at, created_at) FROM job_runs \
+                 WHERE {where_clause}"
+            ))
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let completed_raw: String = row.get(1)?;
+                Ok(JobRunCompletion {
+                    job_id: row.get(0)?,
+                    completed_at: parse_timestamp(&completed_raw)?,
+                })
+            })
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| OrbitError::Store(e.to_string()))
+    }
+
     pub fn delete_job_run_for_workspace(
         &self,
         workspace_id: &str,
@@ -242,8 +280,8 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             run_id, workspace_id, job_id, attempt, state, scheduled_at,
             started_at, finished_at, duration_ms, created_at, pid, pid_start_time,
             input_json, retry_source_run_id, knowledge_metrics_json, resolved_crew,
-            crew_model, pipeline_state_json, executed_on_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            crew_model, executed_on_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
         ON CONFLICT(workspace_id, run_id) DO UPDATE SET
             job_id = excluded.job_id,
             attempt = excluded.attempt,
@@ -259,8 +297,7 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             retry_source_run_id = excluded.retry_source_run_id,
             knowledge_metrics_json = excluded.knowledge_metrics_json,
             resolved_crew = excluded.resolved_crew,
-            crew_model = excluded.crew_model,
-            pipeline_state_json = COALESCE(excluded.pipeline_state_json, job_runs.pipeline_state_json)"#,
+            crew_model = excluded.crew_model"#,
         rusqlite::params![
             run.run_id,
             workspace_id,
@@ -279,11 +316,14 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             knowledge_metrics_json,
             run.resolved_crew,
             run.crew_model,
-            pipeline_state_json,
             executed_on_json,
         ],
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
+    // `None` keeps whatever state the run already has.
+    if let Some(state_json) = pipeline_state_json {
+        write_state_json_conn(conn, workspace_id, &run.run_id, &state_json)?;
+    }
     // Reserve the id for good: deleting the row must not free it for
     // `next_run_id_conn` while other records still name it.
     conn.execute(
@@ -413,6 +453,11 @@ pub(super) fn job_run_list_sql(
 }
 
 /// Columns [`row_to_job_run`] reads, in its order.
+///
+/// Every listing, show and filter path selects these, so none may sit behind
+/// an unbounded payload in the stored record: SQLite reaches a column only by
+/// walking the overflow-page chain of every large value stored before it.
+/// Pipeline state lives in `job_run_states` for that reason.
 pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
      started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
      retry_source_run_id, knowledge_metrics_json, resolved_crew, \
@@ -448,13 +493,51 @@ fn job_run_filter_sql(
         conditions.push(format!("job_id = ?{}", params.len() + 1));
         params.push(Box::new(job_id.clone()));
     }
+    if let Some(task_id) = &query.task_id {
+        // Ownership follows the same bindings the TASK column shows: a text
+        // element of the top-level `task_ids` array, or a text top-level
+        // `task_id`. EXISTS and OR together avoid duplicate rows when a run
+        // names the same id both ways.
+        let placeholder = params.len() + 1;
+        conditions.push(format!(
+            "((json_type(input_json, '$.task_ids') = 'array' AND EXISTS (\
+             SELECT 1 FROM json_each(input_json, '$.task_ids') AS task_binding \
+             WHERE task_binding.type = 'text' AND task_binding.value = ?{placeholder})) \
+             OR (json_type(input_json, '$.task_id') = 'text' \
+             AND json_extract(input_json, '$.task_id') = ?{placeholder}))"
+        ));
+        params.push(Box::new(task_id.clone()));
+    }
+    if let Some(routine) = &query.trigger_routine {
+        conditions.push(format!(
+            "EXISTS (SELECT 1 FROM job_run_states AS trigger_state \
+             WHERE trigger_state.workspace_id = job_runs.workspace_id \
+             AND trigger_state.run_id = job_runs.run_id \
+             AND json_extract(trigger_state.pipeline_state_json, '$.trigger.routine') = ?{})",
+            params.len() + 1
+        ));
+        params.push(Box::new(routine.clone()));
+    }
     if let Some(state) = query.state {
         conditions.push(format!("state = ?{}", params.len() + 1));
         params.push(Box::new(state.to_string()));
     }
+    if !query.states.is_empty() {
+        let placeholders = query
+            .states
+            .iter()
+            .map(|state| {
+                params.push(Box::new(state.to_string()));
+                format!("?{}", params.len())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        conditions.push(format!("state IN ({placeholders})"));
+    }
     if query.terminal_only {
         conditions.push(
-            "state IN ('success', 'failed', 'timeout', 'cancelled', 'interrupted')".to_string(),
+            "state IN ('success', 'failed', 'timeout', 'cancelled', 'interrupted', 'held')"
+                .to_string(),
         );
     }
     if query.active_only {
@@ -471,10 +554,11 @@ fn job_run_filter_sql(
 /// [`JobRunOrder`]. `run_id ASC` breaks ties deterministically in both
 /// variants; timestamps are stored as fixed-width RFC 3339 text, so a
 /// lexical `DESC` sort matches chronological order. `CreatedAt` is covered by
-/// `idx_job_runs_workspace_created`; `Recency` is a query-time expression
-/// over the same rows the `workspace_id` prefix of that index already
-/// narrows to, so a per-workspace sort stays cheap without a dedicated index
-/// [ORB-11251].
+/// `idx_job_runs_workspace_created`. `Recency` [ORB-11251] is covered by the
+/// v39 expression indexes `idx_job_runs_ws_recency` and, under a `state`
+/// filter, `idx_job_runs_ws_state_recency`; SQLite uses an expression index
+/// only when the `ORDER BY` spells the indexed expression identically, so
+/// keep this text in step with the migration.
 fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
     match order_by {
         JobRunOrder::CreatedAt => "created_at DESC, run_id ASC",
@@ -629,3 +713,7 @@ fn parse_job_target_type(raw: &str) -> rusqlite::Result<JobTargetType> {
         )
     })
 }
+
+#[cfg(test)]
+#[path = "tests/queries.rs"]
+mod tests;

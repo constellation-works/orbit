@@ -2,8 +2,339 @@
 
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::HostOs;
+use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::*;
+
+/// A configured follower name survives the refill request, owner admission,
+/// claimed leaf insertion, task binding and pulled-by history. Legacy callers
+/// without a name keep their machine id and unknown display name.
+#[test]
+fn pull_admission_preserves_execution_machine_name() {
+    if !isolated(
+        module_path!(),
+        "pull_admission_preserves_execution_machine_name",
+    ) {
+        return;
+    }
+    for name in [Some("Daniels-Mac-mini.local"), None] {
+        let mut pair = Pair::new(1);
+        let location = orbit_types::task::ExecutionLocation {
+            machine_id: FOLLOWER.into(),
+            machine_name: name.map(ToOwned::to_owned),
+        };
+        pair.follower = pair
+            .follower
+            .with_automation_execution_location(Some(location.clone()));
+        let drain = pair.run_drain();
+        // The existing lost-bind-reply fixture stops after real admission and
+        // insertion, before this non-worker test binary would launch a leaf.
+        let leaf_id = pair.queued_leaf(&drain, 1);
+        let leaf = pair.follower_jobs.get_job_run(&leaf_id).unwrap().unwrap();
+        assert_eq!(leaf.executed_on, Some(location.clone()));
+        let task = pair.owner_task(&pair.tasks[0]);
+        assert_eq!(task["job_run_machine"], json!(location));
+        let history = pair.wire.owner.get_task_history(&pair.tasks[0]).unwrap();
+        let pulled = history
+            .iter()
+            .find(|entry| entry.event == "pulled_by")
+            .unwrap();
+        let evidence: Value = serde_json::from_str(pulled.note.as_deref().unwrap()).unwrap();
+        assert_eq!(evidence["machine_id"], FOLLOWER);
+        assert_eq!(evidence["run_context"]["machine_name"], json!(name));
+        assert_eq!(evidence["run_context"]["run_id"], drain);
+    }
+}
+
+/// Exercise the owner's actual tool/redaction boundary with the incident's
+/// inherited session metadata, then the follower's real refill action.
+#[test]
+fn session_metadata_does_not_corrupt_owner_probe_or_pull_pass() {
+    if !isolated(
+        module_path!(),
+        "session_metadata_does_not_corrupt_owner_probe_or_pull_pass",
+    ) {
+        return;
+    }
+    let pair = Pair::new(0);
+    let drain = pair.run_drain();
+    let _env = orbit_common::test_env::scoped([
+        ("XDG_SESSION_ID", Some("35912")),
+        (
+            "DBUS_SESSION_BUS_ADDRESS",
+            Some("unix:path=/run/user/1000/bus"),
+        ),
+        ("SESSION_MANAGER", Some("local/host:@/tmp/.ICE-unix/35912")),
+        (
+            "TERM_SESSION_ID",
+            Some("35912AB0-0000-4000-8000-123456789ABC"),
+        ),
+        ("MY_SESSION_TOKEN", Some("35912")),
+    ]);
+    let reply = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    assert_eq!(
+        reply["protocol_fingerprint"],
+        orbit_store::contracts::distributed_drain_protocol_fingerprint()
+    );
+    // Also cover the exact incident substring even if the generated request
+    // shape changes its fingerprint in a later build.
+    let incident = "3531880b5359125003d9ff82a4666593a2fc93756c67758714a336aadcb0a658";
+    assert_eq!(
+        orbit_common::security::redaction::redact_sensitive_env_text(incident),
+        incident
+    );
+    let pass = pair.pass(&drain);
+    assert!(pass["error"].is_null(), "{pass}");
+    assert_eq!(pass["degraded"], false, "{pass}");
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+}
+
+/// Both a current owner's typed redaction refusal and an older owner's
+/// corrupted fingerprint must leave the window alive for the next pass.
+#[test]
+fn redacted_owner_identity_retries_without_protocol_skew() {
+    if !isolated(
+        module_path!(),
+        "redacted_owner_identity_retries_without_protocol_skew",
+    ) {
+        return;
+    }
+    let pair = Pair::new(0);
+    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let drain = pair.run_drain();
+    {
+        // A realistic mixed hex credential can overlap a legitimate hash.
+        // It must remain secret: reject the corrupted reply rather than
+        // allowlisting hash-shaped output from redaction.
+        let _env = orbit_common::test_env::scoped([("MY_SESSION_TOKEN", Some(&fingerprint[..16]))]);
+        let error = pair
+            .wire
+            .call("", "orbit.drain.probe", json!({}))
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::OwnerNegotiation(_)), "{error}");
+        let pass = pair.pass(&drain);
+        assert!(error_of(&pass).contains("redaction artefact"), "{pass}");
+        assert_eq!(pass["degraded"], false);
+        assert_eq!(pass["done"], false);
+    }
+    let recovered = pair.pass(&drain);
+    assert!(recovered["error"].is_null(), "{recovered}");
+    assert_eq!(recovered["consecutive_pass_failures"], 0);
+
+    let pulls_before_corrupted_probe = pair.wire.calls("orbit.task.pull").len();
+    *pair.wire.fingerprint.lock().unwrap() = Some(json!(
+        "3531880b5[REDACTED_ENV]5003d9ff82a4666593a2fc93756c67758714a336aadcb0a658"
+    ));
+    let pass = pair.pass(&drain);
+    assert!(
+        error_of(&pass).contains("owner negotiation failed"),
+        "{pass}"
+    );
+    assert_eq!(pass["degraded"], false);
+    assert_eq!(pass["done"], false);
+    assert_eq!(pair.run_state(&drain), JobRunState::Running);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        pulls_before_corrupted_probe,
+        "a corrupted probe must not send a new pull"
+    );
+    *pair.wire.fingerprint.lock().unwrap() = None;
+    let recovered = pair.pass(&drain);
+    assert!(recovered["error"].is_null(), "{recovered}");
+    assert_eq!(recovered["consecutive_pass_failures"], 0);
+}
+
+/// A scrubbed mutation reply must not imply that admission failed: replaying
+/// its durable request returns the receipt the owner already stored.
+#[test]
+fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
+    if !isolated(
+        module_path!(),
+        "redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let request = json!({
+        "request_id": "redacted-receipt-request", "caller_version": probe["binary_version"],
+        "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, "caller_fingerprint": fingerprint,
+        "caller_before_pr": false, "review_gate": true, "ship": probe["ship"],
+        "run_context": {"run_id": "receipt-drain", "job_name": "workspace_pull_pipeline"},
+    });
+    {
+        let _env = orbit_common::test_env::scoped([("MY_SESSION_TOKEN", Some(&fingerprint[..16]))]);
+        let error = pair
+            .wire
+            .call("", "orbit.task.pull", request.clone())
+            .unwrap_err();
+        assert!(
+            matches!(error, OrbitError::OutcomeUnknown { .. }),
+            "{error}"
+        );
+    }
+    let reply = pair.wire.call("", "orbit.task.pull", request).unwrap();
+    assert_eq!(
+        reply["receipt"]["request"]["request_id"],
+        "redacted-receipt-request"
+    );
+    assert_eq!(
+        reply["receipt"]["request"]["caller_fingerprint"],
+        fingerprint
+    );
+    assert_eq!(reply["receipt"]["claim"]["task_id"], pair.tasks[0]);
+    assert_eq!(
+        pair.owner_claims().len(),
+        1,
+        "replay must not admit a second claim"
+    );
+}
+
+/// An unanswered request from before both hosts upgraded must not fail the
+/// current drain after its probe matches; receipt lookup releases the old slot.
+#[test]
+fn obsolete_persisted_request_skew_does_not_fail_a_matching_drain() {
+    if !isolated(
+        module_path!(),
+        "obsolete_persisted_request_skew_does_not_fail_a_matching_drain",
+    ) {
+        return;
+    }
+    let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    for (old_fingerprint, schema) in [
+        (
+            Some("older-request-shape"),
+            DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+        ),
+        (None, 1),
+        (Some(current), 1),
+    ] {
+        let pair = Pair::new(0);
+        let previous = pair.run_drain();
+        let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+        assert_eq!(probe["protocol_fingerprint"], current);
+        let destination = serde_json::from_value(pair.destination.clone()).unwrap();
+        let request = serde_json::from_value(json!({
+            "request_id": "unanswered-before-upgrade", "caller_version": probe["binary_version"],
+            "caller_schema": schema,
+            "caller_fingerprint": old_fingerprint,
+            "caller_before_pr": false, "review_gate": true, "ship": probe["ship"],
+            "run_context": {"run_id": previous, "job_name": "workspace_pull_pipeline"},
+        }))
+        .unwrap();
+        let persisted = pair
+            .follower_jobs
+            .allocate_pull_request(&destination, &request, 1)
+            .unwrap()
+            .expect("persist the old unanswered request before sending it");
+        assert_eq!(persisted.phase, LocalPullPhase::Requested);
+        pair.follower_jobs
+            .finalize_job_run(&previous, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
+
+        let drain = pair.run_drain();
+        if old_fingerprint == Some(current) {
+            let failure = pair
+                .follower
+                .run_deterministic(
+                    "pull_refill",
+                    &json!({}),
+                    &json!({"run_id": drain, "destination": pair.destination, "window_expired": false}),
+                    ToolContext::default(),
+                )
+                .expect_err("skew on a current-build fingerprint remains fatal");
+            assert!(
+                matches!(failure, orbit_engine::DispatchError::ProtocolSkew(_)),
+                "{failure}"
+            );
+            assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1);
+            continue;
+        }
+        let pass = pair.pass(&drain);
+        assert!(pass["error"].is_null(), "{old_fingerprint:?}: {pass}");
+        assert_eq!(pass["degraded"], false, "{pass}");
+        assert_eq!(pass["done"], false, "{pass}");
+        assert_eq!(pair.run_state(&drain), JobRunState::Running);
+        let records = pair.follower_jobs.local_pull_admissions().unwrap();
+        let closed = records
+            .iter()
+            .find(|record| record.request.request_id == request.request_id)
+            .unwrap();
+        assert_eq!(closed.phase, LocalPullPhase::Refused);
+        assert_eq!(
+            closed.request, request,
+            "the persisted request remains immutable"
+        );
+        assert!(closed.refusal.is_some());
+        assert!(closed.receipt.is_none());
+        assert!(!closed.holds_capacity());
+        assert_eq!(pair.wire.calls("orbit.drain.receipt.lookup").len(), 1);
+        let pulls = pair.wire.calls("orbit.task.pull");
+        assert_eq!(pulls.len(), 2, "the same pass can send a fresh request");
+        assert_eq!(pulls[0]["request_id"], request.request_id);
+        assert_eq!(pulls[1]["caller_fingerprint"], current);
+        assert_ne!(pulls[1]["request_id"], request.request_id);
+        assert!(records.iter().any(|record| {
+            record.request.run_context.run_id == drain && record.phase == LocalPullPhase::Idle
+        }));
+        assert!(pair.owner_claims().is_empty());
+        assert!(pair.leaf_runs().is_empty());
+    }
+}
+
+/// Owner admission hands selector-free implementation work to a follower on
+/// its first pass with an empty lock footprint; tagged no-diff work is
+/// claimable by the follower too [ORB-14474].
+#[test]
+fn owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work() {
+    if !isolated(
+        module_path!(),
+        "owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+    for (index, id) in pair.tasks.iter().enumerate() {
+        pair.wire
+            .owner
+            .update_task_as_human(
+                id,
+                orbit_core::application::task::TaskUpdateParams {
+                    context_files: Some(vec![]),
+                    tags: (index == 0).then(|| vec!["no-diff-expected".into()]),
+                    ..Default::default()
+                },
+                "fixture operator".into(),
+            )
+            .unwrap();
+    }
+    let drain = pair.start_drain();
+    let first = pair.pass(&drain);
+    assert!(launch_refused(&first), "{first}");
+    let claims = pair.owner_claims();
+    assert_eq!(claims.len(), 1, "{claims:#?}");
+    assert_eq!(
+        claims[0]["claim"]["task_id"], pair.tasks[0],
+        "the tagged task is the oldest candidate and the follower claims it: {claims:#?}"
+    );
+    assert_eq!(claims[0]["claim"]["footprint"], json!([]), "{claims:#?}");
+    let receipts = pair.follower_jobs.local_pull_admissions().unwrap();
+    let receipt = receipts
+        .iter()
+        .filter_map(|record| record.receipt.as_ref())
+        .find(|receipt| receipt.claim.is_some())
+        .expect("first pass claimed selector-free work");
+    assert!(receipt.invalid_candidates.is_empty(), "{receipt:#?}");
+    assert!(receipt.task.as_ref().unwrap().context_files.is_empty());
+    assert!(
+        receipt
+            .deferred_conflicts
+            .iter()
+            .all(|entry| !entry.reason.contains("no-diff-expected")),
+        "an executor with the NoDiff handoff is not refused tagged work: {receipt:#?}"
+    );
+}
 
 /// A replica that declares no `workflow.required_validation_commands` starts
 /// its pull drain: an empty list means no required check, as it does for an
@@ -38,6 +369,7 @@ fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
                 selector: &format!("{OWNER}/{logical}"),
                 for_seconds: Some(60),
                 max_active_leaf_runs: Some(1),
+                allowed_crews: &[],
                 actor: None,
             },
             orbit_types::workflow::JobRunTrigger::cli(),
@@ -51,7 +383,7 @@ fn a_follower_without_required_validation_commands_starts_a_pull_drain() {
         ),
         "an empty requirement list must not refuse a pull drain: {submitted}"
     );
-    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 1);
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 2);
 }
 
 /// An unreadable persisted cancel request fails the whole pass visibly; it
@@ -76,7 +408,7 @@ fn unreadable_cancel_state_fails_visibly_without_admission() {
     store
         .with_transaction(|tx| {
             let changed = tx.connection().execute(
-                "UPDATE job_runs SET pipeline_state_json = '{' WHERE workspace_id = ?1 AND run_id = ?2",
+                "UPDATE job_run_states SET pipeline_state_json = '{' WHERE workspace_id = ?1 AND run_id = ?2",
                 [workspace.as_str(), drain.as_str()],
             ).unwrap();
             assert_eq!(changed, 1);
@@ -131,14 +463,24 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     let pair = Pair::new(1);
     *pair.wire.protocol.lock().unwrap() = Some(1);
     let drain = pair.start_drain();
-    let pass = pair.pass(&drain);
-    let refusal = pass["refusal"].as_str().unwrap();
-    assert!(refusal.starts_with("protocol_mismatch:"), "{pass}");
+    let failure = pair
+        .follower
+        .run_deterministic(
+            "pull_refill",
+            &json!({}),
+            &json!({"run_id": drain, "destination": pair.destination, "window_expired": false}),
+            ToolContext::default(),
+        )
+        .unwrap_err();
     assert!(
-        refusal.contains(&format!(
+        matches!(&failure, orbit_engine::DispatchError::ProtocolSkew(_)),
+        "{failure}"
+    );
+    assert!(
+        failure.to_string().contains(&format!(
             "caller revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}; owner revision 1"
         )),
-        "{pass}"
+        "{failure}"
     );
     assert!(pair.wire.calls("orbit.task.pull").is_empty());
     assert!(pair.owner_claims().is_empty());
@@ -161,17 +503,221 @@ fn an_older_owner_is_refused_before_a_newer_request_is_sent() {
     assert!(probe["diagnostics"].to_string().contains(&format!(
         "caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
     )));
-    let request = json!({"request_id": "old-request", "caller_version": probe["binary_version"],
-        "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
-        "run_context": {"run_id": "old-drain", "job_name": "workspace_pull_pipeline"}});
-    let failure = pair.wire.call("", "orbit.task.pull", request).unwrap_err();
+}
+
+/// A pre-fingerprint follower pulls with an older `caller_schema` and no
+/// fingerprint. Its build closes a request only on `invalid_input`, so the
+/// owner must keep that code for it; a fingerprinted older build is skew.
+#[test]
+fn fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal() {
+    if !isolated(
+        module_path!(),
+        "fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let pull = |request_id: &str, caller_fingerprint: Option<&str>| {
+        let mut request = json!({"request_id": request_id, "caller_version": probe["binary_version"],
+            "caller_schema": 1, "caller_review_policy": "none", "ship": probe["ship"],
+            "run_context": {"run_id": "old-drain", "job_name": "workspace_pull_pipeline"}});
+        if let Some(fingerprint) = caller_fingerprint {
+            request["caller_fingerprint"] = json!(fingerprint);
+        }
+        pair.wire.call("", "orbit.task.pull", request).unwrap_err()
+    };
+
+    let legacy = pull("old-request", None);
     assert!(
-        failure.to_string().contains(&format!(
-            "protocol_mismatch: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
-        )),
-        "{failure}"
+        matches!(
+            &legacy,
+            OrbitError::InvalidInput(message)
+                if message == &format!(
+                    "protocol_mismatch: caller revision 1; owner revision {DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA}"
+                )
+        ),
+        "a fingerprint-less older revision must keep the invalid_input refusal: {legacy}"
+    );
+
+    let current = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    let fingerprinted = pull("old-fingerprinted-request", Some(current));
+    assert!(
+        matches!(fingerprinted, OrbitError::ProtocolSkew(_)),
+        "a fingerprinted older revision is a different build and stays skew: {fingerprinted}"
     );
     assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}
+
+/// The incident's same-version builds must differ as soon as an admission
+/// field changes, including a nested field. This checks the live probe against
+/// the generated request shape instead of pinning a manually bumped hash.
+#[test]
+fn probe_fingerprint_tracks_request_types_and_refuses_changed_shapes() {
+    if !isolated(
+        module_path!(),
+        "probe_fingerprint_tracks_request_types_and_refuses_changed_shapes",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let schema = orbit_store::contracts::admission_request_schema();
+    let fingerprint = sha256_hex(schema.to_string().as_bytes());
+    assert_eq!(
+        probe["protocol_fingerprint"], fingerprint,
+        "the failed-pull incident requires the live fingerprint to change with the derived request types"
+    );
+    for (section, name, field) in [
+        ("properties", "future_field", json!({"type": "string"})),
+        (
+            "definitions",
+            "AdmissionRunContext",
+            json!({"type": "object", "properties": {"future_field": {"type": "boolean"}}}),
+        ),
+    ] {
+        let mut changed = schema.clone();
+        changed[section][name] = field;
+        let changed_fingerprint = sha256_hex(changed.to_string().as_bytes());
+        assert_ne!(changed_fingerprint, fingerprint);
+        let error = pair
+            .wire
+            .call(
+                "",
+                "orbit.drain.probe",
+                json!({
+                    "caller_fingerprint": changed_fingerprint,
+                    "caller_version": probe["binary_version"],
+                    "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                }),
+            )
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
+    }
+    assert!(pair.owner_claims().is_empty());
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}
+
+/// The owner can upgrade after preflight: skew is checked before unknown
+/// request fields or malformed nested values can hide it as invalid input.
+#[test]
+fn owner_checks_fingerprint_before_deserializing_an_incompatible_pull() {
+    if !isolated(
+        module_path!(),
+        "owner_checks_fingerprint_before_deserializing_an_incompatible_pull",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let error = pair
+        .wire
+        .call(
+            "",
+            "orbit.task.pull",
+            json!({
+                "caller_fingerprint": "skewed", "unknown_new_field": true,
+                "ship": "cannot deserialize this request on the owner",
+            }),
+        )
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
+    let matching = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    for input in [
+        json!({"caller_fingerprint": matching, "unknown_new_field": true}),
+        json!({"caller_fingerprint": matching, "ship": "malformed"}),
+    ] {
+        let error = pair.wire.call("", "orbit.task.pull", input).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
+            ),
+            "{error}"
+        );
+    }
+    assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+}
+
+/// The real pull job ends failed on same-release wire skew, even with an open
+/// window; neither stop nor cancellation can turn the failed pass into success.
+#[test]
+fn same_version_skew_ends_the_pull_job_failed_before_any_pull() {
+    if !isolated(
+        module_path!(),
+        "same_version_skew_ends_the_pull_job_failed_before_any_pull",
+    ) {
+        return;
+    }
+    let mut pair = Pair::new(1);
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &pair.follower.global_root(),
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    pair.follower = calm_host(
+        OrbitRuntime::from_roots(
+            &pair.follower.global_root(),
+            &pair.follower_repo.join(".orbit"),
+        )
+        .unwrap()
+        .with_automation_machine_identity(Some(FOLLOWER.into()))
+        .with_coordination_write_owner(Some(OWNER.into()))
+        .with_drain_owner_transport(pair.wire.clone()),
+    );
+    let job = pair
+        .follower
+        .show_job_catalog_entry("workspace_pull_pipeline")
+        .unwrap();
+    // No fingerprint covers a legacy owner; a different hash covers wire skew
+    // between two builds with the same version and manual revision.
+    for fingerprint in [Value::Null, json!("different-request-shape")] {
+        *pair.wire.fingerprint.lock().unwrap() = Some(fingerprint);
+        let error = pair
+            .follower
+            .run_job_v2_from_yaml(
+                &job.path,
+                json!({"for_seconds": 3600, "destination": pair.destination}),
+            )
+            .unwrap_err();
+        assert!(matches!(error, OrbitError::ProtocolSkew(_)), "{error}");
+        let runs = pair
+            .follower
+            .list_job_runs(orbit_core::application::job::JobRunListParams {
+                job_id: Some("workspace_pull_pipeline".into()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
+        let run = &runs[0];
+        assert_eq!(run.state, JobRunState::Failed);
+        assert!(
+            run.steps
+                .iter()
+                .any(|step| step.error_code.as_deref() == Some("protocol_skew")),
+            "{run:#?}"
+        );
+        let pass = pair
+            .follower
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .drain_last_pass
+            .unwrap();
+        assert!(pass.degraded);
+        assert_eq!(pass.last_pass_error_code.as_deref(), Some("protocol_skew"));
+        assert_eq!(pass.consecutive_pass_failures, 1);
+    }
+    assert!(pair.wire.calls("orbit.task.pull").is_empty());
+    assert!(pair.owner_claims().is_empty());
+    assert!(pair.leaf_runs().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
 }
 
 /// Transport errors persist, a successful pass resets a transient streak,
@@ -296,7 +842,7 @@ fn readable_state_without_cancel_permits_refill() {
         "the admitted leaf reaches launch: {pass}"
     );
     assert_eq!(pass["cancelling"], false, "{pass}");
-    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 1);
+    assert_eq!(pair.wire.calls("orbit.drain.probe").len(), 2);
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 1);
     assert_eq!(pair.owner_claims().len(), 1);
     assert_eq!(pair.leaf_runs().len(), 1);
@@ -317,8 +863,10 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     let drain = pair.start_drain();
 
     for failed in 1..=3 {
-        let pass = pair.pass(&drain);
-        assert!(launch_refused(&pass), "{pass}");
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_fails_with(&leaf, "candidate validation failed");
+        let pass = pair.pass_with(&drain, 0);
+        assert!(error_of(&pass).is_empty(), "{pass}");
         assert_eq!(pass["consecutive_failures"], failed, "{pass}");
     }
     let opened = pair.pass(&drain);
@@ -341,9 +889,12 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     let restarted = pair.start_drain();
     let reset = pair.pass(&restarted);
     assert!(launch_refused(&reset), "{reset}");
-    assert_eq!(reset["consecutive_failures"], 1, "{reset}");
+    assert_eq!(
+        reset["consecutive_failures"], 0,
+        "launch failures release instead of counting toward the breaker: {reset}"
+    );
     assert_eq!(pair.wire.calls("orbit.task.pull").len(), 4);
-    assert_eq!(backlog(&pair), 0);
+    assert_eq!(backlog(&pair), 1);
     assert_eq!(pair.owner_claims().len(), 4);
 }
 
@@ -375,8 +926,8 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
     let (unrunnable, runnable) = (&pair.tasks[0], &pair.tasks[1]);
     let drain = pair.start_drain();
 
+    let leaf = pair.running_leaf(&drain, 1);
     let first = pair.pass(&drain);
-    assert!(launch_refused(&first), "{first}");
     let exclusion = excluded(&first, "antigravity");
     assert_eq!(exclusion["source"], "preflight", "{first}");
     assert!(
@@ -385,6 +936,7 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
             .is_some_and(|reason| reason.contains("orbit-test-no-such-provider-cli")),
         "{first}"
     );
+    pair.leaf_fails_with(&leaf, "candidate validation failed");
     let idle = pair.pass(&drain);
     assert_eq!(idle["admitted"], 0, "{idle}");
 
@@ -466,9 +1018,11 @@ fn a_follower_is_handed_only_tasks_its_os_satisfies() {
     pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Linux));
     let drain = pair.start_drain();
 
-    for _ in 0..3 {
-        pair.pass(&drain);
+    for _ in 0..2 {
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_fails_with(&leaf, "candidate validation failed");
     }
+    pair.pass(&drain);
     let claimed = |pair: &Pair| {
         pair.owner_claims()
             .iter()
@@ -524,15 +1078,39 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     ) {
         return;
     }
+    a_provider_failure_releases_the_claim(
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+        "OAuth token revoked",
+    );
+}
+
+/// [ORB-14149] Likewise a claimed leaf whose provider said its selected model
+/// was at capacity: recovery could not change that and an immediate rerun
+/// would use the same model, so the claim goes back to the owner's backlog.
+#[test]
+fn a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window() {
+    if !isolated(
+        module_path!(),
+        "a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window",
+    ) {
+        return;
+    }
+    a_provider_failure_releases_the_claim(
+        "[provider_capacity] cli subprocess exited with code 1: codex provider reported the \
+         selected model at capacity: Selected model is at capacity. Please try a different model.",
+        "Selected model is at capacity",
+    );
+}
+
+/// The settlement of a claimed `sol` leaf that ended on `diagnostic`, a typed
+/// provider failure whose provider text includes `reason`.
+fn a_provider_failure_releases_the_claim(diagnostic: &str, reason: &str) {
     let pair = Pair::with_crews(&[Some("sol")]);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);
-    pair.leaf_fails_with(
-        &leaf,
-        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
-         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
-    );
+    pair.leaf_fails_with(&leaf, diagnostic);
 
     let pass = pair.pass(&drain);
     assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
@@ -541,10 +1119,12 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     let exclusion = excluded(&pass, "sol");
     assert_eq!(exclusion["source"], "provider_unavailable", "{pass}");
     assert!(
-        exclusion["reason"].as_str().is_some_and(
-            |reason| reason.contains(task.as_str()) && reason.contains("OAuth token revoked")
-        ),
-        "{pass}"
+        exclusion["reason"]
+            .as_str()
+            .is_some_and(|text| text.contains(task.as_str())
+                && text.contains(reason)
+                && !text.contains("[provider_")),
+        "the reason quotes the provider without Orbit's marker: {pass}"
     );
 
     let settles = pair.wire.calls("orbit.drain.claim.settle");
@@ -589,6 +1169,256 @@ fn a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_wind
     );
 }
 
+/// [ORB-14262] One provider's authentication failure closes every crew that
+/// resolves to it. `sonnet` is configured as the `anthropic` alias of
+/// `claude`, so a 401 on `opus` must keep `sonnet` out of the window while
+/// `sol`, on codex, is still admitted.
+#[test]
+fn a_provider_auth_failure_excludes_every_crew_of_that_provider() {
+    if !isolated(
+        module_path!(),
+        "a_provider_auth_failure_excludes_every_crew_of_that_provider",
+    ) {
+        return;
+    }
+    let config = "\
+[workflow]
+default_crew = \"sol\"
+
+[crews.opus]
+provider = \"claude\"
+model = \"claude-opus\"
+
+[crews.sonnet]
+provider = \"anthropic\"
+model = \"claude-sonnet\"
+
+[crews.sol]
+provider = \"codex\"
+model = \"gpt-sol\"
+";
+    // Oldest first, which is admission order: opus fails, then sonnet would
+    // be next if the alias were still runnable, and sol is the other provider.
+    let pair = Pair::with_configs(config, config, &[Some("opus"), Some("sonnet"), Some("sol")]);
+    let (opus, sonnet, sol) = (
+        pair.tasks[0].clone(),
+        pair.tasks[1].clone(),
+        pair.tasks[2].clone(),
+    );
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), opus);
+
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+    );
+    let pass = pair.pass(&drain);
+
+    for crew in ["opus", "sonnet"] {
+        let exclusion = excluded(&pass, crew);
+        assert_eq!(
+            exclusion["source"], "provider_unavailable",
+            "{crew}: {pass}"
+        );
+        assert!(
+            exclusion["reason"].as_str().is_some_and(
+                |text| text.contains(opus.as_str()) && text.contains("OAuth token revoked")
+            ),
+            "{crew}: {pass}"
+        );
+    }
+    assert!(excluded(&pass, "sol").is_null(), "{pass}");
+
+    let claims = pair.owner_claims();
+    let phase = |task: &str| {
+        claims.iter().find_map(|claim| {
+            (claim["claim"]["task_id"] == task).then(|| claim["claim"]["phase"].as_str().unwrap())
+        })
+    };
+    assert_eq!(phase(&opus), Some("revoked"), "{claims:#?}");
+    assert_eq!(
+        phase(&sonnet),
+        None,
+        "the alias crew is not admitted: {claims:#?}"
+    );
+    // This test binary cannot re-exec a worker, so the admitted sol leaf's
+    // launch fails and the owner releases that task. The claim phase is the
+    // launch failure, which is how an admitted crew shows up here.
+    assert!(
+        launch_refused(&pass),
+        "sol was admitted far enough to launch: {pass}"
+    );
+    assert_eq!(
+        phase(&sol),
+        Some("revoked"),
+        "the other provider is admitted, then its launch fails: {claims:#?}"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert!(
+        settles.iter().any(|call| {
+            call["settlement"]["Release"]["failure"]["reason"]
+                .as_str()
+                .is_some_and(|summary| summary.starts_with("leaf launch failed"))
+        }),
+        "sol's admission reached launch: {settles:?}"
+    );
+    assert_eq!(pair.owner_status(&sonnet), "backlog");
+    assert_eq!(pair.owner_status(&opus), "backlog");
+    assert_eq!(
+        pair.owner_status(&sol),
+        "backlog",
+        "the launch refusal releases the admitted task"
+    );
+
+    let window = pair
+        .follower
+        .pull_drain_crew_window(&drain)
+        .unwrap()
+        .expect("a pull drain has a crew window");
+    let runnable = window.runnable.as_ref().expect("preflight ran");
+    assert!(
+        window.host_suppressed.is_some(),
+        "launch failure suppresses the follower: {window:#?}"
+    );
+    assert!(
+        runnable
+            .iter()
+            .all(|crew| crew != "opus" && crew != "sonnet"),
+        "{window:#?}"
+    );
+}
+
+/// [ORB-14258] A claimed leaf whose required validation failed on its base
+/// exactly as on the candidate releases its claim with the hold. The owner's
+/// task returns to the backlog under that hold, and the failure breaker does
+/// not count it. The owner's admission withholds the task while the base still
+/// points at the red commit and after it moves to another failing tip, then
+/// offers it once the owner's clock tick records that the required command
+/// passes on the new base. Pull admission never re-checks it [ORB-14739].
+#[test]
+fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
+    if !isolated(
+        module_path!(),
+        "a_red_base_failure_releases_the_claim_until_the_command_passes",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let repo = &pair.owner_repo;
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+    std::fs::write(
+        repo.join("Makefile"),
+        "ci-lint:\n\t@echo lint is red >&2; exit 2\n",
+    )
+    .unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "red base"]);
+    let red = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: red.clone(),
+        command: "make ci-lint".into(),
+        run_id: String::new(),
+        selection: None,
+    };
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_fails_with(
+        &leaf,
+        &hold.text(&format!(
+            "required validation 'make ci-lint' fails on base {red} exactly as on the candidate"
+        )),
+    );
+
+    let pass = pair.pass(&drain);
+    assert_eq!(pair.owner_status(&task), "backlog", "{pass}");
+    assert_eq!(pass["consecutive_failures"], 0, "{pass}");
+    assert_eq!(
+        pass["admitted"], 0,
+        "the held task is not pulled back: {pass}"
+    );
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    let released = &settles[0]["settlement"]["Release"]["baseline_red"];
+    assert_eq!(released["base_sha"], red.as_str(), "{settles:?}");
+    assert_eq!(released["command"], "make ci-lint", "{settles:?}");
+    assert_eq!(
+        settles[0]["settlement"]["Release"]["failure"]["class"], "baseline_red",
+        "[ORB-14257] the release is typed: {settles:?}"
+    );
+    let owner_task = pair.owner_task(&task);
+    let latest = owner_task["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|entry| !entry["to_status"].is_null())
+        .cloned()
+        .unwrap();
+    assert_eq!(latest["event"], BASELINE_RED_HOLD_EVENT, "{owner_task:#}");
+    assert_eq!(
+        latest["note"].as_str().and_then(BaselineRedHold::from_text),
+        Some(BaselineRedHold {
+            run_id: leaf.clone(),
+            selection: None,
+            ..hold.clone()
+        }),
+        "{owner_task:#}"
+    );
+    assert!(
+        comments_of(&owner_task).contains("no pull request was opened"),
+        "{owner_task:#}"
+    );
+
+    let leaves = pair.leaf_runs();
+    let still_red = pair.pass(&drain);
+    assert_eq!(still_red["admitted"], 0, "{still_red}");
+    assert_eq!(
+        pair.leaf_runs(),
+        leaves,
+        "no leaf is created for the held task"
+    );
+    assert_eq!(pair.owner_status(&task), "backlog");
+
+    std::fs::write(
+        repo.join("Makefile"),
+        "ci-lint:\n\t@echo lint is still red >&2; exit 2\n",
+    )
+    .unwrap();
+    git(repo, &["add", "Makefile"]);
+    git(repo, &["commit", "-q", "-m", "still red"]);
+    let refresh = pair.wire.owner.refresh_baseline_holds(None).unwrap();
+    assert_eq!(refresh.held, vec![task.clone()], "{refresh:?}");
+    let moved_red = pair.pass(&drain);
+    assert_eq!(
+        moved_red["admitted"], 0,
+        "the new tip is still red: {moved_red}"
+    );
+    assert_eq!(pair.leaf_runs(), leaves, "a still-red base is not pulled");
+
+    std::fs::write(repo.join("Makefile"), "ci-lint:\n\t@echo lint-ok\n").unwrap();
+    git(repo, &["add", "Makefile"]);
+    git(repo, &["commit", "-q", "-m", "fix lint"]);
+    let unchecked = pair.pass(&drain);
+    assert_eq!(
+        unchecked["admitted"], 0,
+        "admission waits for the tick's verdict on the green tip: {unchecked}"
+    );
+    assert_eq!(pair.leaf_runs(), leaves);
+    let refresh = pair.wire.owner.refresh_baseline_holds(None).unwrap();
+    assert_eq!(refresh.lifted, vec![task.clone()], "{refresh:?}");
+    let next = pair.queued_leaf(&drain, 1);
+    assert_eq!(
+        pair.claimed_task(&next),
+        task,
+        "the required command passes on the new base, so the task is offered again"
+    );
+}
+
 /// [ORB-13901] While sustained host pressure throttles the follower, its
 /// drain requests no claim but still delivers a settlement it owes; once
 /// memory is back below its resume mark the next pass pulls again.
@@ -608,8 +1438,10 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
         .with_host_resource_probe(probe.clone());
     let drain = pair.start_drain();
 
-    // The first claim fails at launch and its settlement reply is lost, so
+    // A launched candidate fails and its settlement reply is lost, so
     // the drain owes the owner that settlement.
+    let leaf = pair.running_leaf(&drain, 1);
+    pair.leaf_fails_with(&leaf, "candidate validation failed");
     pair.wire.lose_next_reply("orbit.drain.claim.settle");
     let owed = pair.pass(&drain);
     assert!(error_of(&owed).contains("dropped"), "{owed}");
@@ -657,7 +1489,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
 /// A local drain's admission of `task` on the owner, as its gate leaves it
 /// while waiting for context locks: the wrapper and gate carry the task, and
 /// the task is still `backlog` with nothing reserved.
-fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<String> {
+pub(super) fn local_drain_admission(owner: &OrbitRuntime, task: &str) -> Vec<String> {
     let jobs = orbit_store::compose::workspace_job_run_store(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
@@ -782,4 +1614,306 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
         "no local delivery run starts beside the claim"
     );
     assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "claimed");
+
+    // Replay is a fresh admission too, including older singular task input.
+    for input in [json!({"task_ids": [task]}), json!({"task_id": task})] {
+        let source = owner_jobs
+            .insert_job_run("replay_fixture", 1, Utc::now(), Some(input), None)
+            .unwrap();
+        let before = owner.list_job_runs(Default::default()).unwrap();
+        let foreground = owner.replay_job_run(&source.run_id).unwrap_err();
+        let detached = owner
+            .submit_replay_run(
+                &source.run_id,
+                None,
+                None,
+                orbit_types::workflow::JobRunTrigger::dashboard(),
+            )
+            .unwrap_err();
+        for error in [foreground, detached] {
+            assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error:?}");
+        }
+        assert_eq!(
+            owner.list_job_runs(Default::default()).unwrap(),
+            before,
+            "a replay cannot admit beside the live claim"
+        );
+    }
+}
+
+/// A task that keeps an admissible status but is refused at dispatch (a pilot
+/// hold, or a pilot receipt that cannot be decoded) stops the gate as a failed
+/// child whose reason and audit record carry the admission error, never a
+/// claim that its status changed. A status that really left the admissible set
+/// still reports a withdrawal.
+#[test]
+fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
+    if !isolated(
+        module_path!(),
+        "a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change",
+    ) {
+        return;
+    }
+    let pair = Pair::new(3);
+    let owner = &pair.wire.owner;
+    let gate = |task: &str| {
+        owner
+            .run_deterministic(
+                "invoke_and_wait",
+                &json!({"run_id": "parent-run"}),
+                &json!({
+                    "job_name": "task_pr_pipeline",
+                    "run_input": {"task_ids": [task]},
+                    "admission_task_ids": [task],
+                    "admission_workflow": "worktree_setup",
+                    "timeout_seconds": 5,
+                }),
+                ToolContext::default(),
+            )
+            .expect("gate dispatch")
+    };
+    let audit_reason = |command: &str| {
+        let events = owner
+            .list_audit_events(None, None, None, None, 1000)
+            .expect("audit events");
+        let event = events
+            .iter()
+            .find(|event| event.command == command)
+            .unwrap_or_else(|| panic!("no {command} audit event"));
+        let payload: Value =
+            serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["outcome"], command.trim_start_matches("gate."));
+        payload["reason"].as_str().unwrap().to_string()
+    };
+
+    // A host-operational pilot hold recorded after the gate was admitted.
+    let held = pair.tasks[0].clone();
+    super::pilot::apply_assessment(
+        &pair,
+        "The owner-side repair is observable.",
+        json!({
+            "disposition": "host_operational", "context_files_after": [],
+            "evidence": "Only the operator can repair the owner-side definition.",
+        }),
+    );
+    let output = gate(&held);
+    assert_eq!(output["skipped"], true, "{output}");
+    assert_eq!(output["status"], "failed", "{output}");
+    let error = output["error"].as_str().unwrap();
+    assert!(
+        error.contains("Only the operator can repair the owner-side definition."),
+        "{output}"
+    );
+    assert!(!error.contains("no longer admissible"), "{output}");
+    assert!(!error.contains("status changed"), "{output}");
+    assert_eq!(output["task_statuses"][0]["status"], "backlog", "{output}");
+    assert!(
+        audit_reason("gate.admission_refused")
+            .contains("Only the operator can repair the owner-side definition.")
+    );
+
+    // A malformed pilot receipt is surfaced instead of discarded.
+    let malformed = pair.tasks[1].clone();
+    // The write persists the comment, then its own admission read refuses it.
+    let _ = owner.update_task_as_human(
+        &malformed,
+        orbit_core::application::task::TaskUpdateParams {
+            comment: Some("operation_id=fixture\n{not json".into()),
+            ..Default::default()
+        },
+        "task-pilot".into(),
+    );
+    assert_eq!(
+        owner.get_task_comments(&malformed).unwrap().len(),
+        1,
+        "the malformed receipt must be recorded"
+    );
+    let output = gate(&malformed);
+    assert_eq!(output["status"], "failed", "{output}");
+    let error = output["error"].as_str().unwrap();
+    assert!(error.contains("decode pilot assessment"), "{output}");
+    assert!(!error.contains("no longer admissible"), "{output}");
+
+    // A task a human moved out of the admissible set is still a withdrawal.
+    let withdrawn = pair.tasks[2].clone();
+    owner
+        .update_task_as_human(
+            &withdrawn,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Someday),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let output = gate(&withdrawn);
+    assert_eq!(output["status"], "failed", "{output}");
+    assert!(
+        output["error"]
+            .as_str()
+            .unwrap()
+            .contains("no longer admissible"),
+        "{output}"
+    );
+    assert!(audit_reason("gate.withdrawn").contains("someday"));
+}
+
+/// Ask `owner`'s probe, as the routed follower does, whether a pull with
+/// `caller_before_pr` would be admitted.
+fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
+    owner
+        .run_tool_with_context_and_role(
+            "orbit.drain.probe",
+            json!({
+                "caller_version": orbit_core::application::distributed::owner_binary_version(),
+                "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                "caller_before_pr": caller_before_pr,
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    caller_machine_id: Some(FOLLOWER.to_string()),
+                    process_machine_id: Some(OWNER.to_string()),
+                    transport: Some(McpTransport::SshMcp),
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )
+        .expect("probe")
+}
+
+/// An owner opened over `config` and, when `after_landing` is set, an
+/// enabled `delivery-code-review` auto-task.
+fn owner_with(root: &Path, config: &str, after_landing: bool) -> OrbitRuntime {
+    let orbit = root.join(OWNER).join("repo/.orbit");
+    std::fs::create_dir_all(orbit.join("auto_tasks")).unwrap();
+    std::fs::write(orbit.join("config.toml"), config).unwrap();
+    if after_landing {
+        let seed = include_str!("../../../assets/auto_tasks/delivery-code-review.yaml")
+            .replace("__ORBIT_BASE_BRANCH__", "main")
+            .replace("enabled: false", "enabled: true")
+            .replace("updated_by: system", "updated_by: human:operator");
+        std::fs::write(orbit.join("auto_tasks/delivery-code-review.yaml"), seed).unwrap();
+    }
+    open_runtime(root, OWNER).0
+}
+
+/// [ORB-13992] [ORB-13908] Review never refuses a PR-route pull from an
+/// executor of this binary. After-landing review — the `delivery-code-review`
+/// auto-task, or the deprecated policy value that stands in for it — runs on
+/// the owner after landing; the owner's `review.before_pr` is captured on the
+/// claim for the leaf's gate; and the executor's own switch decides nothing.
+#[test]
+fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
+    if !isolated(
+        module_path!(),
+        "review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+
+    let after_landing = owner_with(&root.path().join("auto-task"), "", true);
+    let probe = probe_owner(&after_landing, false);
+    assert_eq!(probe["review"]["after_landing"]["enabled"], true);
+    assert_eq!(probe["review"]["before_pr"]["enabled"], false);
+    assert_eq!(probe["admits"], true, "{probe}");
+    assert_eq!(probe["ship"]["before_pr"], false);
+    assert!(probe["ship"].get("review").is_none(), "{probe}");
+
+    let legacy_after_landing = owner_with(
+        &root.path().join("legacy-after-landing"),
+        "[operation]\nreview_policy = \"after-landing\"\n",
+        false,
+    );
+    assert_eq!(probe_owner(&legacy_after_landing, false)["admits"], true);
+
+    let follower_before_pr = probe_owner(&after_landing, true);
+    assert_eq!(follower_before_pr["admits"], true, "{follower_before_pr}");
+    assert_eq!(follower_before_pr["ship"]["before_pr"], false);
+
+    for config in [
+        "[review]\nbefore_pr = true\n[operation]\nreview_crew = \"reviewer\"\n",
+        "[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewer\"\n",
+    ] {
+        let owner = owner_with(&root.path().join(config.len().to_string()), config, false);
+        let probe = probe_owner(&owner, false);
+        assert_eq!(probe["review"]["before_pr"]["enabled"], true, "{config}");
+        assert_eq!(probe["ship"]["before_pr"], true, "{config}");
+        assert_eq!(probe["ship"]["review"]["crew"], "reviewer", "{config}");
+        assert_eq!(probe["admits"], true, "{config}: {probe}");
+    }
+}
+
+/// A host whose Git protection would refuse every sandboxed leaf must not
+/// turn the tasks it claims into `blocked` one by one [ORB-14928]. The drain
+/// stops at submission with the scan's diagnostic: no owner call, no run, no
+/// task touched.
+#[cfg(unix)]
+#[test]
+fn a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing() {
+    if !isolated(
+        module_path!(),
+        "a_pull_drain_on_a_host_that_fails_the_git_scan_claims_nothing",
+    ) {
+        return;
+    }
+    let pair = Pair::new(2);
+    let sandbox = if cfg!(target_os = "linux") {
+        orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
+    } else {
+        orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec
+    };
+    pair.follower
+        .upsert_executor_def(&ExecutorDef {
+            name: "codex".to_string(),
+            executor_type: ExecutorType::DirectAgent,
+            command: Some("codex".to_string()),
+            args: vec![],
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: None,
+            auth_probe: None,
+            env: Default::default(),
+            sandbox: Some(sandbox),
+            allow_fallback: false,
+            created_at: None,
+            updated_at: None,
+        })
+        .expect("sandboxed executor");
+    let outside = pair.follower_repo.parent().unwrap().join("outside-hook");
+    std::fs::write(&outside, "#!/bin/sh\n").unwrap();
+    let hook = pair.follower_repo.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::hard_link(&outside, &hook).unwrap();
+    let before: Vec<String> = pair.tasks.iter().map(|id| pair.owner_status(id)).collect();
+    let selector = pair.destination["selector"].as_str().unwrap().to_string();
+
+    let error = pair
+        .follower
+        .submit_workspace_pull_run(
+            orbit_core::WorkspacePullRequest {
+                selector: &selector,
+                for_seconds: Some(60),
+                max_active_leaf_runs: Some(1),
+                allowed_crews: &[],
+                actor: None,
+            },
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
+        .expect_err("a failing scan refuses admission");
+
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_))
+            && message.contains(&hook.display().to_string()),
+        "the scan's diagnostic names the entry: {message}"
+    );
+    assert!(pair.wire.calls("orbit.drain.probe").is_empty());
+    assert!(pair.leaf_runs().is_empty());
+    let after: Vec<String> = pair.tasks.iter().map(|id| pair.owner_status(id)).collect();
+    assert_eq!(before, after, "no task changed status");
 }

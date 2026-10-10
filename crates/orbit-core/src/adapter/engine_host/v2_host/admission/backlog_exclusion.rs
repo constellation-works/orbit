@@ -1,19 +1,23 @@
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskOsRequirement,
-    TaskReferenceIndex, TaskStatus, has_epic_tag, inherited_only_epic_roots,
+    EpicHierarchyNode, ReadinessGap, ReadinessStage, Task, TaskOsRequirement, TaskReferenceIndex,
+    TaskStatus, has_epic_tag, inherited_only_epic_roots, readiness_gaps,
     task_dependencies_ready_with_index,
 };
 use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::surface_reservation::{
+    MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
+};
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
-use crate::application::task::list_task_metadata_in;
+use crate::application::task::{PilotAdmissionHold, list_task_metadata_in};
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
     TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
@@ -36,7 +40,10 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogTaskExclusion {
     /// an exclusion the drain cannot resolve by itself. A lock conflict clears
     /// when the holder finishes and needs no instruction; an
     /// [`BacklogTaskExclusionReason::InheritedOnlyEpicRoot`] never clears until
-    /// the task is edited, so it carries one.
+    /// the task is edited, so it carries one. A lock conflict whose task
+    /// reserves its surface says so here, and the
+    /// [`BacklogTaskExclusionReason::SurfaceReserved`] exclusions it causes
+    /// name it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::adapter::engine_host::v2_host) detail: Option<String>,
 }
@@ -51,6 +58,12 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// `backlog` rather than failing a gate run on every drain pass; `detail`
     /// carries the refusal, naming the plugin when one is installed.
     DeliveryJobUnavailable,
+    /// The drain delivers in PR mode, the task would ship through the PR
+    /// pipeline, and no Git remote of the checkout names a network host, so
+    /// `pr_open` could never succeed. `detail` names the remotes,
+    /// `orbit workspace ship-mode local`, and the `delivery:task_local_pipeline`
+    /// tag that delivers just this task locally.
+    PrForgeRemoteMissing,
     /// The run window permits a set of crews and this task's effective crew is
     /// not one of them [ORB-11242]. The task is left in `backlog` exactly as
     /// it is — never silently re-crewed — and the remaining eligible work
@@ -69,9 +82,65 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     InheritedOnlyEpicRoot,
     /// Automated work must be prepared before an implementation lane can
     /// consume it; urgency does not substitute for a complexity assessment.
-    /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
+    /// Work tagged [`orbit_types::task::NO_DIFF_EXPECTED_TAG`] is exempt — see
     /// [`clears_complexity_gate`].
     UnassessedComplexity,
+    /// A live task-pilot run holds a successful preparation checkpoint for
+    /// this task. Delivery waits until that run settles its assessment.
+    ActivePilotPreparation,
+    /// The latest applied pilot assessment identifies duplicate work. Only a
+    /// newer clear assessment or an explicit operator decision releases it.
+    PilotDuplicate,
+    /// The latest applied pilot assessment identifies work already landed.
+    PilotAlreadyLanded,
+    /// Current validation needs an operator-reserved governed operation.
+    OperatorValidationHandoff,
+    /// The latest assessment identifies operator-side work no managed lane can perform.
+    HostOperationalHandoff,
+    /// The latest applied pilot assessment found a criterion that needs
+    /// native evidence from an OS this host does not run, and the task's
+    /// `os:` tags do not name that OS. `detail` names the criterion and the
+    /// tag to add; the tag, a re-scope, an operator decision or a newer
+    /// assessment without the finding clears it. A host of that OS may
+    /// still start the task.
+    NativeOsRequired,
+    /// Effective `review.before_pr` is on and this delivery is the local-only
+    /// route. Pipeline admission refuses that combination; the task stays in
+    /// `backlog` until the switch is turned off or delivery uses the PR route.
+    /// `detail` names the deciding config layer and the remedy [ORB-14168].
+    LocalRouteBeforePr,
+    /// Effective `review.before_landing` is on and this delivery is the
+    /// local-only route, which opens no pull request to review. Pipeline
+    /// admission refuses it the same way; `detail` names the deciding config
+    /// layer and the remedy [ORB-14849].
+    LocalRouteBeforeLanding,
+    /// The task's last delivery failed a required command its base fails the
+    /// same way, and the base has not moved to a commit that may pass it
+    /// [ORB-14258]. The task stays in `backlog`; the hold lifts by itself once
+    /// the command passes on a new base tip, and `detail` names the base and
+    /// command.
+    BaselineRedHold,
+    /// The task's last local run failed on its provider (capacity, an
+    /// unusable provider, or a content-policy refusal), and the hold that
+    /// failure placed excludes every crew the task could run as until its
+    /// `not_before` [ORB-14266]. A hold that leaves another crew admits the
+    /// task on that crew instead. `detail` names the run, the failure, the
+    /// excluded crews and the time.
+    ProviderBackoff,
+    /// Every crew the task may run as belongs to a provider whose latest usage
+    /// reading on this host is exhausted, or at or above the configured
+    /// threshold, and the reading is still live [ORB-14697]. A crew left
+    /// unlimited takes the task instead. The exclusion lifts by itself once
+    /// the reading's reset passes; `detail` names the provider, window, used
+    /// percent, threshold, reset and the crews skipped.
+    ProviderLimit,
+    /// A critical or high-priority task ranked ahead of this one waits only on
+    /// context locks, and this task's surface overlaps the surface it reserves.
+    /// Admitting this task would take a lock the reserving task needs as soon
+    /// as it frees, so it waits until the reserving task is admitted or leaves
+    /// `backlog`. `conflicts` names the reserving task; reservations are
+    /// bounded per pass (see `surface_reservation`).
+    SurfaceReserved,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
@@ -106,6 +175,10 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
     /// selection, exclusion reasons, and the lock-wait diagnostic all name the
     /// same holder for the same selector [ORB-11973].
     pub(in crate::adapter::engine_host::v2_host) lock_holders: BTreeMap<String, Vec<String>>,
+    /// Backlog tasks minted over a frozen delivery batch that nears its
+    /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
+    /// same-priority backlog in `admissible_leaves`.
+    pub(in crate::adapter::engine_host::v2_host) expiring_batches: BTreeMap<String, DateTime<Utc>>,
 }
 
 /// The tasks a live claim is currently executing [ORB-12500].
@@ -131,6 +204,13 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
+    runtime.reclaim_worktrees_on_admission();
+    runtime
+        .record_backlog_pilot_operator_handoffs()
+        .map_err(|error| DispatchError::DeterministicActionFailed {
+            action: action.into(),
+            message: format!("record pilot operator handoffs: {error}"),
+        })?;
     let max_tasks = input
         .get("max_tasks")
         .and_then(Value::as_u64)
@@ -191,6 +271,7 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
         // Discovery reaches the same rule through the claim footprints
         // `backlog_snapshot` merges into its holders.
         let claimed_tasks = live_claim_task_ids(runtime, action)?;
+        let pilot_preparations = active_pilot_preparations(runtime, action)?;
         // The hierarchy the inherited-only diagnostic reads, materialized only
         // if an override actually names such a root: the explicit path is
         // deliberately a per-id load, and one selected ship should not pay for
@@ -205,14 +286,8 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
-            if !clears_complexity_gate(&task) {
-                excluded.push(BacklogTaskExclusion {
-                    id: task.id,
-                    reason: BacklogTaskExclusionReason::UnassessedComplexity,
-                    conflicts: Vec::new(),
-                    crew: None,
-                    detail: None,
-                });
+            if pilot_preparations.contains_key(&task.id) {
+                excluded.push(pilot_preparation_exclusion(&task.id));
                 continue;
             }
             if let Some(exclusion) = host_os_exclusion(runtime, &task) {
@@ -274,6 +349,20 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                     continue;
                 }
             }
+            if let Some(exclusion) = pilot_finding_exclusion(runtime, action, &task)? {
+                excluded.push(exclusion);
+                continue;
+            }
+            if !clears_complexity_gate(&task) {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id,
+                    reason: BacklogTaskExclusionReason::UnassessedComplexity,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: None,
+                });
+                continue;
+            }
             tasks.push(task);
         }
         (tasks, excluded)
@@ -328,14 +417,15 @@ pub(in crate::adapter::engine_host::v2_host) fn allowlist_from_input(
     })
 }
 
-/// The ship mode an unattended drain delivers in: the workspace binding's,
-/// local when the workspace is unregistered.
+/// The ship mode an unattended drain delivers in.
+///
+/// [`OrbitRuntime::automatic_delivery_ship_mode`]: the workspace binding's
+/// mode, local when the workspace is unregistered. Readiness and doctor call
+/// the same method.
 pub(in crate::adapter::engine_host::v2_host) fn workspace_ship_mode(
     runtime: &OrbitRuntime,
 ) -> ShipMode {
-    runtime
-        .workspace_runtime_binding()
-        .map_or(ShipMode::Local, |binding| binding.ship_mode)
+    runtime.automatic_delivery_ship_mode()
 }
 
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
@@ -397,6 +487,9 @@ fn backlog_snapshot_in_mode(
     // this path would only add a way for the drain's hot loop to fail on a
     // journal awaiting repair. The paths that can reach a claimed task
     // directly, rather than through the backlog, consult it themselves.
+    // [ORB-14247] `no-diff-expected` is omitted from this map. The claim
+    // journal still fences that task's own writes; it just does not exclude
+    // overlapping backlog work.
     let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
@@ -408,19 +501,18 @@ fn backlog_snapshot_in_mode(
                 && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .collect();
-    sort_tasks_for_automatic_dispatch(&mut backlog);
+    // [ORB-14624] A frozen batch about to pass its deadline would lose its
+    // retry budget waiting in the queue. Ordering only: a store that cannot
+    // be read leaves the ordinary order, never a failed pass.
+    let expiring_batches = expiring_backlog_batches(runtime, &backlog);
+    sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches);
     let mut excluded = Vec::new();
+    let pilot_preparations = active_pilot_preparations(runtime, action)?;
     backlog.retain(|task| {
-        if clears_complexity_gate(task) {
+        if !pilot_preparations.contains_key(&task.id) {
             return true;
         }
-        excluded.push(BacklogTaskExclusion {
-            id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::UnassessedComplexity,
-            conflicts: Vec::new(),
-            crew: None,
-            detail: None,
-        });
+        excluded.push(pilot_preparation_exclusion(&task.id));
         false
     });
     // A root that declared no context of its own, while its descendants did,
@@ -440,17 +532,55 @@ fn backlog_snapshot_in_mode(
             false
         });
     }
+    let mut kept = Vec::with_capacity(backlog.len());
+    for task in backlog {
+        if let Some(exclusion) = pilot_finding_exclusion(runtime, action, task)? {
+            excluded.push(exclusion);
+        } else {
+            kept.push(task);
+        }
+    }
+    backlog = kept;
+    backlog.retain(|task| {
+        if clears_complexity_gate(task) {
+            return true;
+        }
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::UnassessedComplexity,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: None,
+        });
+        false
+    });
     // A selection the gate would refuse is withheld here instead: the task is
     // still `backlog` after a refused gate, so the drain would otherwise
     // dispatch it again, and fail again, on every pass. A task with no
-    // `delivery:<job>` tag resolves to the default without a catalog read.
+    // `delivery:<job>` tag resolves to the default without a catalog read; the
+    // checkout's remotes are read once, only if a task takes the PR route.
+    let forge = crate::application::job::delivery::PrForgeCheck::default();
+    let mut routed_locally = std::collections::BTreeSet::new();
     backlog.retain(|task| {
-        let Err(error) = runtime.resolve_delivery_route(std::slice::from_ref(*task), mode) else {
-            return true;
+        let (reason, error) = match runtime.resolve_admitted_delivery_route(
+            std::slice::from_ref(*task),
+            mode,
+            &forge,
+        ) {
+            Ok(route) => {
+                if route.delivers_locally() {
+                    routed_locally.insert(task.id.clone());
+                }
+                return true;
+            }
+            Err(error @ orbit_common::OrbitError::PrForgeRemoteMissing { .. }) => {
+                (BacklogTaskExclusionReason::PrForgeRemoteMissing, error)
+            }
+            Err(error) => (BacklogTaskExclusionReason::DeliveryJobUnavailable, error),
         };
         excluded.push(BacklogTaskExclusion {
             id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::DeliveryJobUnavailable,
+            reason,
             conflicts: Vec::new(),
             crew: None,
             detail: Some(error.to_string()),
@@ -466,6 +596,112 @@ fn backlog_snapshot_in_mode(
         excluded.push(exclusion);
         false
     });
+    // [ORB-14258] A task held for a red base waits until the command passes
+    // on a new base tip; dispatching it would only fail the same command
+    // again. Only the clock tick's recorded verdict is read here, never a
+    // validation run [ORB-14739]. A hold that cannot be read is not one: the
+    // delivery's own validation decides.
+    backlog.retain(|task| match runtime.standing_baseline_hold(task) {
+        Ok(None) => true,
+        Ok(Some(why)) => {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::BaselineRedHold,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(why),
+            });
+            false
+        }
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
+            true
+        }
+    });
+    // [ORB-14266] A task whose provider failure hold excludes every crew it
+    // could run as waits out the backoff; one that leaves another crew is
+    // admitted and drawn onto it. An unreadable hold is not one.
+    backlog.retain(
+        |task| match runtime.provider_backoff_deferral(task, pools) {
+            Ok(None) => true,
+            Ok(Some(why)) => {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::ProviderBackoff,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: Some(why),
+                });
+                false
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read provider failure hold: {error}");
+                true
+            }
+        },
+    );
+    // [ORB-14697] A task every crew of which is at its provider's usage
+    // limit on this host waits for the reading's reset; one with an
+    // unlimited crew left is admitted and drawn onto it.
+    backlog.retain(|task| match runtime.provider_limit_deferral(task, pools) {
+        Ok(None) => true,
+        Ok(Some(why)) => {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::ProviderLimit,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(why),
+            });
+            false
+        }
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read provider limits: {error}");
+            true
+        }
+    });
+    // [ORB-14168] A task that cleared the per-task gates would still fail
+    // closed at local-route admission while `review.before_pr` or
+    // `review.before_landing` [ORB-14849] is on. Hold it here so the drain
+    // does not spawn that delivery. Tasks already excluded above keep the
+    // more specific reason. PR delivery skips this, and turning the switch
+    // off (workspace overriding global included) clears it. A PR drain holds
+    // only the tasks a `delivery:task_local_pipeline` tag routes locally.
+    let policy = runtime.operation_policy();
+    let local_route_review = if policy.review_before_pr.value {
+        Some((
+            BacklogTaskExclusionReason::LocalRouteBeforePr,
+            crate::application::review::local_route_before_pr_conflict(
+                policy.review_before_pr.source.label(),
+            ),
+        ))
+    } else if policy.review_before_landing.value {
+        Some((
+            BacklogTaskExclusionReason::LocalRouteBeforeLanding,
+            crate::application::review::local_route_before_landing_conflict(
+                policy.review_before_landing.source.label(),
+            ),
+        ))
+    } else {
+        None
+    };
+    if let Some((reason, detail)) = local_route_review
+        && (mode == ShipMode::Local || !routed_locally.is_empty())
+    {
+        backlog.retain(|task| {
+            if mode == ShipMode::Pr && !routed_locally.contains(&task.id) {
+                return true;
+            }
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(detail.clone()),
+            });
+            false
+        });
+    }
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
@@ -526,12 +762,22 @@ fn backlog_snapshot_in_mode(
         }
         if !root_trigger.is_empty() {
             let mut kept = Vec::new();
+            // [ORB-14310] Lock-blocked tasks that reserve their surface this
+            // pass, in dispatch order: the backlog is still sorted here.
+            let mut reserving = Vec::new();
             for task in backlog {
                 let root_id = task_root_id(task, &task_lookup);
                 if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
+                    let direct = direct_conflicts.contains_key(&task.id);
+                    let reserves = direct
+                        && reserving.len() < MAX_SURFACE_RESERVATIONS
+                        && reserves_surface(task);
+                    if reserves {
+                        reserving.push(task);
+                    }
                     excluded.push(BacklogTaskExclusion {
                         id: task.id.clone(),
-                        reason: if direct_conflicts.contains_key(&task.id) {
+                        reason: if direct {
                             BacklogTaskExclusionReason::ContextLockConflict
                         } else {
                             BacklogTaskExclusionReason::GroupMemberConflict
@@ -541,13 +787,21 @@ fn backlog_snapshot_in_mode(
                             .cloned()
                             .unwrap_or_else(|| trigger_conflicts.clone()),
                         crew: None,
-                        detail: None,
+                        detail: reserves.then(reserving_detail),
                     });
                 } else {
                     kept.push(task);
                 }
             }
-            backlog = kept;
+            // A multi-lock task would otherwise lose every race: each lock it
+            // waits on is taken by lower-ranked work the moment it frees.
+            backlog = withhold_reserved_surfaces(
+                kept,
+                &reserving,
+                &expiring_batches,
+                workspace_root,
+                &mut excluded,
+            );
         }
     }
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
@@ -559,7 +813,27 @@ fn backlog_snapshot_in_mode(
         admissible_leaves,
         excluded,
         lock_holders,
+        expiring_batches,
     })
+}
+
+/// The backlog tasks whose frozen batch nears its deadline [ORB-14624].
+fn expiring_backlog_batches(
+    runtime: &OrbitRuntime,
+    backlog: &[&Task],
+) -> BTreeMap<String, DateTime<Utc>> {
+    match crate::application::automation::expiring_frozen_batch_tasks(runtime, Utc::now()) {
+        Ok(mut expiring) => {
+            expiring.retain(|task_id, _| backlog.iter().any(|task| task.id == *task_id));
+            expiring
+        }
+        Err(error) => {
+            tracing::warn!(
+                "could not read frozen batch deadlines; backlog keeps its ordinary order: {error}"
+            );
+            BTreeMap::new()
+        }
+    }
 }
 
 /// The exclusion for a task whose `os:` tags this host does not satisfy.
@@ -617,21 +891,115 @@ fn inherited_only_epic_root_exclusion(
 /// provenance does not grant it, and nothing here rewrites the task's stored
 /// complexity — an exempt task keeps `unassessed` and resolves its crew from
 /// the configured crew or the workspace default.
+/// Whether a backlog task has no blocking readiness gap. Missing context
+/// files are advisory in the backlog, so this is the assessed-complexity gate
+/// with its `no-diff-expected` exemption.
 fn clears_complexity_gate(task: &Task) -> bool {
-    task.complexity.is_some_and(TaskComplexity::is_assessed)
-        || task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+    !readiness_gaps(
+        ReadinessStage::Backlog,
+        &task.tags,
+        &task.context_files,
+        task.complexity,
+    )
+    .iter()
+    .any(ReadinessGap::is_blocking)
+}
+
+fn pilot_finding_exclusion(
+    runtime: &OrbitRuntime,
+    action: &str,
+    task: &Task,
+) -> Result<Option<BacklogTaskExclusion>, DispatchError> {
+    let hold = runtime.pilot_admission_hold(&task.id).map_err(|error| {
+        DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("read pilot findings: {error}"),
+        }
+    })?;
+    Ok(hold.and_then(|hold| {
+        let (reason, detail) = match hold {
+            PilotAdmissionHold::HostOperational(hold) => (
+                BacklogTaskExclusionReason::HostOperationalHandoff,
+                hold.detail(),
+            ),
+            PilotAdmissionHold::OperatorValidation(hold) => (
+                BacklogTaskExclusionReason::OperatorValidationHandoff,
+                hold.detail(),
+            ),
+            PilotAdmissionHold::NativeOs(hold) => (
+                BacklogTaskExclusionReason::NativeOsRequired,
+                hold.wait_on(task, runtime.host_os())?,
+            ),
+            PilotAdmissionHold::Duplicate => (
+                BacklogTaskExclusionReason::PilotDuplicate,
+                pilot_decision_detail("duplicate_of"),
+            ),
+            PilotAdmissionHold::AlreadyLanded => (
+                BacklogTaskExclusionReason::PilotAlreadyLanded,
+                pilot_decision_detail("already_landed"),
+            ),
+        };
+        Some(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: Some(detail),
+        })
+    }))
+}
+
+fn pilot_decision_detail(field: &str) -> String {
+    format!(
+        "The latest task-pilot assessment records {field}. Run task-pilot again \
+         to clear the finding, or append a human comment whose first line is \
+         `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`. \
+         A later pilot assessment supersedes that decision."
+    )
+}
+
+fn active_pilot_preparations(
+    runtime: &OrbitRuntime,
+    action: &str,
+) -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, DispatchError> {
+    crate::application::automation::preparation::active_task_pilot_preparations(runtime).map_err(
+        |error| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("read active pilot preparations: {error}"),
+        },
+    )
+}
+
+fn pilot_preparation_exclusion(task_id: &str) -> BacklogTaskExclusion {
+    BacklogTaskExclusion {
+        id: task_id.to_string(),
+        reason: BacklogTaskExclusionReason::ActivePilotPreparation,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(
+            "An active task-pilot preparation holds this task until its run settles.".into(),
+        ),
+    }
 }
 
 /// Sort owned or borrowed tasks into automatic dispatch order: critical
-/// first, then corrective work, then priority, age, and the task ID as the
-/// total tie-breaker.
+/// first, then corrective or expiring work, then priority, expiry, age, and
+/// the task ID as the total tie-breaker. Uses the same expiry-aware comparison
+/// as surface reservations (`automatic_dispatch_cmp_with_expiry`).
 pub(in crate::adapter::engine_host::v2_host) fn sort_tasks_for_automatic_dispatch<
     T: Borrow<Task>,
 >(
     tasks: &mut [T],
+    expiring: &BTreeMap<String, DateTime<Utc>>,
 ) {
     tasks.sort_by(|left, right| {
-        orbit_types::task::automatic_dispatch_cmp(left.borrow(), right.borrow())
+        let (left, right) = (left.borrow(), right.borrow());
+        orbit_types::task::automatic_dispatch_cmp_with_expiry(
+            left,
+            expiring.contains_key(&left.id),
+            right,
+            expiring.contains_key(&right.id),
+        )
     });
 }
 

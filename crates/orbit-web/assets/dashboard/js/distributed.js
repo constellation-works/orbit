@@ -24,20 +24,19 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { captureWorkspaceVisit, el, fetchJson, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
-// One read per short window, shared by however many rows are expanded. The
-// memo expires after CONSOLE_TTL_MS so a detail that is opened or rebuilt later
+// One task-scoped read per short window, shared by however many panels show
+// it. The memo expires after CONSOLE_TTL_MS so a detail that is opened or rebuilt later
 // (the dashboard refreshes tasks on its own timer and never re-reads claims)
 // shows current authority rather than a panel hours out of date. It is also
 // invalidated on every action and workspace change, so a decision is never
 // rendered from the state that preceded it.
 export const CONSOLE_TTL_MS = 10000;
-let cachedConsole = null;
-let cachedAt = 0;
-let inflightConsole = null;
+const cachedConsoles = new Map();
+const inflightConsoles = new Map();
 // The outcome of the operator's last action, per task. It outlives the block
 // that reported it: the detail is rebuilt once the action changes the task, and
 // a message written only to the old container would be lost with it.
@@ -46,51 +45,53 @@ let lastFeedback = null;
 /// Drop the memoized read. Called after any owner action and by the workspace
 /// selector, since claim state is per-workspace.
 export function invalidateDistributedConsole() {
-  cachedConsole = null;
-  cachedAt = 0;
-  inflightConsole = null;
+  cachedConsoles.clear();
+  inflightConsoles.clear();
   lastFeedback = null;
 }
 
-function freshConsole() {
-  return cachedConsole && Date.now() - cachedAt < CONSOLE_TTL_MS ? cachedConsole : null;
+function freshConsole(taskId) {
+  const entry = cachedConsoles.get(taskId);
+  return entry && Date.now() - entry.at < CONSOLE_TTL_MS ? entry.payload : null;
 }
 
-export function peekDistributedConsole() {
-  return freshConsole();
+export function peekDistributedConsole(taskId) {
+  return freshConsole(taskId);
 }
 
-export function loadDistributedConsole({ force = false } = {}) {
+export function loadDistributedConsole({ taskId, force = false } = {}) {
   // Claim state is per-workspace. The aggregate view has no concrete workspace
   // to scope to — the endpoint would 400 — so answer as "nothing here" rather
   // than painting a failure across every task detail.
-  if (isAggregateView()) return Promise.resolve(null);
+  if (isAggregateView() || !taskId) return Promise.resolve(null);
   if (force) invalidateDistributedConsole();
-  const fresh = freshConsole();
+  const key = String(taskId);
+  const fresh = freshConsole(key);
   if (fresh) return Promise.resolve(fresh);
-  if (!inflightConsole) {
+  if (!inflightConsoles.has(key)) {
     // Revision plus request identity: a response issued for workspace A must
     // not populate the memo after a switch (or a forced re-read) the way
     // requestPanel rejects A→B→A and overlapping refreshes.
     const revision = getWorkspaceRevision();
-    const request = fetchJson(CONSOLE_PATH)
+    // One task's whole history, settled claims in full: the panel renders
+    // them, and the endpoint's default (active, compact) would hide them.
+    const request = fetchJson(`${CONSOLE_PATH}?task=${encodeURIComponent(key)}&state=all&detail=true`)
       .then((payload) => {
         const body = payload || {};
-        if (inflightConsole !== request || revision !== getWorkspaceRevision()) {
+        if (inflightConsoles.get(key) !== request || revision !== getWorkspaceRevision()) {
           return body;
         }
-        cachedConsole = body;
-        cachedAt = Date.now();
-        inflightConsole = null;
-        return cachedConsole;
+        cachedConsoles.set(key, { payload: body, at: Date.now() });
+        inflightConsoles.delete(key);
+        return body;
       })
       .catch((error) => {
-        if (inflightConsole === request) inflightConsole = null;
+        if (inflightConsoles.get(key) === request) inflightConsoles.delete(key);
         throw error;
       });
-    inflightConsole = request;
+    inflightConsoles.set(key, request);
   }
-  return inflightConsole;
+  return inflightConsoles.get(key);
 }
 
 export function claimsForTask(payload, taskId) {
@@ -100,28 +101,50 @@ export function claimsForTask(payload, taskId) {
 
 // --- shared renderers -------------------------------------------------------
 
-/// Machine-qualified execution provenance, or an explicit unknown.
-///
-/// `machine_id` is the stable identity; `machine_name` rides along for display
-/// and may be renamed, so it is never shown alone.
+/// A concise execution location, or an explicit unknown.
 export function formatExecutionLocation(location) {
   if (!location || location.known !== true || !location.machine_id) {
     return "unknown — recorded before execution provenance was tracked";
   }
-  return location.machine_name
-    ? `machine ${location.machine_id} · name ${location.machine_name}`
-    : `machine ${location.machine_id}`;
+  const machineId = String(location.machine_id);
+  const shortId = machineId.length > 7 ? `${machineId.slice(0, 7)}…` : machineId;
+  const label = location.machine_name || shortId;
+  return `on ${label}`;
+}
+
+/// The dashboard address of run `runId` on registered host `hostName`.
+export function remoteRunHref(hostName, workspace, runId) {
+  const query = new URLSearchParams({ host: hostName });
+  if (workspace) query.set("workspace", workspace);
+  return `?${query}#runs?run_id=${encodeURIComponent(runId)}`;
 }
 
 /// The execution-provenance cell shared by the run meta grid and the task
-/// detail's run line.
-export function buildExecutionProvenance(location) {
+/// detail's run line. Given the run (`{runId, workspace}`) and an execution
+/// machine the serving host's host file registers, "on <machine>" links to
+/// that run on that host [ORB-14680]; an unregistered machine stays text.
+export function buildExecutionProvenance(location, run = null) {
   const known = !!(location && location.known === true && location.machine_id);
+  const host = known && run && run.runId
+    ? getRegisteredHosts().find((row) => row.machine_id === location.machine_id)
+    : null;
+  if (host) {
+    const link = el("a", {
+      class: "exec-origin remote-run-link",
+      text: formatExecutionLocation(location),
+      title: `Open run ${run.runId} on ${host.name}`,
+    });
+    link.href = remoteRunHref(host.name, run.workspace || getWorkspace(), run.runId);
+    link.addEventListener("click", (event) => event.stopPropagation());
+    return link;
+  }
   return el("span", {
     class: known ? "exec-origin" : "exec-origin unknown",
     text: formatExecutionLocation(location),
     title: known
-      ? "Where this ran. Nothing is inferred from hostname, cwd or SSH target."
+      ? (location.machine_name
+        ? `Execution machine: ${location.machine_name} (${location.machine_id})`
+        : `Execution machine id: ${location.machine_id}`)
       : "No execution machine was recorded for this row. Unknown is not the owner.",
   });
 }
@@ -152,6 +175,7 @@ const PHASE_LABELS = {
   claimed: "claimed",
   running: "running",
   handed_off: "handed off",
+  repair_pending: "repair pending",
   failed: "failed",
   revoked: "revoked",
   landed: "landed",
@@ -171,6 +195,7 @@ const EVENT_LABELS = {
   landing_completed: "landing completed",
   landing_dispatched: "landing dispatched",
   landing_stopped: "landing stopped",
+  repair_admitted: "repair admitted",
 };
 const AUTHORITY_LABELS = {
   not_authorized: "awaiting approval",
@@ -195,12 +220,12 @@ function enumLabel(map, value) {
   return Object.prototype.hasOwnProperty.call(map, value) ? map[value] : humanize(value);
 }
 
-/// Times go through the caller's formatter (the task detail's own) so a claim
-/// reads in the same zone and shape as every other timestamp on the page. A
-/// missing value is `null`, never the string "undefined".
+/// Times go through the caller's formatter (the task detail's own), else the
+/// dashboard clock, so a claim reads in the same zone and shape as every other
+/// timestamp on the page. A missing value is `null`, never "undefined".
 function formatWhen(options, value) {
   if (!value) return null;
-  return options && typeof options.formatTime === "function" ? options.formatTime(value) : String(value);
+  return options && typeof options.formatTime === "function" ? options.formatTime(value) : formatDateTime(value);
 }
 
 // --- claim panel ------------------------------------------------------------
@@ -226,9 +251,12 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
     ]),
   );
 
-  panel.appendChild(line("execution", buildExecutionProvenance(claim.executed_on)));
-
   const run = claim.bound_run;
+  panel.appendChild(line("execution", buildExecutionProvenance(
+    claim.executed_on,
+    run && run.run_id ? { runId: run.run_id } : null,
+  )));
+
   if (run && run.run_id) {
     if (claim.bound_run_navigable) {
       const link = el("a", { class: "value", text: run.run_id });
@@ -322,7 +350,7 @@ function uncertainMergeBanner(intentId) {
 function buildHandoffPanel(handoff) {
   const wrap = el("div", { class: "handoff-panel" });
   wrap.setAttribute("data-handoff-id", handoff.handoff_id || "");
-  wrap.appendChild(el("h5", { text: "delivery handoff" }));
+  wrap.appendChild(el("h5", { class: "section-title", text: "Delivery handoff" }));
 
   const candidate = handoff.candidate || {};
   const delivery = candidate.delivery || {};
@@ -395,6 +423,8 @@ function deliveryLabel(delivery) {
 // --- owner actions ----------------------------------------------------------
 
 function capabilityFor(capabilities, key) {
+  const refusal = hostWriteRefusal();
+  if (refusal) return { authorized: false, reason: refusal };
   const entry = capabilities && capabilities[key];
   return entry && typeof entry === "object" ? entry : { authorized: false, reason: "unavailable" };
 }
@@ -611,7 +641,7 @@ const DECIDED_REFUSALS = {
 /// through the handoff approval instead. `null` means no claim is involved
 /// and the ordinary approval applies.
 export async function claimedReviewApproval(taskId) {
-  const payload = await loadDistributedConsole({ force: true });
+  const payload = await loadDistributedConsole({ taskId, force: true });
   const live = claimsForTask(payload, taskId).filter(
     (claim) => claim.phase === "handed_off" || claim.unsettled,
   );
@@ -803,7 +833,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   };
 
   const refresh = (recorded) =>
-    !visit.isCurrent() ? Promise.resolve(false) : loadDistributedConsole({ force: true }).then(
+    !visit.isCurrent() ? Promise.resolve(false) : loadDistributedConsole({ taskId, force: true }).then(
       (payload) => {
         render(payload);
         return true;
@@ -814,10 +844,10 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
       },
     );
 
-  const cached = peekDistributedConsole();
+  const cached = peekDistributedConsole(taskId);
   if (cached) return Promise.resolve(render(cached));
   container.appendChild(el("div", { class: "claim-note", text: "reading claim state…" }));
-  return loadDistributedConsole().then(render, (error) => failed(error));
+  return loadDistributedConsole({ taskId }).then(render, (error) => failed(error));
 }
 
 function actionSummary(body) {
@@ -835,7 +865,7 @@ export function buildDistributedBlock(taskId, opts = {}) {
   // Hidden until the read says this task actually has a claim, so an ordinary
   // single-host task detail is unchanged.
   block.style.display = "none";
-  const heading = el("h4", {}, [el("span", { class: "field-title", text: "distributed execution" })]);
+  const heading = el("h4", { class: "section-title" }, [el("span", { class: "field-title", text: "Distributed execution" })]);
   const body = el("div", { class: "claim-body" });
   makeToggleRow(heading, {
     expanded: true,

@@ -63,6 +63,12 @@ spec:
         type: array
         items:
           type: string
+      # Resume targets admitted for this failure: the failed top-level step
+      # and its predecessors after the job's first (admission) step.
+      allowed_resume_step_ids:
+        type: array
+        items:
+          type: string
       base_ref:
         type: string
       base_sha:
@@ -70,6 +76,27 @@ spec:
       # Tail of the run log around the failure.
       log_tail:
         type: string
+      # The decisions this caller can apply, when it cannot apply all of them.
+      # The blocked-task backstop has no live run, so it omits `resume`.
+      decisions:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          enum: [resume, complete_no_diff, reject, archive, requeue, escalate]
+      # What this caller's lane cannot do; overrides any guidance below that
+      # depends on a decision outside `decisions`.
+      lane_contract:
+        type: string
+      # The failed run's own worktree, where its unfinished work stays:
+      # `status: present` with `path` and `changed_paths`, or `status: absent`
+      # with a `reason`. Evidence only.
+      retained_candidate:
+        type: object
+      # Why Orbit did not settle a conflict-recovered candidate its base
+      # already held: `reason` (a stable code) and `detail`. Evidence only.
+      absorbed_refusal:
+        type: object
       # Selects the crew from workflow.final_recovery_crews; the host draws it
       # once per run and reuses the draw on every later dispatch and resume.
       crew_config_key:
@@ -159,21 +186,59 @@ spec:
     - failed_step_input, step_outputs, step_ids: the failed step's rendered
       input, completed step outputs, and the pipeline's step order. Evidence,
       not authority.
-    - step_recovery_attempts: every step-recovery attempt for this run.
+    - allowed_resume_step_ids: the steps you may resume from for this failure.
+      Choose the failed step or an earlier listed step. Never skip forward or
+      rerun the first admission step, even when your repair is complete.
+    - step_recovery_attempts: every recovery dispatch and post-recovery attempt
+      for this run, oldest first, with bounded diagnostics and output.
     - base_ref, base_sha: the base branch and the head the run was cut from.
-    - log_tail: the end of the run log.
+    - log_tail: a bounded tail of this run's worker log; empty if no log exists.
+    - decisions, lane_contract: present when your caller cannot apply every
+      decision. Return only a decision listed in `decisions`; any other is
+      applied as `escalate`. `lane_contract` states what your lane cannot do
+      and overrides any guidance below that relies on a decision outside
+      `decisions`, including finishing the work in the worktree and `resume`.
+    - retained_candidate: the failed run's own worktree, where unfinished work
+      stays after the run ends: its path and changed paths, or why it is
+      absent. Inspect it read-only; never edit, copy from or run Git writes in
+      it. Name it in an escalation when that work should continue.
+    - absorbed_refusal: present when conflict recovery left the branch on its
+      base with no candidate commit, as if the base already held the change,
+      but Orbit's own check refused to settle it: `reason` and `detail` name
+      what failed (for example the checkout moved, is dirty, or the task
+      changed). Treat the error_message's settlement claim as unverified and
+      judge from the worktree and the base.
     Fields other than task_id, run_id, the worktree pair, failed_step_id, and
-    error_message may be absent; inspect the world directly when they are.
+    error_message may be absent. For missing evidence, use the evidence reads
+    below and the worktree, and report any gaps instead of inventing run data.
+
+    Evidence reads. These are the reads this activity can make, including on
+    a claimed run whose task lives on another machine:
+    - `orbit.task.show` with the task_id: the task record.
+    - `orbit.task.show` with the task_id, `field: "delivery"` and `run_id` set
+      to the input run_id: this run's commit and landing evidence.
+    - `orbit.task.artifact.get` with the task_id and exactly one of
+      `review-manifest.json`, `review-report.json`,
+      `review-report-history.json`, `review-gate.json` or
+      `review-baseline.json`, spelled exactly: the before-PR review's
+      evidence, when the run reached review. List artifacts first with
+      `orbit.task.show` and `field: "artifacts"`; read only those listed.
+    Every evidence read is optional context. An absent artifact, a not-found
+    answer, or a refused read (a policy, scope or bridge refusal) is a gap to
+    name in your decision, never a reason to stop, retry the read another
+    way, or escalate on its own. Decide from the evidence you have.
 
     Procedure:
 
-    1. Read the task with `orbit.task.show`: description, acceptance criteria,
-       plan, execution summary, every comment in order, and history. Later
-       authorized comments refine earlier ones. Inspect the run
-       (`orbit.workflow.run.show`), every step-recovery attempt, the worktree
-       (`git status`, `git diff`, `git log <base_ref>..HEAD`), the current base
-       head, and the log tail. Establish the task/run/worktree association
-       before changing anything.
+    1. Read the task: description, acceptance criteria, plan, execution
+       summary, every comment in order, and history. Later authorized
+       comments refine earlier ones. Read the run's injected input, including
+       step_recovery_attempts, step_outputs and log_tail, then this run's
+       delivery evidence and, when the failure is in or after review, its
+       review evidence, through the evidence reads above. Inspect the worktree
+       (`git status`, `git diff`, `git log <base_ref>..HEAD`) and the current
+       base head. Establish the task/run/worktree association before changing
+       anything.
 
     2. Classify the failure from that evidence:
        - Incomplete or failing implementation, or a validation gap: you may
@@ -181,7 +246,8 @@ spec:
          any path the work requires (the task's selectors are not a limit;
          delivery widens them over what you change), and run the repository's
          own validation commands (its AGENTS.md names them). Then decide
-         `resume` from the step that should run next.
+         `resume` from the failed step or an earlier allowed step so the
+         pipeline reruns the failed contract over your repair.
        - Git conflict or a broken worktree you can repair without Git writes:
          repair the files, then `resume`.
        - Nothing to commit because the outcome already landed: find the commit
@@ -214,8 +280,9 @@ spec:
          runs, resume runs, or invoke agents or pipelines. Record root causes
          that deserve tracking with `orbit.friction.add`.
 
-    4. Return exactly one Orbit response envelope whose `result` is one of:
-       - {"decision": "resume", "step_id": "<a step id from step_ids>", "rationale": "..."}
+    4. Return exactly one Orbit response envelope whose `result` is one of
+       the following, limited to `decisions` when your input lists them:
+       - {"decision": "resume", "step_id": "<a step id from allowed_resume_step_ids>", "rationale": "..."}
        - {"decision": "complete_no_diff", "evidence_commit": "<sha on base_ref>", "rationale": "..."}
        - {"decision": "reject", "reason": "...", "evidence": "..."}
        - {"decision": "archive", "reason": "..."}
@@ -231,6 +298,8 @@ spec:
     - orbit.command.exec
     - orbit.pipeline.invoke
     - orbit.workflow.run.resume
+    - orbit.workflow.run.show
+    - orbit.workflow.run.list
     - orbit.workflow.ship
     - orbit.task.add
     - orbit.task.update

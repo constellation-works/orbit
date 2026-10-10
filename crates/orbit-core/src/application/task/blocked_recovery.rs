@@ -15,11 +15,11 @@
 //!
 //! - a final-recovery decision was already recorded on or after the block;
 //! - someone other than Orbit's own automation commented on the task,
-//!   changed its status or attached an artifact after the block — a human's
-//!   call stands;
+//!   changed its fields or status, or attached an artifact after the block —
+//!   a human's attributed call stands;
 //! - the task was written after the block by a change no actor is recorded
-//!   for — a field-only edit leaves no history, so the backstop cannot prove
-//!   it was not a human's and leaves the task alone;
+//!   for — a legacy field-only write may leave no history, so the backstop
+//!   cannot prove it was not a human's and leaves the task alone;
 //! - a recovery run for the episode already exists (the episode key is also
 //!   the run's admission key, so two ticks cannot admit two runs);
 //! - the block is older than [`MAX_EPISODE_AGE_HOURS`];
@@ -27,9 +27,14 @@
 //!   validation lacked a tool, which no task decision fixes [ORB-13987].
 //!
 //! The backstop never resumes: `resume` is escalated, and `requeue` is how
-//! work restarts. A recovery run that ends without applying a decision — the
-//! agent crashed, timed out or the worker died — is settled on a later tick as
-//! an escalation, so every dispatched episode ends with one recorded decision.
+//! work restarts. Its agent is told so: the recovery input lists only the
+//! decisions this lane applies ([`BACKSTOP_DECISIONS`]) and states that its
+//! checkout is discarded. The input and every escalation name the failed run's
+//! retained candidate — its worktree and changed paths, read without touching
+//! them — which is where any unfinished work still is. A recovery run that ends
+//! without applying a decision — the agent crashed, timed out or the worker
+//! died — is settled on a later tick as an escalation, so every dispatched
+//! episode ends with one recorded decision.
 //!
 //! Enabled when `workflow.final_recovery_crews` is non-empty and this runtime
 //! owns the workspace's task records; `final_recovery_crews = []` turns it off.
@@ -38,19 +43,21 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
+use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
 use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::identity::{MACHINE_ID_PREFIX, agent_from_model, all_agent_families};
 use orbit_types::task::{ArtifactManifestFileV2, Task, TaskComment, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger};
+use orbit_types::workflow::{
+    FinalRecoveryDecision, JobRun, JobRunState, JobRunTrigger, MAX_DECISION_TEXT_CHARS,
+};
 use serde_json::{Value, json};
 
 use super::final_recovery::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
     FinalRecoveryTaskRevision,
 };
-use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
+use super::retained_candidate::RetainedCandidate;
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD, RetryKey,
@@ -75,6 +82,22 @@ const RUN_SCAN_LIMIT: usize = 500;
 const DECISION_COMMENT_PREFIX: &str = "final_recovery run_id=";
 const TRIGGER_NAME: &str = "blocked-task-recovery";
 const TRIGGER_CONSUMER: &str = "clock-sweep";
+/// The `final_recovery` decisions the backstop applies. `resume` is absent: a
+/// blocked task has no live run to resume.
+pub(crate) const BACKSTOP_DECISIONS: [&str; 5] = [
+    "complete_no_diff",
+    "reject",
+    "archive",
+    "requeue",
+    "escalate",
+];
+/// What the backstop's lane cannot do, stated in its agent's input.
+pub(crate) const BACKSTOP_LANE_CONTRACT: &str = "Blocked-task backstop: the failed run is over and \
+    nothing resumes it. Your checkout is a fresh detached checkout of base_sha that is removed \
+    after your decision; nothing you change in it is committed or delivered, so do not implement \
+    or validate the task there. `resume` is not available and is applied as `escalate`. When the \
+    task's work should continue, escalate naming `retained_candidate`, or requeue for a fresh \
+    attempt. `retained_candidate` is evidence only: never modify it.";
 
 /// What put a task into its current block, for the blocks the backstop owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,7 +171,22 @@ impl BlockEpisode {
         let note = entry.note.clone().unwrap_or_default();
         // [ORB-13987] Required validation lacked a tool: the host needs
         // fixing, not the task, so no recovery agent is spent on it.
-        if orbit_types::workflow::is_validation_environment_failure(None, Some(&note)) {
+        // [ORB-14269] An implementer-declared blocker is the same shape of
+        // stop: another agent does not clear it. The marker is what a
+        // `workflow_run_failed` fallback note still carries.
+        // A claimed leaf records its failure diagnostic in the task's
+        // execution summary; its `claim_failed` history entry may have no
+        // status note. Check that durable evidence too, or the backstop would
+        // spend a recovery agent immediately after the implementer stopped.
+        let agent_blocker = orbit_types::workflow::is_task_blocked_by_agent(None, Some(&note))
+            || (source == BlockSource::ClaimFailed
+                && orbit_types::workflow::is_task_blocked_by_agent(
+                    None,
+                    Some(&task.execution_summary),
+                ));
+        if orbit_types::workflow::is_validation_environment_failure(None, Some(&note))
+            || agent_blocker
+        {
             return None;
         }
         let failed_run_id = note_field(&note, "run_id=")
@@ -221,8 +259,8 @@ pub enum EpisodeDisposition {
         /// Who acted.
         by: String,
     },
-    /// The task was written after the block with no recorded actor (a
-    /// field-only edit), so a human's edit cannot be ruled out.
+    /// The task was written after the block with no recorded actor (for
+    /// example, a legacy field-only write), so a human's edit cannot be ruled out.
     UnexplainedChange {
         /// The unattributed write.
         changed_at: DateTime<Utc>,
@@ -288,18 +326,6 @@ pub fn episode_disposition(
         return EpisodeDisposition::TooOld;
     }
     EpisodeDisposition::Eligible
-}
-
-/// Whether `label` is one of Orbit's own writers: the system, a machine (claim
-/// settlement), the task pilot, or an agent. Any other label — `human:<user>`,
-/// `operator`, an `ORBIT_ACTOR` or dashboard author — counts as a human.
-fn is_automation_actor(label: &str) -> bool {
-    let label = label.trim();
-    label == SYSTEM_ACTOR_LABEL
-        || label == "task-pilot"
-        || label.starts_with(MACHINE_ID_PREFIX)
-        || all_agent_families().contains(&label)
-        || agent_from_model(label).is_some()
 }
 
 /// The run input the backstop dispatches with; also how a recovery run finds
@@ -408,7 +434,7 @@ pub(crate) enum BlockedRecoveryPreparation {
         reason: String,
     },
     /// The agent's input.
-    Ready(PreparedBlockedRecovery),
+    Ready(Box<PreparedBlockedRecovery>),
 }
 
 /// The final-recovery agent's view of a blocked episode.
@@ -428,6 +454,8 @@ pub(crate) struct PreparedBlockedRecovery {
     pub(crate) job_id: Option<String>,
     /// The failure as recorded.
     pub(crate) error_message: String,
+    /// The failed run's worktree, when it is still on this machine.
+    pub(crate) retained_candidate: RetainedCandidate,
 }
 
 impl OrbitRuntime {
@@ -621,9 +649,10 @@ impl OrbitRuntime {
             Ok(episode) => episode,
             Err(reason) => return Ok(BlockedRecoveryPreparation::Skip { reason }),
         };
+        let task = self.get_task(&input.task_id)?;
         let failed_run = match &episode.failed_run_id {
-            Some(run_id) => self.get_job_run_backend(run_id)?,
-            None => None,
+            Some(run_id) if self.task_run_is_local(&task) => self.get_job_run_backend(run_id)?,
+            _ => None,
         };
         let failed_step = failed_run.as_ref().and_then(|run| {
             run.steps
@@ -635,30 +664,66 @@ impl OrbitRuntime {
         // the diagnostic on the owner's task, without copying the run state.
         let settled_failure = if episode.source == BlockSource::ClaimFailed && failed_run.is_none()
         {
-            Some(self.get_task(&input.task_id)?.execution_summary)
+            Some(task.execution_summary.clone())
         } else {
             None
         };
+        let diagnostic = failed_step
+            .and_then(|step| step.error_message.clone())
+            .filter(|message| !message.trim().is_empty())
+            .or_else(|| settled_failure.filter(|message| !message.trim().is_empty()))
+            .unwrap_or_else(|| episode.note.clone());
+        let error_message = match &task.job_run_machine {
+            Some(location) if !self.task_run_is_local(&task) => format!(
+                "Failed run executed on {} ({}); its run state is on that machine.\n\n{diagnostic}",
+                location
+                    .machine_name
+                    .as_deref()
+                    .unwrap_or(&location.machine_id),
+                location.machine_id,
+            ),
+            _ => diagnostic,
+        };
+        let retained_candidate =
+            self.retained_candidate(&task, episode.failed_run_id.as_deref(), failed_run.as_ref());
         let (base_ref, base_sha) = self.recovery_base()?;
         let checkout = self.create_recovery_checkout(recovery_run_id, &base_sha)?;
-        Ok(BlockedRecoveryPreparation::Ready(PreparedBlockedRecovery {
-            checkout,
-            base_ref,
-            base_sha,
-            failed_run_id: episode
-                .failed_run_id
-                .clone()
-                .unwrap_or_else(|| recovery_run_id.to_string()),
-            failed_step_id: failed_step
-                .map(|step| step.target_id.to_string())
-                .unwrap_or_else(|| episode.source.as_str().to_string()),
-            job_id: failed_run.as_ref().map(|run| run.job_id.to_string()),
-            error_message: failed_step
-                .and_then(|step| step.error_message.clone())
-                .filter(|message| !message.trim().is_empty())
-                .or_else(|| settled_failure.filter(|message| !message.trim().is_empty()))
-                .unwrap_or_else(|| episode.note.clone()),
-        }))
+        Ok(BlockedRecoveryPreparation::Ready(Box::new(
+            PreparedBlockedRecovery {
+                checkout,
+                base_ref,
+                base_sha,
+                failed_run_id: episode
+                    .failed_run_id
+                    .clone()
+                    .unwrap_or_else(|| recovery_run_id.to_string()),
+                failed_step_id: failed_step
+                    .map(|step| step.target_id.to_string())
+                    .unwrap_or_else(|| episode.source.as_str().to_string()),
+                job_id: failed_run.as_ref().map(|run| run.job_id.to_string()),
+                error_message,
+                retained_candidate,
+            },
+        )))
+    }
+
+    /// The retained candidate of `input`'s failed run, read now.
+    fn episode_candidate(&self, input: &BlockedRecoveryInput) -> RetainedCandidate {
+        let task = match self.get_task(&input.task_id) {
+            Ok(task) => task,
+            Err(error) => {
+                return RetainedCandidate::Absent {
+                    reason: format!("the task could not be read: {error}"),
+                };
+            }
+        };
+        let failed_run = match &input.failed_run_id {
+            Some(run_id) if self.task_run_is_local(&task) => {
+                self.get_job_run_backend(run_id).unwrap_or_default()
+            }
+            _ => None,
+        };
+        self.retained_candidate(&task, input.failed_run_id.as_deref(), failed_run.as_ref())
     }
 
     /// The workspace base the agent inspects and a `complete_no_diff` commit
@@ -691,9 +756,11 @@ impl OrbitRuntime {
     /// Apply a recovery run's final-recovery result to its task.
     ///
     /// `output` is the decision object the agent returned, or `None` when it
-    /// returned none. `resume` is escalated: this backstop restarts work only
-    /// by `requeue`. The decision comment names `recovery_run_id`. A verified
-    /// `complete_no_diff` moves the task to `review`, never `done`.
+    /// returned none, which escalates. `resume` is escalated: this backstop
+    /// restarts work only by `requeue`. Every escalation names the failed
+    /// run's retained candidate. The decision comment names
+    /// `recovery_run_id`. A verified `complete_no_diff` moves the task to
+    /// `review`, never `done`.
     pub(crate) fn apply_blocked_task_recovery(
         &self,
         input: &BlockedRecoveryInput,
@@ -701,7 +768,19 @@ impl OrbitRuntime {
         base_ref: &str,
         output: Option<&Value>,
     ) -> Result<FinalRecoveryOutcome, OrbitError> {
-        let output = output.map(|output| without_resume(output, input));
+        let decision = match without_resume(FinalRecoveryDecision::from_output(output), input) {
+            FinalRecoveryDecision::Escalate {
+                diagnosis,
+                human_action,
+            } => FinalRecoveryDecision::Escalate {
+                diagnosis,
+                human_action: with_line(&human_action, &self.episode_candidate(input).summary()),
+            },
+            decision => decision,
+        };
+        let output = serde_json::to_value(&decision).map_err(|error| {
+            OrbitError::Execution(format!("serialize final recovery decision: {error}"))
+        })?;
         let request = FinalRecoveryRequest {
             task_id: input.task_id.clone(),
             run_id: recovery_run_id.to_string(),
@@ -711,7 +790,7 @@ impl OrbitRuntime {
             completion: FinalRecoveryCompletion::Review,
             requeue_bound: FinalRecoveryRequeueBound::default(),
         };
-        self.apply_final_recovery(&request, output.as_ref())
+        self.apply_final_recovery(&request, Some(&output))
     }
 
     /// Create the detached checkout of `base_sha` a recovery run's agent
@@ -725,7 +804,7 @@ impl OrbitRuntime {
         let path = recovery_checkout_path(&self.paths().state_dir, recovery_run_id)?;
         self.remove_recovery_checkout(recovery_run_id)?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
+            orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
                 OrbitError::Execution(format!(
                     "create recovery checkout directory {}: {error}",
                     parent.display()
@@ -733,9 +812,10 @@ impl OrbitRuntime {
             })?;
         }
         let target = path.to_string_lossy().to_string();
-        let output = run_git(
+        let output = run_git_within(
             &self.paths().repo_root,
             &["worktree", "add", "--detach", "--quiet", &target, base_sha],
+            GIT_CHECKOUT_TIMEOUT,
         )?;
         if !output.success {
             return Err(OrbitError::Execution(format!(
@@ -748,7 +828,7 @@ impl OrbitRuntime {
         // and Seatbelt can deny the same subtree. Keep it empty here; the
         // launcher prepares scratch, but no task/runtime stores are copied.
         let denied_root = path.join(".orbit");
-        std::fs::create_dir(&denied_root).map_err(|error| {
+        orbit_common::fs::io::create_private_dir(&denied_root).map_err(|error| {
             OrbitError::Execution(format!(
                 "prepare recovery checkout deny root {}: {error}",
                 denied_root.display()
@@ -766,9 +846,10 @@ impl OrbitRuntime {
             return Ok(());
         }
         let target = path.to_string_lossy().to_string();
-        let output = run_git(
+        let output = run_git_within(
             &self.paths().repo_root,
             &["worktree", "remove", "--force", &target],
+            GIT_CHECKOUT_TIMEOUT,
         )?;
         if output.success {
             return Ok(());
@@ -845,16 +926,15 @@ impl OrbitRuntime {
     }
 }
 
-/// `output` with `resume` replaced by an escalation naming the failed run.
-fn without_resume(output: &Value, input: &BlockedRecoveryInput) -> Value {
-    if output.get("decision").and_then(Value::as_str) != Some("resume") {
-        return output.clone();
-    }
-    let step = output.get("step_id").and_then(Value::as_str).unwrap_or("-");
-    let rationale = output
-        .get("rationale")
-        .and_then(Value::as_str)
-        .unwrap_or("-");
+/// `decision` with `resume` replaced by an escalation naming the failed run.
+fn without_resume(
+    decision: FinalRecoveryDecision,
+    input: &BlockedRecoveryInput,
+) -> FinalRecoveryDecision {
+    let FinalRecoveryDecision::Resume { step_id, rationale } = decision else {
+        return decision;
+    };
+    let step = step_id.trim();
     let human_action = match &input.failed_run_id {
         Some(run_id) => format!(
             "Resume `{run_id}` from `{step}` with `orbit job resume {run_id}` if the diagnosis \
@@ -862,14 +942,27 @@ fn without_resume(output: &Value, input: &BlockedRecoveryInput) -> Value {
         ),
         None => "Requeue the task once the diagnosis is addressed.".to_string(),
     };
-    json!({
-        "decision": "escalate",
-        "diagnosis": format!(
+    FinalRecoveryDecision::Escalate {
+        diagnosis: format!(
             "final recovery proposed resuming from `{step}`, which the blocked-task backstop \
-             never does: {rationale}"
+             never does: {}",
+            rationale.trim()
         ),
-        "human_action": human_action,
-    })
+        human_action,
+    }
+}
+
+/// `text` followed by `line`, shortening both so the result stays within a
+/// decision field's bound and the applier does not refuse it as malformed.
+fn with_line(text: &str, line: &str) -> String {
+    let line: String = line.chars().take(MAX_DECISION_TEXT_CHARS / 2).collect();
+    let room = MAX_DECISION_TEXT_CHARS.saturating_sub(line.chars().count() + 2);
+    let text = text.trim();
+    if text.chars().count() <= room {
+        return format!("{text}\n{line}");
+    }
+    let kept: String = text.chars().take(room.saturating_sub(1)).collect();
+    format!("{kept}…\n{line}")
 }
 
 /// The `key=value` token in a history note or comment header.

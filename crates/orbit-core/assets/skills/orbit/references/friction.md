@@ -121,7 +121,10 @@ cause, give that task
 friction IDs are workspace-local: auto-resolve looks up that ID only in the
 task's workspace and records `resolved_by_task` when the task reaches `done`.
 IDs are not global. Filing the task does not itself resolve anything — the
-record stays open until the fix lands.
+record stays open until the fix lands. Auto-resolve runs on the transition into
+`done`, not on later writes to the done task: a friction reopened afterwards
+stays open. A resolution that failed at that transition is recorded in the
+task's history and retried by the task's next write.
 
 A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A
@@ -132,6 +135,32 @@ operator CLI path; an agent instead runs `orbit tool run orbit.friction.update
 --input '{"id":"<id>","status":"resolved"}'`, which stamps the same resolution
 metadata — or land a covering task there. Do not count a foreign `resolves`
 edge as coverage.
+
+### Closing legacy records on a replica
+
+A checkout re-registered as a replica keeps its host-local friction corpus.
+Its friction reads still show those records, including reports authored before
+the role change. They are separate from the owner's corpus: identical IDs on
+the two hosts can name unrelated reports.
+
+Close a local legacy report from that replica using the normal audited path:
+
+```bash
+orbit --workspace <replica-workspace> friction resolve <ID>
+orbit tool run orbit.friction.update --input '{"workspace":"<replica-workspace>","id":"<ID>","status":"resolved","body":"<original report plus disposition evidence>","model":"<agent-family>"}'
+```
+
+The update must explicitly set `status: resolved`; it may include body, title,
+tags, and a `rehome_to` disposition with `move: false`. Preserve the original
+report when adding evidence, since `body` replaces it. Resolution keeps the
+local ID, attribution, creation time, task reference, and first `resolved_at`
+timestamp. It records the normal command audit and requires no connection to
+the owner. Select the replica host and workspace explicitly over federated MCP.
+
+This exception only closes existing records in the local workspace partition.
+Additions, reopening, triage-only or metadata-only updates, and actual moves
+remain refused on replicas, even with operator authority. Claimed workers
+continue to use the owner route for friction writes.
 
 ## Re-homing a friction to its owning workspace
 

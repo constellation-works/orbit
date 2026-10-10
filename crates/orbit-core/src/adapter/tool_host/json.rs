@@ -7,7 +7,8 @@ use orbit_types::task::{
     ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
     TaskHistoryEntry, TaskStatus, artifact_presentation, is_valid_orb_task_id,
     resolve_task_dependencies, resolve_task_relations, serialize_task_artifacts,
-    task_os_requirement_json, task_show_record_field_json, unknown_task_show_field_message,
+    task_os_requirement_json, task_readiness_json, task_show_record_field_json,
+    unknown_task_show_field_message,
 };
 use serde_json::{Map, Value, json};
 
@@ -46,6 +47,7 @@ pub(super) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         "job_run_id": task.job_run_id,
         "job_run_machine": task.job_run_machine,
         "crew": task.crew,
+        "crew_source": task.crew_source,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
         "updated_at": task.updated_at.to_rfc3339(),
@@ -97,6 +99,11 @@ fn serialize_task_record(
     insert_resolved_crew(runtime, task, object);
     if let Some(requirement) = task_os_requirement_json(task) {
         object.insert("os_requirement".to_string(), requirement);
+    }
+    // What a proposed or backlog task lacks before automation approves or
+    // admits it, so whoever just filed or edited it sees the gaps at once.
+    if let Some(readiness) = task_readiness_json(task) {
+        object.insert("readiness".to_string(), readiness);
     }
     Ok(value)
 }

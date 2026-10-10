@@ -1,7 +1,9 @@
 mod crew_pools;
 mod layering;
 mod machine;
+mod operation;
 mod plugin_enablement;
+mod seed;
 mod store;
 
 use crate::ConfigRoots;

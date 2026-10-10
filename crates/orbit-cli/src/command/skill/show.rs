@@ -8,8 +8,6 @@ use crate::command::{CommandOut, Execute, Payload};
 #[derive(Args)]
 pub struct SkillShowArgs {
     pub name: String,
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for SkillShowArgs {

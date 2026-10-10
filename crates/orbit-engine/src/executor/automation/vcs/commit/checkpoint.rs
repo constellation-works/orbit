@@ -10,7 +10,7 @@ use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
 use super::super::git::{git_command_success, git_output};
-use super::{already_landed, no_diff};
+use super::{already_landed, no_diff, tagged_no_diff};
 
 /// Accept a clean tree at the pinned HEAD only with structured evidence: a
 /// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
@@ -60,10 +60,59 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
     run_id: &str,
     checkpoint: &Value,
 ) -> Result<(), OrbitError> {
-    if checkpoint.get("decision").and_then(Value::as_str) == Some(no_diff::DECISION) {
-        no_diff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
-    } else {
-        already_landed::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
+    match checkpoint.get("decision").and_then(Value::as_str) {
+        Some(no_diff::DECISION) => {
+            no_diff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
+        }
+        Some(tagged_no_diff::DECISION) => match tasks {
+            [task] => tagged_no_diff::verify_handoff(task, workspace_path, checkpoint),
+            _ => Err(OrbitError::PolicyDenied(
+                "a no-diff-expected checkpoint covers exactly one task".into(),
+            )),
+        },
+        _ => already_landed::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
+    }
+}
+
+/// The checkpoint a claimed leaf's NoDiff handoff pins: a verified clean tree,
+/// or a claimed `no-diff-expected` skip that names its run and base
+/// [ORB-14791]. The owner's own skip names neither and never qualifies.
+pub(in crate::executor::automation::vcs) fn claimed_clean_base_checkpoint(
+    input: &Value,
+) -> Option<&Value> {
+    verified_clean_tree_checkpoint(input).or_else(|| {
+        input.get("already_landed_checkpoint").filter(|checkpoint| {
+            checkpoint.get("decision").and_then(Value::as_str) == Some(tagged_no_diff::DECISION)
+                && checkpoint.get("job_run_id").is_some_and(Value::is_string)
+                && checkpoint.get("base_sha").is_some_and(Value::is_string)
+        })
+    })
+}
+
+/// Owner revalidation on an independently observed base, without modifying
+/// the owner's checkout or requiring the executor's branch to exist there.
+pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revision<
+    H: RuntimeHost + ?Sized,
+>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    workspace: &Path,
+    run_id: &str,
+    checkpoint: &Value,
+) -> Result<(), OrbitError> {
+    match checkpoint["decision"].as_str() {
+        Some(no_diff::DECISION) => {
+            no_diff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+        }
+        Some(already_landed::DECISION) => {
+            already_landed::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+        }
+        Some(tagged_no_diff::DECISION) => {
+            tagged_no_diff::verify_handoff_at_revision(task, checkpoint)
+        }
+        _ => Err(OrbitError::PolicyDenied(
+            "a NoDiff handoff requires a verified clean-tree checkpoint".into(),
+        )),
     }
 }
 
@@ -130,6 +179,42 @@ pub(super) fn head_descends_from_pin(
         workspace_path,
         &["merge-base", "--is-ancestor", base_sha, head_sha],
     )
+}
+
+/// Accept only the exact repair HEAD observed during this run's final
+/// recovery, after its resume decision was durably applied. A descendant of
+/// that repair or an unrelated worktree gains no permission from the record.
+pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    task_id: &str,
+    workspace_path: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<bool, OrbitError> {
+    let Some(checkpoint) = host
+        .read_run_state(run_id)?
+        .and_then(|state| state.final_recovery)
+    else {
+        return Ok(false);
+    };
+    if checkpoint.task_id != task_id
+        || checkpoint.outcome.as_deref() != Some("resume")
+        || !matches!(
+            checkpoint.decision,
+            Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+        )
+    {
+        return Ok(false);
+    }
+    let Some(repair) = checkpoint.repair_commit else {
+        return Ok(false);
+    };
+    Ok(repair.head_sha == head_sha
+        && repair.head_sha_before != head_sha
+        && repair.workspace_path == workspace_path.canonicalize()?
+        && head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
+        && head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?)
 }
 
 /// Reject anything that is not a full Git object id.

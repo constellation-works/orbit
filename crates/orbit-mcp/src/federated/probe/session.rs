@@ -1,7 +1,7 @@
 //! Bounded MCP session I/O, request deadlines, and lost-answer classification.
 
-use std::io::{BufRead, BufReader, Write};
-use std::process::Child;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, ChildStderr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
@@ -37,6 +37,20 @@ const MAX_TOOL_RESULT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 /// holds open.
 const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(1);
 
+/// Bytes of the session's stderr kept for a failure message. The stream is
+/// drained to its end so the destination never blocks on a full pipe, but
+/// only this much of its end is held.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+/// Lines of that tail a failure message quotes, and their total length.
+const STDERR_TAIL_LINES: usize = 3;
+const STDERR_TAIL_CHARS: usize = 400;
+
+/// How long a session whose output ended waits for its stderr to close too.
+/// ssh writes its reason and exits, so this only bounds a stream some other
+/// process still holds open.
+const STDERR_SETTLE_GRACE: Duration = Duration::from_millis(500);
+
 /// The MCP protocol revision this client negotiates. Pinned to the revision
 /// Orbit's own server answers with, so a probe fails loudly on a real protocol
 /// change rather than silently degrading.
@@ -47,7 +61,8 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 ///
 /// Losing the answer is not the same fact for every request. The phases that
 /// decide a route are read-only and repeatable, so silence there means the
-/// host did not answer. A routed `tools/call` may already have run and
+/// host did not answer. An unreadable answer has the same uncertainty as a
+/// missing one. A routed `tools/call` may already have run and
 /// committed on the destination, and killing the SSH child does not undo it,
 /// so silence there is genuine ambiguity: reporting it as a delivery miss
 /// invites the retry that duplicates the write [ORB-11023].
@@ -92,6 +107,7 @@ pub(in crate::federated) struct DestinationSession {
     deadline: Instant,
     next_id: i64,
     pub(super) worker_invocation: Option<orbit_types::tool::WorkerInvocation>,
+    stderr: StderrTail,
 }
 
 impl DestinationSession {
@@ -108,6 +124,7 @@ impl DestinationSession {
             .stdout
             .take()
             .ok_or_else(|| unreachable(&destination, "SSH session has no stdout".to_string()))?;
+        let stderr = StderrTail::spawn(child.stderr.take());
         let writer = RequestWriter::spawn(stdin);
         // A reader thread is what makes the deadline real: a blocking read on
         // an unresponsive host cannot otherwise be abandoned, and the thread
@@ -142,6 +159,7 @@ impl DestinationSession {
             deadline: Instant::now() + timeout,
             next_id: 0,
             worker_invocation: None,
+            stderr,
         })
     }
 
@@ -161,7 +179,7 @@ impl DestinationSession {
         binding: Option<&orbit_types::tool::WorkerInvocation>,
     ) -> Result<(), OrbitError> {
         if let Some(binding) = binding {
-            binding.validate().map_err(OrbitError::InvalidInput)?;
+            binding.validate()?;
         }
         self.worker_invocation = binding.cloned();
         let response = self.request_probe(
@@ -240,15 +258,28 @@ impl DestinationSession {
             }),
             LostAnswer::OutcomeUnknown { tool: name },
         )?;
+        self.dispatched_content(&response, name)
+    }
+
+    /// The `structuredContent` of a dispatched call's answer.
+    ///
+    /// Orbit's server sets it on every result, so an answer without it is
+    /// malformed. The destination may still have committed the call, so it is
+    /// an unknown outcome rather than a success with no data.
+    fn dispatched_content(&self, response: &Value, tool: &str) -> Result<Value, OrbitError> {
         let result = &response["result"];
         let content = &result["structuredContent"];
-        if result["isError"].as_bool().unwrap_or(false) {
+        if result.is_object() && result["isError"].as_bool().unwrap_or(false) {
             // Named destination codes such as `capability_refused` must survive
             // as `RemoteTool`, not be wrapped into `execution_failed`.
             return Err(remote_tool_error(&self.destination, content));
         }
-        if content.is_null() {
-            return Ok(json!({}));
+        if !result.is_object() || content.is_null() {
+            return Err(LostAnswer::OutcomeUnknown { tool }.classify(
+                &self.destination,
+                self.next_id,
+                "answered with a result lacking structuredContent".to_string(),
+            ));
         }
         Ok(content.clone())
     }
@@ -267,12 +298,7 @@ impl DestinationSession {
             json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL, "name": name, "arguments": arguments}),
             LostAnswer::OutcomeUnknown { tool: name },
         )?;
-        let result = &response["result"];
-        let content = &result["structuredContent"];
-        if result["isError"].as_bool().unwrap_or(false) {
-            return Err(remote_tool_error(&self.destination, content));
-        }
-        Ok(content.clone())
+        self.dispatched_content(&response, name)
     }
 
     /// A request whose loss tells the caller nothing was delivered.
@@ -344,10 +370,8 @@ impl DestinationSession {
             )
         })?;
         if writer.outbox.send(line).is_err() {
-            return Err(unreachable(
-                &self.destination,
-                "write failed: session input closed".to_string(),
-            ));
+            let reason = self.ended("write failed: session input closed".to_string());
+            return Err(unreachable(&self.destination, reason));
         }
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         match writer.acks.recv_timeout(remaining) {
@@ -355,14 +379,14 @@ impl DestinationSession {
                 self.writer = Some(writer);
                 Ok(())
             }
-            Ok(Err(error)) => Err(unreachable(
-                &self.destination,
-                format!("write failed: {error}"),
-            )),
-            Err(RecvTimeoutError::Disconnected) => Err(unreachable(
-                &self.destination,
-                "write failed: session input closed".to_string(),
-            )),
+            Ok(Err(error)) => {
+                let reason = self.ended(format!("write failed: {error}"));
+                Err(unreachable(&self.destination, reason))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let reason = self.ended("write failed: session input closed".to_string());
+                Err(unreachable(&self.destination, reason))
+            }
             Err(RecvTimeoutError::Timeout) => {
                 // Killing the child closes its end of the pipe, which is the
                 // only way to end a write the destination is not draining.
@@ -388,9 +412,9 @@ impl DestinationSession {
         }
     }
 
-    /// Read until the response with this id arrives or the deadline passes.
-    /// Matching strictly by id keeps a server-initiated message or an
-    /// out-of-order answer from being read as this request's result.
+    /// Read until a response with this id arrives or the deadline passes.
+    /// Peer requests have their own ID namespace and must be answered before
+    /// correlating responses, including when their ID equals ours.
     fn await_response(
         &mut self,
         method: &str,
@@ -426,11 +450,8 @@ impl DestinationSession {
                     ));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(lost.classify(
-                        &self.destination,
-                        id,
-                        format!("session ended before answering '{method}'"),
-                    ));
+                    let reason = self.ended(format!("session ended before answering '{method}'"));
+                    return Err(lost.classify(&self.destination, id, reason));
                 }
             };
             if line.trim().is_empty() {
@@ -439,13 +460,42 @@ impl DestinationSession {
             let message: Value = match serde_json::from_str(line.trim()) {
                 Ok(message) => message,
                 Err(error) => {
-                    return Err(unreachable(
+                    return Err(lost.classify(
                         &self.destination,
-                        format!("emitted invalid JSON: {error}"),
+                        id,
+                        format!("emitted invalid JSON while awaiting '{method}': {error}"),
                     ));
                 }
             };
+            if let Some(peer_method) = message.get("method") {
+                // Notifications do not require a reply. Preserve JSON-RPC
+                // request IDs verbatim; none belongs to our counter.
+                if let Some(peer_id) = message
+                    .get("id")
+                    .filter(|id| id.is_string() || id.is_number() || id.is_null())
+                {
+                    self.answer_peer(peer_id, peer_method).map_err(|error| {
+                        // The outgoing call is already dispatched. A failed
+                        // peer reply cannot reclassify it as a delivery miss.
+                        lost.classify(
+                            &self.destination,
+                            id,
+                            format!("could not answer peer while awaiting '{method}': {error}"),
+                        )
+                    })?;
+                }
+                continue;
+            }
             if message.get("id").and_then(Value::as_i64) == Some(id) {
+                if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+                    || message.get("result").is_some() == message.get("error").is_some()
+                {
+                    return Err(lost.classify(
+                        &self.destination,
+                        id,
+                        format!("emitted an invalid JSON-RPC response while awaiting '{method}'"),
+                    ));
+                }
                 if let Some(error) = message.get("error") {
                     return Err(unreachable(
                         &self.destination,
@@ -455,6 +505,33 @@ impl DestinationSession {
                 return Ok(message);
             }
         }
+    }
+
+    /// `reason` for a session that ended, with the tail of its stderr when it
+    /// left one: ssh's own diagnostic, such as an unresolvable hostname.
+    fn ended(&mut self, reason: String) -> String {
+        match self.stderr.settled() {
+            "" => reason,
+            tail => format!("{reason}; ssh stderr: {tail}"),
+        }
+    }
+
+    /// This client advertises no optional capabilities. Ping is required;
+    /// other peer methods are explicitly refused. Sending uses the current
+    /// absolute deadline, so servicing requests never renews the call budget.
+    fn answer_peer(&mut self, id: &Value, method: &Value) -> Result<(), OrbitError> {
+        let response = match method.as_str() {
+            Some("ping") => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
+            Some(_) => json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"},
+            }),
+            None => json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": {"code": -32600, "message": "Invalid request"},
+            }),
+        };
+        self.send("peer response", &response, unreachable)
     }
 }
 
@@ -510,6 +587,77 @@ pub(super) fn read_bounded_line(
     String::from_utf8(line)
         .map(BoundedLine::Line)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// The end of the session's stderr, drained by a thread so the destination
+/// never blocks writing it, and read only once the session has ended.
+struct StderrTail {
+    /// The kept bytes, delivered once the stream closes.
+    pending: Option<Receiver<Vec<u8>>>,
+    tail: String,
+}
+
+impl StderrTail {
+    fn spawn(stderr: Option<ChildStderr>) -> Self {
+        let Some(mut stderr) = stderr else {
+            return Self {
+                pending: None,
+                tail: String::new(),
+            };
+        };
+        let (sender, pending) = sync_channel(1);
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                match stderr.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        kept.extend_from_slice(&chunk[..read]);
+                        let excess = kept.len().saturating_sub(STDERR_TAIL_BYTES);
+                        kept.drain(..excess);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+            let _ = sender.send(kept);
+        });
+        Self {
+            pending: Some(pending),
+            tail: String::new(),
+        }
+    }
+
+    /// The last lines the stream carried, waiting briefly for it to close;
+    /// empty when there were none or it stayed open. Control characters are
+    /// dropped, because the text came from another host and ends up on a
+    /// terminal.
+    fn settled(&mut self) -> &str {
+        if let Some(pending) = self.pending.take()
+            && let Ok(bytes) = pending.recv_timeout(STDERR_SETTLE_GRACE)
+        {
+            self.tail = quote_tail(&bytes);
+        }
+        &self.tail
+    }
+}
+
+fn quote_tail(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines = text
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|character| !character.is_control())
+                .collect::<String>()
+        })
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let quoted = lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join(" | ");
+    let skip = quoted.chars().count().saturating_sub(STDERR_TAIL_CHARS);
+    quoted.chars().skip(skip).collect()
 }
 
 /// The session's stdin, owned by a thread so a write the destination never

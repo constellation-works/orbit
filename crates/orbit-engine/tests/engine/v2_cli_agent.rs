@@ -49,6 +49,9 @@ use tempfile::TempDir;
 
 const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"result":"Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."}"#;
 
+#[cfg(unix)]
+mod build_budget;
+
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
 #[cfg(unix)]
@@ -189,6 +192,60 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
     }
 }
 
+/// On a host that would otherwise let `claude` start on the Claude Desktop
+/// app's shared login, an activity without a worker credential is refused
+/// before the provider launches; one that carries a credential runs
+/// [ORB-15154].
+#[cfg(unix)]
+#[test]
+fn claude_without_a_worker_credential_is_refused_before_launch_on_a_desktop_login_host() {
+    let cases: [(&[(&str, &str)], bool); 4] = [
+        (&[], false),
+        (&[("CLAUDE_CODE_OAUTH_TOKEN", "")], false),
+        (&[("CLAUDE_CODE_OAUTH_TOKEN", "fixture-worker-token")], true),
+        (&[("ANTHROPIC_API_KEY", "fixture-api-key")], true),
+    ];
+    for (index, (admitted, launches)) in cases.into_iter().enumerate() {
+        let run = format!("worker-credential-{index}");
+        let audit = tempfile::tempdir().unwrap();
+        let (writer, _) = build_writer(audit.path(), &run).unwrap();
+        let marker = audit.path().join("launched");
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\ntouch '{}'\necho '{{\"type\":\"result\",\"is_error\":false,\"result\":\"ok\"}}'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let host = ScriptHost::new(fake.cli_path()).requiring_claude_credential(admitted);
+        let mut spec = cli_agent_loop_spec(Some(Provider::Claude));
+        spec.model = None;
+        spec.require_completion_envelope = false;
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "worker_credential_fixture",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({"prompt":"test"}),
+            audit: writer,
+            run_id: &run,
+            host: Some(&host),
+        });
+        assert_eq!(marker.exists(), launches, "{admitted:?}: launched");
+        if launches {
+            assert!(outcome.is_ok(), "{admitted:?}: {outcome:?}");
+            continue;
+        }
+        let Err(DispatchError::CliInvocationPermanent(message)) = outcome else {
+            panic!("{admitted:?}: expected a permanent refusal, got {outcome:?}");
+        };
+        assert!(
+            message.contains("CLAUDE_CODE_OAUTH_TOKEN") && message.contains("~/.zprofile"),
+            "the refusal names the variable and where to set it: {message}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn claude_revoked_token_preserves_the_release_marker_without_step_recovery() {
@@ -321,6 +378,53 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
     must_contain(&types, "cli.invocation.started");
     must_contain(&types, "cli.invocation.finished");
     println!("    events: {:?}", types);
+    Ok(())
+}
+
+/// The provider's environment carries its own wall-clock deadline, so a
+/// nested `proc.spawn` can run as long as the invocation has left rather than
+/// the 60 s unscoped ceiling.
+#[cfg(unix)]
+#[test]
+fn cli_dispatch_stamps_the_provider_deadline() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp_audit = tempfile::tempdir()?;
+    let (writer, _store) = build_writer(tmp_audit.path(), "smoke-cli-deadline")?;
+    let observed = tempfile::tempdir()?;
+    let observed_path = observed.path().join("deadline");
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' \"$ORBIT_ACTIVITY_DEADLINE_UNIX_MS\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            observed_path.display()
+        ),
+    )?;
+
+    let mut spec = cli_agent_loop_spec(None);
+    spec.wall_clock_timeout_seconds = 600;
+    let host = ScriptHost::new(fake.cli_path());
+    let epoch_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis())
+    };
+    let before = epoch_ms()?;
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "cli_smoke_deadline",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: serde_json::json!({ "prompt": "hello" }),
+        audit: writer,
+        run_id: "smoke-cli-deadline",
+        host: Some(&host),
+    })?;
+    let after = epoch_ms()?;
+    assert!(outcome.success, "fake claude should exit 0");
+
+    let deadline: u128 = fs::read_to_string(&observed_path)?.trim().parse()?;
+    assert!(
+        (before + 600_000..=after + 600_000).contains(&deadline),
+        "deadline {deadline} is not dispatch time plus the 600 s wall clock ({before}..={after})"
+    );
     Ok(())
 }
 
@@ -598,6 +702,16 @@ fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::
         injected_defaults,
         "the audited argv must retain every injected managed MCP default"
     );
+    let forwarded: Vec<String> = serde_json::from_str(
+        argv[3 + 7]
+            .strip_prefix("mcp_servers.orbit.env_vars=")
+            .expect("env_vars override"),
+    )?;
+    assert!(
+        forwarded.iter().any(|name| name == "ORBIT_PLUGIN_BROKER"),
+        "Codex must forward the plugin broker locator to its orbit MCP server; without it a \
+         Codex reviewer cannot reach the claimed review bridge (on-call 2026-10-06)"
+    );
 
     let command_overrides = argv
         .windows(2)
@@ -783,11 +897,84 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// The real CLI supervisor must keep high-volume stdout/stderr out of the
+/// operational feed. A child owns the global subscriber and disposable state.
+#[cfg(unix)]
+#[test]
+fn agent_relay_uses_an_independent_persistent_feed() {
+    use orbit_common::{observability::logging, test_env};
+    const NAME: &str = "v2_cli_agent::agent_relay_uses_an_independent_persistent_feed";
+    if std::env::var("ORBIT_RELAY_TEST_CHILD").as_deref() != Ok(NAME) {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", NAME, "--nocapture"])
+            .env("ORBIT_RELAY_TEST_CHILD", NAME)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env_remove("RUST_LOG");
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            Duration::from_secs(45),
+            64 * 1024,
+        )
+        .unwrap();
+        test_env::assert_child_test_passed(NAME, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+    logging::init_subscriber_with_file_filter("warn", "info");
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _) = build_writer(audit.path(), "relay-volume").unwrap();
+    let payload = "x".repeat(256);
+    let fake = fake_cli("claude", &format!(
+        "#!/bin/sh\ncat > /dev/null\ni=0\nwhile [ \"$i\" -lt 5000 ]; do\nprintf '%s\\n' '{payload}'\nprintf '%s\\n' '{payload}' >&2\ni=$((i + 1))\ndone\nprintf '%s\\n' '{{\"type\":\"result\",\"is_error\":false,\"result\":\"{{\\\"schemaVersion\\\":1,\\\"status\\\":\\\"success\\\",\\\"result\\\":{{}},\\\"error\\\":null}}\"}}'\n"
+    )).unwrap();
+    let host = ScriptHost::new(fake.cli_path());
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "relay_volume",
+        spec: &ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+        fs_profile: None,
+        input: serde_json::json!({"prompt":"test"}),
+        audit: writer,
+        run_id: "relay-volume",
+        host: Some(&host),
+    })
+    .unwrap();
+    assert!(outcome.success, "fake agent must complete: {outcome:?}");
+    logging::shutdown_jsonl_writer();
+    let operational = logging::global_jsonl_log_path().unwrap();
+    let agent = logging::agent_jsonl_log_path(&operational).unwrap();
+    let bytes = fs::read_to_string(agent).unwrap();
+    let records: Vec<Value> = bytes
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        records.len(),
+        10_001,
+        "all fake agent lines must remain readable"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|event| event["fields"]["stream"] == "stderr")
+            .count(),
+        5000
+    );
+    assert!(
+        fs::metadata(operational).unwrap().len() * 100 < (10_000 * (payload.len() + 1)) as u64,
+        "operational overhead must stay below 1% of agent bytes"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
+pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "cli smoke".to_string(),
@@ -816,7 +1003,7 @@ fn must_contain(types: &[&str], needle: &str) {
     );
 }
 
-fn build_writer(
+pub(super) fn build_writer(
     root: &Path,
     run_id: &str,
 ) -> Result<(Arc<V2AuditWriter>, Arc<Store>), Box<dyn std::error::Error>> {
@@ -834,7 +1021,7 @@ fn build_writer(
     Ok((writer, store))
 }
 
-fn events_snapshot(
+pub(super) fn events_snapshot(
     store: &Store,
     run_id: &str,
 ) -> Result<Vec<V2AuditEvent>, Box<dyn std::error::Error>> {
@@ -855,19 +1042,19 @@ fn events_snapshot(
 /// The struct retains ownership of the `TempDir` so the file lives for the
 /// whole scenario.
 #[cfg(unix)]
-struct FakeCli {
+pub(super) struct FakeCli {
     _tempdir: TempDir,
     path: PathBuf,
 }
 #[cfg(unix)]
 impl FakeCli {
-    fn cli_path(&self) -> &Path {
+    pub(super) fn cli_path(&self) -> &Path {
         &self.path
     }
 }
 
 #[cfg(unix)]
-fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn std::error::Error>> {
+pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn std::error::Error>> {
     let tempdir = tempfile::tempdir()?;
     let path = tempdir.path().join(basename);
     {
@@ -953,6 +1140,10 @@ fn synthetic_loop_session_job() -> JobV2 {
 struct ScriptHost {
     command: String,
     args: Vec<String>,
+    /// Behave as a macOS host: Claude must bring its own credential.
+    requires_claude_credential: bool,
+    /// Variables the host's allowlist admits, beyond the baseline.
+    admitted_env: Vec<(String, String)>,
 }
 impl ScriptHost {
     fn new(path: &Path) -> Self {
@@ -963,10 +1154,32 @@ impl ScriptHost {
         Self {
             command: path.to_string_lossy().into_owned(),
             args,
+            requires_claude_credential: false,
+            admitted_env: Vec::new(),
         }
+    }
+
+    fn requiring_claude_credential(mut self, admitted_env: &[(&str, &str)]) -> Self {
+        self.requires_claude_credential = true;
+        self.admitted_env = admitted_env
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        self
     }
 }
 impl RuntimeHost for ScriptHost {
+    fn requires_claude_worker_credential(&self) -> bool {
+        self.requires_claude_credential
+    }
+
+    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
+        let mut env =
+            orbit_common::security::child_env::allowlisted_child_env(&[], required_env_vars);
+        env.extend(self.admitted_env.iter().cloned());
+        env
+    }
+
     fn run_deterministic(
         &self,
         _action: &str,

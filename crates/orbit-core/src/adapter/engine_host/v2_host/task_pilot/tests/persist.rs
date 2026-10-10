@@ -15,13 +15,13 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 const MATERIAL_DETAIL: &str = "task meaning or dependency evidence changed after preparation";
 
-struct Workspace {
+pub(super) struct Workspace {
     _root: TempDir,
-    runtime: OrbitRuntime,
-    repo: PathBuf,
+    pub(super) runtime: OrbitRuntime,
+    pub(super) repo: PathBuf,
 }
 
-fn workspace(config_toml: Option<&str>) -> Workspace {
+pub(super) fn workspace(config_toml: Option<&str>) -> Workspace {
     let (root, runtime, _) = runtime_with_workspace_config(config_toml);
     let repo = runtime.paths().repo_root.clone();
     git(&repo, &["init"]);
@@ -133,17 +133,27 @@ fn assert_refused(
     workspace: &Workspace,
     before: &Task,
     output: &Value,
+    expected_outcome: &str,
     reason: &str,
     detail: &str,
 ) {
     assert_eq!(output["applied_count"], 0, "{output}");
-    assert_eq!(output["status"], "failed", "{output}");
+    let status = if expected_outcome == "superseded" {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    assert_eq!(output["status"], status, "{output}");
     let outcome = &output["task_outcomes"][0];
-    assert_eq!(outcome["outcome"], "stale", "{outcome}");
+    assert_eq!(outcome["outcome"], expected_outcome, "{outcome}");
     assert_eq!(outcome["reason"], reason, "{outcome}");
     assert_eq!(outcome["detail"], detail, "{outcome}");
-    let error = output["error"].as_str().expect("apply error");
-    assert!(error.contains(reason) && error.contains(detail), "{error}");
+    if expected_outcome == "stale" {
+        let error = output["error"].as_str().expect("apply error");
+        assert!(error.contains(reason) && error.contains(detail), "{error}");
+    } else {
+        assert!(output["error"].is_null());
+    }
     let after = workspace.runtime.get_task(&before.id).expect("task");
     assert_eq!(after.status, before.status);
     assert_eq!(after.title, before.title);
@@ -185,25 +195,6 @@ fn assert_applied(workspace: &Workspace, task_id: &str, output: &Value) {
 }
 
 #[test]
-fn admission_to_in_progress_is_status_changed_and_writes_nothing() {
-    let workspace = workspace(None);
-    let task = add_task(&workspace.runtime, "Admit", TaskStatus::Backlog);
-    let prepared = prepare(&workspace, &task.id);
-    RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
-        .expect("admit");
-    let started = workspace.runtime.get_task(&task.id).expect("started task");
-    assert_eq!(started.status, TaskStatus::InProgress);
-    let output = apply(&workspace, &prepared).expect("apply");
-    assert_refused(
-        &workspace,
-        &started,
-        &output,
-        "status_changed",
-        "task status changed after preparation; task-pilot does not rewrite active work",
-    );
-}
-
-#[test]
 fn meaning_edits_name_the_drifted_component_and_write_nothing() {
     let workspace = workspace(None);
     let cases = [
@@ -225,6 +216,7 @@ fn meaning_edits_name_the_drifted_component_and_write_nothing() {
             &workspace,
             &edited,
             &output,
+            "superseded",
             "material_changed",
             &format!("{MATERIAL_DETAIL}: {component}"),
         );
@@ -248,6 +240,7 @@ fn meaning_edits_name_the_drifted_component_and_write_nothing() {
         &workspace,
         &edited,
         &output,
+        "superseded",
         "material_changed",
         &format!("{MATERIAL_DETAIL}: plan, title"),
     );
@@ -301,6 +294,7 @@ fn context_files_outside_freshness_stay_context_files_changed() {
         &workspace,
         &edited,
         &output,
+        "superseded",
         "context_files_changed",
         "task context_files changed after preparation",
     );
@@ -327,6 +321,7 @@ fn task_prepared_in_progress_is_not_rewritten() {
         &workspace,
         &started,
         &output,
+        "stale",
         "status_not_mutable",
         "task-pilot does not rewrite in-progress, review, or terminal work",
     );
@@ -419,6 +414,7 @@ fn configured_crew_and_dependency_meaning_drift_are_named() {
         &workspace,
         &edited,
         &output,
+        "superseded",
         "material_changed",
         &format!("{MATERIAL_DETAIL}: crew"),
     );
@@ -453,6 +449,7 @@ fn configured_crew_and_dependency_meaning_drift_are_named() {
         &workspace,
         &before,
         &output,
+        "stale",
         "material_changed",
         &format!("{MATERIAL_DETAIL}: dependencies"),
     );
@@ -527,6 +524,7 @@ fn dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit() {
         &workspace,
         &edited,
         &output,
+        "superseded",
         "material_changed",
         &format!("{MATERIAL_DETAIL}: title"),
     );

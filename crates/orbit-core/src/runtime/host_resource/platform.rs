@@ -78,20 +78,34 @@ impl HostResourceProbe for NativeProbe {
     }
 }
 
-fn disk_percent(path: &Path) -> Option<f64> {
+pub(super) fn disk_percent(path: &Path) -> Option<f64> {
     // The worktrees directory may not exist yet; use its nearest existing
     // ancestor's filesystem without creating anything. Permission/I/O failures
     // are unknown rather than being disguised by a fallback.
-    let mut existing = path;
-    while let Err(error) = existing.metadata() {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return None;
-        }
-        existing = existing.parent()?;
-    }
-    let stat = fs2::statvfs(existing).ok()?;
+    let existing = nearest_existing_ancestor(path)?;
+    let stat = fs2::statvfs(&existing).ok()?;
     let total = stat.total_space();
     (total > 0).then(|| 100.0 * total.saturating_sub(stat.available_space()) as f64 / total as f64)
+}
+
+/// Canonical form of the nearest existing ancestor of `path`. Resolving before
+/// the filesystem is probed settles `..` and symlinks first, so the probe only
+/// ever touches a resolved absolute path. A relative input is refused rather
+/// than resolved against the process's working directory.
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut candidate = path;
+    loop {
+        match candidate.canonicalize() {
+            Ok(resolved) => return Some(resolved),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                candidate = candidate.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -158,46 +172,7 @@ impl NativeProbe {
         // SAFETY: mach_host_self returns a send right owned by this call. Both
         // statistics buffers use the libc ABI with counts in integer_t units.
         let host = unsafe { libc::mach_host_self() };
-        let mut cpu = MaybeUninit::<libc::host_cpu_load_info>::zeroed();
-        let mut cpu_count = libc::HOST_CPU_LOAD_INFO_COUNT;
-        let cpu_result = unsafe {
-            libc::host_statistics(
-                host,
-                libc::HOST_CPU_LOAD_INFO,
-                cpu.as_mut_ptr().cast(),
-                &mut cpu_count,
-            )
-        };
-        let cpu_percent = if cpu_result == libc::KERN_SUCCESS
-            && cpu_count == libc::HOST_CPU_LOAD_INFO_COUNT
-        {
-            // SAFETY: host_statistics initialized the full CPU buffer on success.
-            let ticks = unsafe { cpu.assume_init() }.cpu_ticks;
-            let mut previous = self
-                .cpu_ticks
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let value = previous.and_then(|(at, old)| {
-                // A long idle/error gap cannot supply a short CPU window.
-                if at.elapsed() > super::RESOURCE_MAX_AGE {
-                    return None;
-                }
-                let delta =
-                    std::array::from_fn::<_, 4, _>(|i| u64::from(ticks[i].wrapping_sub(old[i])));
-                let total: u64 = delta.iter().sum();
-                (total > 0).then(|| {
-                    100.0 * (total - delta[libc::CPU_STATE_IDLE as usize]) as f64 / total as f64
-                })
-            });
-            *previous = Some((Instant::now(), ticks));
-            value
-        } else {
-            *self
-                .cpu_ticks
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = None;
-            None
-        };
+        let cpu_percent = self.cpu_percent(host);
         let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
         let mut vm_count = libc::HOST_VM_INFO64_COUNT;
         // SAFETY: same ABI/count guarantee as CPU stats above.
@@ -246,6 +221,67 @@ impl NativeProbe {
         }
         (cpu_percent, memory_percent)
     }
+}
+
+/// Long enough for the aggregate tick counters to advance on any host, and well
+/// inside the admission budget of `RESOURCE_CACHE_TTL`.
+#[cfg(target_os = "macos")]
+const CPU_BASELINE_WINDOW: std::time::Duration = std::time::Duration::from_millis(200);
+
+#[cfg(target_os = "macos")]
+impl NativeProbe {
+    /// Busy share of host CPU since the previous reading, from Mach tick deltas.
+    /// A process's first reading, or one after a gap longer than
+    /// `RESOURCE_MAX_AGE`, has no window to measure: it takes a baseline, waits
+    /// `CPU_BASELINE_WINDOW`, and reads again, so admission reports a value
+    /// rather than CPU unknown.
+    fn cpu_percent(&self, host: libc::mach_port_t) -> Option<f64> {
+        let mut previous = self
+            .cpu_ticks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let old = match *previous {
+            Some((at, old)) if at.elapsed() <= super::RESOURCE_MAX_AGE => old,
+            _ => {
+                let Some(baseline) = host_cpu_ticks(host) else {
+                    *previous = None;
+                    return None;
+                };
+                std::thread::sleep(CPU_BASELINE_WINDOW);
+                baseline
+            }
+        };
+        let Some(ticks) = host_cpu_ticks(host) else {
+            *previous = None;
+            return None;
+        };
+        *previous = Some((Instant::now(), ticks));
+        let delta = std::array::from_fn::<_, 4, _>(|i| u64::from(ticks[i].wrapping_sub(old[i])));
+        let total: u64 = delta.iter().sum();
+        (total > 0)
+            .then(|| 100.0 * (total - delta[libc::CPU_STATE_IDLE as usize]) as f64 / total as f64)
+    }
+}
+
+/// Aggregate host CPU tick counters, or `None` when the kernel call fails.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn host_cpu_ticks(host: libc::mach_port_t) -> Option<[u32; 4]> {
+    use std::mem::MaybeUninit;
+    let mut cpu = MaybeUninit::<libc::host_cpu_load_info>::zeroed();
+    let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
+    // SAFETY: the buffer and count follow the host_cpu_load_info ABI.
+    let result = unsafe {
+        libc::host_statistics(
+            host,
+            libc::HOST_CPU_LOAD_INFO,
+            cpu.as_mut_ptr().cast(),
+            &mut count,
+        )
+    };
+    (result == libc::KERN_SUCCESS && count == libc::HOST_CPU_LOAD_INFO_COUNT)
+        // SAFETY: host_statistics initialized the full CPU buffer on success.
+        .then(|| unsafe { cpu.assume_init() }.cpu_ticks)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

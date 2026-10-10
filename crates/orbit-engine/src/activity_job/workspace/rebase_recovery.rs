@@ -7,7 +7,10 @@ use sha2::{Digest, Sha256};
 
 use orbit_types::task::ContextWideningStep;
 
-use crate::context::{RuntimeHost, StepRecoveryAdmission};
+use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost, StepRecoveryAdmission};
+use crate::executor::automation::vcs::absorbed::{
+    ABSORBING_STEP, AbsorbedReason, covering_commit, task_scope_digest,
+};
 use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
 use super::boundary_guard::is_host_owned_path;
@@ -20,6 +23,11 @@ use super::{DispatchError, WorktreeBoundaryGuard};
 
 pub(super) struct RebaseRecoveryCheckpoint {
     metadata: RecoveryMetadata,
+    /// The failed step this recovery completes.
+    step_id: String,
+    /// The attempt the host reserved when it admitted this recovery. Held only
+    /// here, never read back from provider output or the run store.
+    attempt: u64,
     branch: String,
     original_head: String,
     original_base_sha: String,
@@ -27,14 +35,39 @@ pub(super) struct RebaseRecoveryCheckpoint {
     target_base_sha: String,
     conflicting_paths: Vec<String>,
     remote_sha_before: Option<String>,
+    /// The task's scope when recovery was admitted; an absorbed continuation
+    /// carries it so settlement can refuse a task edited since [ORB-14668].
+    task_scope_digest: Option<String>,
+}
+
+/// How the host continuation of an admitted stopped rebase ended.
+pub(super) enum RebaseContinuation {
+    /// The rebase finished on the pinned base (and followed an advanced
+    /// tip when it could); the payload is the checkpoint the host certifies.
+    Completed(Value),
+    /// `rebase --continue` committed the repaired pick, then stopped on a
+    /// later commit of the same pinned rebase with new unmerged paths. The
+    /// progress is kept: the executor's retry reports the new stop as a
+    /// typed conflict and the next bounded recovery round resolves it.
+    StoppedAgain,
+    /// The rebase finished exactly on the pinned base, every pick dropped as
+    /// empty, and a commit on that base covers the candidate's change. The
+    /// payload is the checkpoint the host certifies, with its `absorbed`
+    /// evidence; the retry hands it to verified no-diff settlement
+    /// [ORB-14668].
+    Absorbed(Value),
 }
 
 impl WorktreeBoundaryGuard {
     /// Admit file repair for the already stopped, checkpoint-matching rebase.
     /// The provider remains unable to write Git metadata; after it exits, the
     /// host boundary independently validates and completes this checkpoint.
+    /// Admission reserves the host's attempt identity for this recovery, so a
+    /// later legitimate recovery of the same step certifies as a new attempt
+    /// instead of colliding with this one.
     pub(crate) fn authorize_rebase_completion(
         &mut self,
+        host: &dyn RuntimeHost,
         input: &Value,
     ) -> Result<(), DispatchError> {
         let invalid = || {
@@ -77,7 +110,8 @@ impl WorktreeBoundaryGuard {
             .get("base_sha")
             .and_then(Value::as_str)
             .unwrap_or(target);
-        validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
+        let step_id =
+            validate_failed_step_identity(input, prepared, original).ok_or_else(invalid)?;
         // The stopped rebase is pinned by its own `onto` metadata below, not by
         // the moving base ref: a linked worktree shares remote-tracking refs
         // with every sibling checkout, so `origin/<base>` routinely advances
@@ -121,8 +155,24 @@ impl WorktreeBoundaryGuard {
             {
                 return Err(invalid());
             }
+            let metadata = RecoveryMetadata::capture(&self.assigned_root, path)?;
+            let task_scope_digest = self
+                .recovery_task_id(input)
+                .and_then(|task_id| host.get_task(task_id).ok())
+                .map(|task| task_scope_digest(&task));
+            let attempt = host.begin_rebase_recovery_attempt(
+                &self.run_id,
+                step_id,
+                &RebaseRecoveryAttemptScope {
+                    workspace_path: self.assigned_root.to_string_lossy().into_owned(),
+                    head_sha_before: original.to_string(),
+                    target_base_sha: target.to_string(),
+                },
+            )?;
             self.rebase_recovery = Some(RebaseRecoveryCheckpoint {
-                metadata: RecoveryMetadata::capture(&self.assigned_root, path)?,
+                metadata,
+                step_id: step_id.to_string(),
+                attempt,
                 branch: branch.to_string(),
                 original_head: original.to_string(),
                 original_base_sha: original_base_sha.to_string(),
@@ -134,21 +184,37 @@ impl WorktreeBoundaryGuard {
                     .or_else(|| prepared.get("published_head_sha"))
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                task_scope_digest,
             });
             return Ok(());
         }
         Err(invalid())
     }
 
-    pub(super) fn completed_authorized_rebase(
+    /// The task this recovery serves: the guard's own, else the recovery
+    /// input's single task.
+    fn recovery_task_id<'a>(&'a self, input: &'a Value) -> Option<&'a str> {
+        if self.task_id != "unknown" {
+            return Some(self.task_id.as_str());
+        }
+        match input.get("task_ids").and_then(Value::as_array) {
+            Some(ids) if ids.len() == 1 => ids[0].as_str(),
+            Some(_) => None,
+            None => input.get("task_id").and_then(Value::as_str),
+        }
+    }
+
+    /// The admitted rebase's checkpoint, when `after` shows it finished on
+    /// its branch with no rebase state left.
+    fn finished_authorized_rebase(
         &self,
         after: &GitWorktreeFingerprint,
-    ) -> Result<bool, DispatchError> {
+    ) -> Result<Option<&RebaseRecoveryCheckpoint>, DispatchError> {
         let Some(checkpoint) = &self.rebase_recovery else {
-            return Ok(false);
+            return Ok(None);
         };
         if after.branch.as_deref() != Some(checkpoint.branch.as_str()) {
-            return Ok(false);
+            return Ok(None);
         }
         for backend in ["rebase-merge", "rebase-apply"] {
             let path = git_stdout(
@@ -156,9 +222,30 @@ impl WorktreeBoundaryGuard {
                 &["rev-parse", "--path-format=absolute", "--git-path", backend],
             )?;
             if Path::new(&path).exists() {
-                return Ok(false);
+                return Ok(None);
             }
         }
+        Ok(Some(checkpoint))
+    }
+
+    /// Whether the admitted rebase finished exactly on its pinned base, with
+    /// no candidate commit left: the shape an absorbed candidate leaves.
+    pub(super) fn absorbed_authorized_rebase(
+        &self,
+        after: &GitWorktreeFingerprint,
+    ) -> Result<bool, DispatchError> {
+        Ok(self
+            .finished_authorized_rebase(after)?
+            .is_some_and(|checkpoint| after.head == checkpoint.target_base_sha))
+    }
+
+    pub(super) fn completed_authorized_rebase(
+        &self,
+        after: &GitWorktreeFingerprint,
+    ) -> Result<bool, DispatchError> {
+        let Some(checkpoint) = self.finished_authorized_rebase(after)? else {
+            return Ok(false);
+        };
         Ok(after.head != checkpoint.target_base_sha
             && git_output_raw(
                 &self.assigned_root,
@@ -172,12 +259,26 @@ impl WorktreeBoundaryGuard {
             .success)
     }
 
+    /// Whether the assigned worktree is still inside this recovery's pinned
+    /// rebase, stopped on unmerged paths: the shape a host continuation that
+    /// stopped on a later commit leaves behind.
+    pub(super) fn stopped_authorized_rebase(&self) -> Result<bool, DispatchError> {
+        let Some(checkpoint) = &self.rebase_recovery else {
+            return Ok(false);
+        };
+        let invalid = |reason: &str| DispatchError::CliInvocationPermanent(reason.to_string());
+        Ok(self
+            .validate_rebase_checkpoint(checkpoint, &invalid)
+            .is_ok()
+            && !unmerged_paths(&self.assigned_root)?.is_empty())
+    }
+
     pub(super) fn complete_rebase_recovery(
         &self,
         host: &dyn RuntimeHost,
         step_id: &str,
         task_ids: &[String],
-    ) -> Result<Value, DispatchError> {
+    ) -> Result<RebaseContinuation, DispatchError> {
         let checkpoint = self.rebase_recovery.as_ref().ok_or_else(|| {
             DispatchError::CliInvocationPermanent(
                 "conflict recovery has no authenticated rebase checkpoint".to_string(),
@@ -188,6 +289,11 @@ impl WorktreeBoundaryGuard {
                 "conflict recovery refused host Git continuation: {reason}"
             ))
         };
+        if step_id != checkpoint.step_id {
+            return Err(invalid(
+                "the failed step differs from the admitted recovery",
+            ));
+        }
 
         // Authenticate metadata before snapshotting or staging repaired files.
         // Matching commits/index alone cannot authenticate a copy.
@@ -277,6 +383,26 @@ impl WorktreeBoundaryGuard {
         )?;
         if !continued.success {
             let additional = unmerged_paths(&self.assigned_root)?;
+            // A candidate with several commits can conflict again on a later
+            // pick. The repaired pick is committed; keep that progress for
+            // the next bounded recovery round instead of refusing it.
+            if !additional.is_empty() && self.stopped_authorized_rebase()? {
+                self.widen_task(
+                    host,
+                    task_ids,
+                    ContextWideningStep::Recovery,
+                    &companion_paths,
+                );
+                tracing::warn!(
+                    target: "orbit.engine.cli_runner",
+                    run_id = %self.run_id,
+                    step_id,
+                    pinned_base = %checkpoint.target_base_sha,
+                    additional_conflicting_paths = ?additional,
+                    "conflict recovery continued the rebase onto a later commit that conflicts again"
+                );
+                return Ok(RebaseContinuation::StoppedAgain);
+            }
             let diagnostic = continued.stderr.trim().to_string();
             return Err(invalid(&format!(
                 "rebase --continue failed; additional_conflicting_paths={additional:?}; diagnostic={diagnostic}"
@@ -284,6 +410,19 @@ impl WorktreeBoundaryGuard {
         }
 
         let completed = git_fingerprint(&self.assigned_root)?;
+        if self.absorbed_authorized_rebase(&completed)? {
+            self.require_clean_continuation(&completed, &expected_untracked, &invalid)?;
+            return self
+                .absorbed_continuation(
+                    checkpoint,
+                    step_id,
+                    task_ids,
+                    &completed,
+                    &checkpoint.target_base_sha,
+                    &invalid,
+                )
+                .map(RebaseContinuation::Absorbed);
+        }
         if !self.completed_authorized_rebase(&completed)? {
             return Err(invalid(
                 "continued rebase did not leave the checkpointed branch on the pinned base with a candidate commit",
@@ -293,15 +432,25 @@ impl WorktreeBoundaryGuard {
         // The pin only records where the rebase stopped. Land the continued
         // candidate on the base tip that is live now, so the deterministic
         // retry and the PR see current integration rather than a stale one.
-        let base_sha = self.follow_advanced_base(checkpoint, &expected_untracked, &invalid)?;
+        let landed = self.follow_advanced_base(checkpoint, &expected_untracked, &invalid)?;
         let completed = git_fingerprint(&self.assigned_root)?;
+        let base_sha = match landed {
+            LandedOn::Candidate(base_sha) => base_sha,
+            LandedOn::Absorbed(base_sha) => {
+                return self
+                    .absorbed_continuation(
+                        checkpoint, step_id, task_ids, &completed, &base_sha, &invalid,
+                    )
+                    .map(RebaseContinuation::Absorbed);
+            }
+        };
         self.widen_task(
             host,
             task_ids,
             ContextWideningStep::Recovery,
             &companion_paths,
         );
-        Ok(serde_json::json!({
+        Ok(RebaseContinuation::Completed(serde_json::json!({
             "run_id": self.run_id,
             "step_id": step_id,
             "task_ids": task_ids,
@@ -316,6 +465,78 @@ impl WorktreeBoundaryGuard {
             "head_sha": completed.head,
             "companion_paths": companion_paths,
             "rewritten": true,
+            "recovery_attempt": checkpoint.attempt,
+        })))
+    }
+
+    /// The certified evidence for a continuation that left the branch on
+    /// `landed_base` (the pin, or the advanced tip it followed) with no
+    /// candidate commit: the covering commit, the candidate paths it covers
+    /// and the task scope admitted with the recovery. Without all three the
+    /// continuation is refused as before, naming the typed reason.
+    fn absorbed_continuation(
+        &self,
+        checkpoint: &RebaseRecoveryCheckpoint,
+        step_id: &str,
+        task_ids: &[String],
+        completed: &GitWorktreeFingerprint,
+        landed_base: &str,
+        invalid: &impl Fn(&str) -> DispatchError,
+    ) -> Result<Value, DispatchError> {
+        let refused = |reason: AbsorbedReason| {
+            invalid(&format!(
+                "continued rebase left the checkpointed branch on its base with no candidate \
+                 commit; absorbed_candidate_refused: {}",
+                reason.code()
+            ))
+        };
+        if step_id != ABSORBING_STEP {
+            return Err(invalid(
+                "continued rebase did not leave the checkpointed branch on the pinned base with a candidate commit",
+            ));
+        }
+        let task_scope_digest = checkpoint
+            .task_scope_digest
+            .clone()
+            .ok_or_else(|| refused(AbsorbedReason::TaskScopeChanged))?;
+        let (covering, candidate_paths) = covering_commit(
+            &self.assigned_root,
+            &checkpoint.original_base_sha,
+            &checkpoint.original_head,
+            landed_base,
+        )
+        .map_err(|error| invalid(&format!("find the covering commit: {error}")))?
+        .ok_or_else(|| refused(AbsorbedReason::NoCoveringCommit))?;
+        tracing::info!(
+            target: "orbit.engine.cli_runner",
+            run_id = %self.run_id,
+            step_id,
+            pinned_base = %checkpoint.target_base_sha,
+            landed_base,
+            covering_commit = %covering,
+            "conflict recovery left no candidate commit; its base already covers the candidate"
+        );
+        Ok(serde_json::json!({
+            "run_id": self.run_id,
+            "step_id": step_id,
+            "task_ids": task_ids,
+            "workspace_path": self.assigned_root,
+            "head": checkpoint.branch,
+            "head_sha_before": checkpoint.original_head,
+            "original_base_sha": checkpoint.original_base_sha,
+            "base_ref": checkpoint.base_ref,
+            "target_base_sha": checkpoint.target_base_sha,
+            "base_sha": landed_base,
+            "remote_sha_before": checkpoint.remote_sha_before,
+            "head_sha": completed.head,
+            "companion_paths": [],
+            "rewritten": true,
+            "recovery_attempt": checkpoint.attempt,
+            "absorbed": {
+                "covering_commit": covering,
+                "candidate_paths": candidate_paths,
+                "task_scope_digest": task_scope_digest,
+            },
         }))
     }
 
@@ -343,6 +564,8 @@ impl WorktreeBoundaryGuard {
 
     /// Rebase the continued candidate onto `base_ref`'s current tip when it
     /// advanced past the pin, returning the base the candidate now sits on.
+    /// A follow-up that drops every pick as empty leaves the branch on the
+    /// tip itself: [`LandedOn::Absorbed`].
     ///
     /// A tip that does not descend from the pin (a rewound or force-moved
     /// base) is not followed; the pinned result stands and the deterministic
@@ -354,7 +577,7 @@ impl WorktreeBoundaryGuard {
         checkpoint: &RebaseRecoveryCheckpoint,
         expected_untracked: &BTreeMap<String, String>,
         invalid: &impl Fn(&str) -> DispatchError,
-    ) -> Result<String, DispatchError> {
+    ) -> Result<LandedOn, DispatchError> {
         let pinned = checkpoint.target_base_sha.as_str();
         let live = git_stdout(
             &self.assigned_root,
@@ -367,7 +590,7 @@ impl WorktreeBoundaryGuard {
             )?
             .success
         {
-            return Ok(pinned.to_string());
+            return Ok(LandedOn::Candidate(pinned.to_string()));
         }
         let followed = git_mutation_output(&self.assigned_root, &["rebase", &live])?;
         if !followed.success {
@@ -388,9 +611,13 @@ impl WorktreeBoundaryGuard {
                 additional_conflicting_paths = ?additional,
                 "conflict recovery kept the pinned result; the advanced base conflicts again"
             );
-            return Ok(pinned.to_string());
+            return Ok(LandedOn::Candidate(pinned.to_string()));
         }
         let followed = git_fingerprint(&self.assigned_root)?;
+        if followed.head == live && self.finished_authorized_rebase(&followed)?.is_some() {
+            self.require_clean_continuation(&followed, expected_untracked, invalid)?;
+            return Ok(LandedOn::Absorbed(live));
+        }
         if !self.completed_authorized_rebase(&followed)?
             || followed.head == live
             || !git_output_raw(
@@ -404,7 +631,7 @@ impl WorktreeBoundaryGuard {
             ));
         }
         self.require_clean_continuation(&followed, expected_untracked, invalid)?;
-        Ok(live)
+        Ok(LandedOn::Candidate(live))
     }
 
     fn validate_rebase_checkpoint(
@@ -453,6 +680,14 @@ impl WorktreeBoundaryGuard {
             "the stopped rebase metadata no longer matches its checkpoint",
         ))
     }
+}
+
+/// Where [`WorktreeBoundaryGuard::follow_advanced_base`] left the branch.
+enum LandedOn {
+    /// A candidate commit on this base.
+    Candidate(String),
+    /// Exactly this base: the follow-up dropped every pick as empty.
+    Absorbed(String),
 }
 
 /// In-memory host evidence, never loaded from provider output or scratch.
@@ -589,12 +824,22 @@ fn recovery_metadata_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Di
     Ok(files)
 }
 
-fn validate_failed_step_identity(input: &Value, prepared: &Value, original: &str) -> Option<()> {
+/// The failed step a conflict recovery may complete, when its input
+/// describes one of the rebasing steps consistently: `sync_base`, or a
+/// completion that rebases a conflicting published PR (`complete_pr`, and
+/// `complete_reviewed_pr` once the base moved again after a re-review).
+fn validate_failed_step_identity<'a>(
+    input: &'a Value,
+    prepared: &Value,
+    original: &str,
+) -> Option<&'a str> {
     let activity_name = input.get("activity_name")?.as_str()?;
     let failed_step_id = input.get("failed_step_id")?.as_str()?;
     if !matches!(
         (failed_step_id, activity_name),
-        ("sync_base", "git_rebase") | ("complete_pr", "pr_complete")
+        ("sync_base", "git_rebase")
+            | ("complete_pr", "pr_complete")
+            | ("complete_reviewed_pr", "pr_complete")
     ) {
         return None;
     }
@@ -605,7 +850,7 @@ fn validate_failed_step_identity(input: &Value, prepared: &Value, original: &str
     {
         return None;
     }
-    Some(())
+    Some(failed_step_id)
 }
 
 fn recovery_conflicting_paths(input: &Value) -> Option<Vec<String>> {

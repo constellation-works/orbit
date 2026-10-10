@@ -118,6 +118,19 @@ Run branches in parallel:
         target: activity:assess_b
 ```
 
+`parallel.join` and `fan_in.join` use the same success requirements:
+
+- `all` succeeds when every branch or worker succeeds, including an empty block.
+- `any` requires at least one successful branch or worker, so an empty block fails.
+- `quorum` requires at least `n` successes. `n` must be positive and cannot exceed
+  a parallel block's declared branch count. Fan-out item counts are resolved at
+  runtime, so a positive quorum fails when too few workers succeed, including
+  when there are no items.
+
+An empty fan-out records `[]` under its step id and optional `fan_in.collect`
+alias, and emits dispatch and join audit events with zero workers. A failed
+join stops subsequent steps.
+
 ## Modifiers
 
 Any step may add `when` and `retry`.

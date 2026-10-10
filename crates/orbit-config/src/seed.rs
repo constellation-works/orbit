@@ -75,7 +75,7 @@ const DEFAULT_CREW_BY_FAMILY: &[(&str, &str)] = &[
 /// callers to special-case a family.
 const SYSTEM_CREW_BY_FAMILY: &[(&str, &str)] = &[
     ("codex", "luna"),
-    ("claude", "sonnet"),
+    ("claude", "haiku"),
     ("grok", "grok"),
     ("antigravity", "antigravity"),
     ("gemini", "gemini"),
@@ -83,6 +83,33 @@ const SYSTEM_CREW_BY_FAMILY: &[(&str, &str)] = &[
     ("cursor", "cursor"),
     ("pi", "pi"),
     ("opencode", "opencode"),
+];
+
+/// Seeded `workflow.*_complexity_crews` pools, keyed by detected codex/claude
+/// presence: `(codex, claude, [low, medium, hard, xhard])`. A host with
+/// neither starts from empty pools; grok and the Google CLIs are layered on top
+/// by [`ConfigSeed::complexity_pools`].
+const BASE_POOLS: &[(bool, bool, [&[&str]; 4])] = &[
+    (
+        true,
+        true,
+        [
+            &["haiku", "luna"],
+            &["sol", "sonnet"],
+            &["opus"],
+            &["opus", "astra"],
+        ],
+    ),
+    (true, false, [&["luna"], &["sol"], &["sol"], &["astra"]]),
+    (false, true, [&["haiku"], &["sonnet"], &["opus"], &["opus"]]),
+];
+
+/// The four `workflow.*_complexity_crews` keys, in pool order.
+const POOL_KEYS: [&str; 4] = [
+    "low_complexity_crews",
+    "medium_complexity_crews",
+    "hard_complexity_crews",
+    "xhard_complexity_crews",
 ];
 
 /// Explicit, host-independent inputs for rendering a fresh `config.toml`.
@@ -190,6 +217,30 @@ impl ConfigSeed {
         self.system_crew_options().first().copied()
     }
 
+    /// The seeded complexity pools `[low, medium, hard, xhard]`, derived from
+    /// the detected families. Codex and claude pick a base row; grok is
+    /// appended to medium; a Google CLI is appended to low, `antigravity` when
+    /// `agy` is present and `gemini` otherwise. Families with no pool rule
+    /// (copilot, cursor, pi, opencode) leave their pools as they are, and an
+    /// empty pool routes to `default_crew`.
+    pub fn complexity_pools(&self) -> [Vec<&'static str>; 4] {
+        let (codex, claude) = (self.has_family("codex"), self.has_family("claude"));
+        let mut pools: [Vec<&'static str>; 4] = BASE_POOLS
+            .iter()
+            .find(|(has_codex, has_claude, _)| *has_codex == codex && *has_claude == claude)
+            .map(|(_, _, rows)| rows.map(|row| row.to_vec()))
+            .unwrap_or_default();
+        if self.has_family("grok") {
+            pools[1].push("grok");
+        }
+        if self.has_family("antigravity") {
+            pools[0].push("antigravity");
+        } else if self.has_family("gemini") {
+            pools[0].push("gemini");
+        }
+        pools
+    }
+
     /// Available families in Orbit's fixed preference order.
     fn available_families(&self) -> Vec<&'static str> {
         CREW_FAMILY_PREFERENCE
@@ -261,9 +312,10 @@ fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<Str
 }
 
 /// The `[workflow]` keys a seed owns: the two lane crews, each naming a crew
-/// the same file defines, and the four complexity pools scaffolded empty so an
-/// operator finds them without reading the docs.
-fn render_workflow_crew_keys(
+/// the same file defines, and the four complexity pools seeded from the
+/// detected families (empty when no pool rule applies, so an operator still
+/// finds them without reading the docs).
+pub(crate) fn render_workflow_crew_keys(
     seed: &ConfigSeed,
     crews: &BTreeMap<String, Crew>,
 ) -> Result<String, OrbitError> {
@@ -296,12 +348,23 @@ fn render_workflow_crew_keys(
         "# Automatic crew pools by task complexity. Entries are crew names, written\n\
          # `name` or `name:weight` (all bare or all weighted). A task created without\n\
          # a crew draws from the pool for its complexity; an empty pool routes that\n\
-         # complexity to `default_crew`.\n\
-         low_complexity_crews = []\n\
-         medium_complexity_crews = []\n\
-         hard_complexity_crews = []\n\
-         xhard_complexity_crews = []\n",
+         # complexity to `default_crew`.\n",
     );
+    for (key, pool) in POOL_KEYS.into_iter().zip(seed.complexity_pools()) {
+        if let Some(name) = pool
+            .iter()
+            .find(|name| !crews.get(**name).is_some_and(|crew| crew.enabled))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.{key} names crew `{name}`, which this host does not seed enabled"
+            )));
+        }
+        let entries = pool
+            .into_iter()
+            .map(|name| toml::Value::String(name.to_string()))
+            .collect::<Vec<_>>();
+        rendered.push_str(&format!("{key} = {}\n", toml::Value::Array(entries)));
+    }
     Ok(rendered)
 }
 

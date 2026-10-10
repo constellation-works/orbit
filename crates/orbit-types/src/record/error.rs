@@ -4,6 +4,4 @@ use thiserror::Error;
 pub enum RecordError {
     #[error("{0}")]
     Invalid(String),
-    #[error("{0}")]
-    InvalidTransition(String),
 }

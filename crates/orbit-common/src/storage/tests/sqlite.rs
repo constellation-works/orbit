@@ -133,8 +133,8 @@ mod read_only_observation {
 
     use rusqlite::Connection;
 
-    use crate::OrbitError;
-    use crate::storage::sqlite::{ObservationCurrency, open_private};
+    use crate::StorageLayer;
+    use crate::storage::sqlite::{ObservationCurrency, open_private, sqlite_error};
 
     const SQLITE_FILE_SUFFIXES: [&str; 3] = ["", "-wal", "-shm"];
 
@@ -379,9 +379,15 @@ mod read_only_observation {
             .connection
             .execute("INSERT INTO observed VALUES ('denied')", [])
             .expect_err("observation must refuse writes");
-        assert!(
-            OrbitError::Store(denied.to_string()).is_readonly_or_access_failure(),
+        assert_eq!(
+            denied.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly),
             "{denied}"
+        );
+        assert!(
+            sqlite_error(StorageLayer::Store, &denied, denied.to_string())
+                .is_readonly_or_access_failure(),
+            "SQLITE_READONLY must classify as read-only through the translator: {denied}"
         );
 
         drop(opened);

@@ -32,15 +32,16 @@ left behind, and `--force` also stops leaves it left running.\n\n\
 `--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the \
 task runs it started, which a plain cancel leaves running. A child whose stop \
 cannot be confirmed is listed with its reason and makes the command exit 1. For any other run \
-it changes nothing.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+it changes nothing.\n\n\
+Cancelling a task leaf returns its task to the backlog with the reason and \
+keeps the candidate available to resume. `--block` keeps the task blocked for \
+the existing manual recovery flow, including for the leaves and children a \
+`--force` or cascading cancel stops; a pull drain's released claims always \
+return to the owner's backlog.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel
     pub run_id: String,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 
     /// Confirm process termination and irreversible run terminalization
     #[arg(long)]
@@ -54,17 +55,22 @@ pub struct RunCancelArgs {
     /// pull drain's claims to the owner's backlog
     #[arg(long)]
     pub force: bool,
+
+    /// Keep a cancelled task leaf blocked instead of returning it to the backlog
+    #[arg(long)]
+    pub block: bool,
 }
 
 impl Execute for RunCancelArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         require_confirmation(self.confirm, "run cancellation")?;
-        let result = runtime.cancel_job_run_with_options(
+        let result = runtime.cancel_job_run_with_options_and_policy(
             &self.run_id,
             "cli",
             "run_cancel",
             self.reason.as_deref(),
             self.force,
+            self.block,
         )?;
         let doc = json!({
             "run_id": result.run_id,

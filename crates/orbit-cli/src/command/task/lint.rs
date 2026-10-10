@@ -32,9 +32,6 @@ pub struct TaskLintArgs {
     /// Restrict the sweep to specific statuses (repeatable; sweep mode only)
     #[arg(long = "status", value_enum, conflicts_with = "id")]
     pub statuses: Vec<TaskStatus>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskLintArgs {
@@ -115,7 +112,7 @@ fn lint_single_task(runtime: &OrbitRuntime, id: &str, restore_pruned: bool) -> C
 }
 
 /// Sweep active tasks for context declarations that need repair before they
-/// can be admitted: an empty or unusable surface, or selectors an earlier
+/// can hold context locks: an empty or unusable surface, or selectors an earlier
 /// prune removed and recorded ([ORB-12490]).
 ///
 /// Nothing here deletes a declaration. The sweep that used to drop selectors

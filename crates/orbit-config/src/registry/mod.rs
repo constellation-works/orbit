@@ -9,29 +9,13 @@
 //! `crews.<name>.<field>` keys are addressable by `orbit config set`/`get`
 //! through [`admit_config_key`].
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
 use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::LogRotationConfig;
-use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{
-    Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
-};
-use orbit_types::workflow::automation::members::{
-    MaterialField, PreparationFreshness, SourceSensitivity,
-};
-use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
-use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
-
-use crate::memory_limit::MemoryLimit;
-use crate::operation::{self, ReviewPolicy};
-use serde::de::DeserializeOwned;
-use serde_json::{Value as JsonValue, json};
+use orbit_types::workflow::CODEX_PROVIDER_SANDBOX_MODES;
 
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
+const SECURITY_ALERT_SEVERITIES: &[&str] = &["low", "moderate", "high", "critical"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 /// Built-in name of the bounded system lane and the default value of
 /// `workflow.system_crew`. Shipped job steps name this crew directly, and a
@@ -85,8 +69,10 @@ pub enum ConfigSection {
     Crews,
     /// `execution.*` — how agent subprocesses run.
     Execution,
-    /// `operation.*` — automatic review policy.
-    Operation,
+    /// `review.*` and `operation.review_crew` — before-PR review and the
+    /// automatic-review crew. After-landing review is an auto-task flag, not
+    /// a key.
+    Review,
     /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`,
     /// `pr.*`, `plugin.*`.
     Housekeeping,
@@ -99,7 +85,7 @@ impl ConfigSection {
         ConfigSection::Delivery,
         ConfigSection::Crews,
         ConfigSection::Execution,
-        ConfigSection::Operation,
+        ConfigSection::Review,
         ConfigSection::Housekeeping,
     ];
 
@@ -110,7 +96,7 @@ impl ConfigSection {
             Self::Delivery => "Delivery (workflow.*)",
             Self::Crews => "Crews (crews.*)",
             Self::Execution => "Execution (execution.*)",
-            Self::Operation => "Review (operation.*)",
+            Self::Review => "Review (review.*, operation.review_crew)",
             Self::Housekeeping => "Housekeeping",
         }
     }
@@ -122,21 +108,21 @@ impl ConfigSection {
             Self::Delivery => "how tasks are shipped",
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
-            Self::Operation => "automatic review policy",
+            Self::Review => "before-PR review and the automatic-review crew",
             Self::Housekeeping => "logs, scoring, ids, plugins, and PR links",
         }
     }
 
     /// Dotted prefix every key in the section shares, when there is one.
-    /// `Housekeeping` spans several prefixes and has none, so its rows print
-    /// the full key.
+    /// `Review` and `Housekeeping` span several prefixes and have none, so
+    /// their rows print the full key.
     pub fn key_prefix(self) -> Option<&'static str> {
         match self {
             Self::Machine => Some("machine"),
             Self::Delivery => Some("workflow"),
             Self::Crews => Some("crews"),
             Self::Execution => Some("execution"),
-            Self::Operation => Some("operation"),
+            Self::Review => None,
             Self::Housekeeping => None,
         }
     }
@@ -148,7 +134,7 @@ impl ConfigSection {
             Self::Delivery => "delivery",
             Self::Crews => "crews",
             Self::Execution => "execution",
-            Self::Operation => "operation",
+            Self::Review => "review",
             Self::Housekeeping => "housekeeping",
         }
     }
@@ -174,12 +160,13 @@ pub struct ConfigKeyDescriptor {
 mod keys;
 mod settings;
 
+pub(crate) use keys::{
+    DEPRECATED_CONFIG_KEYS, REMOVED_CONFIG_KEYS, deprecated_key_note, is_machine_identity_key,
+    parse_crew_field_key, removed_key_note,
+};
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
     describe, is_global_only_key,
-};
-pub(crate) use keys::{
-    REMOVED_CONFIG_KEYS, is_machine_identity_key, parse_crew_field_key, removed_key_note,
 };
 pub(crate) use settings::read_optional;
 pub use settings::{

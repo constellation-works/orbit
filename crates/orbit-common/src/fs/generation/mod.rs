@@ -10,7 +10,11 @@
 //! newest migrations older binaries could not keep reading or writing — not
 //! the executable's digest. Every participant holds `.generation.lock` shared
 //! for its lifetime. `.generation-compat.json` records the envelope of every
-//! identity admitted since the authority last had no participant:
+//! identity admitted since the authority last had no participant. A joiner
+//! that finds the generation lock unheld replaces that envelope with its own
+//! identity before the compatibility check. Dropping a guard does not clear
+//! the file; the lock is what shows the authority is empty. Admission then
+//! follows that envelope:
 //!
 //! - A newcomer compatible with that envelope joins as an ordinary writer (or
 //!   reader) whatever its digest, and widens it. A rebuild or patch release
@@ -27,7 +31,32 @@
 //!   newer participants.
 //!
 //! Participants register PID, role and start time under
-//! `.generation-participants/`, each record held by its own lock.
+//! `.generation-participants/`, each record held by its own lock. A live
+//! record means its owner holds `.generation.lock`; on release the record is
+//! first renamed to a releasing name, still locked, then the generation lock
+//! is released, and only then is the record withdrawn. A holder of the lock
+//! with neither record never registered.
+//!
+//! # Admission
+//!
+//! `.generation-admission.lock` orders joins against anything that changes
+//! the authority. A join that writes nothing shared — its identity already
+//! fits the envelope unchanged and the authority is visibly not empty, or it
+//! reads beside a v1-owned record — holds it shared, so concurrent startups
+//! never wait for one another (registration is per process). A join that
+//! must reseed, widen or rewrite a record, take over or record a pending
+//! switch, and [`GenerationUpdate`], hold it exclusively. Exclusive waiters
+//! publish locked records under `.generation-admission-waiters/` before
+//! waiting: new shared admissions yield until existing admissions drain and
+//! the exclusive waiter acquires the lock. A continuous shared startup stream
+//! therefore cannot starve an envelope-widening join. A wait that other
+//! startups cause lasts up to [`quiesce_bound`] and then refuses as
+//! contention. A wait behind a pending switch (other than one the joiner
+//! targets) or an update refuses within about a second instead of queueing,
+//! and says which upgrade held it.
+//! Read-only observers need no writes to check waiter liveness. A participant
+//! that cannot publish intent retains lock-only admission. Crashed waiters
+//! release their OS locks and cannot keep shared admissions waiting.
 //!
 //! # Yielding and handing over
 //!
@@ -41,7 +70,24 @@
 //! replacement speaks this contract and their [`RESUME_CAPABILITIES`] entry,
 //! and [`reexec`] it at an idle boundary. The exec keeps the PID and releases
 //! every lock (Orbit descriptors are close-on-exec), so the new image joins
-//! like any newcomer.
+//! like any newcomer. A participant that will do so registers the resume
+//! capability it hands over with ([`ParticipantRecord::handover`]).
+//!
+//! # Updating
+//!
+//! [`GenerationUpdate`] holds admission exclusively, so nothing joins behind
+//! it, and then waits up to [`quiesce_bound`] for short-lived participants
+//! ([`ParticipantRole::is_short_lived`]) to exit before it takes the
+//! generation exclusively, and likewise for a participant whose record is
+//! releasing. Any other live participant refuses it at once, named with its
+//! role and what would end its hold.
+//! [`GenerationUpdate::acquire_for_candidate`] is the same admission for an
+//! installer that renames a candidate over the executable: a participant
+//! whose registered capability the candidate reports will hand over after
+//! the rename, so it is admitted beside and named instead. Its
+//! [`CandidateAdmission::pin`] waits, still holding admission, for those
+//! participants to release the generation by exec'ing into the candidate,
+//! then records the candidate; they queue behind it and join what it pinned.
 //!
 //! # Coexistence with `executable-generation-v1`
 //!
@@ -59,6 +105,7 @@
 use std::time::Duration;
 
 mod admission;
+mod admission_waiters;
 mod clock_hold;
 mod handoff;
 mod identity;
@@ -70,22 +117,25 @@ mod refusal;
 mod registry;
 mod update;
 
+#[cfg(test)]
+mod tests;
+
 pub use admission::{
-    GenerationGuard, Participant, pending_switch_for_this_process, process_participation,
-    quiesce_bound,
+    GenerationGuard, Participant, pending_switch_for_this_process, process_handover,
+    process_participation, quiesce_bound,
 };
 pub use clock_hold::{
     finish_clock_generation_hold, is_clock_generation_hold, record_clock_generation_hold,
 };
 pub use handoff::{
-    RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO, candidate_supports, handover_target,
-    reexec, replaced_installation,
+    HandoverCandidate, RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO,
+    candidate_supports, handover_target, reexec, replaced_installation,
 };
 pub use identity::{Access, CompatibilityIdentity, LedgerCompatibility};
 pub use image::{executable_generation, process_generation};
 pub use paths::authority_root;
 pub use registry::{ParticipantRecord, ParticipantRole, PendingSwitch, pending_switch};
-pub use update::GenerationUpdate;
+pub use update::{CandidateAdmission, GenerationUpdate};
 
 /// Admission protocol this binary implements.
 pub const GENERATION_CONTRACT: &str = "compatibility-generation-v2";
@@ -100,3 +150,7 @@ pub const QUIESCE_TIMEOUT_ENV: &str = "ORBIT_UPGRADE_QUIESCE_SECS";
 
 /// Default [`QUIESCE_TIMEOUT_ENV`].
 pub const DEFAULT_QUIESCE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The longest [`QUIESCE_TIMEOUT_ENV`] honoured, so a deadline computed from
+/// it can never overflow.
+pub const MAX_QUIESCE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);

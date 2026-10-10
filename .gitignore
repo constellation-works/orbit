@@ -6,7 +6,6 @@
 .gemini/
 .grok/
 
-agentspace
 !.claude/settings.json
 !.claude/hooks/
 !.codex/
@@ -37,14 +36,7 @@ plugin/.claude-plugin/types/
 .vscode/settings.json
 
 # Scratch / session files
-sessions
 tmp
-raw
-examples.md
-feature.md
-feat.md
-schema.md
-critique.md
 
 # Runtime state
 
@@ -68,6 +60,12 @@ uv.lock
 node_modules/
 dist/
 build/
+# `plugin/build/` is a Rust module, not a build artifact. The directory rule
+# above would otherwise drop it, and the deleted `plugin/build.rs` with it.
+!crates/orbit-tools/src/plugin/build/
+!crates/orbit-tools/src/plugin/build/**
+!crates/orbit-tools/src/plugin/tests/build/
+!crates/orbit-tools/src/plugin/tests/build/**
 .astro/
 
 # dotenv — local credentials at any depth; share only credential-free examples.

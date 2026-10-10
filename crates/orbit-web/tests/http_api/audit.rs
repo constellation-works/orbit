@@ -2,11 +2,98 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::{
-    AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery, OrbitError,
+    AuditEventFilter, AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery,
+    JobRunState, OrbitError,
 };
 use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok};
+
+#[test]
+fn failed_runs_tile_matches_filtered_terminal_runs() {
+    isolated(
+        "audit::failed_runs_tile_matches_filtered_terminal_runs",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for (index, (id, state)) in [
+                ("success", JobRunState::Success),
+                ("failed", JobRunState::Failed),
+                ("timeout", JobRunState::Timeout),
+                ("cancelled", JobRunState::Cancelled),
+                ("interrupted", JobRunState::Interrupted),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut run = fixture.seed_run(id, "terminal", state);
+                let timestamp = now - Duration::seconds(5 - index as i64);
+                run.created_at = timestamp;
+                run.started_at = Some(timestamp);
+                run.finished_at = Some(timestamp);
+                fixture.save_run(&run);
+            }
+            // A known job with no runs, so the job filter is an empty match
+            // rather than an unknown-job refusal.
+            fixture.job("other");
+
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let filtered = json_ok(
+                server
+                    .request("GET", "/api/job-runs")
+                    .query(&[
+                        ("workspace", "ws_http_fixture"),
+                        ("state", "failed"),
+                        ("since", summary["since"].as_str().unwrap()),
+                    ])
+                    .send()
+                    .unwrap(),
+            );
+            assert_eq!(summary["failed_runs"], 3);
+            assert_eq!(summary["failed_runs"], filtered["total"]);
+            let ids = |page: &serde_json::Value| {
+                page["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|run| run["run_id"].as_str().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&filtered), ["interrupted", "timeout", "failed"]);
+            assert_eq!(filtered["truncated"], false);
+            let bounded = json_ok(server.get(
+                "/api/job-runs?state=failed&limit=2&job_id=terminal&workspace=ws_http_fixture",
+            ));
+            assert_eq!(bounded["total"], 3);
+            assert_eq!(bounded["truncated"], true);
+            assert_eq!(ids(&bounded), ["interrupted", "timeout"]);
+            let aggregate = json_ok(server.get("/api/job-runs/all?state=failed&limit=2"));
+            assert_eq!(ids(&aggregate), ids(&bounded));
+            let all_failures = json_ok(server.get("/api/job-runs/all?state=failed"));
+            assert_eq!(ids(&all_failures), ids(&filtered));
+            let unrelated = json_ok(
+                server.get("/api/job-runs?state=failed&job_id=other&workspace=ws_http_fixture"),
+            );
+            assert_eq!(unrelated["total"], 0);
+            assert!(ids(&unrelated).is_empty());
+            let future = (now + Duration::hours(1)).to_rfc3339();
+            let future_page = json_ok(
+                server
+                    .request(
+                        "GET",
+                        "/api/job-runs?state=failed&workspace=ws_http_fixture",
+                    )
+                    .query(&[("since", future)])
+                    .send()
+                    .unwrap(),
+            );
+            assert_eq!(future_page["total"], 0);
+            assert!(ids(&future_page).is_empty());
+        },
+    );
+}
 
 fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInsertParams {
     AuditEventInsertParams {
@@ -43,6 +130,222 @@ fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInse
         activity_id: None,
         step_index: None,
     }
+}
+
+#[test]
+fn scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging() {
+    isolated(
+        "audit::scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging",
+        || {
+            let fixture = Fixture::new();
+            use AuditEventStatus::{Denied, Failure, Success};
+            for (id, role, status) in [
+                ("model-failure", "claude-sonnet-4-5", Failure),
+                ("model-denied", "claude-opus-4-1", Denied),
+                ("model-success", "claude-sonnet-4-5", Success),
+                ("family-failure", "claude", Failure),
+            ] {
+                let mut event = row(id, Some("orbit.task.show"), status);
+                event.role = role.into();
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            // A whole newer SQL batch belongs to another family. Family and
+            // status must be evaluated before offset/limit, across batches.
+            for index in 0..225 {
+                fixture
+                    .runtime
+                    .record_audit_event(&row(
+                        &format!("other-family-{index}"),
+                        Some("orbit.task.show"),
+                        Failure,
+                    ))
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            let events = |query: &str| {
+                json_ok(server.get(&format!(
+                    "/api/audit?workspace=ws_http_fixture&since=24h&{query}"
+                )))
+                .as_array()
+                .unwrap()
+                .clone()
+            };
+            let all = events("agent_family=claude");
+            assert_eq!(all.len(), 4, "family view includes model and native roles");
+            let non_success = events("agent_family=claude&status=non_success");
+            assert_eq!(non_success.len(), 3);
+            assert!(non_success.iter().any(|event| event["status"] == "denied"));
+            assert!(non_success.iter().all(|event| event["status"] != "success"));
+            let scoreboard =
+                json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture&window=24h"));
+            assert_eq!(
+                scoreboard["agents"]["claude"]["failure_incident_events"],
+                non_success.len(),
+                "the incident drilldown retains every raw event counted for the family"
+            );
+            let page = events("agent_family=claude&status=non_success&limit=1&offset=1");
+            assert_eq!(page, non_success[1..2]);
+            assert_eq!(events("agent_family=claude&status=failure").len(), 2);
+            assert_eq!(events("role=claude").len(), 1, "exact roles stay exact");
+            assert_eq!(events("role=claude-sonnet-4-5").len(), 2);
+            assert_eq!(
+                events("agent_family=claude&role=claude-sonnet-4-5&status=non_success&q=sonnet")
+                    .len(),
+                1,
+                "free text still composes with family, role and status predicates"
+            );
+            assert_eq!(
+                events("agent_family=claude&role=claude-sonnet-4-5&status=non_success&tool=orbit.task.show")
+                    .len(),
+                1
+            );
+        },
+    );
+}
+
+#[test]
+fn incident_audit_ids_return_all_requested_rows_with_workspace_scope() {
+    isolated(
+        "audit::incident_audit_ids_return_all_requested_rows_with_workspace_scope",
+        || {
+            let fixture = Fixture::new();
+            for index in 0..65 {
+                let mut event = row(
+                    &format!("incident-{index}"),
+                    None,
+                    AuditEventStatus::Failure,
+                );
+                event.command = "task".into();
+                event.subcommand = Some("add".into());
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            fixture
+                .runtime
+                .record_audit_event(&row(
+                    "unrelated",
+                    Some("orbit.task.show"),
+                    AuditEventStatus::Success,
+                ))
+                .unwrap();
+            let mut foreign = row(
+                "foreign-workspace",
+                Some("orbit.task.show"),
+                AuditEventStatus::Success,
+            );
+            foreign.workspace_id = Some("ws_other".into());
+            fixture.runtime.record_audit_event(&foreign).unwrap();
+
+            let stored = fixture
+                .runtime
+                .list_audit_events_filtered(&AuditEventFilter {
+                    limit: 100,
+                    ..AuditEventFilter::default()
+                })
+                .unwrap();
+            let target_ids = stored
+                .iter()
+                .filter(|event| event.execution_id.starts_with("incident-"))
+                .map(|event| event.id)
+                .collect::<Vec<_>>();
+            let foreign_id = stored
+                .iter()
+                .find(|event| event.execution_id == "foreign-workspace")
+                .unwrap()
+                .id;
+            assert_eq!(target_ids.len(), 65);
+
+            let requested_ids = target_ids
+                .iter()
+                .chain(std::iter::once(&foreign_id))
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let url = format!(
+                "/api/audit?workspace=ws_http_fixture&workspace_id=ws_http_fixture&ids={requested_ids}"
+            );
+            let returned = json_ok(fixture.server(false).get(&url));
+            let returned = returned.as_array().unwrap();
+            assert_eq!(
+                returned.len(),
+                65,
+                "exact IDs bypass the default 50-row page"
+            );
+            let returned_ids = returned
+                .iter()
+                .map(|event| event["id"].as_i64().unwrap())
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(returned_ids, target_ids.into_iter().collect());
+            assert!(returned.iter().all(|event| event["status"] == "failure"));
+            assert!(!returned_ids.contains(&foreign_id));
+        },
+    );
+}
+
+#[test]
+fn failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard() {
+    isolated(
+        "audit::failure_incident_scan_coverage_is_shared_by_summary_and_scoreboard",
+        || {
+            let fixture = Fixture::new();
+            fixture
+                .runtime
+                .record_audit_event(&row(
+                    "scan-0",
+                    Some("orbit.workflow.run.list"),
+                    AuditEventStatus::Failure,
+                ))
+                .unwrap();
+            let server = fixture.server(false);
+            let complete =
+                json_ok(server.get("/api/audit/summary?since=1h&workspace=ws_http_fixture"));
+            let scoreboard =
+                json_ok(server.get("/api/scoreboard?window=1h&workspace=ws_http_fixture"));
+            let cap = complete["failure_incidents_scan_limit"].as_u64().unwrap();
+            assert!(cap > 0);
+            for payload in [&complete, &scoreboard] {
+                assert_eq!(payload["failure_incidents_truncated"], false);
+                assert_eq!(payload["failure_incidents_scan_limit"], cap);
+            }
+            assert_eq!(
+                scoreboard["coverage"]["failure_incidents"]["availability"],
+                "observed"
+            );
+            assert_eq!(complete["failed_events"], 1);
+            assert_eq!(scoreboard["agents"]["codex"]["failure_incident_events"], 1);
+
+            // Exceed the advertised production cap, without pinning its value
+            // or adding a test-only query path. Use another summary window to
+            // avoid the first response's memoized bundle.
+            for index in 1..=cap {
+                fixture
+                    .runtime
+                    .record_audit_event(&row(
+                        &format!("scan-{index}"),
+                        Some("orbit.workflow.run.list"),
+                        AuditEventStatus::Failure,
+                    ))
+                    .unwrap();
+            }
+            let partial =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let scoreboard = json_ok(server.get("/api/scoreboard?workspace=ws_http_fixture"));
+            for payload in [&partial, &scoreboard] {
+                assert_eq!(payload["failure_incidents_truncated"], true);
+                assert_eq!(payload["failure_incidents_scan_limit"], cap);
+            }
+            assert_eq!(
+                scoreboard["coverage"]["failure_incidents"]["availability"],
+                "partial"
+            );
+            assert_eq!(partial["events"], cap + 1, "SQL total remains uncapped");
+            assert_eq!(partial["failed_events"], cap);
+            assert_eq!(
+                scoreboard["agents"]["codex"]["failure_incident_events"],
+                cap
+            );
+            assert_eq!(scoreboard["agents"]["codex"]["failed_tool_calls"], cap + 1);
+        },
+    );
 }
 
 #[test]
@@ -284,6 +587,46 @@ fn inactive_tool_calls_are_denied_by_registry_and_audit_classifier() {
             assert_eq!(report.incidents.len(), 1);
             assert_eq!(report.incidents[0].class, FailureClass::Denied);
             assert_eq!(report.raw_events_by_class["denied"], 1);
+        },
+    );
+}
+
+#[test]
+fn duration_ranking_excludes_unnamed_events_before_selecting_top_tools() {
+    isolated(
+        "audit::duration_ranking_excludes_unnamed_events_before_selecting_top_tools",
+        || {
+            let fixture = Fixture::new();
+            for index in 0..8 {
+                let tool = format!("fixture.tool.{index}");
+                let mut event = row(&tool, Some(&tool), AuditEventStatus::Success);
+                event.duration_ms = (index + 1) * 100;
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            for (index, tool) in [None, Some(""), Some(" "), Some("unknown")]
+                .into_iter()
+                .enumerate()
+            {
+                let mut event = row(&format!("unnamed-{index}"), tool, AuditEventStatus::Success);
+                event.command = "job-run".into();
+                event.duration_ms = 90_000;
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let durations = summary["duration_by_tool"].as_array().unwrap();
+            assert_eq!(
+                durations.len(),
+                8,
+                "unnamed buckets must not consume top-N slots"
+            );
+            for (rank, duration) in durations.iter().enumerate() {
+                assert_eq!(duration["tool"], format!("fixture.tool.{}", 7 - rank));
+                assert_eq!(duration["count"], 1);
+                assert_eq!(duration["avg"].as_f64().unwrap(), ((8 - rank) * 100) as f64);
+                assert_eq!(duration["p95"], (8 - rank) * 100);
+            }
         },
     );
 }

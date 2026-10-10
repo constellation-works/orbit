@@ -15,6 +15,27 @@ pub(crate) fn request_shutdown() {
 pub(crate) fn router() -> Router<crate::state::DashboardState> {
     Router::new()
         .route("/host/resources", get(host::resources))
+        // Settings › Hosts [ORB-14451]: the serving host's host file, through
+        // the same operations as `orbit host`.
+        .route("/hosts", get(host::list_hosts).post(host::add_host))
+        .route(
+            "/hosts/:host",
+            get(host::show_host)
+                .patch(host::rename_host)
+                .delete(host::remove_host),
+        )
+        // Another registered host's dashboard API through this one, over an
+        // on-demand SSH forward [ORB-14679]. Methods are listed, not `any`,
+        // so OPTIONS and the rest stay a local 405.
+        .route("/hosts/:host/connection", get(forward::connection))
+        .route(
+            "/on/:host/*rest",
+            get(forward::forward)
+                .post(forward::forward)
+                .put(forward::forward)
+                .patch(forward::forward)
+                .delete(forward::forward),
+        )
         .route("/search", get(search::search))
         .route(
             "/tasks",
@@ -48,6 +69,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             put(config::put_config_crew).delete(config::delete_config_crew),
         )
         .route("/tasks/:id/artifacts/*path", get(tasks::get_task_artifact))
+        .route("/automation/:kind/:name/state", get(automation::full_state))
         .route(
             "/automation/:kind/:name/coverage/:batch/evidence",
             get(automation::accepted_evidence),
@@ -141,6 +163,9 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             get(diagnostics::diagnostics_implement_one),
         )
         .route("/diagnostics/denials", get(denials::list_denials))
+        // `orbit doctor` for the selected workspace: read-only, on demand and
+        // cached [ORB-14830]. GET only; repairs stay on the CLI.
+        .route("/doctor", get(doctor::doctor))
         // Installed plugins and their declared panels [§4.7]. Panel reads
         // remain safe for every session; operator-only enable/disable writes
         // preserve recorded consent. Install and grant decisions stay on CLI.

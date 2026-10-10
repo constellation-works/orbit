@@ -46,7 +46,9 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_REVOKE,
 };
-use orbit_core::application::review::{ExpectedCandidate, HandoffConsoleRefusal};
+use orbit_core::application::review::{
+    DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal,
+};
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,6 +71,24 @@ const MAX_REQUEST_ID: usize = 128;
 /// Longest accepted operator reason, matching what the store records as a
 /// status note.
 const MAX_REASON: usize = 2000;
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ClaimsStateQuery {
+    #[default]
+    Active,
+    Settled,
+    All,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct ClaimsQuery {
+    task: Option<String>,
+    #[serde(default)]
+    state: ClaimsStateQuery,
+    #[serde(default)]
+    detail: bool,
+}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ApproveHandoffRequest {
@@ -105,10 +125,24 @@ pub(super) struct RecoverClaimRequest {
 /// Creates nothing: no receipt, no reservation, no claim, no task transition.
 /// A replica checkout is answered rather than refused, so switching the
 /// workspace selector renders an honest empty view instead of a fault.
-pub(super) async fn list_claims(State(state): State<DashboardState>, Ws(runtime): Ws) -> Response {
+pub(super) async fn list_claims(
+    State(state): State<DashboardState>,
+    Query(query): Query<ClaimsQuery>,
+    Ws(runtime): Ws,
+) -> Response {
+    if let Some(task_id) = query.task.as_deref()
+        && let Err(message) = validate_id(task_id)
+    {
+        return bad_request(message);
+    }
+    let claim_state = match query.state {
+        ClaimsStateQuery::Active => DistributedClaimState::Active,
+        ClaimsStateQuery::Settled => DistributedClaimState::Settled,
+        ClaimsStateQuery::All => DistributedClaimState::All,
+    };
     let operator_session = state.operator_session();
     match blocking("distributed claim console", move || {
-        runtime.distributed_claim_console()
+        runtime.distributed_claim_console_filtered(query.task.as_deref(), claim_state, query.detail)
     })
     .await
     {
@@ -359,7 +393,7 @@ where
             Json(json!({ "ok": true, "result": value })).into_response()
         }
         Ok(Err(error)) => {
-            let response = refusal_response(&error);
+            let response = refusal_response(&runtime, &error);
             record_operation_audit(
                 &runtime,
                 &workspace,
@@ -388,9 +422,9 @@ where
 /// differs: refresh the view, reconcile the merge, or act on the owner machine.
 /// Collapsing them into one 500 would hide exactly the state this surface
 /// exists to show.
-fn refusal_response(error: &OrbitError) -> Response {
+fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
     let message = error.to_string();
-    match HandoffConsoleRefusal::classify(error) {
+    match runtime.handoff_console_refusal(error) {
         Some(refusal @ HandoffConsoleRefusal::ReplicaCheckout) => (
             StatusCode::FORBIDDEN,
             Json(json!({"error": message, "code": refusal.code()})),
@@ -406,24 +440,24 @@ fn refusal_response(error: &OrbitError) -> Response {
             })),
         )
             .into_response(),
-        Some(refusal) => (
+        // A handoff the owner no longer holds reads as stale too: the operator's
+        // remedy is the same refresh, and a 404 would invite a client retry loop.
+        Some(refusal @ HandoffConsoleRefusal::NotCurrent) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": message,
+                "code": refusal.code(),
+                "remedy": "refresh the view: this handoff or claim is no longer current",
+            })),
+        )
+            .into_response(),
+        Some(refusal @ HandoffConsoleRefusal::Stale) => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": message,
                 "code": refusal.code(),
                 "remedy": "refresh the view: the owner's claim or handoff state changed since \
                            this action was prepared",
-            })),
-        )
-            .into_response(),
-        // A handoff the owner no longer holds reads as stale too: the operator's
-        // remedy is the same refresh, and a 404 would invite a client retry loop.
-        None if message.contains("is current on this owner") => (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": message,
-                "code": HandoffConsoleRefusal::NotCurrent.code(),
-                "remedy": "refresh the view: this handoff or claim is no longer current",
             })),
         )
             .into_response(),

@@ -26,16 +26,56 @@ is never a candidate. Run the report a few times before automating it, then
 enable the `worktree-gc` routine for hourly reclamation —
 [automation.md](automation.md).
 
+### Workspace scratch
+
+The same `worktree_gc_pipeline` run also prunes the checkout's own
+`.orbit/tmp` (`ORBIT_SCRATCH_DIR`), where operators and
+`orbit.task.artifact.put` callers stage evidence, build output and CodeQL
+databases. Artifacts are copied into the task store, so staged files are
+disposable once attached. A top-level entry is removed when its **newest mtime
+anywhere inside it** is older than `scratch_older_than_hours` (default `24`);
+newer entries are kept, so a file staged moments ago is never at risk.
+Override the window for one run:
+
+```bash
+orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=72
+orbit run job worktree_gc_pipeline --wait --input scratch_older_than_hours=0   # everything not in use
+```
+
+Set the default for a workspace by editing `scratch_older_than_hours` in the
+seeded job under `~/.orbit/resources/jobs/worktree_gc_pipeline.yaml`. A run
+scoped to one run id (`target_run_id`) leaves scratch alone.
+
+Symlinks are removed as links and never followed out of `.orbit/tmp`. GC skips,
+and reports with a reason, any entry that a live process holds open, uses as its
+working directory or executes (read from `/proc` on Linux and `lsof` on macOS —
+best effort, so another user's processes are not visible), or whose path an
+active run's record or state names. When it cannot tell, it skips. A failure
+removing an entry skips that entry and the sweep continues.
+
+`orbit run show <run> --json` carries the figures under the `reap` step's
+`scratch` object, beside the worktree figures: `bytes_reclaimed`,
+`entries_removed`, `entries_skipped` (each listed in `entries` with its
+`reason`) and `entries_kept`. To empty the directory by hand regardless of age,
+use `orbit gc tmp`.
+
 On a replica checkout (one that pulls work from an owner on another machine),
-task records live on the owner. A claimed leaf whose claim this follower has
-settled with the owner needs no task answer: the owner holds its delivery, so
-its worktree is collected and `detail` names the settled claim. For any other
-worktree GC asks the owner for the task's status over the owner's tool
-surface, through the claim's own route (the owner must be in
-`~/.orbit/mcp-destinations.toml`). A transport failure keeps the worktree as
+new claimed tasks live on the owner; historical tasks minted with this machine's
+prefix remain local. A claimed leaf whose handoff the owner accepted and whose
+claim this follower settled needs no task answer: the owner holds its delivery, so
+its worktree is collected and `detail` names the settled claim. For other
+worktrees, GC reads tasks carrying this machine's prefix from its local store
+and asks the owner only for the owner's prefix, learned from existing claim
+admissions or a single foreign prefix in the workspace's stored tasks. Claims
+identify the owner even when other foreign task mirrors exist; without claims,
+multiple foreign prefixes are ambiguous. An unknown or ambiguous prefix retains the worktree with
+`skipped:task_prefix_unroutable` and makes no owner call. Missing local or owner
+tasks stay `skipped:task_unresolved`. Owner lookups use the owner's tool
+surface, through the claim's own route (the owner must be registered with
+`orbit host add`). A transport failure keeps the worktree as
 `skipped:owner_unreachable` with the error in `detail`; run GC again once the
 owner answers. `skipped:no_owner_route` means the replica has no route to ask
-at all — the owner is missing from `mcp-destinations.toml` or the checkout is
+at all — the owner has no host entry (`orbit host add`) or the checkout is
 not a registered workspace — and `detail` says which. A status lookup that
 fails without a transport error is reported as `skipped:owner_lookup_failed`
 with the reason in `detail`; it does not establish that the owner is down.
@@ -43,10 +83,17 @@ The pull drain also
 reclaims each settled leaf's `target/` on its next pass, so follower disk
 does not depend on this schedule.
 
+Removal first restores owner access to read-only directories inside the
+worktree (a test fixture can leave one), so Git can delete the whole tree.
+
 A directory under the worktree root that Git does not list as a worktree is
-never removed (`skipped:not_registered_worktree`). `detail` gives the remedy:
-`git worktree repair <path>` if it was moved, otherwise inspect it and delete
-it by hand once nothing in it is needed.
+never removed (`skipped:not_registered_worktree`), unless it is the leftover
+of a removal that failed partway: its `.git` link is missing or names an
+administrative directory that no longer exists, and it maps to a terminal run
+with no live worker whose tasks are settled. GC then removes it as `removed`,
+with the reason in `detail`. For any other such directory, `detail` gives the
+remedy: `git worktree repair <path>` if it was moved, otherwise inspect it and
+delete it by hand once nothing in it is needed.
 
 `--target-only` reclaims per-worktree Cargo `target/` directories, which hold
 most of a worktree's size. It deletes only `<worktree>/target` and keeps the
@@ -72,6 +119,7 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
 | `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
+| `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--remove-graph` | Removes retired graph state from this worktree and the shared workspace. |
 
 `--fix-stale-artifacts` is how a workspace catches up after an Orbit upgrade
@@ -132,7 +180,8 @@ a missing/incompatible candidate is refused, including pre-fix downgrades.
 Use `orbit update --preflight --json` against the configured executable and
 same authorities before a wrapper changes the installation. Exit 0 reports
 `schema_version: 1`, `admitted: true`, `reservation: false`,
-`contract: executable-generation-v1`, and the `admission_roots` it locked;
+`contract: executable-generation-v1`, `admission_contract: compatibility-generation-v2`,
+and the `admission_roots` it locked;
 exit 1 refuses admission on stderr and names the refusing authority.
 `--root`, then `ORBIT_ROOT`, otherwise isolated `HOME=` / the host-global
 root selects the first authority, reported as `global_root` (scratch init in
@@ -140,33 +189,49 @@ a read-only `~/.orbit` sandbox stays unblocked). When an override names
 something other than the host-global root, the host-global root is locked
 *as well*: the replaced executable is the running host binary, which no root
 override moves, and clients started without an override pin the host-global
-root. A root override therefore isolates state, not host-binary replacement —
-a live client on either authority refuses the upgrade, and so does an
-authority whose `.generation.lock` this process cannot write (a read-only
-`~/.orbit`, say): the update could never record the candidate there, so it is
-refused before anything is staged rather than after the binary is replaced.
+root. The initialized workspace that convergence would use is locked too
+when it is a different directory — the initialized override, or, when that
+override is only an uninitialized generation root, the workspace discovered
+from the working directory. `--preflight` probes that uninitialized root without
+requiring `orbit workspace init`; `orbit update` itself still refuses it
+before convergence. Spellings of the same directory are one authority. A root
+override therefore isolates state, not host-binary replacement — a live client
+on any of those authorities refuses the upgrade, and so does an authority
+whose `.generation.lock` this process cannot write (a read-only `~/.orbit`,
+say): the update could never record the candidate there, so it is refused
+before anything is staged rather than after the binary is replaced.
 `orbit update` admits against that same set for the invocation; a green
 preflight is not evidence for an update that would resolve different roots. It opens no runtime or
 stores and may create coordination lock files. It is an observation, not a
 reservation. `orbit update` reacquires and holds admission through
 replacement, then pins the candidate in every locked authority through
 convergence. External installers must quiesce clients; a standalone preflight
-is not race-free. `orbit update --check` checks releases, not running-client
+is not race-free, so preflight plus a raw copy is never a way to deploy a
+local build — use `--local-candidate` (below). `orbit update --check` checks releases, not running-client
 compatibility.
 
-Participating CLI/MCP processes pin their executable generation for their entire
-lifetime. An update refuses while any is live, and a different executable cannot
-auto-migrate underneath them. A read-only command whose compiled store schema
+Participating CLI/MCP processes hold a generation lock for their entire
+lifetime. The updater still requires exclusive admission and refuses while a
+participant is live. Ordinary v2 runtime admission instead compares store,
+layout and feature compatibility: compatible builds may run and apply additive
+migrations side by side despite different executable digests. A breaking newer
+writer records a pending switch and waits up to 120 seconds by default for
+participants to yield at safe points; an incompatible older build is refused.
+With a v1-owned generation record, a read-only command whose compiled store schema
 equals the live store schema may join that pin without rewriting `.generation.lock`
 (`task show`/`list`/`flow`, `run history`/`show`, `search`, `workspace list`/`show`,
-`tool list`, `friction list`). The joiner still holds the shared flock, so
+`tool list`, `friction list`). That v1 joiner still holds the shared flock, so
 `orbit update` stays refused until it exits. Writers, MCP/web serve, `migrate --confirm`,
 and a differing schema are still refused; schema equality is exact, not
 additive-newer. Additive-newer read-only compatibility still applies
 to a matching digest. This covers stdio/operator, TCP listener, federated local,
 destination SSH and managed processes without changing their authority. Quiesce
-via the owning client/operator and retry; Orbit does not kill sessions, hand off
-connections, reclaim claims or replay mutations. For a lost reply, inspect the
+via the owning client/operator when replacement is refused. After an installed
+executable changes, supported long-lived processes can re-exec at idle boundaries;
+MCP stdio preserves its session and drain coordinators reattach to their run.
+The clock resumes eligible runs interrupted by the current upgrade at most once,
+leaving elapsed, stopped or superseded drains alone. It does not reclaim claims
+or replay uncertain mutations. For a lost reply, inspect the
 durable operation/audit before any retry. Never delete the root's
 `.generation.lock` or `.generation-admission.lock` to force admission.
 
@@ -176,6 +241,53 @@ restart alone does not prove an unmanaged backend exited. No shadow stores or
 ad-hoc MCP servers are part of this contract. Additive-newer compatibility permits
 some unaudited CLI reads; MCP tool calls, including workspace discovery, require
 durable audit writes and cannot use that read-only fallback.
+
+## Deploying a local build pinned to a source commit
+
+To ship an unreleased fix, build a clean checkout of the full commit SHA and run
+the **candidate's** updater so an older installed build is bootstrapped:
+
+```sh
+set -eu
+SHA='replace-with-the-full-40-or-64-hex-commit'
+WORKSPACE='/absolute/path/to/the-intended-workspace'
+test -z "$(git status --porcelain)" # start in a clean Orbit source checkout
+git fetch --all
+git cat-file -e "$SHA^{commit}"
+git checkout --detach "$SHA"
+test "$(git rev-parse HEAD)" = "$SHA"
+test -z "$(git status --porcelain)"
+cargo build --release --locked -p orbit-cli
+C="$(pwd -P)/target/release/orbit"
+"$C" update --local-candidate "$C" --source-commit "$SHA" \
+  --write-candidate-manifest ~/orbit-candidate-"$SHA".json
+# Quiesce clients, then run from the intended workspace for discovery/convergence.
+cd "$WORKSPACE"
+"$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
+  --source-commit "$SHA" \
+  --install-target ~/.orbit/bin/orbit --json
+```
+
+Trust is reported literally as `operator_attested` with `signed_release: false`:
+Orbit computes the digest from the accepted bytes and the target from the
+executable header, but the source commit is the operator's attestation. Release
+signature verification is unchanged and never satisfied by a local candidate;
+each platform builds its own candidate from the same commit.
+
+`--install-target` must be the managed `orbit` executable (not a symlink, owned
+by the invoking user); package-manager or unknown installs are refused. The
+update admits the invocation, host-global, and selected workspace roots for the
+whole staging, backup, swap and convergence sequence. Workspace discovery
+follows the current directory independently of `HOME`; run from the intended
+workspace, and use an isolated checkout as well as isolated `HOME` and install
+target for smoke checks. The JSON report's `workspace_root` and
+`admission_roots` show what was selected and held. The staged copy is what
+installs even if the candidate path changes, an equal version with a different
+digest replaces, and live MCP/dashboard/clock/drain clients make it refuse
+before anything changes — quiesce them, retry, then reconnect. Rerunning the
+same command is idempotent and finishes partial convergence; `needs_recovery`
+(exit 4) carries the exact retry command in `local_candidate.retry_command`.
+See the upgrades runbook for the full procedure.
 
 ## Database and layout upgrades
 
@@ -194,13 +306,48 @@ want before upgrading a machine that matters.
 ```bash
 orbit audit list --since 1h --status failure
 orbit audit stats --since 7d
-orbit audit export --json > audit.json
+orbit audit export --output audit.json
 orbit audit prune --older-than 90d --confirm
 ```
 
 The audit store is persistent invocation metadata: who called what, when, and
 whether it was denied. It grows without bound until pruned. Prune requires
 `--confirm`; export first if the history matters.
+
+## Store retention
+
+The host store (`~/.orbit/orbit.db`) also keeps every run's audit events and
+pipeline state, and each workspace keeps the blobs those events name under
+`.orbit/state/audit/blobs/`. Two commands bound them. Both only report until
+you pass `--apply`:
+
+```bash
+orbit gc audit                        # rows and bytes past retention.audit_days, and unreferenced blobs
+orbit gc audit --apply                # delete them
+orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
+orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
+orbit gc audit --older-than-days 30   # one-off window instead of the configured one
+```
+
+`retention.audit_days` and `retention.runs_days` default to 60 days. `gc audit`
+prunes the host-wide command audit and this workspace's run audit, then removes
+blobs that no remaining audit row, run step or pipeline state names. A blob
+written in the last 24 hours, or one a write in progress has marked as pending,
+is always kept. `gc runs` never touches a held run or one still in flight, so
+`orbit run show`, run history and the scoreboard keep working.
+
+Deletes run in batches of 1,000 rows, each its own short write transaction, so
+running workers are not starved. Freed pages stay inside the database file; each
+report shows the freelist, and `VACUUM` returns it to the filesystem. Run
+`VACUUM` yourself while nothing is using Orbit:
+
+```bash
+sqlite3 ~/.orbit/orbit.db 'VACUUM;'
+```
+
+`orbit doctor` reports what is reclaimable now (`store-retention`). To run both
+sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
+On a replica checkout it is owner-only and never fires.
 
 ## Logs
 

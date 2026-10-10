@@ -1,8 +1,8 @@
 ---
 title: Task Publication — Overview
 owner: codex
-last_updated: 2026-08-30
-last_validated: 2026-09-19
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Accepted
 feature: task-publication
 doc_role: overview
@@ -48,7 +48,7 @@ Existing capabilities solve adjacent problems:
   conflict resolution.
 
 Task publication fills the narrower remaining gap: keep a remote,
-access-controlled, inspectable copy of task intent and selected attachments while
+inspectable copy of task intent and selected attachments while
 separating task visibility and retention from the source-code repository.
 
 ## 2. Core Concepts
@@ -84,7 +84,7 @@ first snapshot.
 
 ### Consumer
 
-A machine that fetches the private publication repository for inspection or
+A machine that fetches the configured publication repository for inspection or
 disaster recovery. Fetching does not bind the snapshot as a live writable
 workspace and does not authorize local task mutation.
 

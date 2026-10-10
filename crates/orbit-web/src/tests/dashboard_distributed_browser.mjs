@@ -1,7 +1,7 @@
 // Usage: node dashboard_distributed_browser.mjs /absolute/path/to/playwright/index.mjs /evidence/directory
 //
-// ORB-12516 in a real browser. The Node DOM harness proves the logic; this
-// proves the shipped markup, styles and modules actually render it — that the
+// ORB-12516 in Chromium: the required dashboard-distributed-browser QA scenario.
+// This runs the behavior assertions and checks the shipped markup and styles: the
 // claim panel fits the detail column without forcing the page sideways, that
 // its controls are reachable and operable from the keyboard, and that an
 // operator decision travels from a real click to a real request.
@@ -47,7 +47,8 @@ const assertNoOverflow = async (label) => {
 
 try {
   browser = await chromium.launch({ headless: true });
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // A fixed zone away from UTC, so claim times are checked as local times.
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
   const pageErrors = [];
   page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -140,7 +141,7 @@ try {
   await page.waitForSelector('.claim-panel', { timeout: 5000 });
   const rendered = await page.textContent('.claim-panel');
   for (const required of [
-    'machine hm_9ca6004473492f06 · name runner-2',
+    'on runner-2',
     'inspect this run on machine hm_9ca6004473492f06',
     'expiry is not revocation',
     'not required · policy none',

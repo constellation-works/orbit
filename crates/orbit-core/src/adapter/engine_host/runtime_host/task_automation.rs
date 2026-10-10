@@ -46,9 +46,13 @@ pub(super) fn apply_locked_task_automation_update(
                     "task automation update body was invoked more than once".to_string(),
                 )
             })?;
+            let holds_evidence = update.status_event.as_deref() == Some("review_awaiting_evidence");
             updated = Some(apply_task_automation_update_under_lock(
                 runtime, task_id, update,
             )?);
+            if holds_evidence {
+                crate::application::review::evidence::resume_evidence_hold(runtime, task_id)?;
+            }
             Ok(())
         })?;
     let (task, previous_status) = updated.ok_or_else(|| {
@@ -56,9 +60,7 @@ pub(super) fn apply_locked_task_automation_update(
             "task automation update body did not run under the task lock".to_string(),
         )
     })?;
-    if task.status == TaskStatus::Done {
-        runtime.record_resolves_side_effects(&task)?;
-    }
+    runtime.record_resolves_side_effects(previous_status, &task);
     runtime.close_task_prs_after_transition(previous_status, &task, landing_note.as_deref());
     Ok(())
 }
@@ -70,6 +72,14 @@ fn apply_task_automation_update_under_lock(
     update: TaskAutomationUpdate,
 ) -> Result<(Task, TaskStatus), OrbitError> {
     let existing_task = runtime.get_task(task_id)?;
+    if update
+        .expected_status
+        .is_some_and(|expected| expected != existing_task.status)
+    {
+        return Err(OrbitError::CapabilityDenied(
+            "task status changed after the automation decision; refusing a stale transition".into(),
+        ));
+    }
     if update.status == Some(TaskStatus::InProgress)
         && crate::application::task::in_progress_transition_requires_plan(existing_task.status)
     {
@@ -132,6 +142,7 @@ fn apply_task_automation_update_under_lock(
                 status_event: update.status_event.clone(),
                 status_note: update.status_note.clone(),
                 append_comments: update.append_comments.clone(),
+                append_history: update.append_history.clone(),
                 expected_status: Some(vec![existing_task.status]),
                 ..StoreTaskUpdateParams::from(TaskUpdateParams {
                     execution_summary: update.execution_summary.clone(),

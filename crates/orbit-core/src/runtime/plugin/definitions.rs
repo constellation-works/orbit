@@ -11,7 +11,7 @@
 //! Every refusal here is scoped to one plugin (§4.9): the caller reports it as
 //! that plugin's diagnostic and leaves every other plugin untouched.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
@@ -261,10 +261,96 @@ pub(crate) fn provenance_header(namespace: &str, version: &str, kind: &str) -> S
 }
 
 /// Read the `plugin:<ns>@<version>` provenance from a seeded definition's
-/// header comment. `None` for any file Orbit's plugin seeding did not write.
-pub fn read_definition_provenance(path: &Path) -> Option<(String, String)> {
-    let raw = std::fs::read_to_string(path).ok()?;
+/// header comment.
+///
+/// `definitions_dir` is the routines or auto-tasks directory the caller is
+/// allowed to read. `path` must be a regular file inside it. A missing file,
+/// a header Orbit did not write, a `..` component, a symlinked definitions
+/// directory, or a symlink on the way to the file all return `None` — the
+/// same answer as "this file has no plugin provenance" — and the file outside
+/// the directory is not opened.
+pub fn read_definition_provenance(definitions_dir: &Path, path: &Path) -> Option<(String, String)> {
+    let root = canonical_definition_directory(definitions_dir)?;
+    let relative = definition_relative(definitions_dir, &root, path)?;
+    if !relative_is_plain(relative) || !contained_regular_file(&root, relative) {
+        return None;
+    }
+    let candidate = root.join(relative);
+    let canonical = std::fs::canonicalize(&candidate).ok()?;
+    // `Path::starts_with` is CodeQL's rust/path-injection SafeAccessCheck on
+    // the receiver, and only after canonicalize (the path is normalized).
+    // A helper wrapping the check is not that barrier, so the read below has
+    // to use this canonical path in this function.
+    if !canonical.starts_with(&root) {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&canonical).ok()?;
     parse_provenance_header(&raw)
+}
+
+/// The real definitions directory: its parent is canonicalized, then the
+/// directory's own name is joined back on. A symlink at that name is refused,
+/// so a `routines` or `auto_tasks` link cannot retarget the root.
+fn canonical_definition_directory(dir: &Path) -> Option<PathBuf> {
+    let name = dir.file_name()?;
+    if name == "." || name == ".." {
+        return None;
+    }
+    let parent = dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())?;
+    let canonical_parent = std::fs::canonicalize(parent).ok()?;
+    let expected = canonical_parent.join(name);
+    if !expected.starts_with(&canonical_parent) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&expected).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    Some(expected)
+}
+
+fn definition_relative<'a>(
+    definitions_dir: &Path,
+    root: &Path,
+    path: &'a Path,
+) -> Option<&'a Path> {
+    path.strip_prefix(definitions_dir)
+        .or_else(|_| path.strip_prefix(root))
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+}
+
+fn relative_is_plain(relative: &Path) -> bool {
+    relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+}
+
+/// Every component under `root` is a real directory, and the leaf is a regular
+/// file. `symlink_metadata` does not follow the component it is called on, so
+/// a link is refused before [`std::fs::canonicalize`] can resolve it.
+fn contained_regular_file(root: &Path, relative: &Path) -> bool {
+    let mut cursor = root.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        cursor.push(component);
+        let Ok(metadata) = std::fs::symlink_metadata(&cursor) else {
+            return false;
+        };
+        if metadata.file_type().is_symlink() {
+            return false;
+        }
+        if components.peek().is_none() {
+            if !metadata.is_file() {
+                return false;
+            }
+        } else if !metadata.is_dir() {
+            return false;
+        }
+    }
+    true
 }
 
 /// The header parser, split out so it can be exercised without a file.

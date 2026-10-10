@@ -20,9 +20,9 @@
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{OrbitError, StorageLayer};
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
 };
@@ -506,7 +506,12 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
     .map_err(|error| match error {
         // The consumer's own refusals (oversize, disk write) already say what
         // happened; only a failure to run curl needs the hint.
-        refusal @ (OrbitError::InvalidInput(_) | OrbitError::Io(_)) => refusal,
+        refusal
+            if matches!(refusal, OrbitError::InvalidInput(_))
+                || refusal.storage_layer() == Some(StorageLayer::Io) =>
+        {
+            refusal
+        }
         error => OrbitError::Execution(format!(
             "cannot fetch the plugin archive '{url}': {error}; fetching an `https://` plugin \
              source needs `curl` on PATH"
@@ -619,7 +624,7 @@ fn unpack_into(
 ) -> Result<PathBuf, OrbitError> {
     refuse_oversize_archive(path, source_name)?;
     let unpacked = scratch.join("archive");
-    std::fs::create_dir_all(&unpacked)
+    orbit_common::fs::io::create_private_dir_all(&unpacked)
         .map_err(|error| OrbitError::Io(format!("create {}: {error}", unpacked.display())))?;
     let file = std::fs::File::open(path)
         .map_err(|error| OrbitError::Io(format!("open {source_name}: {error}")))?;
@@ -760,12 +765,12 @@ pub(super) fn unpack_zip(
         refuse_escaping_member(&member, source_name)?;
         let target = dest.join(&member);
         if entry.is_dir() {
-            std::fs::create_dir_all(&target)
+            orbit_common::fs::io::create_private_dir_all(&target)
                 .map_err(|error| OrbitError::Io(format!("create {}: {error}", target.display())))?;
             continue;
         }
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
+            orbit_common::fs::io::create_private_dir_all(parent)
                 .map_err(|error| OrbitError::Io(format!("create {}: {error}", parent.display())))?;
         }
         let mut out = std::fs::File::create(&target)

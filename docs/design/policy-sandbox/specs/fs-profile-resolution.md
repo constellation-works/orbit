@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Filesystem Profile Resolution"
 tags: ["policy-sandbox"]
-last_validated: 2026-09-26
+last_validated: 2026-10-06
 ---
 
 # Spec: Filesystem Profile Resolution
@@ -18,14 +18,14 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 - **Schema acceptance.** Only `schemaVersion: 2` policies are accepted. v1 is rejected at load time with an explicit migration message that names `spec.denyRead`, `spec.denyModify`, and `spec.fsProfiles`.
 - **Profile lookup.** `effective_profile(profile_name)` returns the named profile if present. If absent and `profile_name == "unrestricted"`, it synthesizes `FsProfile { read: ["./**"], modify: ["./**"] }`. Any other absent name returns `PolicyError::Invalid` from the type layer; application boundaries may map that to `OrbitError::InvalidInput`.
 - **Rule normalization.** Every rule is trimmed, has backslashes converted to forward slashes, has leading `./` stripped, and is rejected if it is `~`/`~/…`, contains parent traversals, or is absolute. The normalizer also compiles the rule to its glob-equivalent regex; a rule that fails to compile is rejected at load.
-- **Deny injection.** Every entry of `denyRead` is appended to the resolved profile's `read` list as `!<rule>`. Ordinary `denyModify` entries append to `modify` as `!<rule>`. A `denyModify` entry already beginning with `!` is an explicit host-policy exception: it is resolved after its enclosing deny, but only through the selected profile's existing positive coverage, with nested profile rules replayed in order so profile negatives still narrow it. Injection happens after profile lookup so the implicit `unrestricted` profile is also subject to global boundaries.
+- **Deny injection.** Every entry of `denyRead` is appended to the resolved profile's `read` list as `!<rule>`. Ordinary `denyModify` entries append to `modify` as `!<rule>`. A `denyModify` entry already beginning with `!` is an explicit host-policy exception: it is resolved after its enclosing deny, but only through the selected profile's existing positive coverage. An exact exception is emitted only when the profile's own last match allows that path, so a wildcard negation such as `!**/config.toml` still denies it. A subtree exception starts with the decision of the last profile rule covering the whole subtree, then replays only rules after that covering rule, scoped to the subtree. Earlier nested and overlapping rules have already been overridden and must not be replayed. With no covering rule, all overlapping rules are considered. Nested rules are copied as written, and a partial overlap (including a wildcard negation structural cover does not see) is rewritten so it matches only inside the exception. Profile negatives therefore still narrow the grant, and the replay does not change decisions outside it. Injection happens after profile lookup so the implicit `unrestricted` profile is also subject to global boundaries.
 - **Validation invariants.**
   - Profile names are non-empty.
   - A positive `modify` rule is covered by at least one positive `read` rule in the same profile (`rule_covers_path_rule`).
   - A profile rule that exactly equals a global `denyRead` or `denyModify` entry is rejected.
   - `denyRead` rules are also treated as `denyModify` for the validation cross-check: a profile cannot grant modify on a path that is globally read-denied.
   - `denyRead` exceptions are rejected. A `denyModify` exception must be an exact path or `<path>/**` subtree strictly contained by an earlier deny in the same policy.
-- **Merge contract.** `PolicyDef::merged(global, workspace)` overrides global `fsProfiles` by name with workspace entries, accumulates global `denyRead` / `denyModify` with workspace additions (deduplicated), prefers the workspace description when set, and re-runs `validate` on the merged result. A workspace modify exception must be contained by a host exception; it cannot expand the host exception surface. Workspace denies remain later and therefore can narrow a host exception.
+- **Merge contract.** `PolicyDef::merged(global, workspace)` overrides global `fsProfiles` by name with workspace entries, accumulates global `denyRead` / `denyModify` with workspace additions, prefers the workspace description when set, and re-runs `validate` on the merged result. `denyRead` additions are deduplicated against the whole list. `denyModify` additions are deduplicated only within the trailing run of rules of the same kind (denies or exceptions), preserving repetitions across intervening rules of the opposite kind. A workspace modify exception must be contained by a host exception; it cannot expand the host exception surface. Workspace denies remain later and therefore can narrow a host exception even when they repeat a host deny. A workspace exception is appended after the workspace rules before it, then the host rules that followed the last covering host exception are replayed, so the exception never reopens a later host deny.
 - **Authority source.** Modify exceptions intersect `FsProfile::modify`; they do not create authority for read-only/narrow profiles and are never derived from task `context_files`.
 
 ## Evaluation Invariants
@@ -56,8 +56,8 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 - New profile fields must extend `FsProfile` and `ResolvedFsProfile` together; the resolver and the validator both consume `ResolvedFsProfile`.
 - New deny categories (e.g., `denyExec`) must be injected as negated rules into a corresponding rule list rather than evaluated as a separate pass; this preserves the single-walk evaluation contract.
 - Schema version bumps must reject the previous version explicitly at load and name the migration in the error message, the same way v1 → v2 currently does.
-- The `denyModify` exception syntax extends schema v2; policies without exceptions need no migration. Installing new shipped defaults is not enough by itself: run `orbit init` to refresh the machine-global policy assets before validating live `orbit policy check` and sandbox mount plans. Do not use `--force` merely to refresh defaults.
+- The `denyModify` exception syntax extends schema v2; policies without exceptions need no migration. Installing new shipped defaults is not enough by itself: run `orbit init` to refresh the machine-global policy assets before validating live sandbox mount plans. Do not use `--force` merely to refresh defaults.
 
 ## Agent Signature
 
-Last revised by grok for [ORB-13489].
+Last revised by codex for [ORB-14286].

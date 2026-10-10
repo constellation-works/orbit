@@ -5,8 +5,11 @@
 use std::fs;
 use std::path::Path;
 
+use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
+
+use super::target::resolve_config_target;
 
 pub(in crate::command::mcp::setup) fn load_toml_document(
     path: &Path,
@@ -21,19 +24,20 @@ pub(in crate::command::mcp::setup) fn load_toml_document(
     })
 }
 
-/// Write `doc` in place. Deliberately not an atomic rename: a config symlinked
-/// from a dotfiles repository must stay a symlink.
+/// Write `doc` atomically, so a failed write leaves the previous config
+/// intact. A config symlinked from a dotfiles repository stays a symlink: the
+/// file it resolves to is the one replaced.
 pub(in crate::command::mcp::setup) fn write_toml_document(
     path: &Path,
     doc: &DocumentMut,
 ) -> Result<(), OrbitError> {
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::InvalidInput(format!("path has no parent: {}", path.display()))
-    })?;
-    fs::create_dir_all(parent)
-        .map_err(|err| OrbitError::Io(format!("failed to create '{}': {err}", parent.display())))?;
-    fs::write(path, doc.to_string())
-        .map_err(|err| OrbitError::Io(format!("failed to write '{}': {err}", path.display())))
+    let target = resolve_config_target(path)?;
+    atomic_write_text(&target, &doc.to_string()).map_err(|err| {
+        OrbitError::Io(format!(
+            "failed to atomically write '{}': {err}",
+            path.display()
+        ))
+    })
 }
 
 /// Like [`write_toml_document`], but delete the file once nothing but

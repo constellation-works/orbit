@@ -1,3 +1,4 @@
+use orbit_common::LOCK_BUSY_ERROR_CODE;
 use orbit_core::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
@@ -38,6 +39,11 @@ pub fn error_payload(error: &OrbitError) -> Value {
         object.insert("source_run_id".to_string(), json!(source_run_id));
         object.insert("run_id".to_string(), json!(run_id));
     }
+    if let OrbitError::TmpGcActiveRuns { run_ids } = error
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("run_ids".to_string(), json!(run_ids));
+    }
     if let Some((task_id, path, reason)) = error.task_bundle_corruption()
         && let Some(object) = payload.as_object_mut()
     {
@@ -52,6 +58,11 @@ pub fn error_payload(error: &OrbitError) -> Value {
         object.insert("task_id".to_string(), json!(details.task_id));
         object.insert("workspace_id".to_string(), json!(details.workspace_id));
         object.insert("found_in".to_string(), json!(details.found_in));
+    }
+    if let Some(tag) = error.dropped_system_tag()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("tag".to_string(), json!(tag));
     }
     payload
 }
@@ -78,10 +89,6 @@ fn error_code(error: &OrbitError) -> &str {
             NotFoundKind::Job => "job_not_found",
             NotFoundKind::JobRun => "job_run_not_found",
             NotFoundKind::Activity => "activity_not_found",
-            // ADR reads expose the same stable distinction as the tool and
-            // federation contracts: absent allocations are `not_found`, while
-            // allocated-but-unreadable bodies are `remote_artifact_unavailable`.
-            NotFoundKind::Adr => "not_found",
             NotFoundKind::DesignFeature => "design_feature_not_found",
             NotFoundKind::AgentSession => "agent_session_not_found",
             NotFoundKind::Workspace => "workspace_not_found",
@@ -90,13 +97,25 @@ fn error_code(error: &OrbitError) -> &str {
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => "capability_refused",
+        OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::HostRegistry { code, .. } => code.as_str(),
+        OrbitError::UnknownSelector(_) => "unknown_selector",
+        OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
+        OrbitError::UnreachableDestination(_) => "unreachable_destination",
+        // `--host` resolution reads a host's live list: the same codes the
+        // federated route reports [ORB-14449].
+        OrbitError::StaleRoute(_) => "stale_route",
+        OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
         OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
-        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => "invalid_input",
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+        OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
         OrbitError::JobValidation(_) => "job_validation_failed",
@@ -106,23 +125,27 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::OwnerNegotiation(_) => "owner_negotiation",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::Execution(_) => "execution_failed",
+        OrbitError::Execution(_) | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
+        // The same retryable code MCP reports [ORB-15088].
+        OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
         OrbitError::TaskStatusTransition(_) => "task_status_transition",
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
         OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
-        OrbitError::AdrInvalidTransition(_) => "adr_invalid_transition",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
+        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
+        OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
+        OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",
         // New OrbitError variants must remain JSON-serializable before this
         // boundary assigns them a dedicated stable code.
         _ => "internal_error",

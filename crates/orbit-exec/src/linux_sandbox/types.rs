@@ -13,6 +13,10 @@ pub struct BwrapProbeOutcome {
     pub available: bool,
     pub trusted_path: String,
     pub detail: String,
+    /// Which trusted binary the probe ran, once one was selected.
+    pub source: Option<BwrapSource>,
+    /// `bwrap --version` of a binary that passed the capability probe.
+    pub version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -24,7 +28,8 @@ pub struct LinuxBwrapPlan {
     /// caller reports each one against the rule that granted it.
     pub dropped_grants: Vec<UnsatisfiedWriteGrant>,
     /// Mount-source descriptors retained by the caller until the sandboxed
-    /// child exits. Empty for ordinary path-based plans and audit rendering.
+    /// child exits. Plans use these for writable authority mounts and for
+    /// read-only Git metadata hidden by the private `/tmp` mount.
     pub(super) mount_sources: Vec<Arc<File>>,
     pub(super) mount_evidence: Vec<LinuxBwrapMountEvidence>,
     /// Post-run snapshot for the write-policy gaps this plan cannot mount,
@@ -44,7 +49,7 @@ impl PartialEq for LinuxBwrapPlan {
 impl Eq for LinuxBwrapPlan {}
 
 impl LinuxBwrapPlan {
-    /// Descriptor and object identity used by each effective `--bind-fd` grant.
+    /// Descriptor and object identity used by each effective writable `--bind-fd` grant.
     pub fn mount_evidence(&self) -> &[LinuxBwrapMountEvidence] {
         &self.mount_evidence
     }

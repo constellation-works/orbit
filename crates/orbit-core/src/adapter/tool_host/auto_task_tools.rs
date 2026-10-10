@@ -57,8 +57,6 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
 /// seeding plugin is off here. A live definition is the bare record.
 fn listed_json(runtime: &OrbitRuntime, listed: &ListedAutoTask) -> Result<Value, OrbitError> {
     let mut value = to_json(&listed.definition)?;
-    value["enabled_by_review_policy"] =
-        json!(runtime.auto_task_enabled_by_review_policy(&listed.definition));
     value["effective_enabled"] = json!(runtime.auto_task_enabled(&listed.definition));
     if let (Some(inactive), Some(object)) = (&listed.inactive_plugin, value.as_object_mut()) {
         object.insert("plugin_inactive".to_string(), json!(true));
@@ -85,6 +83,10 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     // A definition listings hide still resolves here, marked inactive.
     let listed = runtime.listed_auto_task(definition);
     let mut value = listed_json(runtime, &listed)?;
+    match runtime.auto_task_layering(&name) {
+        Ok(layering) => value["layering"] = json!(layering),
+        Err(error) => value["layering_error"] = json!(error.to_string()),
+    }
     let definition = listed.definition;
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input
@@ -118,15 +120,16 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         description: optional_str(&input, "description"),
         schedule: parse_field(&input, "schedule", false)?,
         dedupe: parse_field(&input, "dedupe", false)?,
-        template: parse_field(&input, "template", false)?,
+        // The tool's template object is a full replacement, including defaults
+        // for omitted fields. CLI flags use a field-scoped patch instead.
+        template: parse_field::<AutoTaskTemplate>(&input, "template", false)?.map(Into::into),
         enabled: parse_field(&input, "enabled", false)?,
     };
+    let waived = params.waive_batch.is_some();
     let definition = runtime.auto_task_update(&name, params)?;
     let mut response = to_json(&definition)?;
-    response["enabled_by_review_policy"] =
-        json!(runtime.auto_task_enabled_by_review_policy(&definition));
     response["effective_enabled"] = json!(runtime.auto_task_enabled(&definition));
-    let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
+    let warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
     if !warnings.is_empty()
         && let Some(object) = response.as_object_mut()
     {

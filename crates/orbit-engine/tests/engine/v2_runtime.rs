@@ -17,6 +17,7 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,10 +31,10 @@ use orbit_engine::{
     V2AuditWriter, V2DispatchInput, V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
     resolve_job_catalog_refs_for_execution,
 };
-use orbit_types::workflow::ReviewerInvocationEvent;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, DeterministicSpec, V2AuditEvent, V2AuditEventKind,
 };
+use orbit_types::workflow::{JobRunState, PipelineState, ReviewerInvocationEvent};
 use serde_json::{Value, json};
 
 #[test]
@@ -201,7 +202,7 @@ impl RuntimeHost for EchoHost {
     }
 }
 
-fn build_writer_and_sinks(
+pub(crate) fn build_writer_and_sinks(
     audit_root: &std::path::Path,
     run_id: &str,
 ) -> (Arc<V2AuditWriter>, Arc<V2SqliteSink>, Arc<InMemorySink>) {
@@ -248,7 +249,7 @@ fn assert_sqlite_nonempty(sink: &V2SqliteSink) -> Result<(), String> {
     Ok(())
 }
 
-fn workspace_root() -> PathBuf {
+pub(crate) fn workspace_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()
@@ -267,6 +268,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn parallel_join_policy_decides_the_block_from_its_branches() {
     let cases = [
+        ("all, no branches", json!({"mode": "all"}), "", true),
+        ("any, no branches", json!({"mode": "any"}), "", false),
         (
             "all, every branch succeeds",
             json!({"mode": "all"}),
@@ -319,17 +322,24 @@ fn parallel_join_policy_decides_the_block_from_its_branches() {
         let job = job_asset(json!([{
             "id": "fan",
             "parallel": { "join": join, "branches": branch_steps },
-        }]));
+        }, probe_step("after", json!({"label": "after"}))]));
         let run = run_graph_job(&job, Value::Null);
 
         assert_eq!(run.succeeded(), expect_success, "{case}: {:?}", run.result);
+        assert_eq!(
+            run.host.labels().iter().any(|label| label == "after"),
+            expect_success,
+            "{case}: only a successful join runs the next step"
+        );
         let joined = run
             .events
             .iter()
             .find_map(|event| match &event.kind {
                 V2AuditEventKind::StepJoin {
-                    branch_outcomes, ..
-                } => Some(
+                    step_id,
+                    mode,
+                    branch_outcomes,
+                } if step_id == "fan" && mode == join["mode"].as_str().unwrap() => Some(
                     branch_outcomes
                         .iter()
                         .map(|branch| (branch.branch_id.clone(), branch.outcome.clone()))
@@ -350,6 +360,15 @@ fn parallel_join_policy_decides_the_block_from_its_branches() {
             joined, expected,
             "{case}: branch outcomes in declaration order"
         );
+        if branches.is_empty() {
+            assert_eq!(run.outcome().pipeline["fan"], json!([]), "{case}");
+            assert_eq!(
+                run.host.calls().len(),
+                usize::from(expect_success),
+                "{case}"
+            );
+            assert_empty_join_resume(&job, Value::Null, &run, "fan", expect_success);
+        }
     }
 }
 
@@ -393,6 +412,20 @@ fn fan_out_collects_outputs_in_item_order_within_the_worker_cap() {
 #[test]
 fn fan_in_join_policy_decides_the_block_from_its_workers() {
     let cases = [
+        ("all, no workers", json!({"mode": "all"}), "", true),
+        ("any, no workers", json!({"mode": "any"}), "", false),
+        (
+            "quorum 1, no workers",
+            json!({"mode": "quorum", "n": 1}),
+            "",
+            false,
+        ),
+        (
+            "all, every worker succeeds",
+            json!({"mode": "all"}),
+            "+++",
+            true,
+        ),
         (
             "all, one worker fails",
             json!({"mode": "all"}),
@@ -404,6 +437,30 @@ fn fan_in_join_policy_decides_the_block_from_its_workers() {
             json!({"mode": "any"}),
             "-+-",
             true,
+        ),
+        (
+            "any, every worker fails",
+            json!({"mode": "any"}),
+            "---",
+            false,
+        ),
+        (
+            "quorum 1, one worker succeeds",
+            json!({"mode": "quorum", "n": 1}),
+            "+",
+            true,
+        ),
+        (
+            "quorum 1, one worker fails",
+            json!({"mode": "quorum", "n": 1}),
+            "-",
+            false,
+        ),
+        (
+            "quorum exceeds runtime count",
+            json!({"mode": "quorum", "n": 2}),
+            "+",
+            false,
         ),
         (
             "quorum 2 met",
@@ -430,24 +487,62 @@ fn fan_in_join_policy_decides_the_block_from_its_workers() {
             .enumerate()
             .map(|(index, kind)| probe_input(kind, index))
             .collect();
-        let job = job_asset(json!([fan_out_step(4, join)]));
-        let run = run_graph_job(&job, json!({ "items": items }));
+        let job = job_asset(json!([
+            fan_out_step(4, join),
+            probe_step("after", json!({"label": "after"})),
+        ]));
+        let input = json!({ "items": items });
+        let run = run_graph_job(&job, input.clone());
 
         assert_eq!(run.succeeded(), expect_success, "{case}: {:?}", run.result);
+        assert_eq!(
+            run.host.labels().iter().any(|label| label == "after"),
+            expect_success,
+            "{case}: only a successful join runs the next step"
+        );
+        let worker_count = workers.len() as u32;
+        assert!(
+            run.events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::FanoutDispatched { step_id, worker_count: dispatched }
+                    if step_id == "scatter" && *dispatched == worker_count
+            )),
+            "{case}: fanout.dispatched records the runtime item count"
+        );
         let failed = workers.chars().filter(|kind| *kind != '+').count() as u32;
         assert!(
             run.events.iter().any(|event| matches!(
                 &event.kind,
                 V2AuditEventKind::FaninJoined { collected, failed: joined_failed, .. }
-                    if *collected == 3 - failed && *joined_failed == failed
+                    if *collected == worker_count - failed && *joined_failed == failed
             )),
             "{case}: fanin.joined counts collected and failed workers"
         );
         if let Ok(outcome) = &run.result {
             let collected = outcome.pipeline["scatter"].as_array().expect("collected");
+            assert_eq!(collected.len(), workers.len(), "{case}");
+            assert_eq!(
+                outcome.pipeline["results"], outcome.pipeline["scatter"],
+                "{case}"
+            );
             for (kind, output) in workers.chars().zip(collected) {
                 assert_eq!(output.is_null(), kind != '+', "{case}: {collected:?}");
             }
+        }
+        if workers.is_empty() {
+            assert_eq!(run.outcome().pipeline["scatter"], json!([]), "{case}");
+            assert_eq!(
+                run.host.calls().len(),
+                usize::from(expect_success),
+                "{case}"
+            );
+            assert!(
+                !run.events
+                    .iter()
+                    .any(|event| matches!(event.kind, V2AuditEventKind::WorkerState { .. })),
+                "{case}: no worker audit events for an empty fan-out"
+            );
+            assert_empty_join_resume(&job, input, &run, "scatter", expect_success);
         }
     }
 }
@@ -513,6 +608,155 @@ fn loop_iterates_until_break_failure_or_budget() {
     );
 }
 
+/// An items expression that renders valid JSON must be an array. `null`, an
+/// object, a number, a bool, or a JSON string fails the step with
+/// `JobExecution` naming `fan_out.items` or `loop.items`, and no worker runs.
+/// A JSON array still parses, including one that holds an object, and a bare
+/// `A, B` string still splits on the comma.
+#[test]
+fn items_expression_rejects_non_array_json() {
+    let rejected = [
+        ("null", Value::Null),
+        ("object", json!({"a": 1, "b": 2})),
+        ("number", json!(0)),
+        ("bool", json!(false)),
+        ("string", json!("\"quoted\"")),
+    ];
+    for (case, list) in rejected {
+        for (construct, field, job) in [
+            ("fan_out", "fan_out.items", echo_fan_out_job()),
+            ("loop", "loop.items", echo_loop_job()),
+        ] {
+            let run = run_graph_job(&job, json!({ "list": list.clone() }));
+            match &run.result {
+                Err(DispatchError::JobExecution(message)) => {
+                    assert!(
+                        message.contains(field),
+                        "{construct} {case}: error names {field}: {message}"
+                    );
+                }
+                other => panic!("{construct} {case}: expected JobExecution, got {other:?}"),
+            }
+            assert!(
+                run.host.calls().is_empty(),
+                "{construct} {case}: no worker runs for non-array JSON"
+            );
+        }
+    }
+
+    let accepted = [
+        ("bare list", json!("A, B"), vec![json!("A"), json!("B")]),
+        (
+            "json array",
+            json!(["A", "B"]),
+            vec![json!("A"), json!("B")],
+        ),
+        (
+            "json array of mixed values",
+            json!(["A", {"k": 1}]),
+            vec![json!("A"), json!({"k": 1})],
+        ),
+        ("empty array", json!([]), Vec::new()),
+    ];
+    for (case, list, items) in accepted {
+        let fan_out = run_graph_job(&echo_fan_out_job(), json!({ "list": list.clone() }));
+        assert!(fan_out.succeeded(), "fan_out {case}: {:?}", fan_out.result);
+        let collected = fan_out.outcome().pipeline["scatter"]
+            .as_array()
+            .expect("fan_out collects an array");
+        let values: Vec<Value> = collected
+            .iter()
+            .map(|output| output["value"].clone())
+            .collect();
+        assert_eq!(values, items, "fan_out {case}: workers run in item order");
+        assert_eq!(
+            fan_out.host.calls().len(),
+            items.len(),
+            "fan_out {case}: one call per item"
+        );
+
+        let loop_run = run_graph_job(&echo_loop_job(), json!({ "list": list }));
+        assert!(loop_run.succeeded(), "loop {case}: {:?}", loop_run.result);
+        let loop_values: Vec<Value> = loop_run
+            .host
+            .calls()
+            .iter()
+            .map(|input| input["value"].clone())
+            .collect();
+        assert_eq!(
+            loop_values, items,
+            "loop {case}: iterations run in item order"
+        );
+    }
+}
+
+/// A step whose `when:` guard is false is ordinary control flow and logs its
+/// skip at INFO; a skip that is not a guard decision, such as a resumed step,
+/// stays at WARN so the operational feed still shows it.
+#[test]
+fn when_false_step_skips_log_below_warn_and_other_skips_keep_warn() {
+    // Tracing callsite interest is shared by parallel libtest bodies. Keep
+    // this capture in its own process while the parent suite stays parallel.
+    super::git_fixture::isolated(
+        module_path!(),
+        "when_false_step_skips_log_below_warn_and_other_skips_keep_warn",
+        || {
+            use tracing_subscriber::{Layer, layer::SubscriberExt};
+            struct StepId(Option<String>);
+            impl tracing::field::Visit for StepId {
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    if field.name() == "step_id" {
+                        self.0 = Some(value.to_string());
+                    }
+                }
+                fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+            }
+            struct Capture(Arc<Mutex<Vec<(String, tracing::Level)>>>);
+            impl<S: tracing::Subscriber> Layer<S> for Capture {
+                fn on_event(
+                    &self,
+                    event: &tracing::Event<'_>,
+                    _: tracing_subscriber::layer::Context<'_, S>,
+                ) {
+                    if event.metadata().target() == "orbit.job.step_skipped" {
+                        let mut step = StepId(None);
+                        event.record(&mut step);
+                        self.0.lock().unwrap().push((
+                            step.0.expect("step_skipped names its step"),
+                            *event.metadata().level(),
+                        ));
+                    }
+                }
+            }
+
+            let mut guarded = probe_step("guarded", probe_input('+', 1));
+            guarded["when"] = json!("{{ input.flag }} == true");
+            let job = job_asset(json!([probe_step("done", probe_input('+', 0)), guarded]));
+            let input = json!({ "flag": false });
+            let mut resume =
+                PipelineState::new("graph-run".into(), "graph_fixture".into(), input.clone());
+            resume.step_outputs.insert(0, json!({}));
+            resume.step_states.insert(0, JobRunState::Success);
+
+            let skips = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::registry().with(Capture(skips.clone()));
+            let run = tracing::subscriber::with_default(subscriber, || {
+                run_graph_job_with_resume(&job, input, Some(&resume))
+            });
+            assert!(run.succeeded(), "{:?}", run.result);
+            assert!(run.host.calls().is_empty(), "neither step dispatches");
+            assert_eq!(
+                *skips.lock().unwrap(),
+                [
+                    ("done".to_string(), tracing::Level::WARN),
+                    ("guarded".to_string(), tracing::Level::INFO),
+                ],
+                "a resume skip warns; a false when: guard does not"
+            );
+        },
+    );
+}
+
 /// One kind character per branch, worker or iteration: `+` succeeds, `-`
 /// fails, `!` panics.
 fn probe_input(kind: char, index: usize) -> Value {
@@ -530,6 +774,33 @@ fn probe_step(id: &str, default_input: Value) -> Value {
         "default_input": default_input,
         "spec": { "type": "deterministic", "action": "probe", "config": {} },
     })
+}
+
+fn echo_item_step(id: &str) -> Value {
+    probe_step(id, json!({ "value": "{{ item }}" }))
+}
+
+fn echo_fan_out_job() -> orbit_types::workflow::JobV2 {
+    job_asset(json!([{
+        "id": "scatter",
+        "fan_out": {
+            "items": "{{ input.list }}",
+            "max_workers": 2,
+            "worker": echo_item_step("worker"),
+        },
+        "fan_in": { "join": {"mode": "all"} },
+    }]))
+}
+
+fn echo_loop_job() -> orbit_types::workflow::JobV2 {
+    job_asset(json!([{
+        "id": "spin",
+        "loop": {
+            "items": "{{ input.list }}",
+            "max_iterations": 8,
+            "steps": [echo_item_step("body")],
+        },
+    }]))
 }
 
 fn fan_out_step(max_workers: u32, join: Value) -> Value {
@@ -569,7 +840,7 @@ fn item_fields() -> Value {
 
 /// Load the steps as a job asset, the form a catalog job reaches the engine
 /// in. JSON is valid YAML, so the loader reads it unchanged.
-fn job_asset(steps: Value) -> orbit_types::workflow::JobV2 {
+pub(crate) fn job_asset(steps: Value) -> orbit_types::workflow::JobV2 {
     let asset = json!({
         "schemaVersion": 2,
         "kind": "Job",
@@ -616,10 +887,18 @@ impl GraphRun {
 }
 
 fn run_graph_job(job: &orbit_types::workflow::JobV2, input: Value) -> GraphRun {
+    run_graph_job_with_resume(job, input, None)
+}
+
+fn run_graph_job_with_resume(
+    job: &orbit_types::workflow::JobV2,
+    input: Value,
+    resume: Option<&PipelineState>,
+) -> GraphRun {
     let audit_root = tempfile::tempdir().expect("audit tempdir");
     let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), "graph-run");
     let host = GraphHost::default();
-    let result = execute_job_with_resume(job, input, "graph-run", writer.clone(), &host, None);
+    let result = execute_job_with_resume(job, input, "graph-run", writer.clone(), &host, resume);
     let events = writer.events_snapshot().expect("persisted audit events");
     GraphRun {
         host,
@@ -628,11 +907,52 @@ fn run_graph_job(job: &orbit_types::workflow::JobV2, input: Value) -> GraphRun {
     }
 }
 
+/// Empty successful joins checkpoint their outputs; unsuccessful joins must
+/// be evaluated again on resume rather than allowing later steps to run.
+fn assert_empty_join_resume(
+    job: &orbit_types::workflow::JobV2,
+    input: Value,
+    run: &GraphRun,
+    step_id: &str,
+    success: bool,
+) {
+    let checkpoints = run.host.checkpoints.lock().expect("checkpoints");
+    assert_eq!(
+        checkpoints.contains_key(&0),
+        success,
+        "{step_id}: checkpoint only successful joins"
+    );
+    let mut resume = PipelineState::new("graph-run".into(), "graph_fixture".into(), input.clone());
+    if let Some(output) = checkpoints.get(&0) {
+        resume.step_outputs.insert(0, output.clone());
+        resume.step_states.insert(0, JobRunState::Success);
+    }
+    let resumed = run_graph_job_with_resume(job, input, Some(&resume));
+    assert_eq!(
+        resumed.succeeded(),
+        success,
+        "{step_id}: resumed join outcome"
+    );
+    assert_eq!(resumed.outcome().pipeline[step_id], json!([]));
+    if step_id == "scatter" {
+        assert_eq!(resumed.outcome().pipeline["results"], json!([]));
+    }
+    assert_eq!(resumed.host.calls().len(), usize::from(success));
+    assert_eq!(
+        resumed.events.iter().any(|event| matches!(
+            &event.kind, V2AuditEventKind::StepSkipped { step_id: skipped, .. } if skipped == step_id
+        )),
+        success,
+        "{step_id}: resume skips only a successful empty join"
+    );
+}
+
 /// Runs the single `probe` action every graph fixture uses. Its input says
 /// what to do: sleep `sleep_ms`, then panic, fail or echo the input back.
 #[derive(Default)]
 struct GraphHost {
     calls: Mutex<Vec<Value>>,
+    checkpoints: Mutex<BTreeMap<u32, Value>>,
     in_flight: AtomicUsize,
     peak_in_flight: AtomicUsize,
 }
@@ -655,6 +975,21 @@ impl GraphHost {
 }
 
 impl RuntimeHost for GraphHost {
+    fn checkpoint_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        _step_id: &str,
+        output: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
+    ) -> Result<(), DispatchError> {
+        self.checkpoints
+            .lock()
+            .expect("checkpoints")
+            .insert(step_index, output.clone());
+        Ok(())
+    }
+
     fn run_deterministic(
         &self,
         action: &str,
@@ -748,10 +1083,7 @@ fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
         let invocations = host.invocations();
         assert_eq!(invocations.len(), reviewer_calls * 2);
         for pair in invocations.chunks(2) {
-            assert!(matches!(
-                pair[0].event,
-                ReviewerInvocationEvent::Started { timeout_seconds } if timeout_seconds > 0
-            ));
+            assert!(matches!(pair[0].event, ReviewerInvocationEvent::Started));
             assert!(matches!(
                 pair[1].event,
                 ReviewerInvocationEvent::Finished { .. }
@@ -770,137 +1102,8 @@ fn the_shipped_review_step_retries_then_recovers_a_failing_reviewer() {
     }
 }
 
-/// Run the shipped completion/re-review steps as one job graph. The
-/// deterministic completion stub reports that the published, reviewed head
-/// needs rebasing; the fake reviewer then fixes and certifies the new head,
-/// owner validation reruns on the reviewer commit [ORB-13989], and the
-/// pipeline republishes and completes it. This catches broken step wiring or
-/// template references that action-level tests cannot see.
-#[test]
-fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
-    let audit_root = tempfile::tempdir().expect("audit tempdir");
-    let (writer, _envelope, _inner) =
-        build_writer_and_sinks(audit_root.path(), "complete-review-run");
-    let host = CompletionReviewHost::default();
-    let result = execute_job_with_resume(
-        &shipped_completion_review_job(),
-        json!({
-            "task_ids": ["T-1"],
-            "base_branch": "main",
-            "base_sync": "remote",
-            "completion": "done",
-        }),
-        "complete-review-run",
-        writer,
-        &host,
-        None,
-    );
-
-    assert!(
-        matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
-    let calls = host.calls();
-    let actions = calls
-        .iter()
-        .map(|(action, _)| action.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        actions,
-        [
-            "test_stub_worktree",
-            "test_stub_commit",
-            "test_stub_prepare_branch",
-            "test_stub_sync_base",
-            "test_stub_review_gate_admit",
-            "test_stub_agent_review_repair",
-            "test_stub_review_gate_settle",
-            "test_stub_push",
-            "test_stub_pr_open",
-            "test_stub_promote_tasks",
-            "test_stub_pr_complete",
-            "test_stub_review_gate_admit",
-            "test_stub_agent_review_repair",
-            "test_stub_review_gate_settle",
-            "test_stub_candidate_validate",
-            "test_stub_git_push",
-            "test_stub_pr_complete",
-        ],
-        "a completion conflict must enter the shipped re-review route before the second merge"
-    );
-
-    let admissions = calls
-        .iter()
-        .filter(|(action, _)| action == "test_stub_review_gate_admit")
-        .map(|(_, input)| input.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(admissions.len(), 2);
-    assert!(admissions[0].get("re_review_after").is_none());
-    assert_eq!(admissions[1]["re_review_after"], "complete_pr");
-
-    let reviewer_inputs = calls
-        .iter()
-        .filter(|(action, _)| action == "test_stub_agent_review_repair")
-        .map(|(_, input)| input.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(reviewer_inputs.len(), 2);
-    assert_eq!(reviewer_inputs[0]["attempt_id"], "rvw-first");
-    assert_eq!(reviewer_inputs[1]["attempt_id"], "rvw-re-review");
-
-    let revalidations = calls
-        .iter()
-        .filter(|(action, _)| action == "test_stub_candidate_validate")
-        .map(|(_, input)| input.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        revalidations.len(),
-        1,
-        "only the re-review's reviewer commit is revalidated"
-    );
-    assert_eq!(revalidations[0]["base_sha"], "rebased-base");
-    assert_eq!(
-        revalidations[0]["ownership_base_sha"],
-        "rebased-implementation"
-    );
-
-    let completion_inputs = calls
-        .iter()
-        .filter(|(action, _)| action == "test_stub_pr_complete")
-        .map(|(_, input)| input.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(completion_inputs.len(), 2);
-    assert_eq!(completion_inputs[0]["reviewed_head_sha"], "candidate");
-    assert_eq!(completion_inputs[1]["reviewed_head_sha"], "rebased-head");
-    assert_eq!(completion_inputs[1]["published_head_sha"], "rebased-head");
-
-    let invocations = host.invocations();
-    assert_eq!(
-        invocations.len(),
-        4,
-        "both reviewer runs record their bounds"
-    );
-    assert_eq!(invocations[0].attempt_id, "rvw-first");
-    assert_eq!(invocations[2].attempt_id, "rvw-re-review");
-    assert!(matches!(
-        invocations[0].event,
-        ReviewerInvocationEvent::Started { .. }
-    ));
-    assert!(matches!(
-        invocations[1].event,
-        ReviewerInvocationEvent::Finished { .. }
-    ));
-    assert!(matches!(
-        invocations[2].event,
-        ReviewerInvocationEvent::Started { .. }
-    ));
-    assert!(matches!(
-        invocations[3].event,
-        ReviewerInvocationEvent::Finished { .. }
-    ));
-}
-
-const REVIEWER: &str = "agent_review_repair";
-const RECOVERY: &str = "step_failure_recovery";
+pub(crate) const REVIEWER: &str = "agent_review_repair";
+pub(crate) const RECOVERY: &str = "step_failure_recovery";
 
 /// Both dispatch errors and unsuccessful CLI outcomes bypass recovery when
 /// the provider is unusable; the CLI-outcome case lives in v2_cli_agent.
@@ -965,6 +1168,320 @@ fn provider_unavailable_dispatch_errors_do_not_attempt_recovery() {
     );
 }
 
+/// A typed `{kind, evidence}` blocker on `implement_one` ends the bundle.
+/// The nested step is configured to retry and recover, a later commit step
+/// follows, and the job has final recovery plus a failure activity. None of
+/// the retry, step recovery, commit, or final recovery dispatches run. The
+/// failure activity is invoked once with `task_blocked_by_agent` and the kind.
+#[test]
+fn an_implementer_blocker_ends_implement_one_without_recovery() {
+    let marker = orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER;
+    let host = ScriptedHost {
+        implement_output: json!({
+            "summary": "stopped",
+            "blocker": {
+                "kind": "environment",
+                "evidence": "the toolchain the task needs is not installed",
+            },
+        }),
+        calls: Mutex::new(Vec::new()),
+    };
+    let (outcome, events) = run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+    let actions = host.actions();
+
+    assert!(
+        !outcome.success,
+        "a declared blocker is not a successful job: {outcome:?}"
+    );
+    let message = outcome.message.expect("the job records the blocker");
+    assert!(
+        message.contains(marker) && message.contains("kind=environment"),
+        "the job outcome carries the marker and kind: {message}"
+    );
+    assert_eq!(
+        actions,
+        vec!["implement".to_string(), "preserve_candidate".to_string()],
+        "one implementer dispatch, then the failure activity; no retry, recovery, commit, or final look: {actions:?}"
+    );
+    let preserve = host
+        .calls
+        .lock()
+        .expect("call log")
+        .iter()
+        .find(|(action, _)| action == "preserve_candidate")
+        .expect("failure activity ran")
+        .1
+        .clone();
+    assert_eq!(preserve["error_code"], "task_blocked_by_agent");
+    let error_message = preserve["error_message"].as_str().expect("error message");
+    assert!(
+        error_message.contains(marker) && error_message.contains("kind=environment"),
+        "the failure activity receives the kind: {error_message}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind,
+            V2AuditEventKind::StepRetry { .. } | V2AuditEventKind::StepRecoveryAttempted { .. }
+        )),
+        "a blocker does not retry or enter step recovery: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.kind,
+            V2AuditEventKind::StepFinished { step_id, outcome, error_message }
+                if step_id == "implement_one"
+                    && outcome == "failed"
+                    && error_message.as_deref().is_some_and(|message| {
+                        message.contains(marker) && message.contains("kind=environment")
+                    })
+        )),
+        "implement_one itself ends with the blocker: {events:?}"
+    );
+}
+
+/// A blocker shape that is not `{kind, evidence}` stays ordinary success, and
+/// a resolved `agent_implement` target honors a well-formed blocker even when
+/// the step id is not `implement_one`.
+#[test]
+fn a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is() {
+    let malformed = ScriptedHost {
+        implement_output: json!({
+            "blocker": { "kind": "", "evidence": "missing kind" },
+        }),
+        calls: Mutex::new(Vec::new()),
+    };
+    let (outcome, _) = run_blocker_job(&malformed, json!({ "tasks": ["one", "two"] }));
+    assert!(
+        outcome.success,
+        "a malformed blocker does not fail the step: {outcome:?}"
+    );
+    assert_eq!(
+        malformed.actions(),
+        vec![
+            "implement".to_string(),
+            "implement".to_string(),
+            "commit".to_string()
+        ],
+    );
+
+    let named = ScriptedHost {
+        implement_output: json!({
+            "blocker": { "kind": "conflict", "evidence": "the requirements contradict" },
+        }),
+        calls: Mutex::new(Vec::new()),
+    };
+    let mut job = job_asset(json!([{
+        "id": "work",
+        "recovery_activity": "step_recovery",
+        "retry": { "max_attempts": 3, "initial_backoff_ms": 1, "backoff_cap_ms": 1 },
+        "spec": { "type": "deterministic", "action": "implement", "config": {} },
+    }]));
+    resolve_job_catalog_refs_for_execution(&mut job, &blocker_catalog()).expect("resolve recovery");
+    // Inline specs have no catalog name until something sets it. The shipped
+    // resolver does that for `target: activity:agent_implement`.
+    if let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) =
+        &mut job.steps[0].body
+    {
+        target.activity_name = Some("agent_implement".to_string());
+    }
+    let audit = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), "named-blocker");
+    let outcome = execute_job_with_resume(&job, json!({}), "named-blocker", writer, &named, None)
+        .expect("the named activity runs to an outcome");
+    assert!(!outcome.success, "agent_implement honors the blocker");
+    assert_eq!(named.actions(), vec!["implement".to_string()]);
+    assert!(
+        outcome
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("kind=conflict")),
+        "the kind is on the outcome: {outcome:?}"
+    );
+}
+
+/// An implementer whose `unfiled_findings` are plain strings, not the declared
+/// `{title, description}` objects, fails at `implement_one` [ORB-14927]. The
+/// delivery steps after it never run, so nothing is committed, pushed or
+/// opened for a handoff that cannot be accepted. Well-formed findings, and
+/// output with no findings, still deliver.
+#[test]
+fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
+    let malformed = [
+        json!(["The owner refused this. It needs a follow-up."]),
+        json!("not an array"),
+        json!([{ "title": "No description" }]),
+        json!([{ "title": "  ", "description": "blank title" }]),
+        json!([42]),
+    ];
+    for findings in malformed {
+        let host = ScriptedHost {
+            implement_output: json!({ "summary": "done", "unfiled_findings": findings }),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, events) = try_run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+        let actions = host.actions();
+
+        // The step fails, retries and recovers like any failed step; the job
+        // ends in error once those are spent.
+        let failure = match outcome {
+            Ok(outcome) => {
+                assert!(
+                    !outcome.success,
+                    "{findings}: malformed findings do not deliver: {outcome:?}"
+                );
+                outcome.message.unwrap_or_default()
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            failure.contains("unfiled_findings"),
+            "{findings}: the failure names the field: {failure}"
+        );
+        assert!(
+            !actions.iter().any(|action| action == "commit"),
+            "{findings}: no delivery step runs for the attempt: {actions:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::StepFinished { step_id, outcome, .. }
+                    if step_id == "implement_one" && outcome == "error"
+            )),
+            "{findings}: implement_one itself ends in error"
+        );
+    }
+
+    for output in [
+        json!({ "unfiled_findings": [{
+            "title": "A finding",
+            "description": "Its detail.",
+            "relations": [{ "type": "spawned_from", "target": "ORB-1" }],
+        }] }),
+        json!({ "unfiled_findings": [] }),
+        json!({ "unfiled_findings": null }),
+        json!({ "summary": "no findings" }),
+    ] {
+        let host = ScriptedHost {
+            implement_output: output.clone(),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, _) = run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+        assert!(
+            outcome.success,
+            "{output}: a valid output delivers: {outcome:?}"
+        );
+        assert!(host.actions().iter().any(|action| action == "commit"));
+    }
+}
+
+struct ScriptedHost {
+    implement_output: Value,
+    calls: Mutex<Vec<(String, Value)>>,
+}
+
+impl ScriptedHost {
+    fn actions(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .iter()
+            .map(|(action, _)| action.clone())
+            .collect()
+    }
+}
+
+impl RuntimeHost for ScriptedHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        _: &Value,
+        input: &Value,
+        _: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push((action.to_string(), input.clone()));
+        if action == "implement" {
+            Ok(self.implement_output.clone())
+        } else {
+            Ok(json!({}))
+        }
+    }
+}
+
+fn blocker_catalog() -> V2ActivityCatalog {
+    let mut catalog = V2ActivityCatalog::new();
+    for name in ["step_recovery", "preserve_candidate", "final_look"] {
+        catalog.insert(name.to_string(), scripted_activity(name));
+    }
+    catalog
+}
+
+fn scripted_activity(action: &str) -> ActivityV2 {
+    ActivityV2 {
+        description: String::new(),
+        input_schema_json: Value::Null,
+        output_schema_json: Value::Null,
+        fs_profile: None,
+        spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+            action: action.to_string(),
+            config: Value::Null,
+        }),
+    }
+}
+
+fn run_blocker_job(host: &ScriptedHost, input: Value) -> (JobOutcome, Vec<V2AuditEvent>) {
+    let (outcome, events) = try_run_blocker_job(host, input);
+    (outcome.expect("the blocker job runs to an outcome"), events)
+}
+
+fn try_run_blocker_job(
+    host: &ScriptedHost,
+    input: Value,
+) -> (Result<JobOutcome, DispatchError>, Vec<V2AuditEvent>) {
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": { "name": "blocker_fixture" },
+        "spec": {
+            "state": "enabled",
+            "kind": "workflow",
+            "failure_activity": "preserve_candidate",
+            "final_recovery_activity": "final_look",
+            "steps": [{
+                "id": "implement_bundle",
+                "loop": {
+                    "items": "{{ input.tasks }}",
+                    "max_iterations": 4,
+                    "steps": [{
+                        "id": "implement_one",
+                        "recovery_activity": "step_recovery",
+                        "retry": {
+                            "max_attempts": 3,
+                            "initial_backoff_ms": 1,
+                            "backoff_cap_ms": 1
+                        },
+                        "spec": { "type": "deterministic", "action": "implement", "config": {} }
+                    }]
+                }
+            }, {
+                "id": "commit",
+                "spec": { "type": "deterministic", "action": "commit", "config": {} }
+            }]
+        }
+    });
+    let mut job = load_job_asset(&asset.to_string())
+        .expect("blocker fixture loads")
+        .spec;
+    resolve_job_catalog_refs_for_execution(&mut job, &blocker_catalog()).expect("resolve hooks");
+    let audit = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), "blocker-run");
+    let outcome = execute_job_with_resume(&job, input, "blocker-run", writer.clone(), host, None);
+    let events = writer.events_snapshot().expect("persisted audit events");
+    (outcome, events)
+}
+
 /// Stub worktree and admission steps followed by the shipped `review` step,
 /// whose reviewer and recovery activities resolve to scripted actions. Only
 /// the backoff sleep is shortened; attempts and recovery stay as shipped.
@@ -1017,234 +1534,6 @@ fn shipped_review_step_job() -> orbit_types::workflow::JobV2 {
     job
 }
 
-/// The shipped pipeline slice that reaches completion and can enter its
-/// re-review branch, with all external activities resolved to the test host.
-fn shipped_completion_review_job() -> orbit_types::workflow::JobV2 {
-    let shipped = std::fs::read_to_string(
-        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
-    )
-    .expect("read the shipped PR pipeline");
-    let shipped = load_job_asset(&shipped)
-        .expect("the shipped PR pipeline loads")
-        .spec;
-    let find_step = |id: &str| {
-        shipped
-            .steps
-            .iter()
-            .find(|step| step.id == id)
-            .cloned()
-            .unwrap_or_else(|| panic!("the shipped PR pipeline has `{id}`"))
-    };
-    let stub = |id: &str| {
-        json!({
-            "id": id,
-            "spec": { "type": "deterministic", "action": format!("test_stub_{id}"), "config": {} },
-        })
-    };
-    let stubs = |ids: &[&str]| ids.iter().map(|id| stub(id)).collect::<Vec<_>>();
-    // Keep the graph boundary under test while replacing unrelated VCS and
-    // task-store effects with deterministic stub activities.
-    let prefix = stubs(&["worktree", "commit", "prepare_branch", "sync_base"]);
-    let mut job = job_asset(json!(prefix));
-    for id in [
-        "review_gate_admit",
-        "review",
-        "review_gate_settle",
-        "review_validate",
-    ] {
-        job.steps.push(find_step(id));
-    }
-    let middle = stubs(&["push", "pr_open", "promote_tasks"]);
-    job.steps.extend(job_asset(json!(middle)).steps);
-    job.steps.push(find_step("complete_pr"));
-    for id in [
-        "re_review_gate_admit",
-        "re_review",
-        "re_review_gate_settle",
-        "re_review_validate",
-        "re_push",
-        "complete_reviewed_pr",
-    ] {
-        job.steps.push(find_step(id));
-    }
-
-    let mut catalog = V2ActivityCatalog::new();
-    for name in [
-        "worktree",
-        "commit",
-        "prepare_branch",
-        "sync_base",
-        "review_gate_admit",
-        REVIEWER,
-        "review_gate_settle",
-        "candidate_validate",
-        "push",
-        "git_push",
-        "pr_open",
-        "promote_tasks",
-        "pr_complete",
-        "pr_conflict_recovery",
-        RECOVERY,
-    ] {
-        catalog.insert(
-            name,
-            ActivityV2 {
-                description: format!("scripted `{name}`"),
-                input_schema_json: Value::Null,
-                output_schema_json: Value::Null,
-                fs_profile: None,
-                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
-                    action: format!("test_stub_{name}"),
-                    config: Value::Null,
-                }),
-            },
-        );
-    }
-    resolve_job_catalog_refs_for_execution(&mut job, &catalog)
-        .expect("resolve the shipped completion and review steps");
-    job
-}
-
-#[derive(Default)]
-struct CompletionReviewHost {
-    calls: Mutex<Vec<(String, Value)>>,
-    invocations: Mutex<Vec<ReviewerInvocationRequest>>,
-}
-
-impl CompletionReviewHost {
-    fn calls(&self) -> Vec<(String, Value)> {
-        self.calls.lock().expect("call log").clone()
-    }
-
-    fn invocations(&self) -> Vec<ReviewerInvocationRequest> {
-        self.invocations.lock().expect("invocations").clone()
-    }
-}
-
-impl RuntimeHost for CompletionReviewHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        let output = match action {
-            "test_stub_worktree" => json!({
-                "job_run_id": "complete-review-run",
-                "workspace_path": "/worktrees/complete-review-run",
-            }),
-            "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
-            "test_stub_prepare_branch" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-            }),
-            "test_stub_sync_base" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-                "rewritten": false,
-            }),
-            "test_stub_review_gate_admit" => {
-                let re_review = input.get("re_review_after").is_some();
-                json!({
-                    "applies": true,
-                    "first_task_id": "T-1",
-                    "attempt_id": if re_review { "rvw-re-review" } else { "rvw-first" },
-                    "lineage_key": "lineage-1",
-                    "manifest_artifact": "review-manifest.json",
-                    "report_artifact": "review-report.json",
-                    "reviewer": { "crew": "reviewers" },
-                })
-            }
-            "test_stub_agent_review_repair" => {
-                json!({ "summary": "reviewed", "verdict": "accept" })
-            }
-            "test_stub_review_gate_settle" => {
-                let attempt = input
-                    .pointer("/admission/attempt_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let re_review = attempt == "rvw-re-review";
-                json!({
-                    "gate": "passed",
-                    "reviewed_head_sha": if re_review { "rebased-head" } else { "candidate" },
-                    "reviewed_base_sha": if re_review { "rebased-base" } else { "base-sha" },
-                    "implementation_head_sha": if re_review { "rebased-implementation" } else { "candidate" },
-                    "reviewer_fixed": re_review,
-                    "review_fixes": "",
-                })
-            }
-            "test_stub_push" => json!({ "local_sha": "candidate" }),
-            "test_stub_git_push" => json!({
-                "local_sha": if input.get("branch").and_then(Value::as_str) == Some("rebased-branch") {
-                    "rebased-head"
-                } else {
-                    "candidate"
-                },
-            }),
-            "test_stub_pr_open" => {
-                json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
-            }
-            "test_stub_promote_tasks" => json!({ "promoted": true }),
-            "test_stub_candidate_validate" => json!({ "decision": "passed" }),
-            "test_stub_pr_complete"
-                if input.get("reviewed_head_sha").and_then(Value::as_str) == Some("candidate") =>
-            {
-                json!({
-                    "re_review_required": true,
-                    "rebased": {
-                        "head": "rebased-branch",
-                        "head_sha": "rebased-head",
-                        "base": "main",
-                        "base_ref": "origin/main",
-                        "base_sha": "rebased-base",
-                        "remote_sha_before": "candidate",
-                        "head_sha_before": "candidate",
-                        "rewritten": true,
-                    },
-                    "completed_task_ids": [],
-                    "skipped_task_ids": [],
-                })
-            }
-            "test_stub_pr_complete" => json!({
-                "re_review_required": false,
-                "merge": { "merged": true },
-                "completed_task_ids": ["T-1"],
-                "skipped_task_ids": [],
-            }),
-            other => panic!("unexpected action `{other}`"),
-        };
-        Ok(output)
-    }
-
-    fn record_reviewer_invocation(
-        &self,
-        request: &ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
-        self.invocations
-            .lock()
-            .expect("invocations")
-            .push(request.clone());
-        Ok(())
-    }
-}
-
 /// Serves the stub gate steps, a reviewer that fails its first `failures`
 /// dispatches like an unavailable provider, and a recovery that succeeds.
 struct ReviewerHost {
@@ -1272,6 +1561,10 @@ impl ReviewerHost {
 }
 
 impl RuntimeHost for ReviewerHost {
+    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
     fn run_deterministic(
         &self,
         action: &str,
@@ -1286,6 +1579,7 @@ impl RuntimeHost for ReviewerHost {
             })),
             "review_gate_admit" => Ok(json!({
                 "applies": true,
+                "decision": "admitted",
                 "first_task_id": "T-1",
                 "attempt_id": "rvw-1",
                 "lineage_key": "lineage-1",
@@ -1319,12 +1613,12 @@ impl RuntimeHost for ReviewerHost {
     fn record_reviewer_invocation(
         &self,
         request: &ReviewerInvocationRequest,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<Option<u64>, OrbitError> {
         self.invocations
             .lock()
             .expect("invocations")
             .push(request.clone());
-        Ok(())
+        Ok(None)
     }
 }
 

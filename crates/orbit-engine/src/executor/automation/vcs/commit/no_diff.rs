@@ -32,6 +32,33 @@ pub(super) fn verify<H: RuntimeHost + ?Sized>(
     run_id: &str,
     tested_head: &str,
 ) -> Result<Value, OrbitError> {
+    if git_output(workspace, &["rev-parse", "HEAD"])? != tested_head {
+        return Err(refused(
+            "tested HEAD is not the pinned current HEAD; rerun validation on it",
+        ));
+    }
+    if !git_output(
+        workspace,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )?
+    .is_empty()
+    {
+        return Err(refused(
+            "worktree is not clean; deliver or reconcile the pending changes",
+        ));
+    }
+    verify_at_revision(host, task, workspace, run_id, tested_head)
+}
+
+/// Verify immutable Git objects and task artifacts. The owner uses this on
+/// its observed base without checking out the executor's branch.
+fn verify_at_revision<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    _workspace: &Path,
+    run_id: &str,
+    tested_head: &str,
+) -> Result<Value, OrbitError> {
     let artifacts = host.get_task_artifacts(&task.id)?;
     let report = artifact(&artifacts, ARTIFACT)?;
     let evidence: NoDiffEvidence = serde_json::from_slice(&report.content)
@@ -48,20 +75,8 @@ pub(super) fn verify<H: RuntimeHost + ?Sized>(
         ));
     }
     let head = pinned_object_id(&evidence.tested_head)?;
-    if head != tested_head || git_output(workspace, &["rev-parse", "HEAD"])? != head {
-        return Err(refused(
-            "tested HEAD is not the pinned current HEAD; rerun validation on it",
-        ));
-    }
-    if !git_output(
-        workspace,
-        &["status", "--porcelain", "--untracked-files=all"],
-    )?
-    .is_empty()
-    {
-        return Err(refused(
-            "worktree is not clean; deliver or reconcile the pending changes",
-        ));
+    if head != tested_head {
+        return Err(refused("tested HEAD is not the owner-observed base"));
     }
     let validation_provenance = verify_checks(&evidence, &artifacts)?;
 
@@ -92,6 +107,23 @@ pub(super) fn verify_handoff<H: RuntimeHost + ?Sized>(
     };
     let head = checkpoint["base_sha"].as_str().unwrap_or_default();
     let checked = verify(host, task, workspace, run_id, head)?;
+    compare_checkpoint(checkpoint, &checked)
+}
+
+/// Recheck a clean-tree checkpoint against the owner-observed base revision.
+pub(super) fn verify_handoff_at_revision<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    workspace: &Path,
+    run_id: &str,
+    checkpoint: &Value,
+) -> Result<(), OrbitError> {
+    let head = checkpoint["base_sha"].as_str().unwrap_or_default();
+    let checked = verify_at_revision(host, task, workspace, run_id, head)?;
+    compare_checkpoint(checkpoint, &checked)
+}
+
+fn compare_checkpoint(checkpoint: &Value, checked: &Value) -> Result<(), OrbitError> {
     if checkpoint["decision"] != DECISION
         || checkpoint["no_diff"] != checked["no_diff"]
         || checkpoint["validation_provenance"] != checked["validation_provenance"]

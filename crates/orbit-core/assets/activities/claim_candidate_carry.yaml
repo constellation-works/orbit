@@ -1,0 +1,64 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: claim_candidate_carry
+spec:
+  type: deterministic
+  description: >
+    Terminal failure hook of a claimed pull-request leaf. When the
+    leaf committed a candidate and failed before its own push, it pushes the
+    candidate's branch tip to `refs/orbit/candidates/<task>/<run>` on
+    `origin`, so the task's next claim can fetch and resume it on any host.
+    Its output, checkpointed on the run, is what the leaf's failure
+    settlement names: `carry` is `published` (the leaf's push already put the
+    branch on `origin`), `durable` (with `durable_ref`), `failed` (with
+    `reason`; the candidate stays on this host) or `none` (nothing was
+    committed). It never changes the run's failure or the worktree.
+  input_schema_json:
+    type: object
+    additionalProperties: false
+    required:
+      - failed_step_id
+      - activity_name
+      - error_code
+      - error_message
+      - job_input
+      - pipeline
+      - run_id
+    properties:
+      failed_step_id:
+        type: string
+      activity_name:
+        type: string
+      error_code:
+        type: string
+      error_message:
+        type: string
+      job_input:
+        type: object
+      pipeline:
+        type: object
+      run_id:
+        type: string
+  output_schema_json:
+    type: object
+    required:
+      - phase
+      - carry
+    properties:
+      phase:
+        type: string
+      carry:
+        type: string
+        enum: [published, durable, failed, none]
+      task_id:
+        type: string
+      branch:
+        type: string
+      head_sha:
+        type: string
+      durable_ref:
+        type: string
+      reason:
+        type: string
+  action: claim_candidate_carry

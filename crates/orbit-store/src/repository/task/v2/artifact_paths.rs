@@ -1,30 +1,7 @@
 use super::*;
 
-pub(super) fn normalize_v2_artifact_path(raw: &str) -> Result<String, OrbitError> {
-    let mut trimmed = raw.trim();
-    while let Some(rest) = trimmed.strip_prefix("./") {
-        trimmed = rest;
-    }
-    validate_relative_artifact_path(trimmed)?;
-    let mut parts = Vec::new();
-    for component in Path::new(trimmed).components() {
-        match component {
-            Component::Normal(part) => {
-                let part = part.to_str().ok_or_else(|| {
-                    OrbitError::InvalidInput(format!(
-                        "artifact path '{trimmed}' must be valid UTF-8"
-                    ))
-                })?;
-                parts.push(part.to_string());
-            }
-            _ => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "artifact path '{trimmed}' must be canonical"
-                )));
-            }
-        }
-    }
-    Ok(parts.join("/"))
+pub(crate) fn normalize_v2_artifact_path(raw: &str) -> Result<String, OrbitError> {
+    Ok(orbit_types::task::canonical_artifact_path(raw)?)
 }
 
 pub(super) fn resolve_v2_artifact_file_path(

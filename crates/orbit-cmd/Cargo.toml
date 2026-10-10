@@ -21,13 +21,13 @@ orbit-types = { path = "../orbit-types" }
 orbit-core = { path = "../orbit-core" }
 orbit-mcp = { path = "../orbit-mcp" }
 orbit-tools = { path = "../orbit-tools" }
-orbit-engine = { path = "../orbit-engine" }
 orbit-registry = { path = "../orbit-registry" }
 orbit-store = { path = "../orbit-store" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tar.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 tracing.workspace = true
 
@@ -37,4 +37,3 @@ libc.workspace = true
 [dev-dependencies]
 rsa.workspace = true
 sha2.workspace = true
-tempfile.workspace = true

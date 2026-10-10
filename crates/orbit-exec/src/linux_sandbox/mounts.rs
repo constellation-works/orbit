@@ -1,15 +1,19 @@
 use super::*;
 
 pub(super) fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bool {
-    writable_roots
-        .iter()
-        .any(|root| cwd.starts_with(root) || root.starts_with(cwd))
+    // A writable descendant cannot justify binding the entire cwd writable
+    // through the stable aliases: ungranted siblings would become writable.
+    writable_roots.iter().any(|root| cwd.starts_with(root))
 }
 
 /// Bind the managed worktree (and its `target/` directory) at stable `/tmp`
 /// paths inside this sandbox's private tmpfs. Toolchain wrappers can rewrite
 /// absolute paths onto those mounts so compiler caches hit across worktrees
 /// without sharing a mutable Cargo target directory. [ORB-11259]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Cargo target is build output, outside Orbit state ownership"
+)]
 pub(super) fn append_stable_toolchain_mounts(
     out: &mut Vec<String>,
     cwd: &Path,

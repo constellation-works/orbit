@@ -25,8 +25,25 @@ fn claude_cli_model_arg(model: &str) -> String {
 /// It is an env var rather than a static arg for the same reason
 /// `--json-schema` is emitted here: the installed `claude.yaml` copy is edited
 /// independently of the packaged asset.
-pub(crate) const CLAUDE_CLI_FIXED_ENV: &[(&str, &str)] =
-    &[("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")];
+///
+/// [ORB-14815] `CLAUDE_CODE_DISABLE_CRON` (Claude Code 2.1.294, checked in the
+/// installed binary) disables the cron and loop scheduler, so a queued
+/// `ScheduleWakeup` never fires. Without it a worker that armed a loop while it
+/// waited on gates got a second `result` turn of prose after the envelope turn
+/// (`jrun-20261008-1237-c25`, `jrun-20261008-1421-c5`).
+///
+/// [ORB-15130] With both switches set, the Bash tool's 10-minute cap on a
+/// foreground command is the only way to wait, so a reviewer facing a longer
+/// gate detached it with `nohup … &`, said it would poll later, and ended the
+/// session with its placeholder report (`jrun-20261009-2339-c1`,
+/// `jrun-20261009-2338-c3`). The default and cap are raised so a gate can run
+/// in the foreground; the activity's own wall clock still bounds the session.
+pub(crate) const CLAUDE_CLI_FIXED_ENV: &[(&str, &str)] = &[
+    ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
+    ("CLAUDE_CODE_DISABLE_CRON", "1"),
+    ("BASH_DEFAULT_TIMEOUT_MS", "600000"),
+    ("BASH_MAX_TIMEOUT_MS", "3600000"),
+];
 
 pub(crate) struct ClaudeCliTransport {
     model: Option<String>,
@@ -42,10 +59,8 @@ impl ClaudeCliTransport {
     }
 
     // Static Claude CLI flags live in the executor definition; this transport
-    // only adds per-request toggles.
-    pub(crate) fn args(&self, verbose: bool) -> Vec<String> {
-        let mut args = Vec::new();
-
+    // adds per-request toggles and the flags Orbit's response contract needs.
+    pub(crate) fn args(&self) -> Vec<String> {
         // [ORB-10746] Structured output is what actually enforces the Orbit
         // response envelope; the prompt contract is guidance the model may
         // ignore, and in `jrun-20260812-0312-9` did.
@@ -57,12 +72,23 @@ impl ClaudeCliTransport {
         // A CLI without the flag rejects it at argv parse, before any agent
         // work runs — the failure Orbit wants, and the reason there is no
         // unconstrained fallback.
-        args.push("--json-schema".to_string());
-        args.push(response_envelope_json_schema_arg());
-
-        if verbose {
-            args.push("--verbose".to_string());
-        }
+        //
+        // [ORB-14696] Claude reports its usage windows only as
+        // `rate_limit_event` messages, which `--output-format json` drops.
+        // `stream-json` (which needs `--verbose`) keeps them, one JSONL frame
+        // each. It overrides the executor's static `--output-format json`, as
+        // the later flag wins, so the installed `claude.yaml` copy needs no
+        // edit. Not `json --verbose`: that prints the whole session as one
+        // line, which a run longer than the 1 MiB stdout capture loses, and
+        // with it the terminal `result`. Completion reads only that terminal
+        // `result` (`project_claude_response`).
+        let mut args = vec![
+            "--json-schema".to_string(),
+            response_envelope_json_schema_arg(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--verbose".to_string(),
+        ];
 
         if let Some(model) = &self.model {
             args.push("--model".to_string());

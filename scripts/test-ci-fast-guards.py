@@ -28,34 +28,112 @@ class GuardrailTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"))
+        self.targets = self.root / "targets.json"
+        self.env["GUARD_TEST_TARGETS"] = str(self.targets)
+        # A miniature libtest. Without a targets file every listing reports one
+        # `fixture_test`. With one (see `set_targets`) it honours target
+        # selection, the positional filter and `--exact`, so a guard that drops
+        # any of them lists different tests than the workflow would run.
+        self.write_executable(self.bin / "fixture_libtest.py", '''import json, os
+
+def load_targets():
+    path = os.environ["GUARD_TEST_TARGETS"]
+    return json.load(open(path)) if os.path.exists(path) else None
+
+def matches(test, filters, libtest_args):
+    if not filters:
+        return True
+    return test == filters[0] if "--exact" in libtest_args else filters[0] in test
+
+def list_target(target, filters, libtest_args):
+    return [test + ": test" for test in target["tests"] if matches(test, filters, libtest_args)]
+
+def cargo_listing(targets, cargo_args, libtest_args):
+    if targets is None:
+        return ["fixture_test: test"]
+    selectors, filters, index = [], [], 0
+    while index < len(cargo_args):
+        token = cargo_args[index]
+        if token in ("--test", "--bin"):
+            selectors.append((token[2:], cargo_args[index + 1]))
+            index += 1
+        elif token in ("--lib", "--bins"):
+            selectors.append((token[2:].rstrip("s"), None))
+        elif token == "-p":
+            index += 1
+        elif not token.startswith("-"):
+            filters.append(token)
+        index += 1
+    lines = []
+    for target in targets:
+        if selectors and not any(kind == target["kind"] and name in (None, target["name"])
+                                 for kind, name in selectors):
+            continue
+        lines += list_target(target, filters, libtest_args)
+    return lines
+''')
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
 import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fixture_libtest
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif sys.argv[1] == "test" and "--message-format" in sys.argv:
-    # `--no-run --message-format json`: report one test binary per package
-    # named in the fixture metadata, the way a workspace build does.
+    # `--no-run --message-format json`: report the test binaries of every
+    # package named in the fixture metadata, the way a workspace build does.
+    targets = fixture_libtest.load_targets()
+    if targets is None:
+        targets = [dict(name="fixture", kind="lib", binary=os.environ["GUARD_TEST_BIN"])]
     for package in json.load(open(os.environ["GUARD_TEST_METADATA"]))["packages"]:
-        print(json.dumps({"reason": "compiler-artifact", "package_id": package["id"],
-                          "profile": {"test": True}, "executable": os.environ["GUARD_TEST_BIN"]}))
+        for target in targets:
+            print(json.dumps({"reason": "compiler-artifact", "package_id": package["id"],
+                              "profile": {"test": True}, "executable": target["binary"],
+                              "target": {"name": target["name"], "kind": [target["kind"]]}}))
 elif sys.argv[1] == "test":
-    print("fixture_test: test")
+    args = sys.argv[2:]
+    split = args.index("--") if "--" in args else len(args)
+    for line in fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:]):
+        print(line)
 ''')
         # Stands in for a compiled test binary: logs its argv like the cargo
-        # stub and lists one libtest-style test.
+        # stub and lists the tests of the target it was built for.
         self.write_executable(self.bin / "fixture-test-bin", '''#!/usr/bin/env python3
 import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fixture_libtest
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
-    log.write(json.dumps(["fixture-test-bin"] + sys.argv[1:]) + "\\n")
-print("fixture_test: test")
+    log.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\\n")
+targets = fixture_libtest.load_targets()
+if targets is None:
+    print("fixture_test: test")
+else:
+    target = next(t for t in targets if t["binary"].endswith(os.path.basename(sys.argv[0])))
+    args = sys.argv[1:]
+    filters = [a for a in args if not a.startswith("-")]
+    for line in fixture_libtest.list_target(target, filters, args):
+        print(line)
 ''')
         self.write_executable(self.bin / "rg", "#!/bin/bash\nexit 1\n")
 
     def write_executable(self, path, content):
         path.write_text(content)
         path.chmod(0o755)
+
+    def set_targets(self, *targets):
+        """Give the fixture package these (name, kind, tests) test targets."""
+        entries = []
+        for name, kind, tests in targets:
+            binary = self.bin / f"fixture-test-bin-{name}"
+            shutil.copy2(self.bin / "fixture-test-bin", binary)
+            entries.append(dict(name=name, kind=kind, tests=tests, binary=str(binary)))
+        self.targets.write_text(json.dumps(entries))
+
+    def set_macos_step(self, command):
+        workflow = self.root / ".github/workflows/ci-macos.yml"
+        workflow.write_text(workflow.read_text().replace(
+            "cargo test -p orbit-types fixture_test", command))
 
     def run_guard(self, name, *arguments):
         shutil.copy2(SCRIPTS / name, self.scripts / name)
@@ -68,7 +146,7 @@ print("fixture_test: test")
             self.write_executable(self.scripts / name, "#!/bin/bash\nexit 0\n")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         workflows = self.root / ".github/workflows"
-        workflows.mkdir(parents=True)
+        workflows.mkdir(parents=True, exist_ok=True)
         (self.root / "Cargo.toml").touch()
         self.metadata.write_text(json.dumps(dict(
             packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
@@ -89,11 +167,80 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_rejects_shell_sleep_polls(self):
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-shell-waits.py", self.scripts)
+        (self.scripts / "test-shell-waits-allowlist.json").write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        cases = [
+            'let script = "while [ ! -e x ]; do sleep 0.1; done";',
+            'let script = r#"until [ -e x ]; do /bin/sleep 0.1; done"#;',
+            'let script = r#"while [ ! -e x ]; do\n/bin/sleep 0.1\ndone"#;',
+            's.push_str("while [ ! -e x ]; do\\n");\n'
+            's.push_str("sleep 0.1\\ndone\\n");',
+            'let script = "while true; do for n in 1 2; do sleep 0.1; done; done";',
+            'let script = "sh -c \'while true; do /bin/sleep 0.1; done\'";',
+            'let script = r#"while true; do "/bin/sleep" 0.1; done"#;',
+            'let script = "while true; do sh -c \'sleep 0.1\'; done";',
+        ]
+        for source in cases:
+            with self.subTest(source=source):
+                fixture.write_text(source)
+                result = self.run_guard("ci-guardrails.sh", "--fast")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("fixture.rs:", result.stderr)
+                self.assertIn("shell sleep poll", result.stderr)
+        # A sibling unit-test path receives the same protection.
+        fixture.write_text("")
+        fixture = self.root / "crates/example/src/process/tests/wait.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(cases[0])
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_fast_allows_nonpolling_sleep_and_narrow_reasoned_exception(self):
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-shell-waits.py", self.scripts)
+        allowlist = self.scripts / "test-shell-waits-allowlist.json"
+        allowlist.write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('let script = "sleep 0.1; while true; do read -r x; done";\n'
+                           '// "while true; do sleep 1; done"\n'
+                           'let prose = "we sleep while waiting";')
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fixture.write_text('let script = "while [ ! -e x ]; do sleep 0.1; done";')
+        exception = dict(path="crates/example/tests/fixture.rs",
+                         loop="while [ ! -e x ]; do", reason="bounded sandbox fixture")
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # An exception grants one exact loop, not the entire file or duplicates.
+        fixture.write_text(fixture.read_text() + '\nlet other = "until true; do sleep 1; done";')
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        fixture.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("stale shell-wait exception", result.stderr)
+        exception["reason"] = ""
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 1, result.stderr)
+
     def test_fast_propagates_desktop_ui_failure(self):
         self.prepare_ci()
         self.write_executable(self.scripts / "check-desktop-ui.sh", "#!/bin/bash\nexit 17\n")
         result = self.run_guard("ci-guardrails.sh", "--fast")
         self.assertEqual(result.returncode, 17)
+
+    def test_fast_propagates_doc_link_failure(self):
+        self.prepare_ci()
+        self.write_executable(self.scripts / "check-doc-links.py", "#!/bin/bash\nexit 18\n")
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 18)
 
     def test_fast_invokes_web_blocking_handler_check(self):
         self.prepare_ci()
@@ -161,6 +308,60 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"]])
+
+    def test_macos_check_forwards_target_selectors_and_exact_to_the_listing(self):
+        self.prepare_ci()
+        self.set_targets(("process", "test", ["update::runs"]), ("other", "test", ["update::runs"]))
+        self.set_macos_step("cargo test --no-fail-fast -p orbit-types --locked update:: --test process"
+                            " -- --exact --nocapture")
+        result = self.run_guard("check-ci-macos.sh")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "--test", "process",
+                                  "update::", "--", "--list", "--exact"]])
+
+    def test_macos_check_rejects_filter_matching_only_in_another_test_binary(self):
+        # `--test process` matches nothing when the module moved to another
+        # binary, even though the package still has a matching test elsewhere.
+        for workspace_build in ([], ["--workspace-build"]):
+            with self.subTest(workspace_build=bool(workspace_build)):
+                self.prepare_ci()
+                self.set_targets(("process", "test", ["other::runs"]), ("tool", "test", ["update::runs"]))
+                self.set_macos_step("cargo test -p orbit-types --locked update:: --test process")
+                result = self.run_guard("check-ci-macos.sh", *workspace_build)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("matched zero tests: orbit-types update:: --test process", result.stderr)
+
+    def test_macos_check_rejects_filter_matching_only_as_substring_under_exact(self):
+        for workspace_build in ([], ["--workspace-build"]):
+            with self.subTest(workspace_build=bool(workspace_build)):
+                self.prepare_ci()
+                self.set_targets(("tool", "test", ["plugin_cli_group::lockfile_upgrade_renamed"]))
+                self.set_macos_step("cargo test -p orbit-types --locked plugin_cli_group::lockfile_upgrade"
+                                    " --test tool -- --exact")
+                result = self.run_guard("check-ci-macos.sh", *workspace_build)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("matched zero tests", result.stderr)
+
+    def test_macos_check_accepts_filters_that_the_selected_target_runs(self):
+        for workspace_build in ([], ["--workspace-build"]):
+            with self.subTest(workspace_build=bool(workspace_build)):
+                self.prepare_ci()
+                self.set_targets(("process", "test", ["update::runs"]),
+                                 ("tool", "test", ["plugin_cli_group::lockfile_upgrade"]))
+                self.set_macos_step("cargo test -p orbit-types --locked update:: --test process\n"
+                                    "      - run: cargo test -p orbit-types --locked"
+                                    " plugin_cli_group::lockfile_upgrade --test tool -- --exact")
+                result = self.run_guard("check-ci-macos.sh", *workspace_build)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_macos_check_rejects_missing_selected_target_in_workspace_build(self):
+        self.prepare_ci()
+        self.set_targets(("tool", "test", ["update::runs"]))
+        self.set_macos_step("cargo test -p orbit-types --locked update:: --test process")
+        result = self.run_guard("check-ci-macos.sh", "--workspace-build")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("no test binary matching --test process", result.stderr)
 
     def test_macos_check_rejects_unknown_flags(self):
         self.prepare_ci()
@@ -297,6 +498,96 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--fast")
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+
+class DocLinkGuardrailTests(unittest.TestCase):
+    """Exercise the checker through its executable boundary in real Git repos."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="doc-link-fixture-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.env = dict(os.environ)
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            self.env.pop(name, None)
+        subprocess.run(["git", "init", "-q", str(self.root)], env=self.env, check=True)
+        self.write("scripts/check-doc-links.py", (SCRIPTS / "check-doc-links.py").read_text())
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def run_checker(self):
+        subprocess.run(["git", "add", "."], cwd=self.root, env=self.env, check=True)
+        return subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                              env=self.env, text=True, capture_output=True)
+
+    def test_valid_links_slugs_and_examples(self):
+        self.write("crates/demo/src/lib.rs", "// fixture source\n")
+        self.write("docs/target.md", "# `snake_case` & *Details*\n# Repeat\n# Repeat\n"
+                   "# Repeat-2\n# Repeat\nSetext title\n============\n"
+                   "<a name=\"custom\"></a>\n# Ελληνικά\n")
+        self.write("docs/asset (one).svg", "<svg/>\n")
+        self.write("docs/guide.md", "# Guide\n[local](#guide)\n"
+                   "[`code label`](target.md#snake_case--details)\n"
+                   "[duplicate](target.md#repeat-3)\n[setext](target.md#setext-title)\n"
+                   "[Unicode](target.md#%CE%B5%CE%BB%CE%BB%CE%B7%CE%BD%CE%B9%CE%BA%CE%AC)\n"
+                   "[custom](target.md#custom)\n![image](<asset (one).svg> \"title\")\n"
+                   "[reference][target]\n[target]: target.md#repeat-1\n"
+                   "`crates/demo/src/lib.rs` and `crates/demo/src/lib.rs::item`\n"
+                   "`[example](missing.md)`\n~~~md\n[example](missing.md)\n"
+                   "`crates/missing.rs`\n~~~\n\n    [example](missing.md)\n"
+                   "<!-- [comment](missing.md) -->\n"
+                   "\\[escaped](missing.md)\n"
+                   "[external](https://example.com/missing.md#missing)\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checked", result.stdout)
+
+    def test_broken_link_anchor_and_source_path_name_each_line(self):
+        self.write("docs/target.md", "# Existing heading\n")
+        self.write("docs/guide.md", "[good](target.md#existing-heading)\n"
+                   "[broken](missing.md)\n[anchor](target.md#missing)\n"
+                   "`crates/demo/src/missing.rs`\n\n- List item\n"
+                   "    [nested](missing-nested.md)\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        for line, reason, target in (
+                (2, "missing link target", "missing.md"),
+                (3, "missing heading anchor", "target.md#missing"),
+                (4, "missing tracked source path", "crates/demo/src/missing.rs"),
+                (7, "missing link target", "missing-nested.md")):
+            self.assertIn(f"docs/guide.md:{line}: {reason}: {target}", result.stderr)
+
+    def test_untracked_source_is_rejected_and_excluded_docs_are_ignored(self):
+        for name in ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
+                     "docs/design/CONVENTIONS.md", "docs/rca/record.md", "CHANGELOG.md",
+                     "crates/demo/tests/fixtures/example.md"):
+            self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")
+        self.write("docs/guide.md", "`crates/demo/src/untracked.rs`\n")
+        subprocess.run(["git", "add", "."], cwd=self.root, env=self.env, check=True)
+        self.write("crates/demo/src/untracked.rs", "// untracked\n")
+        result = subprocess.run(["python3", str(self.root / "scripts/check-doc-links.py")],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        errors = [line for line in result.stderr.splitlines() if ":1:" in line]
+        self.assertEqual(errors, ["docs/guide.md:1: missing tracked source path: "
+                                  "crates/demo/src/untracked.rs"])
+
+    def test_website_routes_resolve_to_source_and_validate_anchors(self):
+        self.write("website/src/content/docs/how-to/guide.md",
+                   "[page](../../reference/config/#snake_case)\n[index](../)\n")
+        self.write("website/src/content/docs/how-to/index.md", "# How to\n")
+        self.write("website/src/content/docs/reference/config.md", "# snake_case\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write("website/src/content/docs/reference/config.md", "# Renamed\n")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("guide.md:1: missing heading anchor", result.stderr)
 
 
 class WorkflowActionPinGuardrailTests(unittest.TestCase):
@@ -494,6 +785,29 @@ class WorkflowYamlGuardrailTests(unittest.TestCase):
         self.assertIn("empty.yml: a workflow must be a mapping with a `jobs` mapping",
                       result.stderr)
 
+    def test_homebrew_run_expressions_fail_but_env_values_pass(self):
+        import yaml
+
+        expression = "${{ needs.publish-release.outputs.version }}"
+        workflow = dict(jobs={"bump-homebrew-tap": dict(steps=[
+            dict(env=dict(VERSION=expression), run='git commit -m "orbit v$VERSION"'),
+        ])})
+        path = self.workflows / "release.yml"
+        path.write_text(yaml.safe_dump(workflow))
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        for run in (f'VERSION="{expression}"', f'git commit -m "orbit v{expression}"',
+                    f'echo safe\n# comment\necho "{expression}"'):
+            with self.subTest(run=run):
+                workflow["jobs"]["bump-homebrew-tap"]["steps"][0]["run"] = run
+                path.write_text(yaml.safe_dump(workflow))
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 1,
+                                 "Homebrew scripts must reject expression substitution before "
+                                 "Bash parses tag-derived metadata")
+                self.assertIn("bump-homebrew-tap step 1", result.stderr)
+
 
 class CargoDenyGuardrailTests(unittest.TestCase):
     def setUp(self):
@@ -632,6 +946,138 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         )
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("error", res.stderr.lower())
+
+
+class ErrorTranslationGuardTests(unittest.TestCase):
+    """Run check-error-translation.sh against a generated miniature crates tree."""
+
+    SCRIPT = SCRIPTS / "check-error-translation.sh"
+
+    def setUp(self):
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.script = self.root / "check-error-translation.sh"
+        self.write_script(self.SCRIPT.read_text())
+        text = self.SCRIPT.read_text()
+        crates = self.root / "crates"
+        for err_type, crate, translator in re.findall(r'^  "(\w+):([\w-]+):(\w+)"$', text, re.M):
+            self.write_source(crate, f"{translator}.rs", f"pub enum {err_type} {{}}\npub fn {translator}() {{}}\n")
+        for err_type, crate in re.findall(r'^  "(\w+):([\w-]+)"$', text, re.M):
+            self.write_source(crate, f"{err_type}.rs", f"pub enum {err_type} {{}}\n")
+            self.write_source("orbit-common", f"from_{err_type}.rs",
+                              f"impl From<{err_type}> for OrbitError {{}}\n")
+        self.assertTrue(crates.is_dir())
+
+    def write_script(self, text):
+        self.script.write_text(text)
+        self.script.chmod(0o755)
+
+    def write_source(self, crate, name, text):
+        path = self.root / "crates" / crate / "src" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def run_guard(self):
+        return subprocess.run(["/bin/bash", str(self.script), str(self.root)],
+                              text=True, capture_output=True)
+
+    def test_empty_allowlist_passes_a_clean_tree(self):
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertIn("error translation guard passed", result.stdout)
+
+    def test_unallowlisted_translator_outside_registry_fails(self):
+        self.write_source("orbit-cli", "stray.rs", "fn stray_error_to_orbit() {}\n")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("defines unregistered translator 'stray_error_to_orbit'", result.stdout)
+
+    def test_allowlisted_translator_outside_registry_passes(self):
+        self.write_source("orbit-cli", "stray.rs", "fn stray_error_to_orbit() {}\n")
+        text = self.SCRIPT.read_text()
+        self.assertIn("allowlist=()", text)
+        self.write_script(text.replace("allowlist=()", "allowlist=(stray_error_to_orbit)"))
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class PythonPreflightTests(unittest.TestCase):
+    """Drive scripts/require-python.sh and the make gates with a stub python3."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.bin = Path(self.temporary.name)
+        self.log = self.bin / "cargo.log"
+
+    def stub(self, name, text):
+        path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def stub_python(self, version):
+        self.stub("python3", f"#!/bin/sh\necho {version}\n")
+
+    def env(self):
+        # The stub directory comes first; /usr/bin:/bin keep the shell tools.
+        return dict(os.environ, PATH=f"{self.bin}:/usr/bin:/bin", GUARD_TEST_LOG=str(self.log))
+
+    def run_command(self, *command):
+        return subprocess.run(list(command), env=self.env(), text=True, capture_output=True,
+                              cwd=SCRIPTS.parent)
+
+    def test_python_39_fails_naming_minimum_and_interpreter(self):
+        self.stub_python("3.9.6")
+        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertIn("Python >= 3.11", result.stderr)
+        self.assertIn(f"python3 3.9.6 at {self.bin}/python3", result.stderr)
+
+    def test_python_311_and_newer_pass_silently(self):
+        for version in ("3.11.0", "3.12.4", "3.14.4", "4.0.0"):
+            with self.subTest(version=version):
+                self.stub_python(version)
+                result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout + result.stderr, "")
+
+    def test_unreadable_version_and_missing_python_fail(self):
+        self.stub("python3", "#!/bin/sh\nexit 1\n")
+        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown version", result.stderr)
+        (self.bin / "python3").unlink()
+        if shutil.which("python3", path="/usr/bin:/bin"):
+            self.skipTest("a system python3 remains on the minimal PATH")
+        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no python3 is on PATH", result.stderr)
+
+    def test_make_gates_stop_before_running_anything_else(self):
+        self.stub_python("3.9.6")
+        self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
+        for target in ("ci-fast", "ci-lint"):
+            with self.subTest(target=target):
+                result = self.run_command("make", target, f"CARGO={self.bin}/cargo")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("python3 3.9.6", result.stderr)
+                self.assertIn("Python >= 3.11", result.stderr)
+                self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
+
+    def test_ci_guardrails_runs_preflight_before_any_gate(self):
+        self.stub_python("3.9.6")
+        self.stub("rg", "#!/bin/sh\nexit 1\n")
+        self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
+        result = self.run_command("/bin/bash", str(SCRIPTS / "ci-guardrails.sh"), "--fast")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python >= 3.11", result.stderr)
+        self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
 
 
 if __name__ == "__main__":

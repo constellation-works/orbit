@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args};
 use orbit_core::{
-    AutoTaskTemplate, AutoTaskUpdateParams, DedupePolicy, OrbitError, OrbitRuntime, TaskComplexity,
+    AutoTaskTemplatePatch, AutoTaskUpdateParams, DedupePolicy, OrbitRuntime, TaskComplexity,
     TaskPriority, TaskStatus, TaskType,
 };
 
@@ -9,9 +9,8 @@ use crate::command::{CommandOut, Execute, Payload};
 use super::output::definition_to_json;
 use super::schedule_args::resolve_schedule;
 
-/// Patch an existing definition. Schedule / description / dedupe are patched
-/// directly; any template flag loads the current template and overrides just
-/// the provided fields, so a caller can retune one template field in place.
+/// Patch an existing definition. Only provided fields change; template flags
+/// merge with the latest definition under the edit lock.
 #[derive(Args)]
 pub struct AutoTaskUpdateArgs {
     /// Definition name
@@ -61,9 +60,6 @@ pub struct AutoTaskUpdateArgs {
     /// New minted-task status
     #[arg(long, value_enum)]
     pub status: Option<TaskStatus>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Waive a settled failed delivery batch, retaining its coverage gap.
     #[arg(long, requires = "waiver_reason")]
     pub waive_batch: Option<String>,
@@ -95,43 +91,26 @@ impl Execute for AutoTaskUpdateArgs {
             self.deliveries_landed.clone(),
         )?;
 
-        // A template patch merges onto the current template so a single field
-        // can be retuned without re-supplying the rest.
+        // Core merges only named fields under the same lock as the write.
         let template = if self.touches_template() {
-            let current = runtime
-                .auto_task_show(&self.name)?
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(format!("no such auto-task '{}'", self.name))
-                })?
-                .template;
-            Some(AutoTaskTemplate {
-                title: self.title.clone().unwrap_or(current.title),
-                description: self.body.clone().unwrap_or(current.description),
-                acceptance_criteria: if self.criteria.is_empty() {
-                    current.acceptance_criteria
-                } else {
-                    self.criteria.clone()
-                },
-                task_type: self.task_type.unwrap_or(current.task_type),
-                tags: if self.tags.is_empty() {
-                    current.tags
-                } else {
-                    self.tags.clone()
-                },
-                required_tools: self
-                    .required_tools
-                    .as_deref()
-                    .map(crate::parse::csv_to_vec)
-                    .unwrap_or(current.required_tools),
-                priority: self.priority.unwrap_or(current.priority),
-                complexity: self.complexity.or(current.complexity),
-                crew: self.crew.clone().or(current.crew),
-                status: self.status.unwrap_or(current.status),
+            Some(AutoTaskTemplatePatch {
+                title: self.title,
+                description: self.body,
+                acceptance_criteria: (!self.criteria.is_empty()).then_some(self.criteria),
+                task_type: self.task_type,
+                tags: (!self.tags.is_empty()).then_some(self.tags),
+                required_tools: self.required_tools.as_deref().map(crate::parse::csv_to_vec),
+                priority: self.priority,
+                complexity: self.complexity.map(Some),
+                crew: self.crew.map(Some),
+                status: self.status,
+                ..Default::default()
             })
         } else {
             None
         };
 
+        let waived = self.waive_batch.is_some();
         let definition = runtime.auto_task_update(
             &self.name,
             AutoTaskUpdateParams {
@@ -149,8 +128,7 @@ impl Execute for AutoTaskUpdateArgs {
             },
         )?;
 
-        let required_tool_warnings =
-            runtime.validate_required_tools(&definition.template.required_tools)?;
+        let required_tool_warnings = runtime.auto_task_update_tool_warnings(&definition, waived)?;
         let mut document = definition_to_json(&definition);
         if !required_tool_warnings.is_empty()
             && let Some(object) = document.as_object_mut()

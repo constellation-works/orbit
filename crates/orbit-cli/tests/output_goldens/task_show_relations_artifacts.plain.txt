@@ -4,6 +4,8 @@ Title: Add pagination to the audit export command
 Status: proposed
 Priority: low
 Complexity: medium
+Readiness: not ready
+  - missing_context_files [blocking]: No context files are declared, so a drain will not auto-approve it. Fix: add context files, run the task pilot, or tag no-diff-expected if no diff is expected.
 Type: feature
 Description: orbit audit export currently loads the entire event log into memory.
 Dependencies:
@@ -15,5 +17,6 @@ Artifacts:
 Created By: claude
 History:
   [<TIMESTAMP>] claude: created
+  [<TIMESTAMP>] claude: updated (task fields updated)
 Created: <TIMESTAMP>
 Updated: <TIMESTAMP>

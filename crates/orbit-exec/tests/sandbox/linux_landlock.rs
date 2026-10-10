@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_exec::{
     EnvironmentMode, ExecRequest, LandlockBoundary, NETWORK_LANDLOCK_ABI, StdinMode,
-    WRITE_LANDLOCK_ABI, linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
-    spawn_under_linux_landlock_boundary,
+    WRITE_LANDLOCK_ABI, grants_read, linux_landlock_boundary_grants, linux_landlock_read_boundary,
+    probe_landlock, spawn_under_linux_landlock, spawn_under_linux_landlock_boundary,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -89,8 +89,17 @@ impl Fixture {
     /// Start the confined child without waiting for it, so a test can change
     /// the workspace while the ruleset is already in force.
     fn spawn(&self, profile: &ResolvedFsProfile, script: &str) -> std::process::Child {
+        self.spawn_program(profile, "/bin/sh", script)
+    }
+
+    fn spawn_program(
+        &self,
+        profile: &ResolvedFsProfile,
+        program: &str,
+        script: &str,
+    ) -> std::process::Child {
         let request = ExecRequest {
-            program: "/bin/sh".to_string(),
+            program: program.to_string(),
             args: vec!["-c".to_string(), script.to_string()],
             current_dir: Some(self.root().display().to_string()),
             timeout_ms: Some(10_000),
@@ -266,25 +275,40 @@ fn a_file_the_child_generates_is_readable() {
         .assert_returned("GENERATED_SENTINEL");
 }
 
-/// `/proc` is not granted as a tree, because a process can read any same-user
-/// process's `environ` — including the Orbit process that launched the child,
-/// whose environment may hold provider credentials.
+/// `/proc` must not expose another process's status. Unlike `environ`,
+/// `status` is not ptrace-gated, so granting `/proc` as a tree would leak it
+/// even when Landlock's separate ptrace restriction remains in force.
 #[test]
-fn the_child_cannot_read_another_processs_environment() {
+fn the_child_cannot_read_another_processs_status() {
     if unenforceable() {
         return;
     }
     let fixture = Fixture::new();
+    let profile = profile(&["**"]);
+    // This process is spawned outside the confined child's Landlock domain.
+    // Its guard keeps it alive through the read and kills/reaps it on drop,
+    // including when an assertion fails.
+    let sentinel = orbit_common::test_env::spawn_unrelated_process();
+    let status_path = format!("/proc/{}/status", sentinel.pid());
+    let pid_field = format!("Pid:\t{}\n", sentinel.pid());
+    let status = fs::read_to_string(&status_path).expect("read unsandboxed sentinel status");
+    assert!(
+        status.contains(&pid_field),
+        "the unsandboxed read must identify the live sentinel"
+    );
 
+    // Prove that cat works inside the boundary before testing denial.
+    fixture.write("visible.txt", "CAT_OK");
     fixture
-        .run(
-            &profile(&["**"]),
-            &format!(
-                "cat /proc/{}/environ && echo PARENT_ENVIRON_READ",
-                std::process::id()
-            ),
-        )
-        .assert_withheld("PARENT_ENVIRON_READ");
+        .run(&profile, "cat visible.txt")
+        .assert_returned("CAT_OK");
+    let output = fixture.run(&profile, &format!("cat {status_path}"));
+    output.assert_withheld(&pid_field);
+    assert!(
+        !output.succeeded,
+        "the confined child must fail to read another process's status: stderr={:?}",
+        output.stderr
+    );
 }
 
 /// Criterion 3: the programs shipped activity allowlists name still work, and
@@ -417,9 +441,11 @@ fn a_secret_written_after_admission_is_withheld_from_an_indirect_descendant() {
 
     // The child waits for the writer, then reads the secret through a
     // grandchild and generates a file of its own through another.
-    let child = fixture.spawn(
+    orbit_common::test_env::create_fixture_fifo(&fixture.root().join("go")).expect("release FIFO");
+    let child = fixture.spawn_program(
         &profile,
-        "n=0; while [ ! -e go ] && [ $n -lt 200 ]; do n=$((n+1)); sleep 0.05; done; \
+        "/bin/bash",
+        "read -r -t 10 _ <> go || exit 97; \
          sh -c 'cat vault/secret.txt' || echo DESCENDANT_REFUSED; \
          printf GENERATED_SENTINEL > build/out.txt; \
          sh -c 'cat build/out.txt'",
@@ -428,7 +454,11 @@ fn a_secret_written_after_admission_is_withheld_from_an_indirect_descendant() {
     let secret = fixture.root().join("vault/secret.txt");
     fs::create_dir(fixture.root().join("vault")).expect("concurrent writer creates vault");
     fs::write(&secret, "LATE_SENTINEL").expect("concurrent writer writes secret");
-    fs::write(fixture.root().join("go"), "").expect("release the child");
+    orbit_common::test_env::release_fixture_fifo(
+        &fixture.root().join("go"),
+        std::time::Instant::now() + std::time::Duration::from_secs(10),
+    )
+    .expect("release the child");
 
     // The test is only meaningful if the secret really is there to be read.
     assert_eq!(
@@ -838,4 +868,289 @@ fn a_bounded_child_with_deny_tcp_cannot_connect() {
     let output = spawn_bounded(&fixture, &boundary, &script);
     output.assert_withheld("CONNECTED");
     output.assert_returned("REFUSED");
+}
+
+fn skip_write_boundary() -> bool {
+    if unenforceable() {
+        return true;
+    }
+    let probe = probe_landlock();
+    if probe.abi < WRITE_LANDLOCK_ABI {
+        println!("skipping write-boundary read carve: {}", probe.detail);
+        return true;
+    }
+    false
+}
+
+/// `data/public.txt` beside `data/private/key`, under one write root.
+fn write_root_over_secret(fixture: &Fixture) -> PathBuf {
+    let data = fixture.root().join("data");
+    fs::create_dir_all(data.join("private")).expect("create private dir");
+    fs::write(data.join("public.txt"), "PUBLIC_SENTINEL").expect("write public");
+    fs::write(data.join("private").join("key"), "SECRET_SENTINEL").expect("write secret");
+    data
+}
+
+fn assert_secret_stays_unreadable(fixture: &Fixture, boundary: &LandlockBoundary, data: &Path) {
+    let secret = data.join("private").join("key");
+    spawn_bounded(fixture, boundary, &format!("cat {}", secret.display()))
+        .assert_withheld("SECRET_SENTINEL");
+
+    // A sibling in the same write root still reads and writes.
+    let public = data.join("public.txt");
+    spawn_bounded(
+        fixture,
+        boundary,
+        &format!(
+            "cat {p} && echo MORE >> {p} && cat {p}",
+            p = public.display()
+        ),
+    )
+    .assert_returned("MORE");
+    assert!(
+        fs::read_to_string(&public)
+            .expect("read sibling back")
+            .contains("MORE"),
+        "a permitted write in the carved root must reach the disk"
+    );
+
+    // A name created inside the restricted directory after spawn is not
+    // readable either. The write itself is allowed: a read deny is not a
+    // modify deny, and the ancestor keeps its write rights.
+    let fresh = data.join("private").join("fresh");
+    spawn_bounded(
+        fixture,
+        boundary,
+        &format!(
+            "echo NEW_SECRET > {} && cat {}",
+            fresh.display(),
+            fresh.display()
+        ),
+    )
+    .assert_withheld("NEW_SECRET");
+    assert!(
+        fs::read_to_string(&fresh)
+            .expect("read fresh secret from the parent")
+            .contains("NEW_SECRET"),
+        "the restricted subtree stays writable"
+    );
+}
+
+/// A write-tree grant includes read rights. Those rights must not undo a
+/// read deny that sits beneath the write root.
+#[test]
+fn a_write_root_above_a_read_deny_cannot_read_the_denied_file() {
+    if skip_write_boundary() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let data = write_root_over_secret(&fixture);
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: vec![data.join("private")],
+        read_exclusions: Vec::new(),
+        write: vec![data.clone()],
+        write_files: vec![],
+        deny_tcp: false,
+    };
+    assert_secret_stays_unreadable(&fixture, &boundary, &data);
+
+    // The same deny holds for a directory that does not exist until the
+    // child creates it.
+    let later = data.join("later");
+    let boundary = LandlockBoundary {
+        read_denies: vec![later.clone()],
+        ..boundary
+    };
+    let created = later.join("key");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!(
+            "mkdir -p {} && echo LATER_SECRET > {} && cat {}",
+            later.display(),
+            created.display(),
+            created.display()
+        ),
+    )
+    .assert_withheld("LATER_SECRET");
+    assert!(
+        fs::read_to_string(&created)
+            .expect("read later secret from the parent")
+            .contains("LATER_SECRET")
+    );
+}
+
+/// Caller read exclusions are carved the same way. The directory that holds
+/// the excluded path stays writable; the file does not become readable
+/// through the write root.
+#[test]
+fn a_write_root_above_a_caller_read_exclusion_cannot_read_the_excluded_file() {
+    if skip_write_boundary() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let data = write_root_over_secret(&fixture);
+    let exclusion = format!("{}/private/**", data.display());
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: Vec::new(),
+        read_exclusions: vec![exclusion],
+        write: vec![data.clone()],
+        write_files: vec![],
+        deny_tcp: false,
+    };
+    assert_secret_stays_unreadable(&fixture, &boundary, &data);
+}
+
+/// A single-file write grant includes read. Naming the denied file itself
+/// must not hand that read back. A write path nested strictly inside a
+/// broader deny is a different case: it stays read-write, the way a
+/// plugin's own state directory stays readable under `state/plugins`.
+#[test]
+fn a_write_file_at_a_read_deny_cannot_read_that_file() {
+    if skip_write_boundary() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let data = write_root_over_secret(&fixture);
+    let secret = data.join("private").join("key");
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: vec![secret.clone()],
+        read_exclusions: Vec::new(),
+        write: vec![],
+        write_files: vec![secret.clone()],
+        deny_tcp: false,
+    };
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", secret.display()))
+        .assert_withheld("SECRET_SENTINEL");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!(
+            "echo OVERWRITE > {} && cat {}",
+            secret.display(),
+            secret.display()
+        ),
+    )
+    .assert_withheld("OVERWRITE");
+    assert!(
+        fs::read_to_string(&secret)
+            .expect("read overwritten secret from the parent")
+            .contains("OVERWRITE"),
+        "the named write file stays writable"
+    );
+}
+
+/// A `$HOME` holding `gh`'s sign-in and an `$ORBIT_ROOT` holding the plugin
+/// secret store, both named by the child's environment. The host grants
+/// follow that environment (`$GH_CONFIG_DIR` defaults under `$HOME`), so each
+/// tree is reachable through a tool state grant unless the deny carves it.
+struct HostToolState {
+    fixture: Fixture,
+    gh_token: PathBuf,
+    plugin_secret: PathBuf,
+    orbit_sibling: PathBuf,
+    boundary: LandlockBoundary,
+}
+
+impl HostToolState {
+    fn new() -> Self {
+        let fixture = Fixture::new();
+        let home = fixture.host_root().join("home");
+        let orbit_root = fixture.host_root().join("orbit");
+        let gh_token = home.join(".config/gh/hosts.yml");
+        let plugin_secret = orbit_root.join("state/plugin-secrets/x");
+        let orbit_sibling = orbit_root.join("bin/visible.txt");
+        for (path, contents) in [
+            (&gh_token, "GH_TOKEN_SENTINEL"),
+            (&plugin_secret, "PLUGIN_SECRET_SENTINEL"),
+            (&orbit_sibling, "ORBIT_SIBLING_SENTINEL"),
+        ] {
+            fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+            fs::write(path, contents).expect("write host file");
+        }
+        let fixture = fixture
+            .with_env("HOME", &home)
+            .with_env("ORBIT_ROOT", &orbit_root);
+        let boundary = LandlockBoundary {
+            read: vec![fixture.root()],
+            read_denies: vec![
+                home.join(".config/gh"),
+                orbit_root.join("state/plugin-secrets"),
+            ],
+            read_exclusions: Vec::new(),
+            write: vec![],
+            write_files: vec![],
+            deny_tcp: false,
+        };
+        Self {
+            fixture,
+            gh_token,
+            plugin_secret,
+            orbit_sibling,
+            boundary,
+        }
+    }
+
+    fn request(&self, script: &str) -> ExecRequest {
+        ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            current_dir: Some(self.fixture.root().display().to_string()),
+            timeout_ms: Some(10_000),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(self.fixture.environment.clone()),
+            debug: false,
+        }
+    }
+}
+
+/// Grants are a union: a host tool state grant on `$GH_CONFIG_DIR` or
+/// `$ORBIT_ROOT` would reopen a tree the boundary denies unless the deny is
+/// carved out of the host grants too. The rest of the tree stays readable.
+#[test]
+fn a_read_deny_is_carved_out_of_the_host_tool_state_grants() {
+    let state = HostToolState::new();
+    let grants = linux_landlock_boundary_grants(&state.request("true"), &state.boundary)
+        .expect("compile boundary");
+
+    assert!(
+        !grants_read(&grants, &state.gh_token),
+        "the gh sign-in under a denied `$HOME/.config/gh` must not be granted: {grants:?}"
+    );
+    assert!(
+        !grants_read(&grants, &state.plugin_secret),
+        "the plugin secret store under `$ORBIT_ROOT` must not be granted: {grants:?}"
+    );
+    assert!(
+        grants_read(&grants, &state.orbit_sibling),
+        "the rest of `$ORBIT_ROOT` keeps its host grant: {grants:?}"
+    );
+}
+
+#[test]
+fn a_bounded_child_cannot_read_a_denied_tree_through_a_host_tool_state_grant() {
+    if skip_write_boundary() {
+        return;
+    }
+    let state = HostToolState::new();
+    for (path, sentinel) in [
+        (&state.gh_token, "GH_TOKEN_SENTINEL"),
+        (&state.plugin_secret, "PLUGIN_SECRET_SENTINEL"),
+    ] {
+        spawn_bounded(
+            &state.fixture,
+            &state.boundary,
+            &format!("cat {}", path.display()),
+        )
+        .assert_withheld(sentinel);
+    }
+    spawn_bounded(
+        &state.fixture,
+        &state.boundary,
+        &format!("cat {}", state.orbit_sibling.display()),
+    )
+    .assert_returned("ORBIT_SIBLING_SENTINEL");
 }

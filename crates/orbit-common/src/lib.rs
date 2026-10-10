@@ -1,11 +1,6 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 //! Shared mechanism crate for the Orbit workspace.
 //!
 //! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and
@@ -27,13 +22,17 @@ pub mod text;
 
 pub mod test_env;
 
+#[cfg(test)]
+isolate_test_process!();
+
 pub mod test_fixtures;
 
 pub mod test_process;
 
 pub use error::{
-    ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, NotFoundKind, OrbitError,
-    RecoverableVcsConflict, SqliteContention, WorkspaceClaimHeld,
+    ArtifactOrigin, ArtifactOriginMode, ClaimRefusalKind, DependencyNotDelivered, HostRegistryCode,
+    LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError, RecoverableVcsConflict, SqliteContention,
+    StorageLayer, WorkspaceClaimHeld,
 };
 pub use fs::task_io::task_artifact_from_source_file;
 pub use model::pricing::derive_cost_usd;

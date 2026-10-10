@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 
 use super::drain::{PullLauncher, PullPeer};
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::WorkerLaunchError;
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
@@ -66,7 +67,9 @@ impl RoutedPullPeer {
         tool: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        self.transport.call(&destination.selector, tool, input)
+        self.transport
+            .call(&destination.selector, tool, input)
+            .map_err(crate::application::distributed::owner_protocol_error)
     }
 }
 
@@ -238,7 +241,7 @@ impl LeafPullLauncher<'_> {
 }
 
 impl PullLauncher for LeafPullLauncher<'_> {
-    fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+    fn launch(&self, admission: &LocalPullAdmission) -> Result<(), WorkerLaunchError> {
         let bound = self.bound_runtime(admission)?;
         let run_id = bound
             .worker_invocation()

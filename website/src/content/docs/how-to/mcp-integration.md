@@ -25,6 +25,11 @@ This registers Orbit with every agent client it finds, with **operator**
 authority, so your agent can ship tasks and run drains as well as file them.
 Start a fresh agent session afterwards so the tools load.
 
+The registration launches `orbit mcp serve --operator`. Operator sessions can
+dispatch workflows, resume runs, and run governed commands; agents launched by
+Orbit get agent-only authority. Authority is checked when a tool is called,
+so every session sees the same `tools/list` rather than a filtered tool list.
+
 `orbit mcp init` registers Orbit with the narrower **agent-only** authority:
 the agent can file and update tasks but cannot dispatch runs. Use it to pick
 clients or to limit an agent:
@@ -50,15 +55,23 @@ If the workspace's Orbit data lives outside the repository, pass
 ## Register the federated mux
 
 A federated server puts this machine's workspaces and those on SSH remotes
-under one namespace. List the remotes in `~/.orbit/mcp-destinations.toml`:
+under one namespace. Register each remote host once, by its SSH alias or
+`user@host`:
 
-```toml
-[[destinations]]
-ssh = "orbit-owner"
-machine_id = "hm_alpha"
+```bash
+orbit host add orbit-owner
+orbit host list
 ```
 
-Then register it with a client:
+`orbit host add` reads the host's machine ID, name and task prefix from the
+host itself and records them in `~/.orbit/hosts.toml`. `orbit host list` shows
+every host with its live reachability, Orbit version, pull protocol and
+workspaces, and flags a version or protocol that differs from this machine's.
+`orbit host rename` and `orbit host remove` manage the entries. An older
+`~/.orbit/mcp-destinations.toml` is still read until the first of these
+commands migrates it.
+
+Then register the federated server with a client:
 
 ```bash
 orbit mcp init --federated --client codex --scope home
@@ -67,8 +80,12 @@ orbit mcp init --federated --client codex --scope home
 This adds a separate `orbit-federated` entry beside any existing `orbit` one.
 In that session, `orbit_workspace_list` returns host-qualified selectors such
 as `hm_alpha/ws_orbit`; pass one unchanged as the `workspace` of a call. Task
-reads go to the owner's selector. There is no automatic failover: a call
-reaches only the machine you select.
+reads go to the owner's selector. A call that addresses one task by ID, such
+as `orbit_task_show` or `orbit_task_update`, can omit `workspace`: it goes to
+the host the ID's prefix names. There is no automatic failover: a call reaches
+only the machine you select or the one its task ID names. A plain
+`orbit mcp serve` session does not relay. Given another host's task ID without
+`workspace`, it answers `task_prefix_remote` and names that host.
 
 Operator authority travels over SSH. A client started with `--operator` serves
 operator on every destination it opens, because an SSH login to a machine is
@@ -97,6 +114,11 @@ The listener serves the same tools over TCP, one session per connection, for
 setups such as a server-side Orbit reached through an SSH tunnel. It does not
 authenticate clients, so it binds loopback unless you pass
 `--allow-non-loopback`.
+
+The listener allows 64 concurrent sessions. Each accepted connection has five
+seconds to send a complete initialization request and receive its response;
+silent peers and incomplete messages are closed and release their slots.
+Established sessions remain connected while idle, until the client disconnects.
 
 ## Response shapes
 

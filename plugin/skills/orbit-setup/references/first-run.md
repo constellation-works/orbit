@@ -34,7 +34,7 @@ brew install constellation-works/tap/orbit
 ```
 
 Choose one installation method; do not run both. A machine that still has the
-retired `danieljhkim/tap/orbit` formula installed conflicts with the canonical
+retired Homebrew formula installed conflicts with the canonical
 one — `orbit update` on that machine detects it and reports the exact
 migration sequence (uninstall the legacy formula, then install the canonical
 one) instead of an ambiguous `brew upgrade orbit`; do not improvise a
@@ -47,10 +47,12 @@ installation; ask only for missing choices or required host permissions.
 
 Only when agent execution is requested, verify an authenticated supported agent CLI on the execution
 host. PR mode also needs an authenticated `gh` client. On Linux, `/usr/bin/bwrap`
-must pass its namespace/mount probe; Ubuntu's AppArmor restrictions may require
+(or Orbit's bundled Bubblewrap, where the host's lacks `--bind-fd`) must pass
+its namespace/mount probe; Ubuntu's AppArmor restrictions may require
 the packaged narrow Bubblewrap profile. Complete the [Linux sandbox setup](linux-sandbox.md)
 before dispatch. Do not disable host protection or enable sandbox fallback to hide
-a failed probe.
+a failed probe. On Windows, install and run everything inside a WSL2
+distribution: follow [windows-wsl2.md](windows-wsl2.md) alongside these steps.
 
 To add a provider or deterministic executor to Orbit itself, work in a source
 checkout and follow the [executor onboarding runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/executor-onboarding.md).
@@ -115,7 +117,8 @@ session when the orchestrating crew changes.
 
 Choose the real integration branch; do not assume the product default `main`
 is the repository's landing branch. `--ship-mode local` selects worktree-based
-local merge delivery instead of opening PRs. For another host's workspace, use
+local merge delivery instead of opening PRs; change it later with
+`orbit workspace ship-mode local|pr`. For another host's workspace, use
 `--role replica --owner <owner-machine-id>` rather than creating another owner.
 See [multi-host.md](multi-host.md).
 
@@ -190,7 +193,9 @@ initial setup succeeded:
 5. **Upgrade convergence** — use `orbit workspace sync --check`, then
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
 6. **A replica execution host** — collapse to one owner, match binaries and
-   `review_policy = none`, then probe. Installation is not pull enablement.
+   protocol, make sure the follower can run the owner's before-PR reviewer
+   crew when the owner's `review.before_pr` is on, then probe. Installation is
+   not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 
 ## Anti-patterns

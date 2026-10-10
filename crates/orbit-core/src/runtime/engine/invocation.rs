@@ -7,10 +7,11 @@ use orbit_common::model::pricing::normalize_token_usage;
 use orbit_store::contracts::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationStoreBackend, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
+    InvocationStoreBackend, ProviderLedgerEntry, TaskInvocationMetrics, TaskListFilter,
+    ToolInvocationMetrics,
 };
 use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
-use orbit_types::telemetry::TokenUsage;
+use orbit_types::telemetry::{ProviderLimitObservation, TokenUsage};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
@@ -251,18 +252,57 @@ impl OrbitRuntime {
         open_invocation_store(self)?.list_tool_invocation_metrics()
     }
 
+    /// Lists invocation records. A run id only names a run within one
+    /// workspace, so a `job_run_id` filter without a workspace is scoped to
+    /// this runtime's.
     pub fn invocation_records(
         &self,
-        filter: InvocationQuery,
+        mut filter: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
+        if filter.job_run_id.is_some() && filter.workspace_id.is_none() {
+            filter.workspace_id = Some(self.stores().jobs().workspace_id().to_string());
+        }
         open_invocation_store(self)?.list_invocation_records(&filter)
     }
 
+    /// Records an invocation under this runtime's workspace, whatever
+    /// workspace the caller-supplied params claim to come from.
     pub fn insert_invocation_trace_record(
         &self,
         params: &InvocationInsertParams,
     ) -> Result<(), OrbitError> {
-        open_invocation_store(self)?.insert_invocation_trace_record(params)
+        open_invocation_store(self)?
+            .insert_invocation_trace_record(self.stores().jobs().workspace_id(), params)
+    }
+
+    /// [ORB-14695] Records a provider usage limit in this host's store,
+    /// unless a newer observation for its provider, scope and window stands.
+    /// Returns whether it was stored.
+    pub fn record_provider_limit(
+        &self,
+        observation: &ProviderLimitObservation,
+    ) -> Result<bool, OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .record_provider_limit(observation)
+    }
+
+    /// [ORB-14695] The latest provider usage limit per provider, scope and
+    /// window this host observed, newest first.
+    pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
+        self.context.stores().host.provider_limit.provider_limits()
+    }
+
+    /// [ORB-14699] The provider's invocations since `since`, oldest first,
+    /// across this host; `provider_names` are the names it goes by.
+    pub(crate) fn provider_ledger_entries(
+        &self,
+        provider_names: &[String],
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ProviderLedgerEntry>, OrbitError> {
+        open_invocation_store(self)?.list_provider_ledger_entries(provider_names, since)
     }
 
     /// Refreshes the read-side token scoreboard from persisted invocation telemetry.
@@ -276,7 +316,7 @@ impl OrbitRuntime {
         )
     }
 
-    /// Aggregates managed invocation telemetry by canonical task orchestrator.
+    /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.
     ///
     /// The effective window is half-open (`since <= ts < until`). Missing
     /// tasks take precedence over unattributed tasks, which take precedence
@@ -304,6 +344,7 @@ impl OrbitRuntime {
 
         let facts = open_invocation_store(self)?.list_invocation_accounting_facts(
             &InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
                 since,
                 until: effective_until,
             },

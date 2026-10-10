@@ -6,11 +6,21 @@
 //! evidence and the proposed task's generated identity.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
 
+use crate::adapter::engine_host::v2_host::task_pilot::{
+    PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
+};
+use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
+
 const CI_FAILURE_TAG: &str = "ci-failure-sweep";
-const CI_FAILURE_KEY_TAG_PREFIX: &str = "ci-failure:";
+use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
+
+pub(in crate::adapter::engine_host::v2_host) enum AdmissionOutcome {
+    Decision(Value),
+    Superseded(Value),
+}
 
 pub(in crate::adapter::engine_host::v2_host) fn assess(
     action: &str,
@@ -20,7 +30,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     selectors: &[String],
     filing: &Value,
     promotion_authorized: bool,
-) -> Result<Value, DispatchError> {
+) -> Result<AdmissionOutcome, DispatchError> {
     let filed_task_id = required_string(filing, "task_id", action)?;
     if filed_task_id != task_id {
         return Err(action_failed(
@@ -49,6 +59,15 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
             format!("task {task_id} does not match its CI-sweep filing identity"),
         ));
     }
+    if matches!(task.status, TaskStatus::Rejected | TaskStatus::Archived) {
+        return Ok(AdmissionOutcome::Superseded(json!({
+            "task_id": task_id,
+            "outcome": "superseded",
+            "reason": "operator_rejected",
+            "status": task.status,
+            "detail": "the operator rejected or archived the CI-sweep task before admission",
+        })));
+    }
     if task.status != TaskStatus::Proposed {
         return Err(action_failed(
             action,
@@ -60,46 +79,11 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     }
 
     let disposition = required_string(assessment, "disposition", action)?;
-    let duplicate_of = assessment
-        .get("duplicate_of")
-        .ok_or_else(|| action_failed(action, format!("task {task_id} is missing duplicate_of")))?;
-    let already_landed = assessment.get("already_landed").ok_or_else(|| {
-        action_failed(action, format!("task {task_id} is missing already_landed"))
-    })?;
-    for (field, value) in [
-        ("duplicate_of", duplicate_of),
-        ("already_landed", already_landed),
-    ] {
-        if !value.is_null() && !recommendation_has_evidence(value) {
-            return Err(action_failed(
-                action,
-                format!("task {task_id} {field} finding must include concrete evidence"),
-            ));
-        }
-    }
-
-    // `validation_tool_warnings` is the deterministic boundary's own finding
-    // rather than the pilot's, but it withholds admission for the same reason
-    // the others do: the repair would be admitted with an acceptance check the
-    // implementation lane cannot run [ORB-11980].
-    let warning_fields = [
-        "blocked_by",
-        "adr_conflicts",
-        "utility_warnings",
-        "surface_warnings",
-        super::super::task_pilot::VALIDATION_TOOL_WARNINGS,
-    ];
-    let warnings = warning_fields
-        .iter()
-        .flat_map(|field| {
-            assessment
-                .get(*field)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .map(move |value| json!({ "field": field, "value": value }))
-        })
-        .collect::<Vec<_>>();
+    let PromotionFindings {
+        duplicate_of,
+        already_landed,
+        warnings,
+    } = promotion_findings(action, task_id, assessment)?;
 
     // A release failure may share a cluster with a pull-request run of the
     // same commit. It is release-only for remediation purposes as long as no
@@ -126,7 +110,13 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
     // performs no release operation, so a failure whose correct repair is
     // promotion, a tag, or a publication is reported as that operator action
     // instead of being converted into automatic repository edits.
-    let (decision, classification, evidence) = if let Some(finding) = release_action {
+    let (decision, classification, evidence) = if auto_approval_opted_out(&task.tags) {
+        (
+            "withhold",
+            NO_AUTO_APPROVE_TAG,
+            json!("the task is tagged no-auto-approve; a human must approve it"),
+        )
+    } else if let Some(finding) = release_action {
         (
             "withhold",
             "release_publication_or_operator_action_needed",
@@ -157,15 +147,11 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
         ("withhold", "duplicate", duplicate_of.clone())
     } else if !warnings.is_empty() {
         ("withhold", "warnings", json!(warnings))
-    } else if disposition == "verified_no_diff" {
-        (
-            "withhold",
-            "covering_proof_missing",
-            json!({
-                "pilot_evidence": assessment.get("evidence").cloned().unwrap_or(Value::Null),
-                "required_action": "provide concrete covering task and commit evidence or return actionable selectors",
-            }),
-        )
+    } else if let Some(finding) = VerifiedNoDiff::from_assessment(assessment) {
+        // Never promoted. The apply step archives the task once a cited
+        // commit is proven on the base branch, the same rule an approval
+        // drain applies; without that proof it stays proposed.
+        ("withhold", PILOT_VERIFIED_NO_DIFF, finding.to_json())
     } else if disposition != "selectors" || selectors.is_empty() {
         (
             "withhold",
@@ -190,7 +176,7 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
         )
     };
 
-    Ok(json!({
+    Ok(AdmissionOutcome::Decision(json!({
         "task_id": task_id,
         "decision": decision,
         "classification": classification,
@@ -206,7 +192,59 @@ pub(in crate::adapter::engine_host::v2_host) fn assess(
             "head_branches": filing.get("head_branches").cloned().unwrap_or_else(|| json!([])),
         },
         "evidence": evidence,
-    }))
+    })))
+}
+
+/// A CI-sweep prepare can lose its one filed task to another active pilot.
+/// Settle only that exact, explicitly reported exclusion as superseded.
+pub(in crate::adapter::engine_host::v2_host) fn piloted_elsewhere(
+    action: &str,
+    task_id: &str,
+    prepared: &Value,
+) -> Result<Option<Value>, DispatchError> {
+    if prepared.get("task_count").and_then(Value::as_u64) != Some(0)
+        || prepared
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .is_none_or(|task_ids| !task_ids.is_empty())
+        || prepared
+            .get("tasks")
+            .and_then(Value::as_array)
+            .is_none_or(|tasks| !tasks.is_empty())
+        || prepared
+            .get("partitions")
+            .and_then(Value::as_array)
+            .is_none_or(|partitions| !partitions.is_empty())
+    {
+        return Ok(None);
+    }
+    let Some(excluded) = prepared.get("excluded").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    if excluded.len() != 1 || excluded[0].get("task_id").and_then(Value::as_str) != Some(task_id) {
+        return Ok(None);
+    }
+    if excluded[0].get("reason").and_then(Value::as_str) != Some("already_preparing") {
+        return Ok(None);
+    }
+    let run_ids = required_string_array(&excluded[0], "prepared_by_run_ids", action)?;
+    if run_ids.iter().any(|run_id| run_id.trim().is_empty()) {
+        return Err(action_failed(
+            action,
+            "prepared_by_run_ids must contain non-empty run IDs",
+        ));
+    }
+    let Some(run_id) = run_ids.first() else {
+        return Ok(None);
+    };
+    Ok(Some(json!({
+        "task_id": task_id,
+        "outcome": "superseded",
+        "reason": "piloted_elsewhere",
+        "run_id": run_id,
+        "run_ids": run_ids,
+        "detail": "another active task-pilot run already prepared this CI-sweep task",
+    })))
 }
 
 /// The pilot's explicit finding that a failure's only correct repair is an
@@ -241,19 +279,6 @@ fn release_action_required<'a>(
         ));
     }
     Ok(Some(finding))
-}
-
-fn recommendation_has_evidence(value: &Value) -> bool {
-    match value {
-        Value::String(text) => !text.trim().is_empty(),
-        Value::Object(fields) => fields
-            .get("evidence")
-            .is_some_and(recommendation_has_evidence),
-        Value::Array(values) => {
-            !values.is_empty() && values.iter().all(recommendation_has_evidence)
-        }
-        _ => false,
-    }
 }
 
 fn required_string<'a>(

@@ -16,6 +16,7 @@ fn baseline_def(name: &str) -> ExecutorDef {
         model_pair_override: None,
         model_flag: None,
         timeout_seconds: None,
+        auth_probe: None,
         env: HashMap::new(),
         sandbox: None,
         allow_fallback: false,

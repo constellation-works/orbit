@@ -40,6 +40,31 @@ spec:
     unrelated pull-request run cannot erase a landing-branch failure, and a
     genuinely newer completed non-unsuccessful check of the same identity
     (or a landing-branch success, for non-landing noise) does suppress it.
+    A red run whose workflow has a newer push run on the same branch still
+    queued or in progress at a descendant commit (ancestry from the host
+    checkout, fetching an unseen run commit by id) may already be repaired by
+    that run, so a lone red run is moved to `pending_supersession` with
+    `pending_on` naming that run, `pending_since` (its completion time) and
+    `window_minutes`, before any investigation slot is spent; nothing is
+    filed for it this sweep. A pending successor does not hold back a failure
+    that has reproduced: when the previous completed run of the same workflow
+    and branch, at the same or an ancestor commit, is red (not cancelled) and
+    fails a job the held run fails, at a failed step they share, with the same
+    normalized error signature, the held run stays current with
+    `reproduced_on` naming that run, the pending run, and `shared_cause` (the
+    job, its shared failed steps and the signature). The signature is the one
+    filing dedupes on, computed from each job's failed-step log the way filing
+    reads it; a shared job and step alone is not a reproduction, because one
+    CI step can run several unrelated checks, and a step-name fallback with no
+    diagnostic line proves nothing. Comparisons read at most 12 run views and
+    6 failed-step logs per sweep, each log bounded by `log_max_bytes`; a
+    comparison past a cap or whose log cannot be read leaves the run held,
+    with a note. The hold is also bounded: a run held for
+    `pending_supersession_window_minutes` (default 30) since it completed stays
+    current with `held_past_window` naming the pending run, and filing writes
+    that run into the task description. A rerun
+    of the same commit, a successor that is not a proven descendant, or an
+    ancestry query that fails leaves the failure current, with a note.
     Only landing-ref pushes of the observed event commit, or job checkouts
     matching an observed integration/release tip, remain in current_failures.
     Other live branch failures are retained in branch_failures, including
@@ -51,7 +76,17 @@ spec:
     scanned head nor present on origin is reported as
     `ref_no_longer_exists` rather than current: its pull request merged or
     its branch was deleted, so the landing branch's own runs are the live
-    evidence. That probe is authoritative and bounded — one origin query per
+    evidence. A red run on a branch still on origin whose pull request was
+    closed or merged while the branch still points at that pull request's
+    head, with no open pull request on the branch, is reported as
+    `pull_request_closed` with the pull request's number, URL and
+    state; a branch that moved past its closed pull request stays current. A
+    bounded listing of 100 closed pull requests is supplemented by a
+    branch-specific listing when that page is full and omits a selected
+    candidate, or when the global listing is unavailable. A matching closed PR
+    is checked against open PRs on the branch before it is retired. Failed or
+    truncated branch-specific listings defer the candidate with a note.
+    That probe is authoritative and bounded — one origin query per
     distinct branch carrying a red run, rotating through overflow candidates
     across bounded sweeps by `investigation_cursor` without starvation. A candidate
     branch whose origin probe is skipped past the probe budget or fails transiently
@@ -61,14 +96,32 @@ spec:
     ranked prefix keeps all but one slot and the last slot rotates through
     the overflow by `investigation_cursor`, so a candidate below the cap is
     investigated within one rotation instead of never. A cancelled run is
-    screened from its run view before that budget is spent: with no failed
-    step it is `inconclusive`, or listed in `stale_or_superseded` when a newer
-    run of the same workflow on the same branch exists; neither takes a slot.
-    A cancelled run with a failed step stays a candidate and never hides an
-    older actionable failure. Discovery or investigation failures are
-    bounded, redacted, and emitted in `retryable_errors`; the filing step
-    defers affected jobs (or rejects discovery-wide gaps) so missing evidence
-    cannot be mistaken for a clean result.
+    screened from its run view and job annotations before that budget is
+    spent. Each cancelled job that still lists a failed step has its
+    check-run annotations read (at most 12 reads per sweep); GitHub's
+    "Canceling since a higher priority waiting request ... exists" marks the
+    job `concurrency_cancellation`, because a concurrency group interrupted
+    it and nothing in it failed. When every job is cancelled without a failed
+    step or by concurrency, the run is `inconclusive` (reason
+    `cancelled_without_failed_steps` or `concurrency_cancelled`) without any
+    log read, even when it is the newest run of its workflow on its branch,
+    or listed in `stale_or_superseded` when a newer run of the same workflow
+    on the same branch exists; neither takes a slot. A cancelled run with any
+    other failed step, or whose annotations could not be read, stays a
+    candidate and never hides an older actionable failure. Discovery or
+    investigation failures are bounded, redacted, and emitted in
+    `retryable_errors`; the filing step defers affected jobs (or rejects
+    discovery-wide gaps) so missing evidence cannot be mistaken for a clean
+    result. A run-scoped error with the same run, job and operation on 3
+    consecutive workflow sweeps stops failing the sweep: it moves to
+    `persistent_retryable_errors` with its `consecutive_sweeps`, the
+    incomplete findings it held move to `persistently_incomplete`, and a note
+    says so. The counts persist in
+    `<data root>/state/ci_failure_sweep/retryable_history.json`; collection
+    retries of one workflow run count once, an error missing from one sweep
+    starts over, and an error that names no run never degrades. An unavailable
+    GitHub capability breaks the streak because that sweep could not observe
+    the error.
     When no GitHub client is available or authenticated the snapshot carries
     `collected: false` and gathers nothing further, so a caller can never
     mistake it for a clean CI result.
@@ -90,9 +143,15 @@ spec:
           Cap on the single repository-wide workflow-run listing. This is a
           whole-repository budget, not a per-head one; it must stay deep enough
           that the integration head's newest run survives the pull-request runs
-          that outnumber it. Defaults to 100, maximum 300.
+          that outnumber it. Defaults to 100, which is also the maximum: one
+          `gh run list` page holds at most 100 runs, so larger values are
+          clamped and the snapshot reports the applied limit. Values below 1
+          are raised to 1.
       max_pull_requests:
         type: number
+        description: >
+          Cap on the open pull requests whose heads are scanned. Defaults to
+          10, maximum 50; values below 1 are raised to 1.
       max_investigated_runs:
         type: number
       max_retired_ref_probes:
@@ -120,6 +179,13 @@ spec:
         description: >
           Global cap on additional checkout reads, each narrowed to the same
           failed job. Default 3, maximum 25.
+      pending_supersession_window_minutes:
+        type: number
+        description: >
+          How long a red run that has not reproduced may be held in
+          `pending_supersession` for an in-flight descendant run, measured
+          from the red run's completion. Default 30, maximum 1440; 0 files it
+          without holding.
   output_schema_json:
     type: object
     required: [phase, ci_evidence]
@@ -154,7 +220,19 @@ spec:
             type: array
           deferred:
             type: array
+          pending_supersession:
+            type: array
+            description: >
+              Red runs held while a descendant push run of the same workflow
+              and branch is in flight and the failure has neither reproduced
+              on the previous completed run nor outlived the window, each
+              with `reason` (`newer_descendant_run_in_flight`), `evidence`,
+              `pending_on`, `pending_since` and `window_minutes`.
           retryable_errors:
+            type: array
+          persistent_retryable_errors:
+            type: array
+          persistently_incomplete:
             type: array
           summary:
             type: object

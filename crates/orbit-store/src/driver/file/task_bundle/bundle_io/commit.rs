@@ -16,6 +16,10 @@
 //!
 //! Failure during abort/recovery: pending remains. The next recover retries.
 //! A settled event/envelope mismatch with no pending file is corruption.
+//!
+//! Every bundle writer must recover before it mutates: [`PendingWriteGuard`]
+//! does so on `begin`, and the repository's bundle write lock does so for
+//! every writer it admits, including coordinated commits and their replay.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -31,7 +35,9 @@ use orbit_types::task::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{TaskBundleV2, read_bundle_at, read_required_text, scan_jsonl_records};
+use super::{
+    TaskBundleV2, read_bundle_at, read_required_bytes, read_required_text, scan_jsonl_records,
+};
 use crate::fs::yaml::{serialize_yaml_with, write_yaml_durable_with};
 
 pub(crate) const PENDING_WRITE_FILE_NAME: &str = ".pending-write.yaml";
@@ -292,7 +298,7 @@ fn read_jsonl_prefix<T: serde::de::DeserializeOwned>(
     path: &Path,
     len: u64,
 ) -> Result<Vec<T>, OrbitError> {
-    let raw = read_required_text(path)?;
+    let raw = read_required_bytes(path)?;
     let end = (len as usize).min(raw.len());
     scan_jsonl_records(path, &raw[..end])
 }

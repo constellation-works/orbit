@@ -24,12 +24,11 @@ pub(super) fn apply_workspace_claim_scope(conn: &Connection) -> Result<(), Orbit
 
     add_column_if_missing(
         conn,
-        "ALTER TABLE task_reservations ADD COLUMN scope TEXT NOT NULL DEFAULT 'files'",
+        "task_reservations",
+        "scope",
+        "TEXT NOT NULL DEFAULT 'files'",
     )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE task_reservations ADD COLUMN claim_token TEXT",
-    )?;
+    add_column_if_missing(conn, "task_reservations", "claim_token", "TEXT")?;
 
     conn.execute_batch(
         r#"
@@ -69,26 +68,11 @@ pub(super) fn ensure_task_reservations_schema(conn: &Connection) -> Result<(), O
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE task_reservations ADD COLUMN workspace_id TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE task_reservations ADD COLUMN owner_run_id TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE task_reservations ADD COLUMN owner_metadata_json TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE task_reservations ADD COLUMN release_reason TEXT",
-    )?;
-    add_column_if_missing(
-        conn,
-        "ALTER TABLE task_reservations ADD COLUMN release_metadata_json TEXT",
-    )?;
+    add_column_if_missing(conn, "task_reservations", "workspace_id", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "owner_run_id", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "owner_metadata_json", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "release_reason", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "release_metadata_json", "TEXT")?;
 
     conn.execute_batch(
         r#"

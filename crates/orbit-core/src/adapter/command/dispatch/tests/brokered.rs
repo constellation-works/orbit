@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use orbit_common::OrbitError;
 use orbit_common::process::ancestry::process_start_key;
 use orbit_common::test_env::ScopedEnv;
 use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
@@ -20,6 +21,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::super::brokered::RunDispatch;
+use super::super::execute::ToolEntryPoint;
 use crate::OrbitRuntime;
 use crate::application::plugin::{
     PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin, set_plugin_secret,
@@ -44,6 +46,13 @@ input=$(cat)
 version=$(printf '%s' "$input" | sed -n 's/.*"refresh_token":{"value":"[^"]*","version":"\([^"]*\)".*/\1/p')
 printf '{"ok":true,"output":{"rotated":true},"secret_updates":{"refresh_token":{"value":"rotated-token-7d1","expected_version":"%s"}}}\n' "$version"
 "##;
+
+/// Fail with the listener's retryable `busy` code, which only the listener
+/// may send.
+const LISTENER_CODE_BACKEND: &str = r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"ok":false,"error":{"code":"plugin_broker_busy","message":"x","retryable":true}}'
+"#;
 
 /// A stand-in `gh` that, like the real one, needs the host account's config:
 /// without `~/.config/gh/hosts.yml` it prints the login prompt. Its one run's
@@ -300,6 +309,11 @@ fn a_request_outside_the_run_is_refused_before_the_backend_runs() {
 
 #[test]
 fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     fixture.plugin(
         "demo",
@@ -403,4 +417,36 @@ fn the_broker_runs_the_github_reads_and_refuses_every_other_builtin() {
         assert_eq!(rows.len(), 1, "{tool}");
         assert!(rows[0].brokered && rows[0].status == AuditEventStatus::Denied);
     }
+}
+
+/// A dispatched backend cannot pass for the listener: its `plugin_broker_busy`
+/// reaches the nested caller as a non-retryable call failure, and the call
+/// keeps the broker's row as its only one.
+#[test]
+fn a_backend_answering_with_a_listener_code_is_audited_once_by_the_broker() {
+    let fixture = Fixture::new();
+    fixture.plugin("demo", LISTENER_CODE_BACKEND, None);
+    // The nested caller sends this process's cwd, which must lie in the run.
+    let mut run = fixture.run(&["demo.hello"]);
+    run.caller.worktree = std::env::current_dir()
+        .and_then(std::fs::canonicalize)
+        .expect("test cwd");
+    let serving = serve(&fixture, run);
+    // SAFETY: the fixture's scoped environment holds the process-wide env
+    // lock until it drops, and restores this variable when it does.
+    unsafe { std::env::set_var("ORBIT_PLUGIN_BROKER", serving.broker.socket_path()) };
+
+    let error = fixture
+        .runtime()
+        .execute_tool_command_dispatch("demo.hello", json!({}), None, None, ToolEntryPoint::Cli)
+        .expect_err("the backend failed");
+
+    let rows = serving.rows("demo.hello");
+    assert_eq!(rows.len(), 1, "one audit row for the call: {rows:?}");
+    assert!(rows[0].brokered && rows[0].status != AuditEventStatus::Success);
+    let OrbitError::RemoteTool { code, payload, .. } = &error else {
+        panic!("a structured broker error: {error:?}");
+    };
+    assert_eq!(code, "plugin_broker_call_failed", "{payload}");
+    assert_eq!(payload["retryable"], false, "{payload}");
 }

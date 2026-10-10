@@ -24,10 +24,11 @@ orbit run ship --mode local         # implement in a worktree, merge to the base
 orbit run auto --for 2h             # drain the backlog for a window
 orbit run auto --for 2h --concurrency 8   # ... with 8 tasks in flight at a time
 orbit run auto --for 2h --allow-crew opus,sonnet  # ... using only these crews
+orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 2h # on a replica
 orbit run auto --stop                      # stop new admissions; children keep running
 orbit run concurrency <run-id> --set 7     # retune a live drain, without replacing it
 orbit run readiness                        # explain current auto-drain eligibility, read-only
-orbit run readiness TASK-123 --json        # explain selected task IDs as JSON
+orbit run readiness <task-id> --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
 orbit run ship-sweep --dry-run      # what every registered workspace would ship
 ```
@@ -47,8 +48,10 @@ it expires still finishes.
 It keeps `--concurrency` tasks in flight (5 by default) and re-lists the whole
 backlog every pass, so a slot is refilled as soon as its own task finishes and a
 task filed mid-window starts without waiting for the batch around it. That
-number is the only bound: the delivery jobs impose no active-run limit of their
-own, so size it to what the host can carry.
+number is a workspace-wide bound: workers left running by stopped coordinators,
+explicit `run ship` deliveries, and unsettled pull admissions all consume slots.
+A wrapper and its delivery consume one slot together. The delivery jobs impose
+no active-run limit of their own, so size the ceiling to what the host can carry.
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
@@ -74,6 +77,14 @@ idempotent when nothing is running. `orbit run show` reports
 `Admissions: stopped by ...` and lists remaining children. To cancel workers
 already in flight, `orbit run cancel <child-run-id> --confirm` each one —
 do not cancel the coordinator for this.
+
+If you stop and restart instead of retuning in place, the replacement counts
+those still-running workers against its new ceiling: with K inherited slots and
+a ceiling of N, it admits at most N-K new tasks (zero when K exceeds N).
+`run show` reports `Capacity: occupied=… inherited=… limit=…` (JSON:
+`drain_summary.capacity`) from the last admission pass, before that pass starts
+new work. The `Leaves:` outcomes remain those of the displayed coordinator's
+own children; inherited work is not counted as its success or failure.
 
 A drain's own `State: success` says the coordinator ran, not that its leaves
 shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run
@@ -106,6 +117,25 @@ for an auto drain it is opt-in and scoped to that run's window:
   in flight keep running to completion; nothing is cancelled. It carries no
   completion or promotion authority, and there is no automatic fallback to a
   different provider.
+- On a replica pull drain (`orbit run auto --pull <selector> --allow-crew ...`)
+  it limits the crews the drain declares to the owner, on every pass and on
+  resume, so the owner hands it only tasks on those crews. The owner's before-PR
+  reviewer is not restricted but must still run on that host. A pull drain
+  without `--for` makes one admission pass, then only settles.
+
+For a pull drain, register the owner with `orbit host add <ssh-target>` and
+check `orbit host list`. `--host <name-or-machine_id> --pull <workspace-name-or-ws_id>`
+resolves the owner workspace from that host's live list. Without `--host`,
+`--pull` takes only the full host-qualified selector copied from discovery;
+do not compose one by hand. Run the drain from that owner's replica checkout.
+The flag selects a pull owner, not the execution host for `run ship`,
+`run show/history/logs` or other host-local commands. For task reads and
+updates on the CLI or federated MCP, omit the workspace to route by task ID
+prefix; task creation/listing and dispatch retain workspace selection.
+See [tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection)
+for the routed tools and error remedies, and
+[distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
+for pull setup, captured review policy and owner landing authority.
 
 Runs are asynchronous: these commands return once the run is durable, printing a
 run ID. They do not claim the eventual outcome.
@@ -128,6 +158,13 @@ Two of its answers separate contention from capacity:
   task a live child is already carrying (`live_claim`), or was chosen earlier
   in the same admission wave (`same_wave`). `capacity_saturated`, by contrast,
   means there was no free slot at all.
+- `surface_reserved` means a critical or high-priority task ranked ahead of
+  this one waits only on context locks, and this task overlaps its surface.
+  It is withheld so it cannot take each lock as it frees, and admits once the
+  reserving task (`blocking_task_ids`) is admitted or leaves backlog. The
+  reserving task reports `context_lock_conflict` with a `detail` saying it
+  reserves. At most two tasks reserve per pass; work that does not overlap a
+  reserved surface admits normally.
 - `capacity.occupancy` breaks the occupied slots down by what each is doing —
   `lock_waiting`, `implementing`, `post_implementation`, or `unknown` — with
   the wrapper, task, and descendant run IDs behind each. A drain whose slots
@@ -142,8 +179,8 @@ orbit run show <run_id>
 
 ## Prepare selectors before dispatching under traffic
 
-`context_files` is what conflict detection and file reservation read. Prepare a verified footprint before dispatch under traffic. Empty-surface
-eligibility differs by admission path; do not assume it protects files.
+`context_files` is what conflict detection and file reservation read. Prepare a verified footprint before dispatch under traffic. An empty
+surface is admitted without a context lock, so it protects no files.
 
 Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
 read-only in bounded partitions, and its apply step persists only selectors it
@@ -173,8 +210,11 @@ At the prepare activity boundary, an omitted optional `base_branch` is bound as
 an empty string. Prepare treats an omitted or empty value as the registered
 workspace base branch, else `workflow.base_branch`, fetches that landing branch, and pins one
 `source_revision` while preserving primary HEAD, index, dirty and untracked
-files. Remote failure stops before an agent call. Each pilot runs in its own
-detached checkout at that revision, with
+files. Manual preparation without a pinned source stops on remote failure.
+State-triggered preparation best-effort fetches once during evaluation and
+pins origin, keeping a local branch already ahead of origin; fetch failure
+uses the local head captured before fetching. Its prepare step retains that
+claim's pin. Each pilot runs in its own detached checkout at that revision, with
 its cwd, input paths, and read-only filesystem profile bound there. Task tools
 retain the owning logical workspace, and apply still checks task snapshots
 with compare-and-set on that authority. Inspection checkouts use at most 16
@@ -195,14 +235,41 @@ run before a large dispatch is still appropriate.
 The task-pilot pipeline never promotes tasks or dispatches them; promotion and
 shipping remain separate operator-authorized steps.
 
-Apply is isolated by partition. A stale task snapshot or malformed assessment
-leaves that whole partition untouched while independently valid partitions are
-still applied. The run then fails deliberately, and its durable apply output
-lists each partition as `applied`, `skipped_stale`, or `failed`, plus the exact
+Apply is isolated by partition, then by task. A partition whose assessments are
+malformed (duplicate, or not matching the prepared task IDs) fails as a whole
+and mutates none of its tasks. Within a valid partition each task settles on
+its own: a task that went stale at the write boundary is `stale` with a reason,
+and a task with an invalid assessment is `invalid`. Independently valid siblings
+and partitions still apply.
+
+Durable edits that race a pilot settle as `superseded`, not as failures. This
+covers a task whose fields, material, status or ownership changed after
+preparation, a task admitted to or claimed for execution, a task that became
+terminal, an operator rejection, and a task superseded by a source move under a
+routine claim. Each skipped task carries a `reason` (for example `task_edited`,
+`status_changed`, `execution_claim`, `workflow_admission`, or
+`superseded_by_source`) and is not written. Such a task needs no repair.
+
+Each partition in the durable apply output has one outcome:
+
+- `applied`: every task applied or was already applied.
+- `superseded`: every task applied, was already applied, or was superseded, and
+  at least one was superseded. The partition may still list applied siblings in
+  `applied_task_ids`, so read `task_outcomes`, not the partition label alone.
+- `skipped_stale`: no task applied and every task was stale.
+- `partial`: some tasks applied and others did not resolve.
+- `failed`: no task applied and at least one did not resolve, or the partition
+  was malformed.
+
+The run succeeds when every partition is `applied` or `superseded`. Any
+`failed`, `partial`, or `skipped_stale` partition fails the run. The durable
+apply output lists each partition's outcome, its task outcomes, and the exact
 task IDs actually applied. `orbit run show <run_id>` is therefore the recovery
 source of truth. Resuming the failed run reuses its successful prepare, pilot,
 and apply checkpoints (it does not rerun those agents); start a fresh zero-input
-pilot only for tasks that remain empty after reviewing the recorded outcomes.
+pilot only for tasks that remain empty after reviewing the recorded outcomes. A
+superseded task was not written, so a fresh pilot assesses it against current
+state if it still lacks selectors. Do not re-pilot the whole backlog for it.
 
 ## Keeping parallel runs off each other
 
@@ -231,15 +298,21 @@ children's context declares none of its own, so it reserves nothing and
 
 ## Failed runs
 
-A failed run parks its task in `blocked` with the failure attached. Nothing
-classifies or re-backlogs it for you: read the run, decide whether the cause was
-environmental or real, and make the transition yourself.
+A failed run can park its task in `blocked` with the failure attached. The
+owner's clock can dispatch final recovery for an eligible block; inspect its
+decision before intervening. See [automation.md](../../orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+If it remains blocked, read the run and decide whether a rerun can succeed
+before deliberately returning it to backlog.
 
 ```bash
 orbit task list --status blocked
 orbit run show <run-id> --json
 orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
+
+For blocks caused by a missing provider launcher, `orbit task recheck-blocked`
+reports whether the launcher now resolves. Its `--confirm` option requeues only
+the cleared launcher blocks; it leaves implementation failures blocked.
 
 ## Multi-operator workspaces
 
@@ -309,6 +382,38 @@ as `ship-sweep`.
 - It authorizes delivery completion and `review -> done` only. It never approves
   `proposed` work into the backlog and is not an independent review verdict; the
   transition is recorded against the authorizing run and operator.
+
+`orbit run auto --approve-proposed` (MCP `orbit_workflow_auto` `start` with
+`approve_proposed: true`) is the explicit authorization for one drain to approve
+`proposed` work, independent of `--complete`. Default-off and never enabled by
+configuration.
+
+- Each pass selects up to ten qualifying proposed tasks, including ones filed
+  mid-window. A task qualifies with the `no-diff-expected` tag, or with
+  non-empty `context_files` and an assessed complexity.
+- The drain pilots them through `task_pilot_pipeline`, and the pilot's apply
+  step approves a task only under the existing promotion rules: no duplicate,
+  already-landed, blocked-by, conflict or warning finding, and selectors that
+  resolve at the pinned revision. The authority is verified against the drain
+  that dispatched the pilot.
+- An approved task gets the ordinary approve transition with a history note
+  naming the drain run, and is admitted by that same pass.
+- A task tagged `no-auto-approve` is never approved by any automatic
+  promotion authority (this drain or the CI sweep). The drain does not pilot
+  it; it stays `proposed`, held with reason `no-auto-approve`, until a human
+  approves it. File a task with that tag when it needs a human decision.
+- A task whose current pilot assessment is `verified_no_diff`, and that is
+  not tagged `no-diff-expected`, is held as `pilot_verified_no_diff` with the
+  pilot's evidence and the commits it cites. When Orbit automation filed it
+  (`ci-failure-sweep`, `delivery-code-review` or `auto-task:*`), the pass
+  archives it with a system comment once every cited commit exists and at
+  least one is on the base branch. Human- and orchestrator-filed tasks are
+  never closed this way; archive or re-scope them yourself.
+- Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
+  report approved, closed and held counts with each hold reason. A held task
+  is not piloted again until it changes.
+- `--approve-proposed` with `--pull` is refused before anything is submitted:
+  a follower does not approve another host's tasks.
 
 Submission stays asynchronous, so a `--complete` run's eventual outcome is not
 known when the command returns — confirm with `orbit run show <run_id>` and

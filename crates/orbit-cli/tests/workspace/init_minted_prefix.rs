@@ -8,6 +8,9 @@
 //! Writing an identity naming another prefix used to succeed and then fail
 //! every later command at the allocator. Init must refuse first, writing
 //! nothing, and leave the machine working.
+//!
+//! The same pre-write refusal covers a `--machine-name` the registry rejects
+//! (a path-like name): it must fail before the global root is seeded.
 
 use std::fs;
 use std::path::Path;
@@ -47,7 +50,7 @@ fn init_refuses_a_prefix_that_contradicts_minted_ids_and_writes_no_identity() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     fs::create_dir_all(&home).expect("fixture home");
-    fs::create_dir_all(work.join(".git")).expect("fixture work repo");
+    crate::git_repo::init(&work);
 
     let init = run(&work, &home, &["workspace", "init", "--name", "minted"]);
     assert!(init.status.success(), "workspace init: {init:?}");
@@ -95,7 +98,7 @@ fn init_on_a_machine_with_no_minted_ids_still_creates_the_identity() {
     let home = temp.path().join("home");
     let work = temp.path().join("work");
     fs::create_dir_all(&home).expect("fixture home");
-    fs::create_dir_all(work.join(".git")).expect("fixture work repo");
+    crate::git_repo::init(&work);
 
     let init = run(&work, &home, &["workspace", "init", "--name", "fresh"]);
     assert!(init.status.success(), "workspace init: {init:?}");
@@ -121,5 +124,39 @@ fn init_on_a_machine_with_no_minted_ids_still_creates_the_identity() {
     assert!(
         String::from_utf8_lossy(&add.stdout).contains("QA-"),
         "ids mint under the chosen prefix: {add:?}"
+    );
+}
+
+#[test]
+fn init_refuses_a_path_like_machine_name_before_seeding_the_root() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("fixture home");
+    crate::git_repo::init(&work);
+
+    let refused = run(
+        &work,
+        &home,
+        &[
+            "init",
+            "--task-prefix",
+            "DK",
+            "--machine-name",
+            "dk/server",
+            "--non-interactive",
+        ],
+    );
+    assert!(!refused.status.success(), "init must refuse: {refused:?}");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("machine_name"), "{stderr}");
+    let orbit_root = home.join(".orbit");
+    assert!(
+        !orbit_root.join("config.toml").exists(),
+        "a refused init must not write config.toml"
+    );
+    assert!(
+        !orbit_root.join("skills").exists(),
+        "a refused init must not seed shipped skills"
     );
 }

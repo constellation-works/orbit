@@ -9,17 +9,17 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::blocked_next_step::blocked_next_step;
 use super::output::{
-    format_task_fields, is_human_visible_history_event, task_fields_to_json,
+    format_task_fields, format_task_history_event, format_task_readiness,
+    format_task_show_timestamp, is_human_visible_history_event, task_fields_to_json,
     task_to_json_with_sidecars,
 };
 
 #[derive(Args)]
 pub struct TaskShowArgs {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     /// Task ID
     pub id: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     #[arg(
         long = "fields",
         alias = "field",
@@ -87,6 +87,9 @@ impl Execute for TaskShowArgs {
             );
             if let Some(complexity) = task.complexity {
                 let _ = writeln!(out, "{} {}", bold("Complexity:"), complexity);
+            }
+            if let Some(readiness) = format_task_readiness(&task) {
+                let _ = writeln!(out, "{} {readiness}", bold("Readiness:"));
             }
             let _ = writeln!(out, "{} {}", bold("Type:"), task.task_type);
             if !task.description.is_empty() {
@@ -183,9 +186,9 @@ impl Execute for TaskShowArgs {
                     let _ = writeln!(
                         out,
                         "  {} {}: {}",
-                        dimmed(&format!("[{}]", comment.at.to_rfc3339())),
+                        dimmed(&format!("[{}]", format_task_show_timestamp(comment.at))),
                         comment.by,
-                        comment.message
+                        super::pilot_comment::comment_presentation(comment)
                     );
                 }
             }
@@ -224,18 +227,18 @@ impl Execute for TaskShowArgs {
                         let _ = writeln!(
                             out,
                             "  {} {}: {} ({})",
-                            dimmed(&format!("[{}]", entry.at.to_rfc3339())),
+                            dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
                             entry.by,
-                            entry.event,
+                            format_task_history_event(entry),
                             note
                         );
                     } else {
                         let _ = writeln!(
                             out,
                             "  {} {}: {}",
-                            dimmed(&format!("[{}]", entry.at.to_rfc3339())),
+                            dimmed(&format!("[{}]", format_task_show_timestamp(entry.at))),
                             entry.by,
-                            entry.event
+                            format_task_history_event(entry)
                         );
                     }
                 }
@@ -258,7 +261,7 @@ impl Execute for TaskShowArgs {
                     record.decision,
                     record.outcome,
                     record.run_id,
-                    record.at.to_rfc3339()
+                    format_task_show_timestamp(record.at)
                 );
                 if let Some(object) = doc.as_object_mut() {
                     object.insert(
@@ -285,13 +288,13 @@ impl Execute for TaskShowArgs {
                 out,
                 "{} {}",
                 bold("Created:"),
-                dimmed(&task.created_at.to_rfc3339())
+                dimmed(&format_task_show_timestamp(task.created_at))
             );
             let _ = writeln!(
                 out,
                 "{} {}",
                 bold("Updated:"),
-                dimmed(&task.updated_at.to_rfc3339())
+                dimmed(&format_task_show_timestamp(task.updated_at))
             );
             blocks.push(Block::text(out));
             Ok(Payload::blocks(doc, blocks).into())
@@ -307,6 +310,7 @@ fn relation_type_label(relation_type: TaskRelationType) -> &'static str {
         TaskRelationType::RegressionFrom => "regression_from",
         TaskRelationType::Supersedes => "supersedes",
         TaskRelationType::RelatedTo => "related_to",
+        TaskRelationType::CoveredBy => "covered_by",
         TaskRelationType::Produces => "produces",
         TaskRelationType::Resolves => "resolves",
     }

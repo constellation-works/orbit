@@ -97,6 +97,17 @@ impl OrbitRuntime {
         self.stores().audit_events().list_audit_events(filter)
     }
 
+    /// Returns exact persistent audit rows by their database IDs, newest first.
+    pub fn list_audit_events_by_ids(
+        &self,
+        ids: &[i64],
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<AuditEvent>, OrbitError> {
+        self.stores()
+            .audit_events()
+            .list_audit_events_by_ids(ids, workspace_id)
+    }
+
     pub fn show_audit_event(&self, id: i64) -> Result<AuditEvent, OrbitError> {
         self.stores()
             .audit_events()
@@ -344,23 +355,10 @@ impl OrbitRuntime {
     ) -> Result<FailureIncidentReport, OrbitError> {
         self.stores().audit_events().get_failure_incidents(query)
     }
-
-    /// Sorted `duration_ms` values for audit events with NULL `tool_name`
-    /// at or after `since`. Companion to [`Self::audit_event_aggregates_by_tool`]
-    /// for computing percentiles of the synthetic `"unknown"` bucket.
-    pub fn audit_event_durations_null_tool(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<i64>, OrbitError> {
-        self.stores()
-            .audit_events()
-            .get_audit_event_durations_null_tool(since)
-    }
 }
 
 /// Nearest-rank p95 over a slice of `duration_ms` values that the caller has
-/// already sorted ascending. Returns 0 for an empty slice. Shared with
-/// callers that fetch `audit_event_durations_*` directly.
+/// already sorted ascending. Returns 0 for an empty slice.
 pub fn compute_p95(sorted_durations: &[i64]) -> i64 {
     if sorted_durations.is_empty() {
         return 0;

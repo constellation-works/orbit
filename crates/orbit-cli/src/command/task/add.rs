@@ -1,5 +1,5 @@
 use clap::{ArgAction, Args};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{ContextCreationAuthorization, TaskAddParams};
 use orbit_core::{
     ExternalRef, OrbitRuntime, TaskComplexity, TaskCreateStatus, TaskPriority, TaskType,
 };
@@ -49,7 +49,8 @@ pub struct TaskAddArgs {
     /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long, action = ArgAction::Append, value_delimiter = ',')]
     pub context: Vec<String>,
-    /// Accept context selectors whose target does not exist yet (for work that creates the file)
+    /// Accept context selectors whose target does not exist yet (for work that creates the file).
+    /// Each missing selector is recorded as durable creation intent for the task.
     #[arg(long)]
     pub allow_missing_context: bool,
     /// Priority level
@@ -77,18 +78,18 @@ pub struct TaskAddArgs {
     /// Explicit agent model to persist on the task artifact
     #[arg(long)]
     pub model: Option<String>,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let required_tool_warnings = runtime.validate_required_tools(&self.required_tools)?;
         let (agent, model) = super::mutation_identity(self.model);
-        if !self.allow_missing_context {
+        let context_creation = if self.allow_missing_context {
+            runtime.authorize_missing_context(&self.context)?
+        } else {
             runtime.ensure_context_selectors_exist(&self.context)?;
-        }
+            ContextCreationAuthorization::default()
+        };
         if let Some(parent_id) = self.parent_id.as_deref()
             && runtime.get_task(parent_id).is_err()
         {
@@ -123,6 +124,7 @@ impl Execute for TaskAddArgs {
                 source_task_id: self.source_task.clone(),
                 crew: self.crew,
                 orchestrator: self.orchestrator,
+                context_creation,
             },
             agent,
             model,

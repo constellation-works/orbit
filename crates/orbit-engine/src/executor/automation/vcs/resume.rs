@@ -552,7 +552,7 @@ fn source_state_step_owns_head<H: RuntimeHost + ?Sized>(
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
     Ok(host.read_run_state(handoff_run_id)?.is_some_and(|state| {
-        state.step_outputs.values().any(|output| {
+        state.step_output_entries().any(|(_, output)| {
             output.get("phase").and_then(Value::as_str) == Some("commit")
                 && output.get("task_id").and_then(Value::as_str) == Some(task_id)
                 && output.get("commit_sha").and_then(Value::as_str) == Some(head_sha)
@@ -570,7 +570,7 @@ fn ensure_preservation_parent_owned<H: RuntimeHost + ?Sized>(
 ) -> Result<(), OrbitError> {
     let parent_sha = commit_sha(workspace_path, &format!("{head_sha}^"))?;
     if parent_sha == base_sha
-        || handoff_state.step_outputs.values().any(|output| {
+        || handoff_state.step_output_entries().any(|(_, output)| {
             output.get("commit_sha").and_then(Value::as_str) == Some(parent_sha.as_str())
         })
     {

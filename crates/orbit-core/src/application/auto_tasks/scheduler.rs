@@ -3,7 +3,7 @@
 use crate::OrbitRuntime;
 use crate::application::task::TaskAddParams;
 use chrono::{DateTime, Utc};
-use orbit_automation::auto_tasks::scheduler::{AutoTaskDispatch, ChangeProbe};
+use orbit_automation::auto_tasks::scheduler::{AutoTaskDispatch, ChangeProbe, InactivePluginSkip};
 pub use orbit_automation::auto_tasks::scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions,
 };
@@ -12,7 +12,62 @@ use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
 use std::path::PathBuf;
 
+use crate::application::automation::SourceCache;
 use crate::application::plugin::InactivePlugin;
+
+struct CachedDispatch<'a> {
+    runtime: &'a OrbitRuntime,
+    cache: &'a SourceCache,
+}
+
+impl AutoTaskDispatch for CachedDispatch<'_> {
+    fn evaluate_delivery(
+        &self,
+        definition: &AutoTaskDefinition,
+        dry_run: bool,
+        now: DateTime<Utc>,
+    ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
+        crate::application::automation::evaluate_auto_task_with_cache(
+            self.runtime,
+            definition,
+            dry_run,
+            now,
+            Some(self.cache),
+        )
+    }
+
+    fn definition_root(&self) -> PathBuf {
+        self.runtime.definition_root()
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.runtime.state_dir()
+    }
+
+    fn has_open_instance(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        self.runtime.has_open_instance(definition)
+    }
+
+    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
+        self.runtime.mint_task(definition)
+    }
+
+    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
+        self.runtime.skip_reason(definition)
+    }
+
+    fn probe_change_since_last_sweep(
+        &self,
+        definition: &AutoTaskDefinition,
+        precondition: &SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError> {
+        self.runtime
+            .probe_change_since_last_sweep(definition, precondition)
+    }
+}
 
 /// One definition as a list surface shows it.
 #[derive(Debug, Clone)]
@@ -54,8 +109,15 @@ impl AutoTaskDispatch for OrbitRuntime {
         mint_task(self, definition).map(|task| task.id)
     }
 
-    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
-        OrbitRuntime::auto_task_skip_reason(self, definition)
+    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
+        self.auto_task_inactive_plugin(definition).map(|inactive| {
+            let reason = inactive.reason(&self.auto_task_definition_path(definition), None);
+            InactivePluginSkip {
+                plugin: inactive.namespace,
+                version: inactive.version,
+                reason,
+            }
+        })
     }
 
     fn probe_change_since_last_sweep(
@@ -68,27 +130,21 @@ impl AutoTaskDispatch for OrbitRuntime {
 }
 
 impl OrbitRuntime {
-    /// Why an auto-task definition is skipped this pass, when it is.
+    /// The plugin that makes `definition` inactive in this workspace, if any:
+    /// the one rule both the scheduler's skip and every listing's default
+    /// hiding read.
     ///
     /// A definition a plugin seeded fires only while that plugin is enabled,
     /// on the host and in this workspace:
     /// its template belongs to the plugin, and firing it after a disable would
     /// mint chores nothing on this host can carry out (design §4.5). The file
     /// is left exactly where it is, edits and all.
-    pub fn auto_task_skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
-        let path = self.auto_task_definition_path(definition);
-        self.auto_task_inactive_plugin(definition)
-            .map(|inactive| inactive.reason(&path, None))
-    }
-
-    /// The plugin that makes `definition` inactive in this workspace, if any:
-    /// the one rule both the scheduler's skip and every listing's default
-    /// hiding read.
     pub fn auto_task_inactive_plugin(
         &self,
         definition: &AutoTaskDefinition,
     ) -> Option<InactivePlugin> {
         crate::application::plugin::inactive_plugin(
+            &self.auto_task_definitions_dir(),
             &self.auto_task_definition_path(definition),
             self.plugin_load(),
         )
@@ -133,6 +189,10 @@ impl OrbitRuntime {
         crate::application::auto_tasks::definition_path(&self.paths().local_dir, &definition.name)
     }
 
+    fn auto_task_definitions_dir(&self) -> PathBuf {
+        crate::application::auto_tasks::auto_tasks_dir(&self.paths().local_dir)
+    }
+
     /// The id of a still-open instance of `definition`'s prior mints, if any.
     /// Returns `None` if no prior mint is open, meaning `skip_if_open` dedupe
     /// will permit minting and the dashboard reports no open duplicate [ORB-12158].
@@ -148,7 +208,7 @@ impl OrbitRuntime {
 ///
 /// Exactly one definition of "still-open auto-task instance" exists in the
 /// system [ORB-12158]. Both scheduler dedupe (`skip_if_open`) and the dashboard
-/// (`open_duplicate`, `may_create_open_duplicate`) consume this query.
+/// (`open_duplicate`, `may_create_open_duplicate`) consume the same listed-set rule.
 pub fn open_auto_task_instance(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
@@ -165,21 +225,25 @@ pub(crate) fn open_auto_task_instances(
     name: &str,
 ) -> Result<Vec<String>, OrbitError> {
     let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(name)])?;
+    Ok(open_auto_task_instances_from_tasks(&tasks)
+        .map(|task| task.id.clone())
+        .collect())
+}
+
+/// Still-open instances from an already-listed set of one definition's mints,
+/// preserving the listing order. Callers must select the definition's provenance
+/// tag first. Scheduler dedupe and dashboard projections share this rule.
+pub fn open_auto_task_instances_from_tasks<'a>(
+    tasks: impl IntoIterator<Item = &'a Task>,
+) -> impl Iterator<Item = &'a Task> {
     // `someday` is an explicit "not now" park, not an active instance
     // [ORB-12148]: it must not block every later mint of this auto-task.
-    Ok(tasks
-        .into_iter()
-        .filter(|task| {
-            !matches!(
-                task.status,
-                TaskStatus::Done
-                    | TaskStatus::Archived
-                    | TaskStatus::Rejected
-                    | TaskStatus::Someday
-            )
-        })
-        .map(|task| task.id)
-        .collect())
+    tasks.into_iter().filter(|task| {
+        !matches!(
+            task.status,
+            TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected | TaskStatus::Someday
+        )
+    })
 }
 
 pub fn run_auto_task_scheduler_at(
@@ -187,7 +251,20 @@ pub fn run_auto_task_scheduler_at(
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
-    orbit_automation::auto_tasks::scheduler::run_auto_task_scheduler_at(runtime, now, options)
+    run_auto_task_scheduler_with_cache(runtime, now, options, &SourceCache::default())
+}
+
+pub(crate) fn run_auto_task_scheduler_with_cache(
+    runtime: &OrbitRuntime,
+    now: DateTime<Utc>,
+    options: SchedulerOptions,
+    cache: &SourceCache,
+) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
+    orbit_automation::auto_tasks::scheduler::run_auto_task_scheduler_at(
+        &CachedDispatch { runtime, cache },
+        now,
+        options,
+    )
 }
 
 /// Mint one task from a definition's template — the single template→task
@@ -204,11 +281,14 @@ pub(super) fn mint_task(
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
     // even after the plugin is removed (design §4.4).
+    let definitions_dir = runtime.auto_task_definitions_dir();
     let path = crate::application::auto_tasks::definition_path(
         &runtime.paths().local_dir,
         &definition.name,
     );
-    if let Some((namespace, _)) = crate::application::plugin::read_definition_provenance(&path) {
+    if let Some((namespace, _)) =
+        crate::application::plugin::read_definition_provenance(&definitions_dir, &path)
+    {
         let tag = format!("plugin:{namespace}");
         if !params.tags.contains(&tag) {
             params.tags.push(tag);
@@ -228,6 +308,7 @@ pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams 
         acceptance_criteria: template.acceptance_criteria.clone(),
         tags,
         required_tools: template.required_tools.clone(),
+        context_files: template.context_files.clone(),
         priority: template.priority,
         // Legacy/custom definitions may omit an assessment. Preserve their
         // historical automated-creation behavior while allowing assessed

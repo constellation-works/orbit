@@ -1,5 +1,6 @@
 //! Client used by the nested CLI and MCP server before their local audit
-//! boundary. The broker owns authorization, backend execution, and the row.
+//! boundary. The broker owns authorization, backend execution, and dispatched
+//! audit rows; the caller audits listener refusals and unusable responses.
 
 use std::io;
 use std::os::fd::AsRawFd;
@@ -10,7 +11,9 @@ use std::time::Duration;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::protocol::{FrameError, MAX_REQUEST_BYTES, SCHEMA_VERSION, read_frame, write_frame};
+use super::protocol::{
+    FrameError, MAX_REQUEST_BYTES, SCHEMA_VERSION, is_listener_code, read_frame, write_frame,
+};
 
 const UNAVAILABLE: &str = "plugin_broker_unavailable";
 const RESPONSE_BYTES: u32 = 4 * 1024 * 1024;
@@ -23,6 +26,12 @@ fn unavailable(message: impl Into<String>) -> OrbitError {
         payload: json!({"code": UNAVAILABLE, "message": message, "retryable": false}),
         message,
     }
+}
+
+/// Which side owns the failure audit row for a broker call.
+pub(crate) enum ForwardCallError {
+    CallerAudit(OrbitError),
+    BrokerAudit(OrbitError),
 }
 
 /// Refuse a plugin call that has no broker to go to from inside a masked agent
@@ -58,26 +67,35 @@ pub(crate) fn refuse_unbrokered_host_read(
     Ok(())
 }
 
-/// Send one plugin call, or one of the broker's host-credentialed reads. A
-/// failed connection never falls back to execution in the nested process,
-/// since its sandbox cannot read the plugin's secrets or the host's `gh`
-/// credentials.
-pub(crate) fn forward_call(
+/// Send a broker call while retaining which side owns its failure audit row.
+/// Listener refusals and missing/unusable responses are recorded by the
+/// nested caller; dispatched calls are recorded by the broker.
+/// A failed connection never falls back to execution in the nested process,
+/// whose sandbox cannot read plugin secrets or the host's `gh` credentials.
+pub(crate) fn forward_call_with_status(
     socket: &Path,
     tool: &str,
     input: Value,
     cwd: &Path,
     workspace: Option<&str>,
     entry_point: &str,
-) -> Result<Value, OrbitError> {
-    let mut stream = UnixStream::connect(socket)
-        .map_err(|error| unavailable(format!("connect to plugin broker: {error}")))?;
-    verify_server_uid(&stream)
-        .map_err(|error| unavailable(format!("verify plugin broker server uid: {error}")))?;
+) -> Result<Value, ForwardCallError> {
+    let mut stream = UnixStream::connect(socket).map_err(|error| {
+        ForwardCallError::CallerAudit(unavailable(format!("connect to plugin broker: {error}")))
+    })?;
+    verify_server_uid(&stream).map_err(|error| {
+        ForwardCallError::CallerAudit(unavailable(format!(
+            "verify plugin broker server uid: {error}"
+        )))
+    })?;
     stream
         .set_read_timeout(Some(RESPONSE_TIMEOUT))
         .and_then(|()| stream.set_write_timeout(Some(RESPONSE_TIMEOUT)))
-        .map_err(|error| unavailable(format!("set plugin broker timeout: {error}")))?;
+        .map_err(|error| {
+            ForwardCallError::CallerAudit(unavailable(format!(
+                "set plugin broker timeout: {error}"
+            )))
+        })?;
 
     let request = json!({
         "schema_version": SCHEMA_VERSION,
@@ -88,11 +106,14 @@ pub(crate) fn forward_call(
         "entry_point": entry_point,
         "dry_run": false,
     });
-    let body = serde_json::to_vec(&request)
-        .map_err(|error| OrbitError::InvalidInput(format!("serialize broker request: {error}")))?;
+    let body = serde_json::to_vec(&request).map_err(|error| {
+        ForwardCallError::CallerAudit(OrbitError::InvalidInput(format!(
+            "serialize broker request: {error}"
+        )))
+    })?;
     if body.len() > MAX_REQUEST_BYTES as usize {
-        return Err(OrbitError::InvalidInput(format!(
-            "plugin broker request exceeds {MAX_REQUEST_BYTES} bytes"
+        return Err(ForwardCallError::CallerAudit(OrbitError::InvalidInput(
+            format!("plugin broker request exceeds {MAX_REQUEST_BYTES} bytes"),
         )));
     }
     // A full broker can answer `busy` and close without reading our request.
@@ -100,55 +121,84 @@ pub(crate) fn forward_call(
     // read it before treating the connection as unavailable.
     let sent = write_frame(&mut stream, &body);
     let body = read_frame(&mut stream, RESPONSE_BYTES).map_err(|error| match error {
-        FrameError::TooLarge { declared } => unavailable(format!(
+        FrameError::TooLarge { declared } => ForwardCallError::CallerAudit(unavailable(format!(
             "plugin broker response declares {declared} bytes, over {RESPONSE_BYTES}"
-        )),
+        ))),
         FrameError::Io(error) => match sent {
-            Ok(()) => unavailable(format!("read plugin broker response: {error}")),
-            Err(send_error) => unavailable(format!(
+            Ok(()) => ForwardCallError::CallerAudit(unavailable(format!(
+                "read plugin broker response: {error}"
+            ))),
+            Err(send_error) => ForwardCallError::CallerAudit(unavailable(format!(
                 "send plugin broker request: {send_error}; read response: {error}"
-            )),
+            ))),
         },
     })?;
-    let response: Value = serde_json::from_slice(&body)
-        .map_err(|error| unavailable(format!("invalid plugin broker response: {error}")))?;
+    let response: Value = serde_json::from_slice(&body).map_err(|error| {
+        ForwardCallError::CallerAudit(unavailable(format!(
+            "invalid plugin broker response: {error}"
+        )))
+    })?;
     if response["schema_version"].as_u64() != Some(SCHEMA_VERSION) {
-        return Err(unavailable("unsupported plugin broker response version"));
+        return Err(ForwardCallError::CallerAudit(unavailable(
+            "unsupported plugin broker response version",
+        )));
     }
     match response["ok"].as_bool() {
-        Some(true) => response
-            .get("output")
-            .cloned()
-            .ok_or_else(|| unavailable("plugin broker response omitted output")),
+        Some(true) => response.get("output").cloned().ok_or_else(|| {
+            ForwardCallError::CallerAudit(unavailable("plugin broker response omitted output"))
+        }),
         Some(false) => {
             let error = &response["error"];
             let code = error["code"]
                 .as_str()
                 .filter(|code| !code.is_empty())
-                .ok_or_else(|| unavailable("plugin broker response omitted error code"))?;
+                .ok_or_else(|| {
+                    ForwardCallError::CallerAudit(unavailable(
+                        "plugin broker response omitted error code",
+                    ))
+                })?;
             let message = error["message"]
                 .as_str()
                 .filter(|message| !message.is_empty())
-                .ok_or_else(|| unavailable("plugin broker response omitted error message"))?;
-            let retryable = error["retryable"]
-                .as_bool()
-                .ok_or_else(|| unavailable("plugin broker response omitted retryability"))?;
+                .ok_or_else(|| {
+                    ForwardCallError::CallerAudit(unavailable(
+                        "plugin broker response omitted error message",
+                    ))
+                })?;
+            let retryable = error["retryable"].as_bool().ok_or_else(|| {
+                ForwardCallError::CallerAudit(unavailable(
+                    "plugin broker response omitted retryability",
+                ))
+            })?;
             let mut payload = json!({"code": code, "message": message, "retryable": retryable});
             if let Some(detail) = error.get("detail").filter(|detail| !detail.is_null()) {
                 payload["detail"] = detail.clone();
             }
-            let kind = if super::is_host_credentialed_read(tool) {
+            let kind = if super::is_host_credentialed_read(tool)
+                || orbit_types::tool::is_claimed_owner_tool(tool)
+            {
                 "brokered tool"
             } else {
                 "plugin tool"
             };
-            Err(OrbitError::RemoteTool {
+            let error = OrbitError::RemoteTool {
                 code: code.to_string(),
                 message: format!("{kind} '{tool}' failed: {message}"),
                 payload,
-            })
+            };
+            if is_listener_code(code) {
+                // These are rejected by the listener before dispatch enters
+                // the broker's audit boundary, so the nested caller owns the
+                // only durable failure row. The broker rewrites a dispatched
+                // call's colliding code, so a backend cannot answer with one.
+                Err(ForwardCallError::CallerAudit(error))
+            } else {
+                Err(ForwardCallError::BrokerAudit(error))
+            }
         }
-        None => Err(unavailable("plugin broker response omitted status")),
+        None => Err(ForwardCallError::CallerAudit(unavailable(
+            "plugin broker response omitted status",
+        ))),
     }
 }
 

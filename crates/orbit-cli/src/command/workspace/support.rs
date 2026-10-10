@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 
 /// Repo-local discovery directories a legacy workspace init linked skills into.
@@ -104,16 +105,17 @@ pub(super) fn dir_name_or_fallback(path: &Path) -> String {
         .to_string()
 }
 
-pub(super) fn detect_git_remote(cwd: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
+/// The `origin` URL, or `None` when there is none. A Git that timed out is
+/// an error, never read as no remote; one that could not start (no `git` on
+/// `PATH`) is logged and reads as no remote.
+pub(super) fn detect_git_remote(cwd: &Path) -> Result<Option<String>, OrbitError> {
+    match orbit_common::fs::git::run_git(cwd, &["remote", "get-url", "origin"]) {
+        Ok(output) => Ok(output.success.then(|| output.stdout.trim().to_string())),
+        Err(error @ OrbitError::ProcessTimeout { .. }) => Err(error),
+        Err(error) => {
+            tracing::warn!("cannot read the origin remote URL: {error}");
+            Ok(None)
+        }
     }
 }
 
@@ -251,7 +253,7 @@ fn write_orbit_gitignore_entry(gitignore_path: &Path) -> Result<(), OrbitError> 
         next.push('\n');
     }
     next.push_str(&orbit_gitignore_block());
-    std::fs::write(gitignore_path, next).map_err(|error| OrbitError::Io(error.to_string()))
+    atomic_write_text(gitignore_path, &next).map_err(|error| OrbitError::Io(error.to_string()))
 }
 
 fn gitignore_has_managed_block(content: &str) -> bool {

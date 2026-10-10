@@ -34,6 +34,12 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_registry::hosts::validated_host_root",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_registry::workspace_registry::io::validated_registry_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",

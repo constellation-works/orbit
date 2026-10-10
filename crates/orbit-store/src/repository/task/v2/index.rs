@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::envelope_cache::EnvelopeStamp;
+use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
-use crate::contracts::{IndexedTaskRow, TaskCompletionByComplexity};
+use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity};
+use orbit_common::StorageLayer;
 
 impl TaskV2Store {
     pub(crate) fn task_status_index(
@@ -32,7 +35,9 @@ impl TaskV2Store {
 
     /// One-time rebuild after `complexity` was added as a nullable column.
     /// Indexed unset is `''`; leftover `NULL` means the row has not been
-    /// rewritten from its bundle yet.
+    /// rewritten from its bundle yet. Best effort: the projection reads what
+    /// the index holds either way, so a refused or failed repair never fails
+    /// it.
     fn ensure_complexity_indexed(&self) -> Result<(), OrbitError> {
         if !self
             .registry
@@ -40,59 +45,54 @@ impl TaskV2Store {
         {
             return Ok(());
         }
-        let _ = self.rebuild_index_best_effort("complexity column unpopulated");
+        if let Some(ticket) = self.admit_index_repair()?
+            && let Ok(bundles) = self.bundle_store.list_bundles()
+        {
+            self.attempt_index_repair(ticket, &bundles, "complexity column unpopulated");
+        }
         Ok(())
     }
 
-    pub(super) fn indexed_tasks(
+    /// The tasks an index query selects, in index order — or, when the index
+    /// cannot serve, every settled task from the bundle scan, newest first.
+    /// Callers re-apply their predicates, so either answer is correct.
+    pub(crate) fn tasks_for_index_filter(
         &self,
         filter: TaskIndexFilter,
+    ) -> Result<Vec<Task>, OrbitError> {
+        if let Some(tasks) = self.indexed_tasks(&filter)? {
+            return Ok(tasks);
+        }
+        let mut tasks = self
+            .scan_and_repair_index("missing or stale index")?
+            .into_iter()
+            .map(|bundle| self.task_from_bundle(bundle))
+            .collect::<Result<Vec<_>, _>>()?;
+        sort_by_created_desc_id_asc(&mut tasks, |task| &task.created_at, |task| &task.id);
+        Ok(tasks)
+    }
+
+    /// The tasks an index query selects, in index order, or `None` when the
+    /// freshness scan finds that the index cannot serve.
+    pub(crate) fn indexed_tasks(
+        &self,
+        filter: &TaskIndexFilter,
     ) -> Result<Option<Vec<Task>>, OrbitError> {
-        let Some(bundles) = self.indexed_bundles(filter)? else {
+        if self.validate_index()?.is_none() {
             return Ok(None);
-        };
-        bundles
+        }
+        let ids = self
+            .registry
+            .indexed_task_ids_filtered(&self.workspace_id, filter)?;
+        self.bundles_from_ids(ids)?
             .into_iter()
             .map(|bundle| self.task_from_bundle(bundle))
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
 
-    /// The bundles behind an index query, in index order. `None` when the
-    /// index is not usable and the caller must scan bundles instead.
-    pub(super) fn indexed_bundles(
-        &self,
-        filter: TaskIndexFilter,
-    ) -> Result<Option<Vec<TaskBundleV2>>, OrbitError> {
-        if !self.index_is_usable()? {
-            return Ok(None);
-        }
-        let ids = self
-            .registry
-            .indexed_task_ids_filtered(&self.workspace_id, &filter)?;
-        self.bundles_from_ids(ids).map(Some)
-    }
-
-    /// Decide whether the generated index still matches the bundles on disk.
-    ///
-    /// Two properties matter under concurrency (ORB-10988 / F2026-07-119).
-    /// First, this compares envelopes, not whole bundles: the index only
-    /// projects envelope fields, so assembling every task's seven-file bundle
-    /// on every list was pure cost. Second, a task whose bundle a concurrent
-    /// writer currently holds is *skipped* rather than propagated as an error —
-    /// validating the index for task B must not fail because task A is being
-    /// created or deleted at that instant.
-    fn index_is_usable(&self) -> Result<bool, OrbitError> {
-        if self.validate_index()?.is_some() {
-            Ok(true)
-        } else {
-            self.rebuild_index_best_effort("missing or stale index")
-        }
-    }
-
     /// The freshness scan: compare every registered task's index row with its
-    /// envelope on disk, leaving the [`EnvelopeCache`] warm for each settled
-    /// task so a selection can serve its rows without reading them again.
+    /// envelope on disk.
     ///
     /// `Some(unsettled)` means the index is usable; `unsettled` names the
     /// registered tasks whose bundle a concurrent writer holds, which a
@@ -100,56 +100,144 @@ impl TaskV2Store {
     /// with its envelope — on `updated_at` or on any field listing filters or
     /// orders by — and the caller must rebuild or scan bundles instead.
     ///
-    /// Each registered task costs one metadata probe; its envelope is parsed
-    /// again only when the cache's stamp policy cannot prove the file is the
-    /// one already parsed. Reuse never replaces the index comparison — a
-    /// cached envelope that disagrees with its index row still sends the
-    /// caller to a rebuild.
+    /// Each registered task costs one metadata probe. Its envelope is parsed
+    /// again only when neither the in-process [`EnvelopeCache`] nor a stamp
+    /// recorded in the registry proves the file is one already compared with
+    /// this index row (see the cache's freshness policy); writable scans record
+    /// each new proof for later scans in any process. Reuse never replaces the index
+    /// comparison — a reused envelope that disagrees with its index row still
+    /// sends the caller to a rebuild.
     pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_index_freshness",
+            workspace_id = %self.workspace_id,
+        )
+        .entered();
+        // The index snapshot precedes the envelope probes. A writer can
+        // finish publishing between them, so confirm a mismatch once against
+        // a new snapshot before paying for a workspace-wide bundle scan.
+        for _ in 0..2 {
+            if let Some(unsettled) = self.validate_index_once()? {
+                orbit_common::tracing::debug!(
+                    target: "orbit.store.task_query",
+                    workspace_id = %self.workspace_id,
+                    path = "index",
+                    "task index freshness accepted",
+                );
+                return Ok(Some(unsettled));
+            }
+        }
+        Ok(None)
+    }
+
+    fn validate_index_once(&self) -> Result<Option<Vec<String>>, OrbitError> {
         let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let indexed = self
             .registry
             .indexed_task_rows_for_workspace(&self.workspace_id)?;
+        orbit_common::tracing::debug!(
+            target: "orbit.store.task_query",
+            workspace_id = %self.workspace_id,
+            indexed_tasks = indexed.len(),
+            "task index snapshot loaded",
+        );
         if registered.len() != indexed.len() {
             return Ok(None);
         }
         self.envelope_cache.retain_registered(&registered);
+        let recorded = self
+            .registry
+            .envelope_stamps_for_workspace(&self.workspace_id)?;
 
         let mut unsettled = Vec::new();
+        let mut proofs = Vec::new();
         for binding in &registered {
             let Some(row) = indexed.get(&binding.task_id) else {
                 return Ok(None);
             };
-            match self.settled_envelope_matches(&binding.task_id, row)? {
+            let check = EnvelopeCheck {
+                task_id: &binding.task_id,
+                row,
+                recorded: recorded.get(&binding.task_id),
+            };
+            match self.settled_envelope_matches(check, &mut proofs)? {
                 Some(true) => {}
                 Some(false) => return Ok(None),
                 None => unsettled.push(binding.task_id.clone()),
             }
         }
+        // Proofs only spare later scans a parse. Observation-only reads must
+        // not even attempt to persist them through a read-only connection.
+        if !self.registry.is_read_only()?
+            && let Err(error) = self
+                .registry
+                .record_envelope_stamps(&self.workspace_id, &proofs)
+        {
+            orbit_common::tracing::debug!(
+                target: "orbit.store.task_bundle_v2",
+                workspace_id = %self.workspace_id,
+                %error,
+                "could not record envelope stamps; the next cold scan parses those envelopes",
+            );
+        }
         Ok(Some(unsettled))
     }
 
     /// Whether one registered task's envelope matches its index row, reusing
-    /// the previous parse while the envelope file is unchanged. `None` carries
-    /// the same meaning as [`TaskBundleStoreV2::read_envelope_if_settled`]: a
-    /// concurrent writer holds this bundle, so the scan skips it rather than
-    /// failing.
+    /// a previous parse or a recorded proof while the envelope file is
+    /// unchanged. `None` carries the same meaning as
+    /// [`TaskBundleStoreV2::read_envelope_if_settled`]: a concurrent writer
+    /// holds this bundle, so the scan skips it rather than failing. A match
+    /// the registry does not hold yet is added to `proofs`.
     fn settled_envelope_matches(
         &self,
-        task_id: &str,
-        row: &IndexedTaskRow,
+        check: EnvelopeCheck<'_>,
+        proofs: &mut Vec<EnvelopeStampRecord>,
     ) -> Result<Option<bool>, OrbitError> {
+        let EnvelopeCheck {
+            task_id,
+            row,
+            recorded,
+        } = check;
         // Stamped before the parse it labels, so a write that races this read
         // costs one extra parse next scan instead of pinning stale content.
         let stamp = self
             .envelope_cache
             .stamp(&self.bundle_store.envelope_path(task_id)?);
-        if let Some(stamp) = stamp
-            && let Some(matches) = self
+        let proof = |matches: bool| {
+            let fingerprint = row.fingerprint();
+            stamp
+                .as_ref()
+                .and_then(EnvelopeStamp::persisted)
+                .filter(|stamp| {
+                    matches
+                        && recorded.is_none_or(|recorded| {
+                            recorded.stamp != *stamp || recorded.fingerprint != fingerprint
+                        })
+                })
+                .map(|stamp| EnvelopeStampRecord {
+                    task_id: task_id.to_string(),
+                    stamp,
+                    fingerprint,
+                })
+        };
+        if let Some(stamp) = &stamp {
+            if let Some(matches) = self
                 .envelope_cache
-                .inspect_fresh(task_id, &stamp, |envelope| row.matches(envelope))
-        {
-            return Ok(Some(matches));
+                .inspect_fresh(task_id, stamp, |envelope| row.matches(envelope))
+            {
+                proofs.extend(proof(matches));
+                return Ok(Some(matches));
+            }
+            if let (Some(persisted), Some(recorded)) = (stamp.persisted(), recorded)
+                && recorded.stamp == persisted
+                && recorded.fingerprint == row.fingerprint()
+            {
+                // Any parse this process still holds is of an older file.
+                self.envelope_cache.forget(task_id);
+                return Ok(Some(true));
+            }
         }
 
         let Some(envelope) = self.bundle_store.read_envelope_if_settled(task_id)? else {
@@ -159,37 +247,155 @@ impl TaskV2Store {
         if let Some(stamp) = stamp {
             self.envelope_cache.remember(task_id, stamp, &envelope);
         }
-        Ok(Some(row.matches(&envelope)))
+        let matches = row.matches(&envelope);
+        proofs.extend(proof(matches));
+        Ok(Some(matches))
     }
 
-    /// Rebuild the generated index from the bundles, degrading to `false` (use
-    /// the bundle scan instead) on any failure. Listing-triggered rebuild uses
+    /// The envelope of a task the freshness scan just accepted: the parse it
+    /// reused or made, or — for a task accepted on a recorded stamp — a read
+    /// now. `None` when a concurrent writer holds the bundle.
+    pub(super) fn selected_envelope(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_envelope_selection",
+            task_id,
+        )
+        .entered();
+        if let Some(envelope) = self.envelope_cache.cached(task_id) {
+            return Ok(Some(envelope));
+        }
+        let stamp = self
+            .envelope_cache
+            .stamp(&self.bundle_store.envelope_path(task_id)?);
+        let Some(envelope) = self.bundle_store.read_envelope_if_settled(task_id)? else {
+            return Ok(None);
+        };
+        if let Some(stamp) = stamp {
+            self.envelope_cache.remember(task_id, stamp, &envelope);
+        }
+        Ok(Some(envelope))
+    }
+
+    /// Read every settled bundle for a read the index cannot serve, and
+    /// rebuild the index from them when the registry is writable and the
+    /// [`RepairGate`] admits it. Read-only registries never consult the gate.
+    ///
+    /// The scan is strict: a task-field error in any bundle fails the read
+    /// rather than hiding behind a degraded index. Only the rebuild is
+    /// best effort, since every caller reaches it from a read. Listing uses
     /// the lightweight bundle read (task fields only); explicit
-    /// `reindex_workspace` still hashes artifact payloads. Every caller
-    /// reaches this from a *read*, so a rebuild that cannot run must not fail
-    /// that read.
-    fn rebuild_index_best_effort(&self, reason: &str) -> Result<bool, OrbitError> {
-        let rebuilt = self.bundle_store.list_bundles().and_then(|bundles| {
-            let envelopes = bundles
-                .into_iter()
-                .map(|bundle| bundle.envelope)
-                .collect::<Vec<_>>();
-            self.registry
-                .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
-        });
-        match rebuilt {
-            Ok(()) => Ok(true),
-            Err(err) => {
-                orbit_common::tracing::warn!(
-                    target: "orbit.store.task_v2",
-                    workspace_id = %self.workspace_id,
-                    reason,
-                    error = %err,
-                    "generated task index rebuild failed; falling back to bundle scan",
-                );
-                Ok(false)
+    /// `reindex_workspace` still hashes artifact payloads.
+    pub(super) fn scan_and_repair_index(
+        &self,
+        reason: &str,
+    ) -> Result<Vec<TaskBundleV2>, OrbitError> {
+        let ticket = self.admit_index_repair()?;
+        orbit_common::tracing::debug!(
+            target: "orbit.store.task_query",
+            workspace_id = %self.workspace_id,
+            path = "bundle_scan",
+            repair_admitted = ticket.is_some(),
+            reason,
+            "task index fallback",
+        );
+        let bundles = self.bundle_store.list_bundles()?;
+        if let Some(ticket) = ticket {
+            self.attempt_index_repair(ticket, &bundles, reason);
+        }
+        Ok(bundles)
+    }
+
+    /// Ask the gate whether this read may attempt a rebuild. The evidence is
+    /// one metadata probe per registered task, taken before the bundles are
+    /// read; a recorded failure's unresolved targets are re-resolved so that
+    /// restoring one re-admits the repair.
+    fn admit_index_repair(&self) -> Result<Option<RepairTicket>, OrbitError> {
+        if self.registry.is_read_only()? {
+            return Ok(None);
+        }
+        let gate = self.repair_gate();
+        let mut evidence = RepairEvidence::default();
+        for binding in self.registry.tasks_for_workspace(&self.workspace_id)? {
+            let stamp = self
+                .envelope_cache
+                .stamp(&self.bundle_store.envelope_path(&binding.task_id)?);
+            evidence.envelopes.insert(binding.task_id, stamp);
+        }
+        let mut target_restored = false;
+        for target in gate.unresolved_targets() {
+            if self.registry.find_task_binding(&target)?.is_some() {
+                target_restored = true;
+                break;
             }
         }
+        Ok(gate.admit(evidence, target_restored))
+    }
+
+    /// Publish the index from `bundles`, recording a refusal with the gate.
+    /// The validator stays strict: a dangling edge keeps the index stale and
+    /// the warning names every canonical edge that blocks it.
+    fn attempt_index_repair(&self, ticket: RepairTicket, bundles: &[TaskBundleV2], reason: &str) {
+        let envelopes = bundles
+            .iter()
+            .map(|bundle| bundle.envelope.clone())
+            .collect::<Vec<_>>();
+        let Err(error) = self
+            .registry
+            .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
+        else {
+            ticket.succeeded();
+            return;
+        };
+        let unresolved = self
+            .registry
+            .unresolved_relation_targets(&self.workspace_id, &envelopes)
+            .unwrap_or_default();
+        let rejected = !matches!(
+            error.storage_layer(),
+            Some(StorageLayer::Store | StorageLayer::Io)
+        );
+        let suppressed_reads = ticket.failed(
+            rejected,
+            unresolved
+                .iter()
+                .map(|edge| edge.target_task_id.clone())
+                .collect(),
+        );
+        let unresolved = unresolved
+            .iter()
+            .map(|edge| {
+                format!(
+                    "{} {} -> {}{}",
+                    edge.source_task_id,
+                    edge.relation_type,
+                    edge.target_task_id,
+                    if edge.indexed {
+                        ""
+                    } else {
+                        " (missing from generated index)"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        orbit_common::tracing::warn!(
+            target: "orbit.store.task_v2",
+            workspace_id = %self.workspace_id,
+            reason,
+            %error,
+            unresolved,
+            suppressed_reads,
+            remediation = "drop each unresolved edge through orbit.task.update relations or restore its target task; `orbit doctor` lists them",
+            "generated task index repair failed; reads serve from a bundle scan and retry once a bundle or target changes",
+        );
+    }
+
+    fn repair_gate(&self) -> RepairGate {
+        RepairGate::new(self.registry.workspaces_dir(), &self.workspace_id)
     }
 
     /// Materialize indexed ids into tasks, dropping any whose bundle a
@@ -224,6 +430,12 @@ impl TaskV2Store {
     }
 
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_bundle_materialization",
+            task_id = %bundle.envelope.id,
+        )
+        .entered();
         Ok(Task::from_envelope_parts(
             bundle.envelope,
             bundle.description,
@@ -276,4 +488,12 @@ impl TaskV2Store {
             self.bundle_store.with_bundle_write_lock(id, op)
         })
     }
+}
+
+/// One registered task as the freshness scan checks it.
+struct EnvelopeCheck<'a> {
+    task_id: &'a str,
+    row: &'a IndexedTaskRow,
+    /// The proof the registry holds for this task, if any.
+    recorded: Option<&'a EnvelopeStampRecord>,
 }

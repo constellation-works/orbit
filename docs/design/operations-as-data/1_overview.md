@@ -2,14 +2,14 @@
 title: Operations as Data — Overview
 owner: claude
 last_updated: 2026-07-26
-last_validated: 2026-09-23
+last_validated: 2026-10-09
 status: Accepted
 feature: operations-as-data
 doc_role: overview
 type: design
 summary: Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation_args.rs"]
+paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-cli/src/command/operation/args.rs"]
 related_features: [operations-as-data, orbit-core]
 related_artifacts: [ORB-10358]
 ---
@@ -63,7 +63,7 @@ exactly why it accumulated.
 | The friction registry (single declaration site) | [crates/orbit-common/src/governance/friction/operations.rs](../../../crates/orbit-common/src/governance/friction/operations.rs) | [ORB-10358] |
 | MCP adapter: spec → `ToolSchema` + optional workspace scope | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358] |
 | Friction MCP tools, derived | [crates/orbit-tools/src/builtin/orbit/friction/mod.rs](../../../crates/orbit-tools/src/builtin/orbit/friction/mod.rs) | [ORB-10358] |
-| CLI adapter: spec → `clap::Command` + tool input | [crates/orbit-cli/src/command/operation_args.rs](../../../crates/orbit-cli/src/command/operation_args.rs) | [ORB-10358] |
+| CLI adapter: spec → `clap::Command` + tool input | [crates/orbit-cli/src/command/operation/args.rs](../../../crates/orbit-cli/src/command/operation/args.rs) | [ORB-10358] |
 | Friction CLI, derived (renderers only) | [crates/orbit-cli/src/command/friction.rs](../../../crates/orbit-cli/src/command/friction.rs) | [ORB-10358] |
 | Web handlers over registry field names | [crates/orbit-web/src/api/frictions.rs](../../../crates/orbit-web/src/api/frictions.rs) | [ORB-10358] |
 | Handler table, keyed on `FrictionVerb` | [crates/orbit-core/src/adapter/tool_host/friction_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/friction_tools.rs) | [ORB-10358] |

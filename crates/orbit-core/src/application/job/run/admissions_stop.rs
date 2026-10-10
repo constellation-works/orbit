@@ -35,7 +35,8 @@ pub struct DrainAdmissionsStopRequest<'a> {
     pub claim_token: Option<&'a str>,
     /// Also cancel each live drain and stop the work it has in flight: a
     /// pull drain's claimed leaves, whose claims go back to the owner's
-    /// backlog, or a local drain's detached children.
+    /// backlog, or a local drain's detached children, whose tasks return to
+    /// backlog as well.
     pub force: bool,
 }
 
@@ -282,12 +283,13 @@ impl OrbitRuntime {
         if request.force {
             // Admissions are already stopped, so nothing new starts while the
             // drain and its in-flight work are cancelled.
-            let forced = self.cancel_job_run_with_options(
+            let forced = self.cancel_job_run_with_options_and_policy(
                 &run.run_id,
                 request.actor,
                 request.source,
                 request.reason,
                 true,
+                false,
             )?;
             change.outcome = "force_cancelled";
             change.forced_runs = forced.forced_runs;

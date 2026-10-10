@@ -22,14 +22,14 @@
 //! Nothing in the read-only surface creates an admission receipt, a claim, a
 //! reservation, or a task transition, and nothing here grants execution
 //! authority. The mutating entry points a follower's drain needs — pull, run
-//! binding and settlement — live in [`serve`] [ORB-13625]. They still name
+//! binding and settlement — live in `serve` [ORB-13625]. They still name
 //! [`ensure_distributed_mutation_available`], so turning the whole feature off
 //! again is one source change. Completion approval, revocation and recovery
 //! are not among them: those stay owner-operator actions on the dashboard.
 //!
 //! # The retained entry points
 //!
-//! This module also owns [`OrbitRuntime::drain_entry_admission`] [ORB-12500]:
+//! This module also owns [`OrbitRuntime::drain_entry_admission`](crate::OrbitRuntime::drain_entry_admission) [ORB-12500]:
 //! the one decision an explicit ship, an explicit owner drain and the
 //! independent registry-driven ship sweep all take before they dispatch
 //! anything. It is here rather than beside any one of them because its whole
@@ -39,22 +39,27 @@
 //! [design §4.1]: ../../../../../docs/design/distributed-drain/2_design.md
 //! [spec]: ../../../../../docs/design/distributed-drain/specs/task-pull.md
 
+mod auth_recovery;
 mod contract;
 mod entry;
 mod final_recovery;
 mod follower;
+mod leaf_settlements;
 mod probe;
+mod pull_waiting;
 mod serve;
 mod settlement;
 
-pub(crate) use contract::protocol_mismatch;
 pub use contract::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
     ensure_distributed_mutation_available, owner_binary_version,
 };
+pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
+pub use leaf_settlements::LeafSettlement;
 pub use probe::{AdmissionReceiptLookup, DrainProbeReport, DrainProbeSession};
+pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
 pub use settlement::{
     DrainClaimedLeaf, PendingPullSettlements, PullCrewWindow, PullLeafClaim, PullSettlementEntry,

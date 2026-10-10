@@ -74,7 +74,7 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 ```
 
 - Use the last tag whose version files actually match it. A recovery tag (e.g. `v0.10.1`, whose files still said `0.10.0`) is not a baseline.
-- With more than about 30 task IDs, file a read-only survey task for the release crew (`luna`) instead of looking each one up in-session. [docs/runbooks/release-survey.md](docs/runbooks/release-survey.md) is an example.
+- With more than about 30 task IDs, file a read-only survey task for the release crew (`luna`) instead of looking each one up in-session. The survey lands as an artifact on that task, not as a file in `docs/`.
 - The survey is for understanding and breaking-change triage, not a CHANGELOG inventory.
 - Don't start the bump until in-flight delivery has landed or the human says the queue is settled.
 
@@ -82,10 +82,20 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 
 The CHANGELOG is a short consumer-facing release note, not a commit log. Non-release task PRs do not edit it. An explicitly authorized release-preparation task compiles the section at release time from the survey.
 
-Add `## <X.Y.Z>` at the top of `CHANGELOG.md` with:
+Add `## <X.Y.Z> — <YYYY-MM-DD>` at the top of `CHANGELOG.md`, with the release's
+UTC calendar date in the heading (for example, `## 0.28.0 — 2026-10-07`), and:
 
 1. `### Breaking Changes`: minor bumps only. List every breaking change, one bullet each.
 2. `### Highlights`: 3 to 6 user-facing features or behavior changes. If you're unsure whether something is a highlight, it isn't.
+
+The website renders the date beside the version and keeps version-only anchors
+stable. Historical headings remain frozen: `website/src/data/release-dates.json`
+records the UTC dates of their matching `v<X.Y.Z>` Git tags (tagger timestamps
+for annotated tags, tagged commit timestamps for lightweight tags). These
+are release-tag dates, rather than a reconstructed GitHub publication time.
+New releases use the date in `CHANGELOG.md`; do not add them to that historical
+fallback file. The newest three releases are expanded on the website; older
+notes remain available through their disclosure controls and existing anchors.
 
 Leave out refactors, crate splits, lint fixes, dependency bumps, docs and ADR churn, release metadata, and bug fixes with no user-visible impact.
 
@@ -100,7 +110,7 @@ Bullet shape:
 - Migration steps, rationale, and test inventories stay in the cited task or commit. The task ID is the pointer.
 - A breaking bullet gets at most one extra line, with the migration as a phrase (`x removed → use y`).
 
-The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. The style check does not enforce the task/release boundary. When before-PR review is enabled (`operation.review_policy = "before-pr"`), the reviewer must treat any diff touching `CHANGELOG.md` for a non-release task as an open finding, return `reject` without fixing it, and let the settle step block PR publication. The release exception requires an explicitly authorized task tagged `release` and titled `Prepare v<X.Y.Z> release`; listing `CHANGELOG.md` as a context file alone does not authorize an edit. Deliveries without before-PR review rely on the repository rule in [AGENTS.md](AGENTS.md) and after-landing review. Universal deterministic enforcement is out of scope.
+The style check lints only `## Unreleased`, so you can iterate there before moving bullets into the version section. Released sections are frozen and never reflowed. The style check does not enforce the task/release boundary. When before-PR review is enabled (`review.before_pr = true`), the reviewer must treat any diff touching `CHANGELOG.md` for a non-release task as an open finding, return `reject` without fixing it, and let the settle step block PR publication. The release exception requires an explicitly authorized task tagged `release` and titled `Prepare v<X.Y.Z> release`; listing `CHANGELOG.md` as a context file alone does not authorize an edit. Deliveries without before-PR review rely on the repository rule in [AGENTS.md](AGENTS.md) and after-landing review. Universal deterministic enforcement is out of scope.
 
 ### 3. Confirm breaking changes with the human
 

@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Positioning"
-last_validated: 2026-09-13
+last_validated: 2026-10-06
 ---
 
 # Orbit Positioning
@@ -53,7 +53,7 @@ When auditability conflicts with performance, ergonomics, or feature surface, au
 
 - **Self-hostable under permissive license.** Single binary, no mandatory cloud dependency. MIT.
 - **Bring-your-own-credentials.** API keys belong to the operator; Orbit is pass-through.
-- **Provider CLI execution.** Managed agent activities and agent job steps run through authenticated provider CLIs as supervised subprocesses; the CLI owns communication with the model. Orbit's direct HTTP/SDK transports — including Anthropic, Gemini HTTP, and OpenAI-compatible endpoints such as local Ollama-compatible servers — remain a standalone `orbit-agent` library surface for consumers and examples, not an alternate activity/job backend. See the [agent execution model](../website/src/content/docs/concepts/agents.md), [provider runtime code](../crates/orbit-agent/src/lib.rs), [provider SDK README](../crates/orbit-agent/README.md), and [retired backend specification](design/activity-job/specs/backend-resolution.md).
+- **Provider CLI execution.** Managed agent activities and agent job steps run through authenticated provider CLIs as supervised subprocesses; the CLI owns communication with the model. See the [agent execution model](../website/src/content/docs/concepts/agents.md), [provider runtime code](../crates/orbit-agent/src/lib.rs), and [provider README](../crates/orbit-agent/README.md).
 - **Audit trail for everything that touches code.** See above.
 - **Intent attribution at the codebase level.** `task_id` in commit messages, queryable, durable across rewrites.
 - **Reproducibility where possible, recorded non-determinism where not.**

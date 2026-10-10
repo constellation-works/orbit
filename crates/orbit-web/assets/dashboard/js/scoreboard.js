@@ -1,7 +1,7 @@
 // Orbit dashboard scoreboard-domain rendering.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, syncNodes, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 // ORB-00337/ORB-10872: selector writes the shared dashboard window; app.js
@@ -14,6 +14,74 @@ function wireScoreboardWindowSelector() {
 }
 
 const $ = (id) => document.getElementById(id);
+
+const SCOREBOARD_CHROME = [
+  "scoreboard-narrative",
+  "scoreboard-agent-strip",
+  "scoreboard-insights",
+  "scoreboard-orchestration",
+];
+const SCOREBOARD_COUNTS = [
+  "scoreboard-meta",
+  "scoreboard-count",
+  "scoreboard-insights-count",
+  "scoreboard-orchestration-count",
+];
+
+function clearScoreboardChrome() {
+  for (const id of SCOREBOARD_CHROME) {
+    const node = $(id);
+    if (node) syncNodes(node, []);
+  }
+  for (const id of SCOREBOARD_COUNTS) {
+    const node = $(id);
+    if (node) node.textContent = "—";
+  }
+}
+
+// Aggregate view has no per-workspace scoreboard. Placeholder every surface
+// renderScoreboard fills, not only the matrix, so a previous workspace's
+// cost, token, insight, and agent-strip numbers cannot stay on screen.
+export function placeholdScoreboardAggregate() {
+  renderPanelPlaceholder("scoreboard-body");
+  for (const id of SCOREBOARD_CHROME) renderPanelPlaceholder(id);
+  for (const id of SCOREBOARD_COUNTS) {
+    const node = $(id);
+    if (node) node.textContent = "—";
+  }
+}
+
+let scoreboardRequestScope = null;
+
+export function fetchAndRenderScoreboard() {
+  if (isAggregateView()) {
+    placeholdScoreboardAggregate();
+    return Promise.resolve();
+  }
+  const selectedWindow = getWindow();
+  const revision = getWorkspaceRevision();
+  const path = `/api/scoreboard?window=${encodeURIComponent(selectedWindow)}`;
+  const scope = `${revision}\0${path}`;
+  if (scoreboardRequestScope !== scope) {
+    scoreboardRequestScope = scope;
+    clearScoreboardChrome();
+  }
+  return requestPanel("scoreboard-body", path, () => fetchJson(path), (summary) => {
+    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow) return;
+    if (!payloadHonorsWindow(summary, selectedWindow)) {
+      console.error(
+        `scoreboard payload window ${summary && summary.window} rejected under ${selectedWindow} selection`,
+      );
+      return;
+    }
+    renderScoreboard(summary);
+  }, "scoreboard-count");
+}
+
+onWorkspaceChange(() => {
+  scoreboardRequestScope = null;
+  clearScoreboardChrome();
+});
 
 const compactCountFormatter = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -106,27 +174,25 @@ const OPERATIONS_SCOREBOARD_COLUMNS = [
   },
   {
     key: "tools",
-    label: "tool fail/all",
+    label: "failed / total calls",
     num: true,
     format: "pair",
     left: "failed_tool_calls",
     right: "tool_calls",
-    title: "raw failed tool calls over total tool calls",
-    help: "raw events",
+    title: "tool fail/all: failed tool calls / all tool calls (each call counted separately)",
   },
   // ORB-10871: the same failures, grouped. A repeated burst is one incident
   // with its raw event count beside it, so the left number answers "how many
   // things went wrong" and the right one "how much evidence there is".
   {
     key: "failure_incidents",
-    label: "fail inc/events",
+    label: "incidents / failure events",
     num: true,
     format: "pair",
     left: "failure_incidents",
     right: "failure_incident_events",
     tone: "warn",
-    title: "grouped failure incidents / raw failed events they collapsed",
-    help: "grouped",
+    title: "fail inc/events: repeated failures grouped into incidents / the audit events in those incidents",
     // ORB-11207: names the `coverage.failure_incidents` note so an
     // unavailable source keeps this row visible instead of reading as a
     // filtered-out measured zero.
@@ -218,6 +284,8 @@ function renderScoreboard(summary) {
   const matrix = buildLeaderboardMatrix(canonicalRows, allScoreboardSections(), {
     showSectionDividers: true,
     coverage: summary?.coverage,
+    failureIncidentsTruncated: summary?.failure_incidents_truncated === true,
+    failureIncidentsScanLimit: summary?.failure_incidents_scan_limit,
   });
   syncNodes(body, [el("div", { class: "scoreboard-sections" }, [matrix])]);
 
@@ -398,8 +466,8 @@ function emptyOrchestrationNode() {
 
 function renderOrchestrationSummary(orchestration) {
   if (!orchestration || !Array.isArray(orchestration.buckets)) return emptyOrchestrationNode();
-  const since = orchestration.since || "all managed execution retained";
-  const until = orchestration.until || orchestration.as_of || "unknown cutoff";
+  const since = orchestration.since ? formatDateTime(orchestration.since) : "all managed execution retained";
+  const until = orchestration.until || orchestration.as_of ? formatDateTime(orchestration.until || orchestration.as_of) : "unknown cutoff";
   const children = [
     el("div", { class: "scoreboard-orchestration-context" }, [
       el("div", { class: "scoreboard-orchestration-scope" }, [
@@ -407,7 +475,7 @@ function renderOrchestrationSummary(orchestration) {
         el("span", { class: "scope-badge", text: `window ${getWindow()}` }),
         el("span", { text: "Direct interactive Codex or Claude orchestration-session overhead is excluded." }),
       ]),
-      el("div", { class: "scoreboard-orchestration-window", text: `Window ${getWindow()}: ${since} ≤ invocation < ${until} (exclusive cutoff; as of ${orchestration.as_of || "unknown"}).` }),
+      el("div", { class: "scoreboard-orchestration-window", text: `Window ${getWindow()}: ${since} ≤ invocation < ${until} (exclusive cutoff; as of ${orchestration.as_of ? formatDateTime(orchestration.as_of) : "unknown"}).` }),
       el("p", { class: "scoreboard-orchestration-policy", text: "Provider-first estimate policy: provider-reported values are primary; derived values remain explicitly labeled estimates with their own coverage. Only the explicitly comparable same-invocation population is safe to compare." }),
     ]),
     renderNormalizedTokenUsage(orchestration.normalized_tokens, orchestration.previous_normalized_tokens),
@@ -480,10 +548,10 @@ function renderAgentStrip(rows) {
   sorted.forEach(([name, agent, score], index) => {
     const card = applyAgentTheme(el("button", {
       class: `scoreboard-agent-card ${score === 0 ? "quiet" : ""}`,
-      title: `${name} - click to filter audit by role`,
+      title: `${name} - click to filter audit by agent family`,
     }), name);
     card.type = "button";
-    card.addEventListener("click", () => navigateToDrilldown({ role: name }));
+    card.addEventListener("click", () => navigateToDrilldown({ agent_family: name }));
 
     card.appendChild(el("div", { class: "scoreboard-agent-rank", text: `#${String(index + 1).padStart(2, "0")} · activity` }));
     card.appendChild(el("div", { class: "scoreboard-agent-heading" }, [
@@ -531,12 +599,12 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
   for (const [name, agent] of rows) {
     const th = applyAgentTheme(el("th", {
       class: "col-agent clickable",
-      title: `${name} — click to filter audit by role`,
+      title: `${name} — click to filter audit by agent family`,
     }, [
       document.createTextNode(name),
       el("span", { class: "totals", text: `${fmtScoreboardCount(agentActivityTotal(agent))} activity` }),
     ]), name);
-    th.addEventListener("click", () => navigateToDrilldown({ role: name }));
+    th.addEventListener("click", () => navigateToDrilldown({ agent_family: name }));
     headRow.appendChild(th);
   }
   thead.appendChild(headRow);
@@ -549,23 +617,32 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
       .filter((candidate) => candidate.key !== "agent")
       .filter((candidate) => metricHasActivity(rows, candidate, opts.coverage));
     if (showSectionDividers) {
-      const badge = metrics.length === 0
+      const partialFailures = section.title === "Operations"
+        && opts.coverage?.failure_incidents?.availability === "partial";
+      const badge = partialFailures
+        ? opts.coverage.failure_incidents.detail
+        : metrics.length === 0
         ? emptySectionBadge(section.title, opts.coverage)
         : section.badge;
       tbody.appendChild(sectionDividerRow(section.title, badge, columnCount));
     }
     for (const col of metrics) {
+      const capped = col.coverageKey === "failure_incidents"
+        && (opts.failureIncidentsTruncated || opts.coverage?.failure_incidents?.availability === "partial");
+      const title = capped
+        ? `${col.title}; capped counts from the newest ${(Number(opts.failureIncidentsScanLimit) || 0).toLocaleString()} non-success audit rows; older failures may be omitted`
+        : col.title || col.label;
       const rowMax = rowMaxValue(rows, col);
       const tr = el("tr", { class: "metric" });
       tr.dataset.key = `scoreboard-${section.title}-${col.key}`;
       const metricLabel = el("td", {
         class: "m-label",
-        title: col.title || col.label,
+        title,
       }, [
-        document.createTextNode(col.label),
+        document.createTextNode(`${col.label}${capped ? " (capped)" : ""}`),
         ...(col.help ? [el("span", { class: "help", text: col.help })] : []),
       ]);
-      metricLabel.setAttribute("aria-label", col.title || col.label);
+      metricLabel.setAttribute("aria-label", title);
       tr.appendChild(metricLabel);
       for (const [name, agent] of rows) {
         const value = scoreboardColumnValue(agent, col);
@@ -576,13 +653,12 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
         td.dataset.agent = name;
         td.dataset.metric = col.key;
         td.classList.add("clickable");
-        td.title = `${col.title || col.label}: click to filter audit`;
+        td.title = `${title}: click to filter audit`;
         td.addEventListener("click", () => navigateToDrilldown({
-          role: name,
+          agent_family: name,
           metric: col.key,
-          status: ["tools", "failed_tool_calls", "failure_incidents"].includes(col.key)
-            ? "failure"
-            : null,
+          status: col.key === "failure_incidents" ? "non_success"
+            : ["tools", "failed_tool_calls"].includes(col.key) ? "failure" : null,
         }));
         tr.appendChild(td);
       }
@@ -594,10 +670,9 @@ function buildLeaderboardMatrix(rows, sectionList, opts = {}) {
 }
 
 function metricHasActivity(rows, col, coverage) {
-  // ORB-11207: an unavailable source is not the same as an observed zero —
-  // keep the row visible so the operator sees the missing-coverage marker
-  // instead of the row silently disappearing from the table.
-  if (col.coverageKey && coverage?.[col.coverageKey]?.availability === "unavailable") {
+  // Keep incomplete coverage visible even with no counts: an unavailable
+  // source or a zero in a capped sample cannot prove a window-wide zero.
+  if (col.coverageKey && ["unavailable", "partial"].includes(coverage?.[col.coverageKey]?.availability)) {
     return true;
   }
   return rows.some(([, agent]) => scoreboardCellActivity(agent, col) > 0);

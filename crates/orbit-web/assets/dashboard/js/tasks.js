@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -67,12 +67,10 @@ onWorkspaceChange(() => {
   restoredCommentHash = null;
 });
 
-// ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
-// a write against a live pipeline, so a second click must not launch a second
-// run: the id stays here for the life of the page once a dispatch succeeds (the
-// server rejects a duplicate with 409 regardless), and is released only when the
-// dispatch failed and retrying is the right move.
-let shipInFlightTaskIds = new Set();
+// Guard duplicate clicks while a Ship request is pending. Once the server
+// accepts it, the server's 409 protects the live run; releasing this guard lets
+// a task returned to backlog be shipped again without reloading the page.
+const shipInFlightTaskIds = new Set();
 // Row shortcuts (Approve on a proposed task, Ship on a backlog one): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
@@ -183,12 +181,15 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
 // `workspace_id`, so that's an explicit, workspace-qualified target; anything
 // else is refused rather than silently applied to the wrong (or no) workspace.
 function canMutateTask(task) {
-  return !isAggregateView() || Boolean(task && task.workspace_id);
+  return (!isAggregateView() || Boolean(task && task.workspace_id)) && !hostWriteRefusal();
 }
 
-// One sentence for every inline control that cannot write in the aggregate
-// view, so the refusal reads the same whichever control the operator hovers.
+// One sentence for every inline control that cannot write, so the refusal
+// reads the same whichever control the operator hovers: a selected host that
+// refuses forwarded writes, or the aggregate view.
 function aggregateRefusalTitle(label, action) {
+  const host = hostWriteRefusal();
+  if (host) return `${label} — ${host}`;
   return `${label} — select a specific workspace to ${action} in aggregate view`;
 }
 
@@ -197,7 +198,7 @@ function aggregateRefusalTitle(label, action) {
 function taskWorkspacePath(task, path) {
   if (!task.workspace_id) return withWorkspace(path);
   const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`;
+  return withHost(`${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`);
 }
 
 function taskMutationPath(task, suffix = "") {
@@ -205,9 +206,9 @@ function taskMutationPath(task, suffix = "") {
 }
 
 function scheduleFeedbackExpiry(map, key, context, delay) {
+  const scheduledEntry = map.get(key);
   setTimeout(() => {
-    const entry = map.get(key);
-    if (entry && entry.kind !== "pending") {
+    if (map.get(key) === scheduledEntry && scheduledEntry && scheduledEntry.kind !== "pending") {
       map.delete(key);
       renderTasks(taskList(context), context);
     }
@@ -399,6 +400,16 @@ function taskDetailState(task, context) {
   };
 }
 
+function taskHistoryEventLabel(entry) {
+  if (entry && entry.event === "status_changed" && entry.from_status && entry.to_status) {
+    return `status ${entry.from_status} → ${entry.to_status}`;
+  }
+  if (entry && entry.event === "started" && entry.from_status && entry.to_status) {
+    return `started ${entry.from_status} → ${entry.to_status}`;
+  }
+  return entry && entry.event ? entry.event : "";
+}
+
 // Drop the recorded read so the next render issues a fresh one.
 function forgetTaskDetailLoad(taskId) {
   taskDetailLoads.delete(taskId);
@@ -410,11 +421,17 @@ function stopRowInteraction(node) {
   }
 }
 
+// The "not ready" chip narrows the loaded page to proposed and backlog tasks
+// with a blocking readiness gap. Readiness is derived per task rather than
+// stored, so it filters here instead of in the server's page query.
+let notReadyOnly = false;
+
 function filterTasks(tasks, context) {
   const q = searchQueryValue(context);
   const activeStatuses = activeStatusSet(context);
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
+    if (notReadyOnly && !isNotReady(t)) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -425,14 +442,14 @@ function filterTasks(tasks, context) {
 
 const TASK_META_FIELDS = [
   ["orchestrator", "orchestrator"],
-  ["implemented_by", "implemented_by"],
-  ["planned_by", "planned_by"],
-  ["created_by", "created_by"],
-  ["pr_number", "pr"],
-  ["pr_status", "pr_status"],
-  ["job_run_id", "job_run"],
-  ["created_at", "created"],
-  ["updated_at", "updated"],
+  ["implemented_by", "Implemented by"],
+  ["planned_by", "Planned by"],
+  ["created_by", "Created by"],
+  ["pr_number", "PR"],
+  ["pr_status", "PR status"],
+  ["job_run_id", "Run"],
+  ["created_at", "Created"],
+  ["updated_at", "Updated"],
 ];
 
 const RELATION_GROUPS = [
@@ -502,7 +519,9 @@ function refreshChips(context) {
     const isAll = chip.dataset.role === "all";
     const activeStatuses = activeStatusSet(context);
     const allOn = activeStatuses.size === statusOrder(context).length;
-    const on = isAll ? allOn : activeStatuses.has(status);
+    const on = chip.dataset.role === "not-ready"
+      ? notReadyOnly
+      : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
@@ -526,6 +545,7 @@ export function buildTasksHash(context) {
   } else {
     sp.set("status", selected.length > 0 ? selected.join(",") : "none");
   }
+  if (notReadyOnly) sp.set("ready", "not");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   const qs = sp.toString();
@@ -548,6 +568,7 @@ export function applyTasksHashQuery(query, context) {
     const wanted = new Set(statusParam.split(",").map((s) => s.trim()).filter(Boolean));
     setActiveStatuses(context, new Set(order.filter((s) => wanted.has(s))));
   }
+  notReadyOnly = query.get("ready") === "not";
   setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
@@ -627,6 +648,18 @@ export function buildChips(context) {
     });
     container.appendChild(chip);
   }
+  const notReady = el("button", {
+    class: "chip readiness-filter",
+    text: "not ready",
+    title: "Only proposed and backlog tasks with a gap that blocks automation",
+  });
+  notReady.type = "button";
+  notReady.dataset.role = "not-ready";
+  notReady.addEventListener("click", () => {
+    notReadyOnly = !notReadyOnly;
+    navigateTasksHash(context);
+  });
+  container.appendChild(notReady);
   refreshChips(context);
 }
 
@@ -637,6 +670,17 @@ export function wireSearch(context) {
     setSearchQuery(context, e.target.value.trim().toLowerCase());
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(() => navigateTasksHash(context), 250);
+  });
+  // ORB-14495: `/` jumps to the task search while the Tasks view shows it. A
+  // field that takes typing keeps the key as a character.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (target && (target.isContentEditable || (target.closest && target.closest("input, textarea, select")))) return;
+    if (input.getClientRects().length === 0) return;
+    event.preventDefault();
+    input.focus();
+    input.select();
   });
 }
 
@@ -656,6 +700,7 @@ function renderFilterSummary(context) {
   } else if (activeStatuses.size < order.length) {
     parts.push(`status: ${order.filter((s) => activeStatuses.has(s)).join(", ")}`);
   }
+  if (notReadyOnly) parts.push("not ready");
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";
@@ -688,6 +733,82 @@ function buildOsBadges(task) {
     ...anyOf.map((os) => el("span", { class: "os-badge mono", text: `os:${os}`, title: `Runs on ${requirement.describe || os}` })),
     ...invalid.map((tag) => el("span", { class: "os-badge os-badge-invalid mono", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
   ];
+}
+
+// Readiness: what a proposed or backlog task still lacks before automation
+// approves or admits it. The server attaches it to those statuses only, with
+// `preparing` set while a task-pilot run holds the task.
+function readinessOf(task) {
+  const readiness = task && task.readiness;
+  return readiness && typeof readiness === "object" ? readiness : null;
+}
+
+// Blocking gaps first. The sort is stable, so server order holds within a severity.
+function readinessGaps(readiness) {
+  const gaps = Array.isArray(readiness.gaps) ? readiness.gaps.filter((gap) => gap && gap.code) : [];
+  return gaps.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
+}
+
+function isNotReady(task) {
+  const readiness = readinessOf(task);
+  return Boolean(readiness) && readiness.ready === false;
+}
+
+function readinessSignature(task) {
+  const readiness = readinessOf(task);
+  if (!readiness) return "";
+  const gaps = readinessGaps(readiness).map((gap) => `${gap.code}/${gap.severity}`).join(",");
+  return `${readiness.ready}:${readiness.preparing ? "p" : ""}:${gaps}`;
+}
+
+// The row chip, in the os-badge slot: `preparing` while a pilot run holds the
+// task, amber when a gap blocks automation, muted when every gap is advisory,
+// and nothing for a task that lacks nothing. The tooltip lists each gap.
+function buildReadinessBadge(task) {
+  const readiness = readinessOf(task);
+  if (!readiness) return [];
+  if (readiness.preparing) {
+    return [el("span", {
+      class: "readiness-badge readiness-preparing mono",
+      text: "preparing",
+      title: "A task-pilot run is preparing this task; its readiness settles when the run does",
+    })];
+  }
+  const gaps = readinessGaps(readiness);
+  if (gaps.length === 0) return [];
+  const blocking = readiness.ready === false;
+  return [el("span", {
+    class: `readiness-badge ${blocking ? "readiness-blocking" : "readiness-advisory"} mono`,
+    text: `${blocking ? "not ready" : "advisory"} · ${gaps.length}`,
+    title: gaps.map((gap) => `${gap.severity}: ${gap.message}`).join("\n"),
+  })];
+}
+
+// The detail's Readiness block: each gap with its severity and its fix.
+function buildReadinessBlock(readiness) {
+  const wrap = el("div", { class: "readiness-list" });
+  if (readiness.preparing) {
+    wrap.appendChild(el("div", {
+      class: "readiness-note",
+      text: "A task-pilot run is preparing this task; these gaps settle when it finishes.",
+    }));
+  }
+  const gaps = readinessGaps(readiness);
+  if (gaps.length === 0) {
+    wrap.appendChild(el("div", { class: "readiness-note", text: "Ready: nothing is missing." }));
+    return wrap;
+  }
+  for (const gap of gaps) {
+    const severity = gap.severity === "blocking" ? "blocking" : "advisory";
+    wrap.appendChild(el("div", { class: "readiness-gap" }, [
+      el("span", { class: `readiness-badge readiness-${severity} mono`, text: severity }),
+      el("div", { class: "readiness-gap-body" }, [
+        el("div", { class: "readiness-message", text: gap.message || gap.code }),
+        ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),
+      ]),
+    ]));
+  }
+  return wrap;
 }
 
 function buildExternalRefs(refs) {
@@ -756,8 +877,14 @@ function buildReviewGate(review) {
     `base ${review.base?.commit ?? "—"} → reviewed ${review.reviewed_candidate?.commit ?? "—"} → final ${review.final_candidate?.commit ?? "—"}`,
     `reviewer commit: ${Array.isArray(review.repair_commits) && review.repair_commits.length ? review.repair_commits.map((c) => `${c.commit.slice(0, 12)} by ${c.author}`).join(", ") : "none"}`,
     `findings: ${Array.isArray(review.findings) ? review.findings.length : 0} · validation: ${Array.isArray(review.validation) ? review.validation.length : 0} record(s), complete: ${review.validation_complete ? "yes" : "no"}`,
-    `consumed: ${consumed.reviewer_starts ?? 0}/${budget.reviewer_starts ?? "?"} starts · ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
+    `reviewer runtime: ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
   ];
+  if (Array.isArray(review.validation_limitations) && review.validation_limitations.length) {
+    lines.push(`not established: ${review.validation_limitations.join("; ")}`);
+  }
+  if (Array.isArray(review.retained_obligations) && review.retained_obligations.length) {
+    lines.push(`retained from earlier report revisions: ${review.retained_obligations.map((o) => `${o.validation?.command ?? "?"} ${o.validation?.outcome ?? "?"}`).join(", ")}`);
+  }
   if (review.escalation) lines.push(`escalation: ${review.escalation}`);
   if (Array.isArray(review.landings) && review.landings.length) {
     for (const landing of review.landings) {
@@ -1312,6 +1439,58 @@ function commentMessage(comment) {
   return comment && typeof comment.message === "string" ? comment.message : "";
 }
 
+// A pilot receipt is persisted data: summarize only a recognized assessment,
+// and keep the original message for raw/copy and for unrecognized comments.
+function pilotAssessment(comment) {
+  if (!comment || comment.by !== "task-pilot") return null;
+  const message = commentMessage(comment);
+  const newline = message.indexOf("\n");
+  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
+  try {
+    const receipt = JSON.parse(message.slice(newline + 1));
+    const assessment = receipt && receipt.assessment;
+    const fields = ["disposition", "confidence", "recommended_crew", "recommended_complexity", "assessment_rationale"];
+    if (!assessment || !fields.every(field => typeof assessment[field] === "string" && assessment[field].trim())) return null;
+    return { receipt, assessment };
+  } catch {
+    return null;
+  }
+}
+
+function pilotAssessmentView({ receipt, assessment }) {
+  const view = el("div", { class: "pilot-assessment" });
+  const fields = el("dl", { class: "pilot-assessment-fields" });
+  const addField = (label, value) => {
+    fields.appendChild(el("dt", { text: label }));
+    fields.appendChild(el("dd", { text: value }));
+  };
+  const recommendation = (field, before) => {
+    const after = assessment[field];
+    return typeof before === "string" && before && before !== after ? `${before} → ${after}` : after;
+  };
+  addField("Disposition", assessment.disposition);
+  addField("Confidence", assessment.confidence);
+  addField("Recommended crew", recommendation("recommended_crew", receipt.crew_before));
+  addField("Recommended complexity", recommendation("recommended_complexity", receipt.complexity_before));
+  addField("Rationale", assessment.assessment_rationale);
+  view.appendChild(fields);
+  for (const [field, label] of [["evidence_gaps", "Evidence gaps"], ["reassessment_triggers", "Reassessment triggers"], ["blocked_by", "Blocked by"]]) {
+    const items = Array.isArray(assessment[field]) ? assessment[field].filter(item => typeof item === "string" && item.trim()) : [];
+    if (items.length === 0) continue;
+    view.appendChild(el("div", { class: "pilot-assessment-label", text: label }));
+    view.appendChild(el("ul", {}, items.map(text => el("li", { text }))));
+  }
+  for (const [field, label] of [["duplicate_of", "Duplicate of"], ["already_landed", "Already landed"]]) {
+    const finding = assessment[field];
+    if (finding == null) continue;
+    const text = typeof finding === "string" ? finding : finding && typeof finding === "object"
+      ? [finding.task_id, finding.commit, finding.evidence].filter(value => typeof value === "string" && value.trim()).join(" · ")
+      : "";
+    if (text) addField(label, text);
+  }
+  return view;
+}
+
 function commentKey(taskId, index) {
   return `${taskId}#${index}`;
 }
@@ -1427,15 +1606,16 @@ function buildCommentCard(task, comment, index, context) {
   const key = commentKey(task.id, index);
   const message = commentMessage(comment);
   const writer = comment && comment.by ? String(comment.by) : "?";
-  const titles = commentSections(message);
-  const long = commentIsLong(message);
+  const pilot = pilotAssessment(comment);
+  const titles = pilot ? [] : commentSections(message);
+  const long = !pilot && commentIsLong(message);
 
   const card = el("article", { class: "comment-card" });
   card.id = commentAnchorId(task.id, index);
   card.dataset.commentKey = key;
 
-  const rawToggle = commentActionButton("raw", "Show the Markdown source this comment was written in");
-  const copy = commentActionButton("copy", "Copy this comment's Markdown");
+  const rawToggle = commentActionButton("raw", "Show this comment's original text");
+  const copy = commentActionButton("copy", "Copy this comment's original text");
   const permalink = commentActionButton("#", "Scroll to this comment and copy a link to it");
   permalink.className = "comment-action permalink";
   const actions = el("span", { class: "comment-actions" }, [rawToggle, copy, permalink]);
@@ -1456,12 +1636,12 @@ function buildCommentCard(task, comment, index, context) {
     }),
     isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
     el("span", { class: "comment-at", text: fmtAbsTimeValue(context, comment && comment.at) }),
-    el("span", { class: "comment-age", text: commentAge(comment && comment.at) }),
+    el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
     size,
     actions,
   ]);
 
-  const view = markdownView(message);
+  const view = pilot ? pilotAssessmentView(pilot) : markdownView(message);
   view.className = "markdown-body comment-body";
   const headings = renderedCommentHeadings(view);
   const raw = el("pre", { class: "comment-raw", text: message });
@@ -1629,11 +1809,9 @@ export function scrollToComment(hash = getCommentHash()) {
         .split(/\s+/)
         .filter((c) => c !== "collapsed")
         .join(" ");
-      const head = panel.querySelector
-        ? panel.querySelector("h4")
-        : (panel.children || []).find((c) => c.tag === "h4" || (c.tagName && c.tagName.toLowerCase() === "h4"));
-      if (head && typeof head.setAttribute === "function") {
-        head.setAttribute("aria-expanded", "true");
+      const toggle = panel.querySelector ? panel.querySelector("h4 .field-toggle") : null;
+      if (toggle && typeof toggle.setAttribute === "function") {
+        toggle.setAttribute("aria-expanded", "true");
       }
       commentPrefs = { ...commentPrefs, collapsed: false };
       saveCommentPrefs();
@@ -1703,12 +1881,14 @@ function renderCommentsPanel(panel, task, context) {
     });
     actions.appendChild(collapseAll);
   }
-  const head = el("h4", {}, [
-    el("span", { class: "field-title", text: "comments" }),
+  // The header also holds the order and collapse-all buttons, so the title and
+  // count are the disclosure button rather than the whole header.
+  const toggle = el("button", { class: "field-toggle" }, [
+    el("span", { class: "field-title", text: "Comments" }),
     el("span", { class: "field-count", text: String(comments.length) }),
-    actions,
   ]);
-  makeToggleRow(head, {
+  const head = el("h4", { class: "section-title" }, [toggle, actions]);
+  makeDisclosure(head, toggle, {
     expanded: !isCollapsed,
     onToggle: (event) => {
       if (event && typeof event.stopPropagation === "function") {
@@ -1725,7 +1905,7 @@ function renderCommentsPanel(panel, task, context) {
         else set.delete("collapsed");
         panel.className = Array.from(set).join(" ");
       }
-      head.setAttribute("aria-expanded", String(!nowCollapsed));
+      toggle.setAttribute("aria-expanded", String(!nowCollapsed));
       commentPrefs = { ...commentPrefs, collapsed: nowCollapsed };
       saveCommentPrefs();
     },
@@ -1757,7 +1937,7 @@ function buildTaskDetail(task, context) {
     const heading = [el("span", { class: "field-title", text: title })];
     if (header.count != null) heading.push(el("span", { class: "field-count", text: String(header.count) }));
     if (header.actions) heading.push(header.actions);
-    const h4 = el("h4", {}, heading);
+    const h4 = el("h4", { class: "section-title" }, heading);
     if (collapsible) {
       makeToggleRow(h4, {
         expanded: !collapsed,
@@ -1783,27 +1963,27 @@ function buildTaskDetail(task, context) {
     canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
 
   if (showsEditor("description")) {
-    addField(leftCol, "description", editor("description"));
+    addField(leftCol, "Description", editor("description"));
   }
 
   if (showsEditor("acceptance_criteria")) {
-    addField(leftCol, "acceptance criteria", editor("acceptance_criteria"), true, true);
+    addField(leftCol, "Acceptance criteria", editor("acceptance_criteria"), true, true);
   }
 
   if (task.plan && task.plan.trim()) {
-    addField(leftCol, "plan", markdownView(task.plan), true, true);
+    addField(leftCol, "Plan", markdownView(task.plan), true, true);
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(leftCol, "execution summary", markdownView(task.execution_summary), true, true);
+    addField(leftCol, "Execution summary", markdownView(task.execution_summary), true, true);
   }
 
   if (Array.isArray(task.artifacts) && task.artifacts.length > 0) {
-    addField(leftCol, "artifacts", buildArtifacts(task), true, true);
+    addField(leftCol, "Artifacts", buildArtifacts(task), true, true);
   }
 
   if (task.review && typeof task.review === "object") {
-    addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
+    addField(leftCol, "Review gate", buildReviewGate(task.review), true, true);
   }
 
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
@@ -1852,11 +2032,15 @@ function buildTaskDetail(task, context) {
           }),
         );
       }
+      // The execution note is a separate element; the space keeps its text
+      // from reading as part of the run id.
+      value.appendChild(document.createTextNode(" "));
       value.appendChild(
         buildExecutionProvenance(
           machine && machine.machine_id
             ? { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null }
             : { known: false },
+          { runId: display, workspace: task.workspace_id },
         ),
       );
     } else {
@@ -1869,14 +2053,20 @@ function buildTaskDetail(task, context) {
     meta.appendChild(span);
     metaCount++;
   }
-  if (metaCount > 0) addField(rightCol, "details", meta);
+  if (metaCount > 0) addField(rightCol, "Details", meta);
+
+  const readiness = readinessOf(task);
+  if (readiness) {
+    const count = readinessGaps(readiness).length;
+    addField(rightCol, "Readiness", buildReadinessBlock(readiness), false, false, count > 0 ? { count } : {});
+  }
 
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
   if (task.workspace_root) {
     const loc = el("span", { class: "ws-location mono", text: task.workspace_root, title: task.workspace_root });
-    addField(rightCol, "location", loc);
+    addField(rightCol, "Location", loc);
   }
 
   // Complexity and tags are one card of properties: each is a label beside its
@@ -1890,22 +2080,22 @@ function buildTaskDetail(task, context) {
     if (showsEditor("tags")) {
       properties.appendChild(property("tags", editor("tags", actions)));
     }
-    addField(rightCol, "properties", properties, false, false, { actions });
+    addField(rightCol, "Properties", properties, false, false, { actions });
   }
 
   if (Array.isArray(task.external_refs) && task.external_refs.length > 0) {
-    addField(rightCol, "external refs", buildExternalRefs(task.external_refs));
+    addField(rightCol, "External refs", buildExternalRefs(task.external_refs));
   }
 
   if (Array.isArray(task.relations) && task.relations.length > 0) {
     const relations = buildRelations(task.relations, context);
-    if (relations.children.length > 0) addField(rightCol, "relations", relations);
+    if (relations.children.length > 0) addField(rightCol, "Relations", relations);
   }
 
   if (showsEditor("context_files")) {
     const actions = actionSlot();
     const count = Array.isArray(task.context_files) ? task.context_files.length : 0;
-    addField(rightCol, "context files", editor("context_files", actions), false, false, { actions, count });
+    addField(rightCol, "Context files", editor("context_files", actions), false, false, { actions, count });
   }
 
   if (Array.isArray(task.history) && task.history.length > 0) {
@@ -1921,11 +2111,11 @@ function buildTaskDetail(task, context) {
         const line = el("div", { class: "history-line" }, [
           document.createTextNode(`[${fmtAbsTimeValue(context, h.at)}] `),
           el("span", { class: "actor", text: h.by || "?" }),
-          document.createTextNode(`: ${h.event}${note}`),
+          document.createTextNode(`: ${taskHistoryEventLabel(h)}${note}`),
         ]);
         wrap.appendChild(line);
       }
-      addField(rightCol, "recent history", wrap);
+      addField(rightCol, "Recent history", wrap);
     }
   }
 
@@ -2030,6 +2220,8 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
+  const refusal = hostWriteRefusal();
+  if (refusal) actions.appendChild(el("span", { class: "host-read-only-note", text: refusal }));
   return actions;
 }
 
@@ -2105,6 +2297,15 @@ function buildStatusUpdateControl(task, context) {
 
 function buildCrewUpdateControl(task, context) {
   const cell = el("span", { class: "crew-cell" });
+  if (isAggregateView()) {
+    // The aggregate task list has no single crew registry to validate against.
+    // Keep the task's own crew visible without marking it missing or offering
+    // a workspace-scoped edit control.
+    cell.textContent = explicitCrewValue(task) || resolvedCrewName(task);
+    cell.title = "Crew settings are workspace-specific; select a workspace to edit.";
+    return cell;
+  }
+
   const mutable = canMutateTask(task);
   const feedback = crewFeedback.get(task.id);
   const label = `Update crew for ${task.id}`;
@@ -2363,6 +2564,7 @@ async function shipTask(task, detail, btnNode, context) {
   let dispatched = false;
   try {
     const result = await postJson(requestPath, { task_ids: [task.id] });
+    shipInFlightTaskIds.delete(dispatchKey);
     dispatched = true;
     if (!visit.isCurrent()) return;
     const runId = result && result.run_id ? result.run_id : "(no run id)";
@@ -2371,16 +2573,14 @@ async function shipTask(task, detail, btnNode, context) {
     expandedTaskIds.delete(task.id);
     await refreshTasks(context);
   } catch (error) {
-    // Only a failed dispatch releases the guard; a succeeded one stays held so
-    // a second click cannot queue a duplicate run behind the first.
     if (!dispatched) shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
+    // A refresh may have replaced the detail while this request was pending.
+    renderTasks(taskList(context), context);
+    detail = $("detail-" + task.id) || detail;
+    btnNode = detail.querySelector(".action.ship") || btnNode;
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     btnNode.textContent = oldText;
-    if (dispatched) {
-      btnNode.disabled = true;
-      btnNode.textContent = "submitted";
-    }
     detail.prepend(actionErrorNode(dispatched
       ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
       : `ship failed: ${error.message || String(error)}`));
@@ -2615,24 +2815,18 @@ function takeTaskActionNotice() {
 // The pinned global-resolver result: a task outside the active filter, shown
 // above the list with its own dismiss control.
 function buildPinnedTask(ptask, context) {
-  const idSpan = el("span", { class: "id mono", text: ptask.id });
+  // The pinned row's detail is always open, so the row discloses nothing: its
+  // ID is the same copy button every task row has, and the row holds no other
+  // action of its own.
   const row = el("div", {
     class: "row pinned-external",
     title: `${ptask.title} (global resolver; status ${ptask.status})`
   }, [
-    idSpan,
+    makeCopyButton(ptask.id, { class: "id mono", title: "Copy task ID" }),
     el("span", { class: "title", text: ptask.title }),
     buildStatusUpdateControl(ptask, context),
     buildCrewUpdateControl(ptask, context),
   ]);
-  // The pinned row's detail is always open, so the row is a plain copy-the-id
-  // action rather than a disclosure.
-  makeToggleRow(row, {
-    onToggle: (e) => {
-      e.stopPropagation();
-      copyWithFeedback(idSpan, ptask.id);
-    },
-  });
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const detail = buildTaskDetail(ptask, context);
@@ -2726,7 +2920,7 @@ function buildQuickAction(task, context) {
     }
     const location = summaryExecutionLocation(task.job_run_machine);
     if (location.known) {
-      cell.appendChild(buildExecutionProvenance(location));
+      cell.appendChild(buildExecutionProvenance(location, { runId: task.job_run_id, workspace: task.workspace_id }));
       return cell;
     }
   }
@@ -2796,6 +2990,7 @@ async function runQuickAction(task, kind, context) {
   try {
     if (kind === "ship") {
       const result = await postJson(requestPath, { task_ids: [task.id] });
+      shipInFlightTaskIds.delete(dispatchKey);
       dispatched = true;
       if (!visit.isCurrent()) return;
       const runId = result && result.run_id ? result.run_id : "(no run id)";
@@ -2810,8 +3005,6 @@ async function runQuickAction(task, kind, context) {
     quickActionState.delete(task.id);
     await refreshTasks(context);
   } catch (error) {
-    // A failed ship releases the duplicate-dispatch guard; a succeeded one keeps
-    // it, exactly as the detail's Ship does.
     if (kind === "ship" && !dispatched) shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
     quickActionState.set(task.id, { kind: "error", text: dispatched
@@ -2825,6 +3018,7 @@ export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
+  enableRovingRows(body);
 
   // ORB-00030: in the aggregate ("All workspaces") view each task carries its
   // owning workspace; show it as a badge in the Title cell. Detected from the
@@ -2870,10 +3064,16 @@ export function renderTasks(tasks, context) {
   body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
-  // ORB-10972: the rail shows the same filtered count the panel header does,
-  // so the Tasks entry reads correctly from any other tab.
+  // ORB-10972: the rail shows the matching total the panel header reports, so
+  // the Tasks entry reads correctly from any other tab. The rows on this page
+  // are not that total once the list is paginated (ORB-14701).
   const railCount = document.getElementById("rail-count-tasks");
-  if (railCount) railCount.textContent = String(filtered.length);
+  if (railCount) {
+    const meta = tasksMeta(context);
+    const matching = meta && Number.isFinite(meta.total) ? meta.total : filtered.length;
+    railCount.textContent = String(matching);
+    railCount.title = "Tasks matching the current status filter";
+  }
   renderFilterSummary(context);
   if (filtered.length === 0 && nodes.length === 0) {
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
@@ -2889,7 +3089,7 @@ export function renderTasks(tasks, context) {
 
   // Column header strip (once, before first group-header). Uses .row.header so grid
   // (and all @media overrides) are identical to data rows; labels sit over ID/Title/Status/Crew.
-  const colHeader = el("div", { class: "row header" }, [
+  const colHeader = el("div", { class: "row header col-head" }, [
     el("span", { class: "id", text: "ID" }),
     el("span", { class: "title", text: "Title" }),
     el("span", { class: "status-cell", text: "Status" }),
@@ -2921,21 +3121,23 @@ export function renderTasks(tasks, context) {
     for (const t of group) {
       const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
         const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
-        const osBadges = buildOsBadges(t);
-        const titleCell = (aggregate && t.workspace_name) || osBadges.length > 0
-          ? el("span", { class: "title" }, [
+        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
+        // The title is the row's disclosure: the row holds the copy-id button,
+        // the selects and the quick action, so it cannot be a button itself.
+        const titleCell = (aggregate && t.workspace_name) || titleBadges.length > 0
+          ? el("button", { class: "title" }, [
               ...(aggregate && t.workspace_name
                 ? [el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })]
                 : []),
-              ...osBadges,
+              ...titleBadges,
               t.title,
             ])
-          : el("span", { class: "title", text: t.title });
+          : el("button", { class: "title", text: t.title });
         const quickError = buildQuickActionError(t);
         row = el("div", { class: `row${quickError ? " has-quick-error" : ""}`, title: t.title }, [
           idSpan,
@@ -2947,7 +3149,7 @@ export function renderTasks(tasks, context) {
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;
-        makeToggleRow(row, {
+        makeRowDisclosure(row, titleCell, {
           expanded: expandedTaskIds.has(t.id),
           // The detail node only exists while the row is open, so the IDREF is
           // only published while it actually resolves.
@@ -2990,7 +3192,7 @@ export function renderTasks(tasks, context) {
           // the cached projection must not be rebuilt just because a refresh
           // has a read in flight.
           const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}`;
+          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
           const existingDetail = existingRowNodes.get(key);
           let detail = existingDetail && existingDetail.dataset.hash === detailHash ? existingDetail : null;
           if (!detail) {

@@ -10,7 +10,7 @@ pub fn config_key_options(key: &str) -> Vec<&'static str> {
     match key {
         "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
         "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
-        "operation.review_policy" => ReviewPolicy::CHOICES.to_vec(),
+        "security_alert_sweep.min_severity" => SECURITY_ALERT_SEVERITIES.to_vec(),
         _ => Vec::new(),
     }
 }
@@ -41,7 +41,7 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
         "search uses SQLite FTS5 and no longer selects a model; delete this key",
     ),
     // Operation mode was removed on 2026-09-21; the `[operation]` table keeps
-    // only the review keys. See docs/design/orbit-core/4_decisions.md.
+    // only `review_crew`. See docs/design/orbit-core/4_decisions.md.
     ("operation.preset", OPERATION_MODE_REMOVED_NOTE),
     ("operation.completion", OPERATION_MODE_REMOVED_NOTE),
     ("operation.preparation", OPERATION_MODE_REMOVED_NOTE),
@@ -61,18 +61,51 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
         OPERATION_MODE_REMOVED_NOTE,
     ),
     ("operation.delivery_cap", OPERATION_MODE_REMOVED_NOTE),
-    // [ORB-13989] The before-PR reviewer fixes its findings in one reviewer
-    // commit per attempt; no repair or rework cycle is counted any more.
+    // [ORB-13989] [ORB-13992] Each candidate gets one review, and its
+    // reviewer fixes its findings in one commit; no repair cycle or extra
+    // reviewer start is counted.
     (
         "operation.review_repair_cycles",
-        "the before-PR reviewer fixes its findings in one reviewer commit per attempt and \
-     nothing is reworked, so no repair cycle is counted; review_reviewer_starts and \
-     review_minutes still bound a lineage",
+        "each candidate gets one review whose reviewer fixes its findings in one commit, so \
+     no repair cycle is counted; review.minutes bounds that review",
+    ),
+    (
+        "operation.review_reviewer_starts",
+        "each candidate gets one review, so reviewer starts are no longer counted; \
+     review.minutes bounds that review",
     ),
 ];
 
-const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; the [operation] table \
-     keeps only review_policy, review_crew, review_reviewer_starts and review_minutes";
+const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; review settings live in \
+     [review] (before_pr, before_landing, minutes) and operation.review_crew";
+
+/// Keys retired from the registry whose value is still honoured: loading
+/// translates each into its replacement and warns that it is deprecated
+/// ([`crate::operation`], `resolved::warn_compatibility_keys`), and
+/// `orbit config get`/`set` refuse it with this note. A later release makes
+/// them errors; move each to its replacement before then [ORB-13992].
+pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
+    (
+        "operation.review_minutes",
+        "translated to review.minutes, now the limit for one candidate's before-PR review; \
+     move the value to [review] minutes",
+    ),
+    (
+        "operation.review_policy",
+        "translated: before-pr sets review.before_pr = true; after-landing enables the \
+     delivery-code-review auto-task until its own enabled flag is set (`orbit auto-task \
+     toggle delivery-code-review on|off`); none turns neither on. Set [review] before_pr \
+     and the auto-task flag instead",
+    ),
+];
+
+/// The deprecation note for a translated key, or `None` for any other key.
+pub(crate) fn deprecated_key_note(key: &str) -> Option<&'static str> {
+    DEPRECATED_CONFIG_KEYS
+        .iter()
+        .find(|(deprecated, _)| *deprecated == key)
+        .map(|(_, note)| *note)
+}
 
 /// The migration note for a removed key, or `None` for any other key.
 pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {
@@ -154,6 +187,11 @@ pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
     if let Some(note) = removed_key_note(key) {
         return Err(OrbitError::InvalidInput(format!(
             "config key '{key}' was removed and is ignored: {note}"
+        )));
+    }
+    if let Some(note) = deprecated_key_note(key) {
+        return Err(OrbitError::InvalidInput(format!(
+            "config key '{key}' is deprecated and no longer settable: {note}"
         )));
     }
     if let Some(parsed) = crate::plugins::parse_plugin_field_key(key)? {

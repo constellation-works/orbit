@@ -22,7 +22,8 @@ use serde_json::{Map, Value, json};
 
 use super::pagination::TaskPageQuery;
 use super::{
-    bad_request, blocking, map_runtime_error, non_empty_string, server_error, validate_id,
+    OptionalJson, bad_request, blocking, map_runtime_error, non_empty_string, server_error,
+    validate_id,
 };
 use crate::projections::{
     TaskListProjection, task_locks_json, task_row_to_json, task_to_json_with_sidecars,
@@ -125,10 +126,11 @@ pub(super) struct CreateTaskBody {
     plan: String,
     #[serde(default)]
     context_files: Vec<String>,
-    /// Escape for a `context_files` selector that names a target this task is
-    /// about to create, mirroring `orbit task add --allow-missing-context` and
-    /// the `orbit.task.add` tool's `allow_missing_context` input. See
-    /// [`OrbitRuntime::ensure_context_selectors_exist`](orbit_core::OrbitRuntime::ensure_context_selectors_exist).
+    /// Declares that missing `context_files` selectors name targets this task
+    /// is about to create, mirroring `orbit task add --allow-missing-context`
+    /// and the `orbit.task.add` tool's `allow_missing_context` input. Each
+    /// missing selector is recorded as durable creation intent; see
+    /// [`OrbitRuntime::authorize_missing_context`](orbit_core::OrbitRuntime::authorize_missing_context).
     #[serde(default)]
     allow_missing_context: bool,
     #[serde(default)]
@@ -285,6 +287,9 @@ pub(super) struct UpdateTaskBody {
     /// about to create. See [`CreateTaskBody::allow_missing_context`].
     #[serde(default)]
     allow_missing_context: bool,
+    /// Permit replacing tags with a list that drops a system identity tag (`ci-failure:*`).
+    #[serde(default)]
+    allow_drop_system_tags: bool,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
     crew: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
@@ -404,7 +409,7 @@ fn task_list_page_json(
     let items = page
         .items
         .iter()
-        .map(|row| projection.row_to_json(row, &status_by_id))
+        .map(|row| projection.row_to_json(runtime, row, &status_by_id))
         .collect::<Result<Vec<_>, _>>()?;
     let offset = query.offset();
     let next_offset = offset.saturating_add(items.len());
@@ -577,7 +582,7 @@ pub(super) async fn create_task_action(
     }
     let complexity = match body.complexity.require_assessed() {
         Ok(complexity) => complexity,
-        Err(message) => return bad_request(message),
+        Err(error) => return bad_request(error.to_string()),
     };
     let model = body.model.as_deref().and_then(non_empty_string);
     let allow_missing_context = body.allow_missing_context;
@@ -602,9 +607,13 @@ pub(super) async fn create_task_action(
         source_task_id: body.source_task_id,
         crew: body.crew,
         orchestrator: body.orchestrator,
+        context_creation: Default::default(),
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
-        if !allow_missing_context {
+        let mut params = params;
+        if allow_missing_context {
+            params.context_creation = runtime.authorize_missing_context(&params.context_files)?;
+        } else {
             runtime.ensure_context_selectors_exist(&params.context_files)?;
         }
         runtime.add_task_with_identity(params, None, model)
@@ -646,7 +655,7 @@ pub(super) async fn update_task_action(
         .transpose()
     {
         Ok(complexity) => complexity,
-        Err(message) => return bad_request(message),
+        Err(error) => return bad_request(error.to_string()),
     };
     if body.force && body.status.is_none() {
         return bad_request(
@@ -680,14 +689,21 @@ pub(super) async fn update_task_action(
         crew: body.crew,
         orchestrator: body.orchestrator,
         context_files: body.context_files,
+        context_creation: Default::default(),
         upsert_artifacts: Vec::new(),
         trusted_artifact_origin: None,
         discard_candidate: false,
+        allow_drop_system_tags: body.allow_drop_system_tags,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {
-        if !allow_missing_context && let Some(candidates) = params.context_files.as_deref() {
-            runtime.ensure_context_selectors_exist(candidates)?;
+        let mut params = params;
+        if let Some(candidates) = params.context_files.as_deref() {
+            params.context_creation = if allow_missing_context {
+                runtime.authorize_missing_context(candidates)?
+            } else {
+                runtime.ensure_context_selectors_exist_for_update(&id, candidates)?
+            };
         }
         if force {
             runtime.force_update_task_with_identity(&id, params, None, model)
@@ -760,13 +776,12 @@ fn human_comment_author(requested: Option<&str>) -> String {
 pub(super) async fn approve_task_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<ApproveBody>>,
+    OptionalJson(body): OptionalJson<ApproveBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
         Err(message) => return bad_request(message),
     };
-    let body = body.map(|Json(b)| b).unwrap_or_default();
     let id = id.to_string();
     task_mutation_response(runtime, "task approval", move |runtime| {
         runtime.approve_task(&id, body.note, body.comment)

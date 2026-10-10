@@ -17,30 +17,77 @@ orbit mcp serve --mode federated
 
 Local stdio is what a client launches. Remote mode relays one non-interactive,
 non-PTY SSH connection to a destination Orbit. Federated mode combines the local
-host with configured SSH destinations into one tool surface. There is no
+host with every registered remote host into one tool surface. There is no
 `orbit mcp connect` command; use `serve --mode remote`.
 
-For federation, put remote membership in the calling machine's
-`~/.orbit/mcp-destinations.toml`:
+For federation, register each remote host on the calling machine:
 
-```toml
-[[destinations]]
-ssh = "<ssh-config-alias>"
-machine_id = "<destination-machine-id>"
+```bash
+orbit host add <ssh-config-alias>          # reads machine_id, name, task prefix from the host
+orbit host add user@10.0.0.7 --name build  # name defaults to the remote's machine.name
+orbit host list                            # live reachability, version, protocol, workspaces
+orbit host show <name|hm_id>               # one host and what here depends on it
+orbit host rename <name|hm_id> <new-name>
+orbit host remove <name|hm_id> [--force]   # refused while a replica or pull drain uses it
 ```
 
-Copy machine IDs from `orbit config get machine.id` on the corresponding machines. Local
-membership is automatic and needs no row. Missing/empty configuration gives a
-local-only mux; malformed or ambiguous configuration fails closed. A configured
-unreachable destination remains visible in discovery rather than disappearing.
+`orbit host add` probes the host over the same SSH session federation uses and
+writes `~/.orbit/hosts.toml`; never edit that file to register a host. It
+refuses a duplicate machine id, name or task prefix, this machine itself, an
+unreachable target and a remote too old to report its task prefix. Local
+membership is automatic and needs no entry. A missing host file gives a
+local-only mux; an invalid one fails closed. A registered unreachable host
+remains visible in discovery rather than disappearing. `orbit host list` flags a
+host whose `binary_version` or `protocol_fingerprint` differs from this
+machine's, and `orbit doctor` reports it in its `hosts` row.
+
+The doctor's `hosts` row warns on unreachable hosts, missing replica owners,
+legacy membership and version/protocol differences on other hosts. Invalid
+or conflicting host files, identity mismatch and version/protocol skew on a
+replica's owner are errors. Use `orbit host list` for live details, register
+missing owners, restore SSH reachability and deploy matching builds where
+needed. `host list` is a report and exits zero when the registry loads even
+if a host is down; doctor is the health gate.
+
+### Legacy migration (one release)
+
+An older `~/.orbit/mcp-destinations.toml` is still read while it is the only
+file. The first `orbit host add`, `rename` or `remove` migrates its rows (every
+retained row must answer; `remove` never contacts the row it drops) and deletes
+it, and `orbit host add <ssh-target of a listed host>` is the direct way to
+migrate. If both files exist every consumer refuses with
+`host_file_conflict`, naming each legacy row the host file lacks; delete the
+legacy file, then run the `orbit host add` the error names for each of them.
+Legacy rows contribute no task prefix until migrated. The next release drops
+the legacy reader and retains the both-files conflict check one release longer.
+
+### Registration failures and remedies
+
+| Code | Remedy |
+|---|---|
+| `host_exists` | Use the existing entry; use `orbit host rename` to change its display name. |
+| `host_name_conflict` | Pick an unused `--name`, or rename the conflicting registered entry. |
+| `task_prefix_conflict` | Reach the intended host or initialize a distinct host with an unused prefix; existing prefixes are immutable. |
+| `host_is_local` | Use the automatically listed local host; it needs no registration. |
+| `host_too_old` | Upgrade the remote to a build that reports its machine identity and task prefix, then add it again. |
+| `host_identity_mismatch` | Verify the SSH alias reaches the intended machine. If replacing a host deliberately, reconcile its dependents before removing and re-adding the entry. |
+| `host_in_use` | Inspect `orbit host show` and reconcile the named replica checkouts or pull drains before removal. `--force` deliberately leaves those dependents without a route. |
+| `legacy_host_unreachable` | Restore the named retained host, or remove a decommissioned legacy row with `orbit host remove <host>`; the removed row is not probed. |
+| `host_file_conflict` | Follow the migration diagnostic above; every consumer refuses while both files exist. |
+
+Routing and reachability errors have their own remedies in
+[tool-surface.md](../../orbit/references/tool-surface.md#routing-failures-and-remedies).
 
 ```bash
 orbit mcp init --federated --client codex
 ```
 
 This creates a separate client integration and preserves the ordinary one.
-Federation is session-unbound: call `orbit_workspace_list` and pass each
-returned host-qualified `selector` unchanged. Do not pass `--workspace` or a
+Federation is session-unbound: for workspace-scoped calls, use
+`orbit_workspace_list` and pass its host-qualified `selector` unchanged.
+Single-task calls can instead omit the selector and route by task prefix;
+see [tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection).
+Do not pass `--workspace` or a
 positional SSH destination to federated mode. On a direct server, a session
 binding via `--workspace` is valid, and explicit per-call selectors take
 precedence. `--root` is not an MCP workspace-routing mechanism.
@@ -69,9 +116,19 @@ destination's argv, whatever the process that launched it held. To deny a
 caller, remove its key from the destination's `~/.ssh/authorized_keys` — that
 is the only boundary the destination ever had.
 
-`--remote-caller-machine-id` remains an audit label. It marks the session's
-transport as SSH and names the calling machine in the destination's
-`authorization` audit rows; it authorizes nothing.
+`--remote-caller-machine-id` is a caller-chosen machine label. Its presence
+marks the session's transport as SSH MCP without proving SSH origination. It
+names the calling machine in audit rows and selects the remote drain receipt
+namespace. Claim bind/settle uses it as the machine fence: the journal compares
+it with the claim's execution machine, bound run and phase. An initialize
+`_meta.orbit.worker_invocation` must name that same execution machine.
+
+The label grants no capability and authenticates no machine. This fence is
+acceptable within Orbit's single-user trust model because local account access
+and SSH login already establish owner access. It prevents accidental mixing of
+attempts among cooperating executors; a caller able to start a server can choose
+another machine's label, including locally from a managed agent context. It
+does not isolate mutually untrusted callers sharing that account.
 
 A destination upgraded from the older model may still carry
 `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/`. Both are ignored:
@@ -127,10 +184,48 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
-The dashboard refuses non-loopback binds and has no application login. Its
-Origin checks mitigate browser CSRF, not unauthorized port access. Anyone with
-access to its forwarded port can reach mutation endpoints with the server's
-application authority. Keep access within the intended operator boundary.
+### Switching hosts in the dashboard
+
+A host registered with `orbit host add` appears in the dashboard's **Host**
+picker, above the workspace picker, so one dashboard can show each registered
+machine without an `orbit web connect` tab per machine. Prefer `connect` when
+the machine is not registered, when you need `--no-operator` or a non-default
+`--remote-port`, or when the dashboard must not depend on the serving machine.
+
+- The serving dashboard reaches the host over its own SSH identity, not the
+  browser's. It attaches to a dashboard already running on the remote's default
+  port 7878 or starts one, runs SSH with `BatchMode=yes`, and closes an idle
+  tunnel after five minutes. A host that needs a passphrase or password
+  therefore reports `unreachable_destination`.
+- `?host=<name|machine_id>` selects the host in the URL and wins over the
+  browser's remembered last choice, which only fills a URL with no `?host=`.
+  The serving host's own name selects the serving host.
+- Every panel, action, log tail and resource chip follows the selected host,
+  and the workspace picker lists that host's workspaces. Settings › Hosts does
+  not: it keeps editing the serving host's `hosts.toml`.
+- Version or protocol skew shows a persistent banner and is never refused.
+  An unreachable host replaces the panels with one state carrying a code:
+  `unknown_host`, `unreachable_destination`, `process_timeout`,
+  `host_identity_mismatch` or `host_too_old`, with Retry and a way back to the
+  serving host.
+- Where a task's execution line says which machine ran it and that machine is
+  registered on the serving host, the name links to the run on that host.
+
+Remote writes need an operator session on the serving dashboard
+(`orbit web serve --operator`, or `connect` without `--no-operator`). Without
+one the dashboard shows `Read-only on <host>` and disables write controls; a
+direct request gets `403 authorization_denied` for `host.forward` before any SSH
+starts. A remote dashboard Orbit starts gets `--operator` exactly when the
+serving session has it, and one already running keeps its own capability.
+
+The dashboard refuses non-loopback binds and has no application login. Origin
+checks and `Sec-Fetch-Site` checks mitigate browser CSRF, not unauthorized port
+access. When present, `Sec-Fetch-Site` must be `same-origin` or `none`; direct
+CLI/curl requests without the header continue to work. Older browsers that
+omit both Fetch Metadata and `Origin` on GETs do not receive the additional
+Fetch Metadata protection. Anyone with access to the forwarded port can reach
+mutation endpoints with the server's application authority. Keep access within
+the intended operator boundary.
 
 ## TCP MCP
 

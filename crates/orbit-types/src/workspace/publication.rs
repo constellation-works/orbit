@@ -188,11 +188,27 @@ pub fn git_remote_identity(remote: &str) -> Result<String, WorkspaceError> {
     Ok(parsed.identity)
 }
 
+/// The network host a Git remote names, lowercased and without a port.
+/// `None` for a local path, a `file:` URL, or a value that is not a Git URL.
+pub fn git_remote_network_host(remote: &str) -> Option<String> {
+    if looks_like_local_path(remote) {
+        return None;
+    }
+    let identity = parse_git_remote(remote).ok()?.identity;
+    let authority = identity.split('/').next()?;
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    (!host.is_empty()).then(|| host.to_string())
+}
+
 pub fn git_remotes_equivalent(left: &str, right: &str) -> Result<bool, WorkspaceError> {
     Ok(git_remote_identity(left)? == git_remote_identity(right)?)
 }
 
 /// Replace credential userinfo with `***`. Local paths become `<local-path>`.
+/// Ambiguous scp-style prefixes containing `:` and `/` are treated as userinfo.
 pub fn redact_git_remote(remote: &str) -> String {
     if looks_like_local_path(remote) {
         return "<local-path>".to_string();
@@ -200,6 +216,12 @@ pub fn redact_git_remote(remote: &str) -> String {
     if let Some(redacted) = redact_url_userinfo(remote).or_else(|| redact_raw_url_userinfo(remote))
     {
         return redacted;
+    }
+    if remote.contains("://") && Url::parse(remote).is_err() && remote.contains('@') {
+        // A malformed URL can put password punctuation beyond the ordinary
+        // authority boundary, so the location of userinfo is ambiguous.
+        // Hide the whole remote rather than risk echoing any credential text.
+        return "***".to_string();
     }
     redact_scp_userinfo(remote).unwrap_or_else(|| remote.to_string())
 }
@@ -255,16 +277,23 @@ fn parse_url_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
 }
 
 fn parse_scp_remote(remote: &str) -> Result<ParsedGitRemote, WorkspaceError> {
-    let Some((user_host, path)) = remote.split_once(':') else {
+    // Userinfo can contain a password separator. Find the host/path separator
+    // after it. A slash may be part of a password, so a colon-bearing prefix
+    // fails closed as userinfo even if it could also be a repository path.
+    let (username, host_path) = match remote.split_once('@') {
+        Some((username, host_path))
+            if (!username.contains('/') || username.contains(':')) && host_path.contains(':') =>
+        {
+            (username, host_path)
+        }
+        _ => ("", remote),
+    };
+    let Some((host, path)) = host_path.split_once(':') else {
         return Err(invalid_git_url(remote));
     };
-    if user_host.contains('/') || path.is_empty() || path.starts_with('/') {
+    if host.contains('/') || path.is_empty() || path.starts_with('/') {
         return Err(invalid_git_url(remote));
     }
-    let (username, host) = match user_host.split_once('@') {
-        Some((username, host)) => (username, host),
-        None => ("", user_host),
-    };
     if host.is_empty() || host.contains('@') {
         return Err(invalid_git_url(remote));
     }
@@ -374,12 +403,32 @@ fn redact_raw_url_userinfo(remote: &str) -> Option<String> {
 }
 
 fn redact_scp_userinfo(remote: &str) -> Option<String> {
-    let (user_host, path) = remote.split_once(':')?;
-    let (username, host) = user_host.split_once('@')?;
+    let (username, host_path) = remote.split_once('@')?;
+    let (host, path) = host_path.split_once(':')?;
     if !username.contains(':') && username != "***" {
         return None;
     }
-    Some(format!("***@{host}:{path}"))
+    // Passwords may contain at-signs even when parsing rejects the remote.
+    // Mask through the last one in the host while keeping the original suffix
+    // intact. Rebuilding around the first colon would alter bracketed IPv6
+    // addresses such as `[::1]`.
+    if let Some((_, host)) = host.rsplit_once('@') {
+        return Some(format!("***@{host}:{path}"));
+    }
+    // A colon after the first at-sign makes a later at-sign ambiguous: it may
+    // still be part of the password. Hide the whole remote rather than risk
+    // exposing password text or guessing where the repository path begins.
+    let first_colon = host_path.find(':')?;
+    if let Some(later_at) = host_path[first_colon + 1..].find('@') {
+        let later_at = first_colon + 1 + later_at;
+        if host_path
+            .find('/')
+            .is_none_or(|path_start| later_at < path_start)
+        {
+            return Some("***".to_string());
+        }
+    }
+    Some(format!("***@{host_path}"))
 }
 
 fn invalid_git_url(remote: &str) -> WorkspaceError {

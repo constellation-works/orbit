@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Federated MCP"
-last_validated: 2026-09-19
+last_validated: 2026-10-06
 title: Glossary — Federated MCP
 owner: grok
 status: Draft
@@ -17,12 +17,12 @@ Vocabulary for the proposed federated MCP mux. Standard industry terms (proxy, m
 
 | Term | Meaning |
 |------|---------|
-| **Ambiguous destination** | Duplicate `machine_id` among configured destinations. Raised at **config load** as `ambiguous_destination`, not per call. A token that is not uniquely host-qualified (bare `ws_*`) is `unknown_selector`, not this class. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
+| **Ambiguous destination** | Duplicate `machine_id` among registered hosts (or legacy destination rows). Raised at **config load** as `ambiguous_destination`, not per call. A token that is not uniquely host-qualified (bare `ws_*`) is `unknown_selector`, not this class. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Callers file** | Retired. `~/.orbit/mcp-callers.toml` declared a destination-side ceiling; removed in [ORB-12564] because an SSH login to a destination is ownership of it, so the ceiling lived in a file the caller could rewrite. A leftover file is ignored with one warning. [4_decisions.md](../4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) |
 | **Capabilities** | Classes a destination holds for a workspace, at least `control_plane` and `execute`. Determined by the destination's local catalog role. List advertisement is a hint that may lag; Destination Core refusal is the correctness boundary. A workspace with absent `owner_machine_id` cannot advertise `control_plane`. [2_design.md §3](../2_design.md) |
 | **Checkout health** | Repo-root presence at the destination (`active` / `invalid` / `unknown` when the host cannot be probed). Not SSH reachability. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Control-plane authority** | The declared owner checkout (or a later cloud-offloaded store) that owns task issuance and the coordination store for that workspace. One per repository is operator configuration, not a mux invariant. [2_design.md §4](../2_design.md) |
-| **Destination** | The accepting machine (implicit local membership) or an operator-configured SSH remote the mux may forward to. Not a host-registry fleet member. Local workspaces need no destinations-file row. [2_design.md §1](../2_design.md) |
+| **Destination** | The accepting machine (implicit local membership) or a remote host registered with `orbit host add` that the mux may forward to. The mux reads only each entry's `ssh` and `machine_id`. Local workspaces need no host entry. [2_design.md §1](../2_design.md) |
 | **Execute binding** | A replica checkout: it can run, log, and schedule on that host and must refuse control-plane tools. [2_design.md §3](../2_design.md) |
 | **Delivery budget** | The budget a routed `tools/call` gets, stamped when its request is written. Separate from the probe budget that bounds SSH setup, the handshake, discovery, and `tools/list`, so classification never spends the tool's execution time. [2_design.md §6](../2_design.md) |
 | **Fail-closed routing** | Live delivery with a single caller-facing precedence: `unknown_selector` → `ambiguous_destination` (config) → `unreachable_destination` → `stale_route` → `unhealthy_checkout` → `tool_not_on_this_host` → `capability_refused`. No local fallback, default workspace, or `ws_*` substitution. Cached list health does not decide the error. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
@@ -30,6 +30,7 @@ Vocabulary for the proposed federated MCP mux. Standard industry terms (proxy, m
 | **Federated workspace list** | New session-unbound shape for `orbit_workspace_list`. Puts `machine_id` on each descriptor, not the v1 envelope, and does not inherit the v1 Active-and-locally-checked-out filter. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Gateway** | The mux process that advertises the federated namespace. It does not own destination state and does not rewrite destinations. [1_overview.md](../1_overview.md) |
 | **Granted authority** | Retired with the callers file [ORB-12564]. A destination declares no per-caller ceiling; it serves the authority the session's argv asks for. [4_decisions.md](../4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) |
+| **Id-only routed call** | A federated call to an id-routed task tool that carries no selector. It goes to the host the task id's prefix names: the local prefix is served in-process, a registered host's prefix is delivered there, and any other prefix fails with `unknown_task_prefix`. An unreachable holder fails with `owner_unreachable`, not `not_found`. [host-routing](../../host-registry/specs/host-routing.md) |
 | **Host reachability** | Whether the configured destination answers (reachable / unreachable). Separate from checkout health. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Host-qualified selector** | Structured, caller-uninterpreted addressing token. Encoding `hm_<id>/ws_*` is normative. Not `host_id`, not a path, not a credential. Callers copy the list `selector` field; they must not parse or construct the token. [specs/federated-workspace-mcp.md](../specs/federated-workspace-mcp.md) |
 | **Mux** | A configured forwarder of already-chosen destinations, not a registry and not automatic owner discovery. [2_design.md §1](../2_design.md) |

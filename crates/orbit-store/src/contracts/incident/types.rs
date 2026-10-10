@@ -163,6 +163,13 @@ pub const FAILURE_ONLY_DIAGNOSTIC_SURFACES: &[&str] = &[
     "pipeline.worker.startup",
 ];
 
+/// Prefix of the audit `error_message` that `orbit doctor` records when it ran
+/// every check and reported findings (it then exits nonzero so unattended
+/// callers can alert). The classifier reads it to tell that completed run from
+/// a doctor that crashed before finishing, which records an `OrbitError`
+/// message instead.
+pub const DOCTOR_FINDINGS_MESSAGE_PREFIX: &str = "doctor reported findings: ";
+
 /// Operator-facing label for abnormal-path lifecycle records, whether they
 /// use one of [`FAILURE_ONLY_DIAGNOSTIC_SURFACES`] or have no tool identity.
 pub const LIFECYCLE_DIAGNOSTIC_LABEL: &str = "lifecycle diagnostics";

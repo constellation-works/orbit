@@ -91,6 +91,16 @@ impl OrbitRuntime {
             return Err(invalid("desktop completion requires review state"));
         }
         criteria(&task.acceptance_criteria)?;
+        match self.desktop_foreign_execution(task)? {
+            Some(foreign) => foreign.ensure_stopped()?,
+            None => self.desktop_local_runs_stopped(task)?,
+        }
+        self.ensure_resolves_are_workspace_local(task)?;
+        ensure_status_change_allowed(self, task, &TaskUpdateParams::default(), TaskStatus::Done)
+    }
+    /// This machine's own linked run, and every child it dispatched, must
+    /// have stopped.
+    fn desktop_local_runs_stopped(&self, task: &Task) -> Result<(), OrbitError> {
         let mut pending = task.job_run_id.clone().into_iter().collect::<Vec<_>>();
         let mut visited = std::collections::HashSet::new();
         while let Some(run_id) = pending.pop() {
@@ -121,7 +131,6 @@ impl OrbitRuntime {
                 );
             }
         }
-        self.ensure_resolves_are_workspace_local(task)?;
-        ensure_status_change_allowed(self, task, &TaskUpdateParams::default(), TaskStatus::Done)
+        Ok(())
     }
 }

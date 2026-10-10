@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Vision
 owner: claude
-last_updated: 2026-09-13
-last_validated: 2026-09-13
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: state-compatibility
 doc_role: vision
@@ -70,8 +70,10 @@ explicitly.
 - The claim is written by the binary that performs the migration, which is
   the only party that can make it, and read by binaries that ship later than
   the reader but earlier than the writer.
-- Read-only is enforced by the storage engine rather than by convention, so
-  the guarantee does not depend on reviewing future write paths.
+- For the SQLite store, read-only is enforced by SQLite's `query_only` setting
+  rather than by convention. The workspace-layout ledger has no equivalent
+  write gate: it refuses newer `ReadCompatible` layouts instead of opening
+  them read-only.
 
 ## 4 References
 

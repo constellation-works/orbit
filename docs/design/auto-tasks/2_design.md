@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-27
-last_validated: 2026-09-27
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -33,7 +33,11 @@ and unimplemented; existing scheduling and action semantics remain current.
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 — `{ cron: "…" }` or `{ every_minutes: N }`. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
-`crew`, and `status` (default `backlog`). An explicit complexity must be an
+`crew`, optional `context_files`, and `status` (default `backlog`).
+Context selectors are copied unchanged into minted tasks. Diff-producing
+chores must declare a scope in their YAML template; otherwise admission holds
+them for task-pilot. Older definitions without selectors remain readable.
+An explicit complexity must be an
 assessed `low`, `medium`, or `hard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
 definitions that omit `complexity` remain valid and mint
@@ -130,6 +134,9 @@ absolute and need no cursor.
 last_task_id, pending?, last_skip? }`). This is workspace-local, gitignored
 runtime state (the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
 definition YAML and a definition edit never races the scheduler's cursor writes.
+The same file records `inactive_plugin_warnings`, the (definition, plugin, version)
+keys a plugin-inactive skip has already warned about, so each clock-tick process
+does not warn again.
 
 Admission and persistence share one stable sidecar lock,
 `.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is
@@ -155,7 +162,7 @@ clears it.
 ## 4. The scheduler pass
 
 `scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
-then per enabled definition holds the sidecar lock, re-reads cursors, and
+then per definition holds the sidecar lock, re-reads cursors, and
 either baselines, skips, or fires. Under that lock it first revalidates the
 loaded revision: a definition deleted since discovery skips as
 `definition_removed`, and one whose file no longer loads to the same
@@ -186,6 +193,12 @@ Recovery on the next locked pass:
 - Checkpoint write failure reports `fired` with the task id and best-effort
   mint evidence; retry reconciles from `pending.task_id` or stays
   unresolved.
+
+Pending recovery runs before the enabled check: disabling a definition stops
+new mints while still reconciling an already-recorded mint. Dry-run inspects
+the pending claim in the same order. A claim with a task id previews `fired`
+with that task and slot, while a claim without one reports `unresolved_pending`.
+Neither preview writes cursor state or mints a task.
 
 ### 4b. `skip_if_unchanged`: nothing landed, nothing to mint
 
@@ -251,27 +264,35 @@ job, activity, or job run is created, and fires do not appear on
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
-rejects duplicate names; update patches present fields; toggle (the CLI command,
+rejects duplicate names; update patches present fields (on a managed shipped
+default, settings fields go to the settings table, §5c); toggle (the CLI command,
 or `orbit.auto_task.update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
 toggle re-read the definition and write it while holding the cursor sidecar
 lock (without loading the cursor, so a malformed cursor cannot block the
 kill-switch). Scheduler admission revalidates under the same lock, and
 concurrent edits each patch the latest committed definition instead of
-overwriting one another. Both surfaces validate the schedule
+overwriting one another. CLI template flags are passed as a per-field patch
+and merged only after the lock is acquired, so unnamed fields retain edits
+committed while the command was waiting. The registry tool's `template`
+object remains a full replacement: omitted fields take the template defaults,
+including clearing optional crew and complexity. Both surfaces validate the schedule
 (cron parse / interval > 0) and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
 
 `delete.rs` owns removal (`orbit auto-task delete`; there is no MCP delete).
-Delete refuses while a minted task is open unless forced. It removes the
-definition and its cursor under the cursor lock, tears a delivery consumer down
-through the audited reset, and writes an audit event. Deleting a shipped
+Delete refuses while a minted task is open unless forced. Under the cursor
+lock it removes the definition and its cursor, then tears a delivery consumer
+down through the audited reset, and writes an audit event. Deleting a shipped
 default also records it under `optedOut` in the auto-task managed-asset
 manifest. Reconciliation then leaves it absent and doctor does not report it
 missing. `orbit auto-task restore` writes the shipped content back and clears
-the opt-out.
+the opt-out. The opt-out and cursor removal come before the reset because they
+can be undone: a failed delete puts the definition, cursor and manifest back.
+The reset cannot be, so a ref release failing after it leaves only that
+audited reset applied.
 
 `list` is fail-closed-aware. The loader collects a per-file `AutoTaskLoadError`
 for every definition it rejects, and after [ORB-10800] those errors are no longer
@@ -296,6 +317,88 @@ Orbit wrote for each shipped default, so a default dropped from a later release
 can be retired by content provenance instead of remaining loadable forever.
 Seeding still never overwrites an existing definition, and an operator-edited
 default is preserved under `.retired-managed/auto_tasks/` rather than deleted.
+
+### 5c. Operator settings over bundled bodies
+
+A shipped default's YAML is its *body*; `orbit workspace sync` refreshes it
+only while its bytes match the recorded digest. The fields an operator is meant
+to tune are kept out of the body, in one settings table beside the definitions:
+`.orbit/auto_tasks/.orbit-auto-task-settings.json` (JSON, so discovery never
+loads it as a definition), keyed by definition name
+(`orbit_automation::auto_tasks::settings`). Settings fields are `enabled`,
+`schedule`, `dedupe`, and the template's `crew`, `priority`, `complexity` and
+tag additions (tags appended after the body's own); each entry also carries the
+edit's `updated_by`/`updated_at`. The loader applies an entry over its body, so
+the scheduler, admission revalidation, mint, list, show and doctor all see the
+same effective definition. An unreadable settings table fails every definition
+closed, since any of them may carry settings.
+
+`update` and `toggle` on a shipped default whose body is still managed (file
+digest equals the manifest's) write only the settings table when the edited
+definition differs from the body in settings fields alone, so the body keeps
+refreshing and the settings keep applying. A body edit — description, title,
+criteria, required tools, context files, removing a body tag, clearing a crew or
+complexity — forks the file as before: the whole effective definition is
+written to the YAML and its settings entry is dropped, so the fork alone is
+authoritative. Every later edit of a fork or user-authored definition writes
+its file. `delete` and `restore` drop the entry, as does `add` for a reused name.
+`orbit auto-task show` reports `layering.body` (`managed`, `forked`,
+`user_authored`), the stored `layering.settings`, and for a fork its
+`forked_fields` and `settings_fields`.
+
+`orbit workspace sync` migrates a fork of a shipped default whose differences
+from the current or a previously shipped body are only settings fields
+(ignoring `created_*` and `updated_*`): it writes those fields into the settings table, restores the
+bundled body, and records its digest (`migrated`). A fork with any body edit is
+preserved, and so is one carrying a YAML comment the matching shipped body lacks
+(body field `comments`): no settings entry can hold the operator's note.
+`orbit doctor`'s `artifacts-auto-tasks` row reports a settings-only
+fork as `stale` with `orbit workspace sync` as its remedy, and a body fork as
+`forked` naming the differing body and settings fields; neither remedy moves
+or renames the file.
+
+Previously shipped bodies are recognized by the per-default canonical SHA-256
+digests compiled from [body-history.json](../../../crates/orbit-core/assets/auto_tasks/body-history.json).
+This works even when a checkout's managed manifest no longer records the old
+bytes. A digest covers the parsed definition with settings and edit stamps
+removed; JSON keys are sorted, `template.required_tools` is sorted and
+deduplicated by exact tool name as in the Rust deserializer, and
+`skip_if_unchanged.ref` uses the bundled base-branch placeholder after workspace
+rendering (including the historical
+hardcoded `agent-main`). Each history entry also
+records its source integration commit, the original settings and body tags,
+and its `#` lines. The original tags, crew and complexity distinguish body
+edits from upstream changes; tag removal, clearing a shipped crew or complexity,
+and added notes remain body edits. Existing settings-table overrides take
+precedence and keep their edit stamp. A recognized historical copy upgrades
+to the current bundled body, and doctor calls it a **stale shipped body (will
+upgrade on sync)** rather than a body fork.
+
+Representable settings differences are measured against the current default,
+preserving the copy's effective values even when an older release also used
+those values as defaults. Body fields newly introduced upstream still arrive
+with the current body, including tags or a previously absent complexity.
+
+After landing changes to bundled defaults, run
+`python3 scripts/update-auto-task-body-history.py` (requires PyYAML) and commit
+the resulting history with the next asset change or release preparation.
+The script scans first-parent integration history, recomputes existing records
+from their source revisions (or saved source fixtures in shallow clones), and
+never records uncommitted asset edits. It also regenerates the CLI history
+source fixtures; commit both generated files together. The CLI regression
+iterates every history entry through workspace sync without needing Git history.
+Current bodies are compared directly and need no history entry until they
+become historical.
+The fingerprint format follows the v1 definition's serde defaults; update the
+generator together with any schema change. Unrecognized bodies are preserved
+conservatively; the manifest's exact-byte provenance behavior is unchanged.
+
+Apply-mode migration holds the same workspace auto-task cursor sidecar lock as
+CRUD from the settings-table load through the table write, body restoration and
+digest update. A concurrent toggle or update therefore commits before migration
+loads its settings, or after migration completes; neither its entry nor its
+body edit can be overwritten by migration's stale view. Check mode reports
+without taking the write lock, and create-only seeding does not migrate forks.
 
 ## 5b. Manual mint — `mint` (ORB-10439, renamed by ORB-10446)
 
@@ -386,6 +489,14 @@ disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
 
+The dashboard's `GET /api/auto-tasks` lists workspace task metadata once per
+request and groups it by definition provenance tag. It reads no task bodies on
+the indexed path and uses each group's newest instance for `last_minted_*`.
+Both duplicate flags use the scheduler's shared listed-set rule: done,
+archived, rejected and someday instances do not count as open. Delivery-schedule
+automation diagnostics reuse the same open-instance result. The projection is
+recomputed on each request; it does not cache instance state.
+
 List responses expose separate `capabilities` decisions for auto-task toggle,
 manual mint, routine toggle, clock service, and clock cadence. Each decision
 uses the same governed operation as its POST endpoint; no client-side grant
@@ -412,12 +523,12 @@ server-side idempotency promise for manual mint. A failed readback preserves
 the successful action result and task link, so a refresh failure does not
 invite another mint.
 
-Validation uses the shipped modules in the existing Node harness
-(`cargo test -p orbit-web --lib operations_actions_preserve`). The same fixture
-runs in Chromium with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
+Validation uses the shipped modules in Chromium through the required
+`dashboard-operations-browser` scenario in `scripts/qa-full-sweep-inventory.json`.
+Run it directly with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
 /absolute/path/to/playwright/index.mjs /evidence/directory` (on one shell line).
-The optional runner serves isolated markup, styles and mocked API responses,
-checks behavior, and captures routine/auto-task panels at 1440px and 390px;
+The runner serves isolated markup, styles and mocked API responses,
+checks behavior, and captures Operations panels at 1440px, 672px, 390px and 375px;
 Rust API tests separately exercise the canonical handlers and persisted state.
 
 ## 6. Concerns & Honest Limitations
@@ -450,11 +561,11 @@ accurate.
 - **Definitions are not full-text indexed.** Unlike indexed docs, auto-task
   YAML is not in a SQLite/search index; discovery is a directory scan. Acceptable
   at the expected cardinality (a handful of chores per workspace).
-- **Workspace-scoped.** The scheduler processes the definitions of the workspace
-  whose routine fired it, not a cross-workspace sweep. **[slated to change]** —
-  the tick fans out over every registered owner checkout on the host; each
-  checkout's definitions are still evaluated against that checkout's own store.
-- **Repo-global chores run once per owner** (pending change). Everything the
+- **Workspace-local definitions, host-wide tick.** The scheduler loads definitions
+  from the current runtime's workspace. The host tick evaluates auto-task
+  definitions in every registered owner checkout after routine evaluation and
+  under the host sweep lock; each checkout uses its own task store and cursor.
+- **Repo-global chores run once per owner.** Everything the
   scheduler touches is host-local, so N owner checkouts of one repository are N
   independent schedules by design. A definition whose effect lands on the shared
   remote (a dependency bump, a release chore) is minted by each owner's clock;

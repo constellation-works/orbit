@@ -1,8 +1,16 @@
 //! Codex execution settings and agent subprocess environment projection.
 
-use orbit_common::security::child_env::{allowlisted_child_env, inherited_child_env};
+use orbit_common::security::child_env::{
+    allowlisted_child_env, allowlisted_child_env_from, inherited_child_env, unset_pass_names_from,
+};
+use std::sync::Arc;
 
 use crate::registry::ConfigSnapshot;
+
+// The shipped config template includes this for macOS, where CoreFoundation
+// needs it. Keep treating it as a default on other platforms too, where it is
+// normally absent from the launching environment.
+const PLATFORM_SPECIFIC_TEMPLATE_PASS_NAMES: &[&str] = &["__CF_USER_TEXT_ENCODING"];
 
 /// Codex sandbox and approval policy resolved from `[execution.codex]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +49,7 @@ impl CodexExecutionPolicy {
 
 /// Environment passthrough policy for agent subprocesses, resolved from
 /// `[execution.env]`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecutionEnvPolicy {
     /// Whether a child inherits the parent environment wholesale.
     ///
@@ -54,6 +62,19 @@ pub struct ExecutionEnvPolicy {
     pub(crate) inherit: bool,
     /// `execution.env.pass`: the names an operator admits by name.
     pub(crate) pass: Vec<String>,
+    /// Immutable parent snapshot for a runtime supplied with credential defaults.
+    parent: Option<Arc<Vec<(String, String)>>>,
+}
+
+impl std::fmt::Debug for ExecutionEnvPolicy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExecutionEnvPolicy")
+            .field("inherit", &self.inherit)
+            .field("pass", &self.pass)
+            .field("has_parent_snapshot", &self.parent.is_some())
+            .finish()
+    }
 }
 
 impl Default for ExecutionEnvPolicy {
@@ -61,6 +82,7 @@ impl Default for ExecutionEnvPolicy {
         Self {
             inherit: false,
             pass: default_pass_list(),
+            parent: None,
         }
     }
 }
@@ -70,6 +92,7 @@ impl ExecutionEnvPolicy {
         Self {
             inherit: snapshot.execution_env_inherit,
             pass: snapshot.execution_env_pass.clone(),
+            parent: None,
         }
     }
 
@@ -77,6 +100,33 @@ impl ExecutionEnvPolicy {
     /// allow-listed.
     pub fn inherit(&self) -> bool {
         self.inherit
+    }
+
+    /// The `execution.env.pass` names the operator admits.
+    pub fn pass_names(&self) -> &[String] {
+        &self.pass
+    }
+
+    /// Capture the ambient environment with defaults for this policy's pass
+    /// names. Non-empty ambient values take precedence. Defaults outside this
+    /// workspace's pass list are ignored, including when a provider later
+    /// requests those names as extras. The process environment is never changed.
+    #[must_use]
+    pub fn with_defaults(mut self, defaults: &[(String, String)]) -> Self {
+        let mut parent = std::env::vars().collect::<Vec<_>>();
+        for (name, value) in defaults {
+            if !self.pass.contains(name)
+                || parent
+                    .iter()
+                    .any(|(key, held)| key == name && !held.is_empty())
+            {
+                continue;
+            }
+            parent.retain(|(key, _)| key != name);
+            parent.push((name.clone(), value.clone()));
+        }
+        self.parent = Some(Arc::new(parent));
+        self
     }
 
     /// The complete environment an agent subprocess is launched with.
@@ -88,9 +138,52 @@ impl ExecutionEnvPolicy {
     /// a provider declares it requires.
     pub fn agent_subprocess_env(&self, extras: &[&str]) -> Vec<(String, String)> {
         if self.inherit {
-            return inherited_child_env();
+            return self
+                .parent
+                .as_deref()
+                .cloned()
+                .unwrap_or_else(inherited_child_env);
+        }
+        if let Some(parent) = &self.parent {
+            return allowlisted_child_env_from(parent, &self.pass, extras);
         }
         allowlisted_child_env(&self.pass, extras)
+    }
+}
+
+impl ExecutionEnvPolicy {
+    /// The operator-added `execution.env.pass` names the effective parent
+    /// environment holds no value for, including runtime-supplied defaults,
+    /// so no agent it starts receives them [ORB-14777].
+    ///
+    /// The built-in defaults (`HOME`, `PATH`, `CODEX_HOME`, and the
+    /// platform-specific `__CF_USER_TEXT_ENCODING`, …) are not reported: they
+    /// can legitimately be absent on a host, and warning on each would fire on
+    /// every drain start. A name the operator added is a statement that agents
+    /// need it. Empty when the policy inherits the whole environment.
+    pub fn unset_pass_names(&self) -> Vec<String> {
+        if let Some(parent) = &self.parent {
+            return self.unset_pass_names_in(parent);
+        }
+        self.unset_pass_names_in(&std::env::vars().collect::<Vec<_>>())
+    }
+
+    /// [`Self::unset_pass_names`] over an explicit parent environment.
+    pub fn unset_pass_names_in(&self, parent: &[(String, String)]) -> Vec<String> {
+        if self.inherit {
+            return Vec::new();
+        }
+        let defaults = default_pass_list();
+        let added: Vec<String> = self
+            .pass
+            .iter()
+            .filter(|name| {
+                !defaults.contains(name)
+                    && !PLATFORM_SPECIFIC_TEMPLATE_PASS_NAMES.contains(&name.as_str())
+            })
+            .cloned()
+            .collect();
+        unset_pass_names_from(parent, &added)
     }
 }
 

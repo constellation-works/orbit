@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-03
+last_validated: 2026-10-09
 ---
 # Task/Reservation Commit Boundary
 
@@ -20,15 +20,29 @@ recovery) over `crates/orbit-store/src/driver/sqlite/task_commit_journal/` (the 
 ## The two mechanisms
 
 **One serialization boundary per task-store partition, with a host admission lock.**
-The host lock excludes ordinary writers across partitions during admission, because a task
-may depend on a task in another workspace. Ordinary operations hold it shared; admission
-holds it exclusive. The partition advisory lock then protects recovery and bundle publication. Ordinary task reads and writes, and ordinary reservation writes, take it
+The host lock, always taken before the partition lock, excludes ordinary writers across
+partitions while an admission reads a dependency that another workspace's partition holds.
+Ordinary operations, claim mutations, commits, and an admission whose decision reads only its
+own partition hold it shared, so they never stall another partition's work. Only that
+cross-partition admission holds it exclusive. Holding it exclusively for every admission
+section stalled every workspace's task reads and writes behind one drain's claims. The
+partition advisory lock then protects recovery and bundle publication. Ordinary task reads and writes, and ordinary reservation writes, take it
 *shared* — they still run concurrently with one another and still take their own per-bundle or
 SQLite locks underneath. An admission section takes it *exclusive*, so its readiness reads and
 its commit see state no ordinary write can change in between. Every participant takes the
 boundary **before** any bundle lock, including `with_task_write_lock`, so the two locks are
 always acquired in the same order; the shared helper's per-thread re-entrance makes a nested
 task lock inside an admission section run under the outer acquisition rather than deadlock.
+
+Both boundary locks prefer a waiting exclusive acquirer. An admission, recovery or
+cross-partition admission refused by shared holders queues at the lock's turnstile
+(`<lock>.turnstile`) until it takes the lock. An ordinary section passes through that turnstile
+before trying the lock, so it waits behind a queued writer while the sections already inside
+drain. Without that priority, a writer got the lock only at an instant when no reader held it,
+so a stream of overlapping ordinary sections held admissions past the 3 s warning (ORB-15107).
+A section nested inside another partition's section skips the turnstile. It already holds a
+partition that the queued writer may be waiting behind indirectly, and waiting behind that
+writer could close a cycle. A re-entrant acquisition never reaches either lock.
 
 **One durable commit decision.** A journal row in the host store database:
 
@@ -125,9 +139,20 @@ has been removed. A durable `.task-commit-required` marker makes legacy task com
 refuse access to a coordinated partition, including compositions opened before activation.
 There is no automatic downgrade. Maintenance/import operations must be quiesced separately.
 
-Ordinary operations remain concurrent under shared host and partition locks. Admissions
-exclude ordinary writers across the host registry while checking cross-workspace
-dependencies. Recovery nesting is tracked per partition rather than by a process-wide depth.
+Ordinary operations remain concurrent under shared host and partition locks. An admission
+section excludes its own partition's writers. It excludes writers across the host registry
+only while a decision checks a cross-workspace dependency. A partition-scoped section reaching
+such a dependency stops before it writes anything, and the decision is taken again in a
+host-wide section. Recovery nesting is tracked per partition rather than by a process-wide
+depth.
+
+Owner admission applies the shared completed-archive dependency rule to status history
+from canonical bundles inside that lock, after recovering each registered dependency owner.
+An archived prerequisite counts as done only when its readable history reached done and
+then remained done or archived. Queue depth and claim selection use the same projection;
+the prerequisite's stored status stays archived. Abandoned or reopened archives, rejected
+or missing prerequisites, and histories without completion remain unsatisfied. Damaged
+event logs abort admission without changing a dependent or creating a claim.
 
 Internal distributed admission builds on this journal. Dependent rows can be finalized from
 the reservation result inside the deciding SQLite transaction, so the receipt captures the
@@ -145,7 +170,10 @@ claim footprints also participate in ordinary reservation conflicts after TTL ex
   it already published. Record the decision once; make everything else a replay of it.
 - **A decision must be made from state that cannot move under it.** Put the readers and the
   commit in the same exclusive section, and make every ordinary writer take the shared side —
-  a lock held only around the final writes does not prevent the check from going stale.
+  a lock held only around the final writes does not prevent the check from going stale. Keep
+  that section proportional to the one decision: select candidates before it, under the shared
+  side, and inside it re-read and re-check only what the chosen candidate's decision rests on,
+  so a stale selection can defer a candidate but never admit it (pull admission, ORB-14724).
 
 ## When NOT to
 

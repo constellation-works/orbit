@@ -23,10 +23,21 @@
 //! attribution. [`INHERITED_AUTHORITY_ENV`] is the canonical list for that
 //! case and [`clear_inherited_authority`] applies it.
 //!
+//! A whole test binary gets the same defense from [`isolate_test_process!`](crate::isolate_test_process):
+//! it clears [`INHERITED_AUTHORITY_ENV`] before `main`, so a bare `cargo test`
+//! from an agent shell behaves like one from a clean shell (ORB-14926).
+//!
 //! Always available so integration tests and sibling crates share one
 //! implementation without changing `orbit-common`'s feature set. Child-test
 //! guards reject successful libtest exits that never executed the exact filter.
 
+use std::io::Write;
+#[cfg(unix)]
+mod fifo;
+#[cfg(unix)]
+pub use fifo::{create_fixture_fifo, release_fixture_fifo};
+mod process_scrub;
+pub use process_scrub::{SCRUBBED_MARKER_ENV, scrub_inherited_authority};
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
     atomic::{AtomicUsize, Ordering},
@@ -52,6 +63,58 @@ pub(crate) fn scoped_env_active() -> bool {
 pub fn canonical_temp_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir();
     std::fs::canonicalize(&dir).unwrap_or(dir)
+}
+
+/// A parent for the root of a fixture that seeds thousands of durable writes.
+///
+/// Every task write fsyncs its files and their directory. On a tmpfs temp
+/// directory that costs nothing. A managed executor points `TMPDIR` at
+/// its scratch directory inside the checkout, though, and there a disk under a
+/// busy build host took over a second per fsync: a 4,000-task seed that runs
+/// in 10 s on tmpfs reached 185 tasks in 270 s (ORB-14818). On Linux this is
+/// the system temp directory when it is a tmpfs, else the first writable tmpfs
+/// of `/dev/shm` and `/tmp`, else the system temp directory. Create the root
+/// with `tempfile::tempdir_in(bulk_write_temp_dir())`.
+pub fn bulk_write_temp_dir() -> std::path::PathBuf {
+    let default = std::env::temp_dir();
+    #[cfg(target_os = "linux")]
+    {
+        let tmpfs = |dir: &std::path::Path| {
+            use std::os::unix::ffi::OsStrExt;
+            let Ok(path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+                return false;
+            };
+            let mut stat = std::mem::MaybeUninit::<libc::statfs>::zeroed();
+            // Safety: `statfs` reads the NUL-terminated path and fills only
+            // the struct it is handed.
+            if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+                return false;
+            }
+            // Safety: a zero return means the kernel filled `stat`.
+            unsafe { stat.assume_init() }.f_type == libc::TMPFS_MAGIC
+        };
+        // A sandbox may mount a directory it does not let this process write.
+        let writable = |dir: &std::path::Path| {
+            static PROBES: AtomicUsize = AtomicUsize::new(0);
+            let probe = dir.join(format!(
+                ".orbit-bulk-write-probe-{}-{}",
+                std::process::id(),
+                PROBES.fetch_add(1, Ordering::Relaxed)
+            ));
+            let created = crate::fs::io::create_private_dir(&probe).is_ok();
+            created && std::fs::remove_dir(&probe).is_ok()
+        };
+        if !tmpfs(&default) {
+            let candidates = ["/dev/shm", "/tmp"].map(std::path::PathBuf::from);
+            if let Some(dir) = candidates
+                .into_iter()
+                .find(|dir| tmpfs(dir) && writable(dir))
+            {
+                return dir;
+            }
+        }
+    }
+    default
 }
 
 /// The identity pair consulted when a command carries no explicit
@@ -140,6 +203,7 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     "ORBIT_ACTIVITY_TOOLS_DENY",
     "ORBIT_ACTIVITY_NAME",
     "ORBIT_ACTIVITY_FS_PROFILE",
+    "ORBIT_ACTIVITY_DEADLINE_UNIX_MS",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_PROC_PROGRAM_POLICY",
     "ORBIT_PROC_DISALLOWED_PROGRAMS",
@@ -173,6 +237,9 @@ pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
 ///
 /// Pass captured libtest output, including its final summary. Checking the last
 /// summary prevents a nested child's result from hiding an empty outer run.
+/// A passing child's `DEFERRED:` notices are repeated on the parent's stderr,
+/// so a test that deferred its sandbox-confined path inside an isolated child
+/// still says so in the run's output [ORB-14334].
 pub fn assert_child_test_passed(
     test_name: &str,
     status: std::process::ExitStatus,
@@ -195,6 +262,214 @@ pub fn assert_child_test_passed(
         }),
         "child test `{test_name}` did not run exactly once; missing or ignored entry point:\n{stdout}\n{stderr}"
     );
+    let deferrals = stdout.lines().chain(stderr.lines()).filter(|line| {
+        line.trim_start()
+            .starts_with(orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX)
+    });
+    for line in deferrals {
+        // Bypass libtest capture, as the child's own notice did.
+        let _ = writeln!(std::io::stderr(), "{}", line.trim());
+    }
+}
+
+/// How long [`run_child_test`] lets a re-executed child test run before it
+/// kills the child and fails.
+///
+/// A hang guard, not a speed budget. A fixture slows by an order of magnitude
+/// on a CPU-saturated host: a default-concurrency nextest run beside a busy
+/// drain, or an instrumented `cargo llvm-cov` run. Fixed one- and two-minute
+/// deadlines failed passing children there (ORB-14659). The guard stays below
+/// nextest's ten-minute termination in `.config/nextest.toml`, so the parent
+/// still reports the child's output instead of being killed silently.
+pub const CHILD_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Run a re-executed child test with its output in files under `output_dir`.
+///
+/// Stdin is null and, on Unix, the child leads its own process group, which
+/// is killed once the child has exited or overrun. Pass the result to
+/// [`assert_child_test_passed`]. A child still running at
+/// [`CHILD_TEST_DEADLINE`] fails the caller with the host's load and
+/// everything the child printed so far, so an overrun on a saturated host is
+/// told apart from a hang at the point where it stopped.
+pub fn run_child_test(
+    command: &mut std::process::Command,
+    test_name: &str,
+    output_dir: &std::path::Path,
+) -> crate::process::CapturedOutput {
+    let stdout_path = output_dir.join("child-test-stdout.log");
+    let stderr_path = output_dir.join("child-test-stderr.log");
+    let create = |path: &std::path::Path| {
+        std::fs::File::create(path)
+            .unwrap_or_else(|error| panic!("create {} for `{test_name}`: {error}", path.display()))
+    };
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(create(&stdout_path))
+        .stderr(create(&stderr_path));
+    crate::process::bounded::isolate_process_group(command);
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn child test `{test_name}`: {error}"));
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < CHILD_TEST_DEADLINE => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Ok(None) => break None,
+            Err(error) => panic!("wait for child test `{test_name}`: {error}"),
+        }
+    };
+    crate::process::bounded::kill_owned_group(child.id());
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let read = |path: &std::path::Path| std::fs::read(path).unwrap_or_default();
+    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
+    let Some(status) = status else {
+        panic!(
+            "child test `{test_name}` was still running after {:?} ({}); killed. \
+             Output so far:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            started.elapsed(),
+            host_load(),
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+    };
+    crate::process::CapturedOutput {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+/// The host's load averages against its CPU count, for a fixture deadline's
+/// failure message: an overrun on a saturated host then names the pressure
+/// instead of reading as a defect in the code under test.
+pub fn host_load() -> String {
+    let cpus = std::thread::available_parallelism().map_or(0, std::num::NonZeroUsize::get);
+    #[cfg(unix)]
+    {
+        let mut load = [0.0f64; 3];
+        // Safety: `getloadavg` writes at most the three samples requested into
+        // the array it is handed.
+        if unsafe { libc::getloadavg(load.as_mut_ptr(), 3) } == 3 {
+            return format!(
+                "host load average {:.1} / {:.1} / {:.1} over 1/5/15 min on {cpus} CPUs",
+                load[0], load[1], load[2]
+            );
+        }
+    }
+    format!("host load average unavailable; {cpus} CPUs")
+}
+
+/// How long a [`FixtureProgress`] fixture may run before it fails naming the
+/// phase it was in.
+///
+/// Inside [`CHILD_TEST_DEADLINE`], so a fixture in an isolated child reports
+/// its own phase before the parent kills it, and inside nextest's ten-minute
+/// termination for a fixture that runs in process.
+pub const FIXTURE_PHASE_DEADLINE: std::time::Duration =
+    CHILD_TEST_DEADLINE.saturating_sub(std::time::Duration::from_secs(30));
+
+/// Phase progress for a large fixture, such as one that seeds thousands of
+/// tasks before it measures anything.
+///
+/// Without it, a stalled fixture prints only `running 1 test` before its
+/// deadline, so a slow seed cannot be told from a slow measured section
+/// (ORB-14818). Each phase is reported on stderr when it starts, at most every
+/// few seconds while it advances, and when it ends. An [`advance`] past the
+/// deadline panics with the phase, the items done, the elapsed time and the
+/// host load.
+///
+/// [`advance`]: FixtureProgress::advance
+pub struct FixtureProgress {
+    fixture: String,
+    deadline: std::time::Duration,
+    started: std::time::Instant,
+    phase: &'static str,
+    phase_started: std::time::Instant,
+    done: usize,
+    total: usize,
+    reported: std::time::Instant,
+}
+
+impl FixtureProgress {
+    const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Track `fixture` under [`FIXTURE_PHASE_DEADLINE`].
+    pub fn start(fixture: &str) -> Self {
+        Self::with_deadline(fixture, FIXTURE_PHASE_DEADLINE)
+    }
+
+    /// Track `fixture` under `deadline`, measured from now.
+    pub fn with_deadline(fixture: &str, deadline: std::time::Duration) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            fixture: fixture.to_string(),
+            deadline,
+            started: now,
+            phase: "setup",
+            phase_started: now,
+            done: 0,
+            total: 0,
+            reported: now,
+        }
+    }
+
+    /// End the current phase and start `phase`, which will advance `total`
+    /// times.
+    pub fn phase(&mut self, phase: &'static str, total: usize) {
+        self.report("done");
+        let now = std::time::Instant::now();
+        (self.phase, self.phase_started, self.done, self.total) = (phase, now, 0, total);
+        self.report("started");
+    }
+
+    /// Count one item of the current phase; fail the fixture if it has run
+    /// past its deadline.
+    pub fn advance(&mut self) {
+        self.done += 1;
+        let elapsed = self.started.elapsed();
+        assert!(
+            elapsed <= self.deadline,
+            "fixture `{}` overran its {:?} deadline in phase `{}`: {}/{} done after {:.1?} \
+             in the phase, {:.1?} in total ({})",
+            self.fixture,
+            self.deadline,
+            self.phase,
+            self.done,
+            self.total,
+            self.phase_started.elapsed(),
+            elapsed,
+            host_load()
+        );
+        if self.reported.elapsed() >= Self::REPORT_EVERY {
+            self.report("running");
+        }
+    }
+
+    /// End the last phase.
+    pub fn finish(mut self) {
+        self.report("done");
+    }
+
+    fn report(&mut self, state: &str) {
+        self.reported = std::time::Instant::now();
+        // Bypass libtest capture: an overrun's kill must not lose the line.
+        let _ = writeln!(
+            std::io::stderr(),
+            "fixture `{}`: phase `{}` {state}, {}/{} after {:.1?} ({:.1?} total)",
+            self.fixture,
+            self.phase,
+            self.done,
+            self.total,
+            self.phase_started.elapsed(),
+            self.started.elapsed()
+        );
+    }
 }
 
 /// Verify the exact entry point before starting a child that will be killed or
@@ -338,6 +613,55 @@ pub fn harden_dir(_path: &std::path::Path) {}
 /// attributable from a log line.
 pub fn start_identity_probe_blocker() -> Option<String> {
     crate::process::identity::self_start_identity_probe_blocker()
+}
+
+/// A `ps` run from a test: its output, or why the sandbox refused to start it.
+#[derive(Debug)]
+pub enum PsRun {
+    /// `ps` started; its status and output are the caller's to assert.
+    Ran(std::process::Output),
+    /// An agent executor's sandbox refused to exec the setuid `ps`. The test
+    /// has nothing to compare: it reports this reason as a skip and returns.
+    Denied(String),
+}
+
+/// Run `ps -o lstart= -p <pid>` under the UTC / C locale that persisted owner
+/// tokens were captured in.
+///
+/// Only `PermissionDenied` while starting `ps` yields [`PsRun::Denied`]; any
+/// other failure to start it panics, and a `ps` that ran is returned whatever
+/// its status, so a sandbox can never turn a wrong rendering into a pass.
+pub fn ps_lstart_utc(pid: u32) -> PsRun {
+    let mut command = std::process::Command::new("ps");
+    command
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("TZ", "UTC")
+        .env("LC_ALL", "C")
+        .env("LANG", "C");
+    let spawned = match crate::process::run_bounded_capped_typed(
+        &mut command,
+        std::time::Duration::from_secs(10),
+        64 * 1024,
+    ) {
+        Ok(captured) => Ok(std::process::Output {
+            status: captured.status,
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+        }),
+        Err(crate::process::BoundedRunError::Spawn(error)) => Err(error),
+        Err(crate::process::BoundedRunError::Run(error)) => panic!("run ps: {error}"),
+    };
+    classify_ps(spawned)
+}
+
+pub(crate) fn classify_ps(spawned: std::io::Result<std::process::Output>) -> PsRun {
+    match spawned {
+        Ok(output) => PsRun::Ran(output),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            PsRun::Denied(format!("the sandbox denied running `ps`: {error}"))
+        }
+        Err(error) => panic!("run ps: {error}"),
+    }
 }
 
 /// A live process that is no part of this one: not this process, its parent,

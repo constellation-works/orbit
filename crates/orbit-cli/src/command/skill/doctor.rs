@@ -7,10 +7,7 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::{Domain, Role};
 
 #[derive(Args)]
-pub struct SkillDoctorArgs {
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct SkillDoctorArgs {}
 
 impl Execute for SkillDoctorArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {

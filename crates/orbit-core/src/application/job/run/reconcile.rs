@@ -95,7 +95,7 @@ impl OrbitRuntime {
 
     /// Read-only orphan probe for `orbit doctor`: `running` runs whose
     /// recorded owner process is conclusively gone, without mutating any
-    /// state. The mutating counterpart is [`Self::reconcile_stale_job_runs`].
+    /// state. The mutating counterpart is `Self::reconcile_stale_job_runs`.
     /// `pub` for the workspace doctor in `orbit-cmd` [ORB-10016].
     pub fn list_orphaned_running_job_runs(&self) -> Result<Vec<JobRun>, OrbitError> {
         Ok(self

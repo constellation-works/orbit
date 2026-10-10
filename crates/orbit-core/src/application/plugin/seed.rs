@@ -394,7 +394,7 @@ fn write_manifest(path: &Path, manifest: &PluginAssetManifest) -> Result<(), Orb
         .map_err(|error| OrbitError::Store(format!("serialize plugin asset manifest: {error}")))?;
     encoded.push('\n');
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        orbit_common::fs::io::create_private_dir_all(parent)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", parent.display())))?;
     }
     atomic_write_text(path, &encoded)

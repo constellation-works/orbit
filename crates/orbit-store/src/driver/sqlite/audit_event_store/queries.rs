@@ -135,6 +135,50 @@ impl Store {
         Ok(result)
     }
 
+    /// Returns the requested audit rows, newest first, optionally scoped to a
+    /// workspace. Missing or pruned IDs are omitted.
+    pub fn list_audit_events_by_ids(
+        &self,
+        ids: &[i64],
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<AuditEvent>, OrbitError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = (1..=ids.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let workspace_filter = workspace_id.map_or_else(String::new, |_| {
+            format!(" AND workspace_id = ?{}", ids.len() + 1)
+        });
+        let sql = format!(
+            "SELECT {AUDIT_EVENT_COLUMNS} FROM audit_events \
+             WHERE id IN ({placeholders}){workspace_filter} ORDER BY id DESC"
+        );
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = ids
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        if let Some(workspace_id) = workspace_id {
+            param_values.push(Box::new(workspace_id.to_string()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|value| value.as_ref()).collect();
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), audit_event_from_row)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
     pub fn prune_audit_events(&self, older_than: &DateTime<Utc>) -> Result<usize, OrbitError> {
         let conn = self
             .conn

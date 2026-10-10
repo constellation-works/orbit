@@ -21,7 +21,8 @@ use super::super::handoff::{
 use super::super::pr::meaningful_execution_summary;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
-    PinnedHead, head_descends_from_pin, validate_pinned_head, verify_clean_tree,
+    PinnedHead, head_descends_from_pin, head_matches_final_recovery, validate_pinned_head,
+    verify_clean_tree,
 };
 use super::diagnostics::{changed_head_error, empty_stage_error};
 use super::git_ops::{
@@ -31,6 +32,7 @@ use super::git_ops::{
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
 use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
 use super::summary::ensure_durable_execution_summary;
+use super::tagged_no_diff;
 
 pub(in crate::executor::automation) fn git_commit<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -246,7 +248,9 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         // the pipeline filled it when the implementing agent skipped the
         // instruction to persist one. Derive it read-only from the change about
         // to be delivered — never from the agent's advisory response envelope —
-        // and only when the agent persisted nothing of its own.
+        // and only when the agent persisted nothing of its own. ORB-14837: a
+        // clean delivery automation review derives it from the coverage
+        // evidence the host accepts for its frozen batch instead.
         let task = ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id)?;
 
         // ORB-10313: fail closed on the durable execution outcome before staging
@@ -301,7 +305,18 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             )?;
             let tagged_descendant =
                 no_diff_expected && head_descends_from_pin(&workspace_path, &base_sha, &head_sha)?;
-            if !preserved_failure_head && !allow_moved_head && !tagged_descendant {
+            if !preserved_failure_head
+                && !allow_moved_head
+                && !tagged_descendant
+                && !head_matches_final_recovery(
+                    host,
+                    batch_id,
+                    &task.id,
+                    &workspace_path,
+                    &base_sha,
+                    &head_sha,
+                )?
+            {
                 return Err(changed_head_error(
                     &task.id,
                     &workspace_path,
@@ -318,6 +333,17 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // before mutating the index, then stage exactly those paths.
     let candidate_paths = task_candidate_paths(&workspace_path, new_path_policy)?;
     let candidate_paths = candidate_paths.into_iter().collect::<Vec<_>>();
+    let claimed = matches!(new_path_policy, NewPathPolicy::Claimed);
+    // ORB-14791: a claimed tagged leaf hands off NoDiff and has no PR route
+    // for a change; refuse one before the index is touched.
+    if claimed && no_diff_expected && (head_moved || !candidate_paths.is_empty()) {
+        return Err(tagged_no_diff::diff_refused(
+            &task.id,
+            &workspace_path,
+            candidate_paths.len(),
+            head_moved,
+        ));
+    }
     stage_paths(&workspace_path, &candidate_paths)?;
 
     let changed_files = staged_changed_files(&workspace_path)?;
@@ -331,29 +357,40 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             // deliver; it just is not sitting uncommitted.
             return Ok(already_committed_result(&task.id, base_sha.as_deref()));
         }
-        if no_diff_expected || allow_empty {
+        if (no_diff_expected || allow_empty) && !claimed {
             return Ok(skipped_no_diff_expected_result(&task.id));
+        }
+        let run_id = input_string_field(input, "run_id");
+        let run_id = run_id.as_deref().unwrap_or(batch_id);
+        // ORB-14791: a claimed tagged task whose implementer supplied no
+        // clean-tree report (a review files findings, not a report) skips as
+        // on the owner, pinned to this run and base for the NoDiff handoff.
+        if claimed
+            && no_diff_expected
+            && !super::super::claim::carries_no_diff_artifacts(input)
+            && let Some(base_sha) = base_sha.as_deref()
+        {
+            return Ok(tagged_no_diff::checkpoint(&task.id, run_id, base_sha));
         }
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            return verify_clean_tree(
-                host,
-                &task,
-                &workspace_path,
-                input_string_field(input, "run_id")
-                    .as_deref()
-                    .unwrap_or(batch_id),
-                base_sha,
-            )
-            .map_err(|error| {
-                match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
+            if claimed {
+                super::super::claim::import_implementation_evidence(
+                    host,
+                    &task.id,
+                    &workspace_path,
+                    input,
+                )?;
+            }
+            return verify_clean_tree(host, &task, &workspace_path, run_id, base_sha).map_err(
+                |error| match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
                     Ok(OrbitError::Execution(observed)) => {
                         OrbitError::Execution(format!("{observed}; {error}"))
                     }
                     Ok(observed) | Err(observed) => observed,
-                }
-            });
+                },
+            );
         }
         return Err(empty_stage_error(
             &task.id,
@@ -361,6 +398,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
             base_sha.as_deref(),
         )?);
     }
+
+    // ORB-14247: a `no-diff-expected` task that still has a diff is committed
+    // like any other shipment. The tag only skips a clean stage. It does not
+    // hold context locks, so a concurrent task may edit the same files;
+    // `sync_base` (`git_rebase`) is the conflict boundary and reports
+    // `RecoverableVcsConflict` the same way it does for every other task.
 
     // Widen the task's selectors over every delivered path they do not yet
     // cover. A claimed leaf's host widens nothing: the owner does at handoff.

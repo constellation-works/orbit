@@ -36,7 +36,8 @@
   --hair: #1b1b21;
   --fg: #ededf0;
   --fg-dim: #8f8f99;
-  --fg-mute: #6b6b75;
+  --fg-mute: #8a8a94;
+  --fg-disabled: #6b6b75;
   --accent: #8ab3ff;
   --accent-hover: #a9c6ff;
   --accent-hi: #c9ddff;
@@ -65,6 +66,7 @@
   --state-active: #5ad8a0;
   --state-running: #5cc8de;
   --state-pending: #f2b35e;
+  --state-held: #c4a7ff;
   --state-failed: #ff8a80;
   --state-error: #ff8a80;
   --state-cancelled: #e0a39d;
@@ -118,12 +120,18 @@
 [data-state="success"], [data-state="active"] { --dot: var(--state-success); }
 [data-state="running"] { --dot: var(--state-running); }
 [data-state="pending"], [data-state="retrying"] { --dot: var(--state-pending); }
+[data-state="held"] { --dot: var(--state-held); }
 [data-state="failed"], [data-state="error"], [data-state="timeout"] { --dot: var(--state-failed); }
 [data-state="cancelled"] { --dot: var(--state-cancelled); }
 [data-state="interrupted"] { --dot: var(--state-interrupted); }
 [data-state="disabled"], [data-state="skipped"] { --dot: var(--state-disabled); }
 
 * { box-sizing: border-box; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 html, body {
   margin: 0;

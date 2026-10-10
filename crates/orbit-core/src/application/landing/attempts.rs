@@ -1,6 +1,6 @@
 //! Landing attempt bookkeeping and the claim mutations that record it.
 
-use orbit_common::OrbitError;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{ClaimInspection, ClaimInvocation, ClaimMutation};
 use orbit_types::workflow::handoff::{AcceptedHandoff, LandingAttempt};
 
@@ -93,9 +93,10 @@ impl OrbitRuntime {
                 return Ok((claim, accepted));
             }
         }
-        Err(OrbitError::InvalidInput(format!(
-            "no accepted handoff '{handoff_id}' is current on this owner"
-        )))
+        Err(OrbitError::ClaimRefused {
+            kind: ClaimRefusalKind::NotCurrent,
+            message: format!("no accepted handoff '{handoff_id}' is current on this owner"),
+        })
     }
 
     /// Landing runs as the owner operator. The capability that permits it is the

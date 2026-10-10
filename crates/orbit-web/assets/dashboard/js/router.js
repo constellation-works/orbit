@@ -44,11 +44,12 @@ function markWorkspaceSelectorScope(fleetWide) {
 // mode (ORB-12898). The retired `#auto-drain` and older
 // `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
 const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
-const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
+const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "doctor", "reliability", "scoreboard"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
+  doctor: "diagnostics-doctor-main",
   scoreboard: "diagnostics-scoreboard-main",
   reliability: "diagnostics-reliability-main",
 };
@@ -83,8 +84,9 @@ function railRoute(ctx, tab) {
 }
 const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
-// `--scope` equivalents, and `keys` is the settable-key reference.
-const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system"];
+// `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
+// the serving host's registered remote hosts [ORB-14451].
+const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system", "hosts"];
 const REFRESH_INTERVAL_MS = 30_000;
 const MAX_REFRESH_INTERVAL_MS = 5 * 60_000;
 
@@ -105,6 +107,26 @@ function getCtx() {
     throw new Error("router not initialized; call initRouter(routerContext()) before using router APIs");
   }
   return _routerCtx;
+}
+
+function activePaneMain() {
+  const pane = document.querySelector(".tab-pane.active");
+  if (!pane) return null;
+  return Array.from(pane.querySelectorAll("main")).find((main) => !main.hidden && main.style?.display !== "none") || null;
+}
+
+function syncSkipLinkTarget() {
+  const link = $("skip-link");
+  const pane = document.querySelector(".tab-pane.active");
+  const main = activePaneMain();
+  if (!link || !pane || !main) return;
+  if (!main.id) {
+    const mainIndex = Array.from(pane.querySelectorAll("main")).indexOf(main) + 1;
+    main.id = `dashboard-main-${pane.dataset.tab}-${mainIndex}`;
+  }
+  main.tabIndex = -1;
+  main.setAttribute("aria-labelledby", "topbar-crumb");
+  link.href = `#${main.id}`;
 }
 
 function setRunDetailSubtabImpl(ctx, name) {
@@ -176,6 +198,10 @@ function setDiagSubtabImpl(ctx, name) {
     if (name === "reliability" && ctx.fetchReliability) {
       ctx.fetchReliability();
     }
+    // Doctor runs on open, not on the poll: show the cached report or read one.
+    if (name === "doctor" && ctx.openDoctor) {
+      ctx.openDoctor();
+    }
     return;
   }
 
@@ -235,6 +261,8 @@ function setConfigSubtabImpl(ctx, name) {
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
+  const previousTab = document.querySelector(".tab.active");
+  const previousSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
   // Legacy routes: auto-drain was a destination, and before that an
@@ -337,6 +365,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     indicator.style.display = "";
     indicator.style.width = `${activeTabEl.offsetWidth}px`;
     indicator.style.left = `${activeTabEl.offsetLeft}px`;
+    document.querySelector(".tabs").style.setProperty("--active-tab-width", `${activeTabEl.offsetWidth}px`);
   } else {
     indicator.style.display = "none";
   }
@@ -384,6 +413,15 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
   } else {
     hash = `#${top}`;
+  }
+  syncSkipLinkTarget();
+  // Reveal the current destination on initial deep links and history changes,
+  // as well as clicks. Phone subtabs scroll within the space beside their tab.
+  // A repeated hash normalization must not undo intervening keyboard scrolling.
+  const activeSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
+  if (activeTabEl !== previousTab || activeSubtab !== previousSubtab) {
+    activeSubtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    activeTabEl?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   const hashChanged = window.location.hash !== hash;
   const shouldUpdateHash = opts.updateHash !== false;
@@ -461,6 +499,20 @@ function startDashboardPolling(ctx) {
 }
 
 function initTabsImpl(ctx) {
+  $("skip-link")?.addEventListener("click", (event) => {
+    const main = activePaneMain();
+    if (!main) return;
+    event.preventDefault();
+    main.focus();
+  });
+  // Native focus scrolling can leave half a button outside the phone's
+  // overflow row when its centre is already visible. Reveal the whole entry
+  // on keyboard focus, without changing the route or moving focus elsewhere.
+  $("tabs")?.addEventListener("focusin", (event) => {
+    if (event.target.matches('.tab, .subtab')) {
+      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  });
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false }));
   }

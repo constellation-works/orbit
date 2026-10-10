@@ -1,0 +1,97 @@
+schemaVersion: 1
+name: qa-sweep
+description: Hands-on validation of recent workspace changes
+enabled: false
+schedule:
+  cron: 50 * * * *
+template:
+  title: Perform QA validation
+  description: |
+    Identify recent changes in this workspace and validate them hands-on. Build
+    and run the changed software, then exercise the affected CLI, API, and
+    feature paths as a user would; do not treat re-running the existing test
+    suite as sufficient validation.
+
+    Follow this repository's documented setup and run instructions. When a
+    sandbox or other environment constraint makes the usual local state
+    unwritable, put scratch checkouts, caches, and other ephemeral state in a
+    writable temporary location rather than the machine's real home directory
+    or the product's live data root. A writable temporary location may be too
+    small for build output; choose the build cache location for capacity.
+
+    In agent-executor sandboxes and linked job-run worktrees, the repository's
+    managed `.git` mount is read-only by design and must not be worked around by
+    chmod or host-side gitdir writes. Because `.git` is read-only, commands that
+    attempt write access to `.git` fail (such as `git worktree add` or `git checkout --`).
+    Instead:
+    - To build an arbitrary baseline revision without writing `.git` or creating
+      `.git/worktrees/*`, extract an archive to a writable scratch directory:
+      `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`,
+      then build there using a dedicated build cache/target directory.
+    - To revert a modified tracked file when `git checkout -- <path>` fails
+      because it cannot acquire `index.lock`, restore it from the commit tree:
+      `git show HEAD:<path> > <path>`.
+    - Read-only inspection commands such as `git status --short` succeed with
+      `GIT_OPTIONAL_LOCKS=0`.
+
+    A long build or test command's completion must be confirmed by a positive
+    marker in its captured output (`test result:`, `Finished`, or the target's
+    own final line), with its absence treated as "did not run" regardless of the
+    reported exit status.
+
+    Before reporting anything, search the workspace's configured task or issue surface
+    for open work covering the same problem. For each real issue that is not already
+    filed, create a durable record on that surface. Give it severity-appropriate
+    priority and put the relevant commits, observed evidence, and exact
+    reproduction steps in its description. Skip duplicates.
+
+    A non-duplicate failing test that blocks the repository's
+    standard validation command must be filed as a durable issue even when
+    the failure is sandbox-specific, platform-specific, or otherwise
+    environment-specific, including test-harness or portability defects.
+    Do not leave such a breaking test in narrative-only output. Distinguish
+    clearly between validation impact (the prescribed suite cannot complete)
+    and production impact (whether the failure demonstrates a production
+    defect). Include the failing command, the exact error, relevant
+    environment evidence, and a scope assessment.
+
+    ## Record the cursor
+
+    Record the candidate revision you validated as this task's machine-readable
+    cursor artifact, `sweep-cursor.json`, which the scheduler reads to decide
+    whether the next tick has anything left to validate. Its exact content is
+    `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`;
+    write it to `.orbit/tmp/sweep-cursor.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool show <tool.name>` prints the tool's schema. Write it on every
+    completed sweep, including one that found nothing to fix — a sweep without
+    it leaves the next tick no cursor to compare the branch tip against.
+
+    Your narrative output is advisory; the issues you file are the durable
+    side-effect channel.
+  acceptance_criteria:
+  - Recent changes were exercised through their real user-facing paths.
+  - Real, non-duplicate issues were filed on the workspace's configured task or issue surface with evidence and reproduction steps.
+  - The validated candidate revision is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).
+  - Non-duplicate failing tests that block the prescribed validation command were filed as durable issues, with validation impact distinguished from production impact.
+  task_type: chore
+  tags:
+  - qa-sweep
+  - no-diff-expected
+  priority: medium
+  complexity: medium
+  # The portable system lane is seeded per machine and compatibility-aliased
+  # for configs written before that crew existed.
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+skip_if_unchanged:
+  ref: __ORBIT_BASE_BRANCH__
+  cursor:
+    tags:
+    - qa-sweep
+    - no-diff-expected
+created_by: system
+created_at: 2026-07-12T00:00:00Z
+updated_by: human
+updated_at: 2026-07-12T04:54:45.094136857+00:00

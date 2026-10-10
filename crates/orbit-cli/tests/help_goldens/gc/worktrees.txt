@@ -1,0 +1,46 @@
+Reap job-run worktrees whose associated task has settled to rejected, archived, or done, or whose claim this follower has settled with its owner
+
+Usage: orbit gc worktrees [OPTIONS]
+
+Options:
+      --confirm
+          Perform removals; without this flag the command only reports
+          
+          [aliases: --yes]
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --dry-run
+          Explicitly request the default non-destructive mode
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --run <ID>
+          Restrict collection to one job run
+
+      --older-than-hours <HOURS>
+          Restrict collection to runs finished at least this many hours ago
+
+      --estimate-bytes
+          Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips this walk by default; `--confirm` always measures before removal
+
+      --reclaim
+          Reclaim worktree.reclaim paths and keep the checkout. Reports bytes per pattern for terminal runs with no live or undecidable worker; combine with --confirm to delete. --target-only is an alias
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')

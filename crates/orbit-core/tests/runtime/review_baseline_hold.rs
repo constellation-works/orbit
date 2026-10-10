@@ -1,0 +1,1062 @@
+//! [ORB-14434] A before-PR review whose only failure is a required check the
+//! pinned base fails the same way holds the task for the red base instead of
+//! blocking it, through the real settlement, failure handoff, admission and
+//! candidate resume over a temp repository.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use chrono::Utc;
+use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::{TaskComplexity, TaskStatus};
+use orbit_engine::{RuntimeHost, execute_deterministic_action};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HostCandidateOverride, PipelineState,
+    REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewVerdict,
+    ValidationOutcome, is_baseline_red_failure,
+};
+use serde_json::{Value, json};
+
+use super::review_gate_audit::Fixture;
+
+/// The check the workspace requires beyond the host-required commands. It
+/// fails `suite::broken` wherever `broken` is set, and `suite::regressed`
+/// wherever the candidate's file says so. The red check also logs each
+/// directory it ran in to [`CHECK_CWD_LOG`] in the Git common directory.
+const CHECK: &str = "sh check.sh";
+const CHECK_CWD_LOG: &str = "check-cwd.log";
+const RED: &str = "#!/bin/sh\npwd -P >> \"$(git rev-parse --path-format=absolute --git-common-dir)/check-cwd.log\"\n\
+                   echo 'test suite::broken ... FAILED'\n\
+                   if grep -q regressed candidate.txt; then echo 'test suite::regressed ... FAILED'; fi\n\
+                   exit 1\n";
+const GREEN_ON_BASE: &str = "#!/bin/sh\n\
+                             if grep -q after candidate.txt; then echo 'test suite::broken ... FAILED'; exit 1; fi\n\
+                             exit 0\n";
+const GREEN: &str = "#!/bin/sh\nexit 0\n";
+/// Passes everywhere, reporting that it executed no test [ORB-15122].
+const NO_TESTS: &str = "#!/bin/sh\n\
+                        printf '{\"schema_version\":1,\"selection\":{\"packages\":[]},\"tests_run\":0}' \
+                        > \"$ORBIT_VALIDATION_SUMMARY\"\nexit 0\n";
+
+pub(super) fn git(repo: &Path, args: &[&str]) -> String {
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command.args(args).current_dir(repo).output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// A gated task whose base carries `check` as `check.sh`, with the
+/// candidate (`after`, then `candidate` when that differs, in
+/// `candidate.txt`) rebased onto it. Settlement may rerun [`CHECK`].
+fn fixture(check: &str, candidate: &str) -> Fixture {
+    let fixture = Fixture::new_with_config(&[], "baseline_commands = [\"sh check.sh\"]\n");
+    let repo = &fixture.repo;
+    git(repo, &["checkout", "--quiet", "main"]);
+    std::fs::write(repo.join("check.sh"), check).unwrap();
+    // A check the host does not trust: it marks that it ran.
+    std::fs::write(
+        repo.join("untrusted.sh"),
+        "#!/bin/sh\ntouch .orbit/tmp/untrusted-ran\nexit 1\n",
+    )
+    .unwrap();
+    git(repo, &["add", "check.sh", "untrusted.sh"]);
+    git(repo, &["commit", "--quiet", "-m", "base adds its checks"]);
+    git(repo, &["checkout", "--quiet", "candidate"]);
+    git(repo, &["rebase", "--quiet", "main"]);
+    if candidate != "after\n" {
+        std::fs::write(repo.join("candidate.txt"), candidate).unwrap();
+        git(repo, &["commit", "--quiet", "-am", "candidate change"]);
+    }
+    fixture
+}
+
+/// The reviewer's report: `command` failed on the candidate and, it claims,
+/// on the pinned base the same way.
+fn claim_report(fixture: &Fixture, command: &str, sources: &[&str]) -> Value {
+    json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "reject",
+        "summary": "The candidate is sound; the check fails on the base too.",
+        "findings": [],
+        "validation": [{
+            "id": "V1", "command": command, "outcome": "failed", "role": "required",
+            "sources": sources,
+            "baseline": {
+                "base_commit": fixture.input["admission"]["base_sha"],
+                "outcome": "failed",
+                "failures": ["suite::broken"],
+            },
+        }],
+        "escalation": "The required check fails on the pinned base.",
+    })
+}
+
+fn certificate(fixture: &Fixture) -> ReviewCertificate {
+    serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_GATE_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap()
+}
+
+/// Settle a report claiming a red base and return the step's failure text.
+fn settle_claim(fixture: &mut Fixture, command: &str, sources: &[&str]) -> String {
+    fixture.admit();
+    fixture.put_report(&claim_report(fixture, command, sources));
+    fixture
+        .settle()
+        .expect_err("a failed required check never passes")
+        .to_string()
+}
+
+/// The admission snapshot's entry for the fixture's task.
+fn readiness(fixture: &Fixture) -> Value {
+    let readiness = fixture
+        .runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .unwrap();
+    readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == fixture.task_id.as_str())
+        .cloned()
+        .expect("task in readiness")
+}
+
+#[test]
+fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(RED, "after\n");
+    let candidate = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+    let base_sha = fixture.input["admission"]["base_sha"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+
+    assert!(
+        is_baseline_red_failure(None, Some(&failure)),
+        "the refusal is typed for the red base: {failure}"
+    );
+    // [ORB-14805] The base rerun ran in a checkout outside the Git common
+    // directory: the Linux Git protection scan refuses every symlink under
+    // it, so a base checkout there failed every sandboxed Git consumer.
+    let common = fixture.repo.join(".git").canonicalize().unwrap();
+    let ran_in = std::fs::read_to_string(common.join(CHECK_CWD_LOG)).unwrap();
+    let repo = fixture.repo.canonicalize().unwrap();
+    assert!(
+        ran_in.lines().any(|cwd| Path::new(cwd) != repo),
+        "the check reran on a base checkout: {ran_in}"
+    );
+    assert!(
+        ran_in
+            .lines()
+            .all(|cwd| !Path::new(cwd).starts_with(&common)),
+        "no check ran inside the Git common directory: {ran_in}"
+    );
+    let hold = BaselineRedHold::from_text(&failure).expect("the refusal names its hold");
+    assert_eq!(
+        hold,
+        BaselineRedHold {
+            base_ref: "main".into(),
+            base_sha: base_sha.clone(),
+            command: CHECK.into(),
+            run_id: run_id.clone(),
+            selection: None,
+        }
+    );
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject, "the verdict stands");
+    assert_eq!(settled.baseline_red, vec![hold.clone()]);
+    assert_eq!(settled.final_candidate.commit, candidate);
+
+    // The pipeline's failure handoff receives the typed refusal.
+    let handoff = execute_deterministic_action(
+        &fixture.runtime,
+        "pr_failure_handoff",
+        &json!({}),
+        &json!({
+            "failed_step_id": "review_gate_settle",
+            "error_code": "deterministic_action_refused",
+            "error_message": failure,
+            "run_id": run_id,
+            "job_input": {"task_ids": [fixture.task_id]},
+            "pipeline": {"worktree": {
+                "job_run_id": run_id, "workspace_path": fixture.input["workspace_path"],
+            }},
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(handoff["decision"], "held_baseline_red", "{handoff}");
+    assert_eq!(handoff["candidate_preserved"], true, "{handoff}");
+    assert_eq!(handoff["pr_created"], false, "{handoff}");
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    assert_eq!(
+        task.status,
+        TaskStatus::Backlog,
+        "held, neither rejected nor blocked"
+    );
+    let history = fixture.runtime.get_task_history(&fixture.task_id).unwrap();
+    let latest = history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some())
+        .unwrap();
+    assert_eq!(latest.event, BASELINE_RED_HOLD_EVENT);
+    assert_eq!(
+        latest.note.as_deref().and_then(BaselineRedHold::from_text),
+        Some(hold.clone())
+    );
+    assert_eq!(git(&fixture.repo, &["rev-parse", "HEAD"]), candidate);
+    // Assessed, so admission reaches the red-base check.
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Low),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        readiness(&fixture)["reason"],
+        "baseline_red_hold",
+        "admission withholds the task while the base is red"
+    );
+
+    // The executor records the handoff as the run's failure activity.
+    let mut state = fixture
+        .runtime
+        .read_run_state(&run_id)
+        .unwrap()
+        .unwrap_or_else(|| {
+            PipelineState::new(run_id.clone(), "task_pr_pipeline".into(), json!({}))
+        });
+    state.record_failure_activity(
+        "pr_failure_handoff".into(),
+        "review_gate_settle".into(),
+        handoff,
+    );
+    fixture.runtime.write_run_state(&run_id, &state).unwrap();
+
+    // The base turns green: the hold lifts, and the next delivery resumes
+    // the kept candidate without implementing again.
+    git(&fixture.repo, &["checkout", "--quiet", "main"]);
+    std::fs::write(fixture.repo.join("check.sh"), GREEN).unwrap();
+    git(&fixture.repo, &["commit", "--quiet", "-am", "fix the base"]);
+    let green = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    let refresh = fixture.runtime.refresh_baseline_holds(None).unwrap();
+    assert_eq!(refresh.lifted, vec![fixture.task_id.clone()], "{refresh:?}");
+    // The fixture has no PR route, so admission still withholds it for that.
+    assert_ne!(
+        readiness(&fixture)["reason"],
+        "baseline_red_hold",
+        "a base where the check passes lifts the hold"
+    );
+    let previous = fixture.runtime.show_job_run(&run_id).unwrap();
+    let next = fixture
+        .runtime
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
+        .unwrap();
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(Some(next.run_id.clone())),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    fixture.input["job_run_id"] = json!(next.run_id);
+    git(&fixture.repo, &["checkout", "--quiet", "--detach", &green]);
+    let resumed = execute_deterministic_action(
+        &fixture.runtime,
+        "candidate_resume",
+        &json!({}),
+        &json!({
+            "job_run_id": next.run_id,
+            "task_ids": [fixture.task_id],
+            "workspace_path": fixture.input["workspace_path"],
+            "base_sha": green,
+            "prior_job_run_id": run_id,
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(resumed["outcome"], "resumed_validated", "{resumed}");
+    assert_eq!(resumed["implement"], false, "no implementation step runs");
+    assert_eq!(resumed["source_sha"], candidate.as_str());
+    git(&fixture.repo, &["add", "-A"]);
+    git(
+        &fixture.repo,
+        &["commit", "--quiet", "-m", "resumed candidate"],
+    );
+
+    // A fresh review judges it on the green base.
+    fixture.admit();
+    assert_ne!(
+        fixture.input["admission"]["attempt_id"], settled.attempt_id,
+        "the held attempt is not reused"
+    );
+    assert_eq!(fixture.input["admission"]["base_sha"], green.as_str());
+    fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept", "summary": "Checked on the green base.", "findings": [],
+        "validation": [{"id": "V1", "command": CHECK, "outcome": "passed", "role": "required"}],
+    }));
+    let passed = fixture.settle().unwrap();
+    assert_eq!(passed["gate"], "passed", "{passed}");
+    assert!(certificate(&fixture).baseline_red.is_empty());
+}
+
+#[test]
+fn a_failure_the_base_does_not_explain_is_never_held() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_failure_the_base_does_not_explain_is_never_held",
+    ) {
+        return;
+    }
+    // The candidate fails beyond the base: its own failure stands.
+    let mut superset = fixture(RED, "after, regressed\n");
+    let failure = settle_claim(&mut superset, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&superset);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject);
+    assert!(settled.baseline_red.is_empty());
+    assert!(
+        settled
+            .escalation
+            .as_deref()
+            .is_some_and(|reason| reason.contains("baseline_exceeded")
+                && reason.contains("suite::regressed")),
+        "{:?}",
+        settled.escalation
+    );
+
+    // [ORB-15122] The candidate fails on the host and the base passes: the
+    // failure is the candidate's own, so the review settles reject naming
+    // the command.
+    let mut contradicted = fixture(GREEN_ON_BASE, "after\n");
+    let failure = settle_claim(&mut contradicted, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&contradicted);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject);
+    assert!(settled.baseline_red.is_empty());
+    assert!(settled.host_overrides.is_empty());
+    assert!(
+        settled.escalation.as_deref().is_some_and(|reason| {
+            reason.contains("baseline_refuted")
+                && reason.contains(&format!("`{CHECK}`"))
+                && !reason.contains("baseline_claim_refused")
+        }),
+        "{:?}",
+        settled.escalation
+    );
+
+    // A failure inside the candidate's scope is its own, whatever the base.
+    let mut in_scope = fixture(RED, "after\n");
+    settle_claim(&mut in_scope, CHECK, &["candidate.txt"]);
+    let settled = certificate(&in_scope);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(settled.baseline_red.is_empty());
+
+    // A command the host does not trust is refused without running it on
+    // the host.
+    let mut untrusted = fixture(RED, "after\n");
+    settle_claim(&mut untrusted, "sh untrusted.sh", &["untrusted.sh"]);
+    let settled = certificate(&untrusted);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(settled.baseline_red.is_empty());
+    assert!(
+        !untrusted.repo.join(".orbit/tmp/untrusted-ran").exists(),
+        "settlement never runs reviewer-authored command text"
+    );
+    for fixture in [&superset, &contradicted, &in_scope, &untrusted] {
+        assert_eq!(
+            fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+            TaskStatus::InProgress,
+            "no hold is recorded"
+        );
+    }
+}
+
+/// A task held for [`CHECK`] failing on `main`, recorded by the real failure
+/// handoff, and assessed so admission reaches the red-base check.
+pub(super) fn held_on_red_base() -> (Fixture, BaselineRedHold) {
+    let fixture = fixture(RED, "after\n");
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: git(&fixture.repo, &["rev-parse", "main"]),
+        command: CHECK.into(),
+        run_id: run_id.clone(),
+        selection: None,
+    };
+    let handoff = execute_deterministic_action(
+        &fixture.runtime,
+        "pr_failure_handoff",
+        &json!({}),
+        &json!({
+            "failed_step_id": "validate",
+            "error_code": "deterministic_action_refused",
+            "error_message": hold.text("required validation 'sh check.sh' fails on the base too"),
+            "run_id": run_id,
+            "job_input": {"task_ids": [fixture.task_id]},
+            "pipeline": {"worktree": {
+                "job_run_id": run_id, "workspace_path": fixture.input["workspace_path"],
+            }},
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(handoff["decision"], "held_baseline_red", "{handoff}");
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Low),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    (fixture, hold)
+}
+
+/// [ORB-14739] A held task whose base tip moved to a commit where the check
+/// would run for minutes does not block the readiness explanation or the
+/// drain's backlog snapshot: both read the hold's recorded verdict and never
+/// run the command. Only a refresh run the owner's clock dispatches does.
+#[test]
+fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_moved_base_never_runs_the_check_inside_a_snapshot",
+    ) {
+        return;
+    }
+    let (fixture, hold) = held_on_red_base();
+
+    // The base moves to a check that marks it ran, then outlasts the test.
+    let marker = fixture.repo.parent().unwrap().join("base-check-ran");
+    git(&fixture.repo, &["checkout", "--quiet", "main"]);
+    std::fs::write(
+        fixture.repo.join("check.sh"),
+        format!(
+            "#!/bin/sh\ntouch '{}'\nsleep 120\nexit 0\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    git(
+        &fixture.repo,
+        &["commit", "--quiet", "-am", "slow base check"],
+    );
+    git(&fixture.repo, &["checkout", "--quiet", "candidate"]);
+
+    let started = std::time::Instant::now();
+    let entry = readiness(&fixture);
+    let backlog = fixture
+        .runtime
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            Default::default(),
+        )
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(60),
+        "the snapshots waited {elapsed:?} on the base check"
+    );
+    assert!(!marker.exists(), "a snapshot ran the required command");
+    assert_eq!(entry["reason"], "baseline_red_hold", "{entry}");
+    assert!(
+        entry["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(&hold.base_sha)),
+        "with no verdict yet the recorded hold stands: {entry}"
+    );
+    assert!(
+        backlog["excluded"].as_array().is_some_and(|excluded| {
+            excluded.iter().any(|row| {
+                row["id"] == fixture.task_id.as_str() && row["reason"] == "baseline_red_hold"
+            })
+        }),
+        "{backlog}"
+    );
+
+    // A tick whose budget is already spent reads no hold, so it neither
+    // checks one nor dispatches a refresh run.
+    let refresh = fixture
+        .runtime
+        .run_baseline_hold_tick(std::time::Instant::now())
+        .unwrap();
+    assert_eq!(
+        refresh,
+        orbit_core::application::task::BaselineHoldRefresh::default()
+    );
+    assert!(!marker.exists(), "an expired tick ran the required command");
+}
+
+/// An accepting report that files a failed `command` as a diagnostic, its
+/// sources outside the candidate's scope.
+fn diagnostic_report(fixture: &Fixture, command: &str, sources: &[&str]) -> Value {
+    json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept",
+        "summary": "The candidate is sound; a wider check failed elsewhere.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {
+                "command": command, "outcome": "failed", "role": "diagnostic",
+                "note": "Fails only in files the candidate does not touch.",
+                "sources": sources,
+            },
+        ],
+    })
+}
+
+/// [ORB-14684] The incident shape through the real settlement: a check the
+/// owner lists in `review.baseline_commands`, filed as a failed diagnostic on
+/// the reviewer's own out-of-scope sources, never settles as a pass. It
+/// needs a passing record or a baseline claim settlement reproduces, and the
+/// certificate records the trusted list its consumers judge it by. An
+/// unlisted command's failure stays an honest diagnostic.
+#[test]
+fn a_listed_check_filed_as_a_failed_diagnostic_settles_incomplete() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_listed_check_filed_as_a_failed_diagnostic_settles_incomplete",
+    ) {
+        return;
+    }
+    let mut listed = fixture(RED, "after\n");
+    listed.admit();
+    listed.put_report(&diagnostic_report(&listed, CHECK, &["check.sh"]));
+    let failure = listed
+        .settle()
+        .expect_err("a trusted gate's failure is never a pass")
+        .to_string();
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&listed);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(!settled.validation_complete);
+    assert_eq!(settled.baseline_commands, vec![CHECK.to_string()]);
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains(&format!("`{CHECK}`"))
+            && escalation.contains("cannot be recorded as diagnostic")
+            && escalation.contains("passing record or a baseline claim"),
+        "the reason names the command and what a trusted gate needs: {escalation}"
+    );
+
+    let mut unlisted = fixture(RED, "after\n");
+    unlisted.admit();
+    unlisted.put_report(&diagnostic_report(
+        &unlisted,
+        "sh untrusted.sh",
+        &["untrusted.sh"],
+    ));
+    let passed = unlisted.settle().unwrap();
+    assert_eq!(passed["gate"], "passed", "{passed}");
+    assert!(certificate(&unlisted).validation_complete);
+}
+
+/// [ORB-14684] A baseline claim naming a base other than the one the review
+/// pinned is refused before anything runs, and the review settles
+/// `incomplete`.
+#[test]
+fn a_baseline_claim_on_another_base_is_refused() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_baseline_claim_on_another_base_is_refused",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(RED, "after\n");
+    fixture.admit();
+    let mut report = claim_report(&fixture, CHECK, &["check.sh"]);
+    report["validation"][0]["baseline"]["base_commit"] =
+        json!("0000000000000000000000000000000000000000");
+    fixture.put_report(&report);
+    let failure = fixture
+        .settle()
+        .expect_err("a failed required check never passes")
+        .to_string();
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(settled.baseline_red.is_empty());
+    assert!(
+        settled.escalation.as_deref().is_some_and(|reason| {
+            reason.contains("baseline_claim_refused")
+                && reason.contains("but the review pinned base")
+        }),
+        "{:?}",
+        settled.escalation
+    );
+}
+
+/// A check that, like `make ci-test-affected`, selects what to test from the
+/// candidate's diff against `main` and reports its selection and executed-test
+/// count in `ORBIT_VALIDATION_SUMMARY` [ORB-15131]. On `main` itself the diff
+/// is empty, so it tests nothing and passes. With `honours_selection` it
+/// tests the selection `ORBIT_VALIDATION_SELECTION` hands it instead. A run
+/// that tests `suite` fails `suite::broken` wherever `fails_where` matches
+/// `candidate.txt` (`.` matches everywhere).
+fn affected_check(honours_selection: bool, fails_where: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         if [ -n \"$ORBIT_VALIDATION_SELECTION\" ] && {honours}; then selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+         elif git diff --quiet main -- candidate.txt; then selection='{{\"packages\":[]}}'\n\
+         else selection='{{\"packages\":[\"suite\"]}}'; fi\n\
+         case \"$selection\" in *suite*) tests=1 ;; *) tests=0 ;; esac\n\
+         printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":%s}}' \"$selection\" \"$tests\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         [ \"$tests\" = 0 ] && exit 0\n\
+         if grep -q '{fails_where}' candidate.txt; then echo 'test suite::broken ... FAILED'; exit 1; fi\n\
+         exit 0\n",
+        honours = if honours_selection { "true" } else { "false" },
+    )
+}
+
+/// [ORB-15131] A diff-selecting check that tests nothing on the base cannot
+/// refute a reviewer's red-base claim: its base run is not comparable, and
+/// the review settles `incomplete` naming that, not `baseline_claim_refused`.
+/// Handed the candidate's selection, a base that genuinely passes it does
+/// refute the claim.
+#[test]
+fn a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim",
+    ) {
+        return;
+    }
+    // The base selects nothing of its own and passes without a test.
+    let mut empty = fixture(&affected_check(false, "after"), "after\n");
+    let failure = settle_claim(&mut empty, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&empty);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(settled.baseline_red.is_empty());
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_not_comparable")
+            && !escalation.contains("baseline_claim_refused"),
+        "the diagnostic names the non-comparable base run: {escalation}"
+    );
+
+    // The base tests the candidate's selection and passes it: refuted, and
+    // the candidate's failure is its own [ORB-15122].
+    let mut refuted = fixture(&affected_check(true, "after"), "after\n");
+    let failure = settle_claim(&mut refuted, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&refuted);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject);
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_refuted")
+            && escalation.contains("passes")
+            && !escalation.contains("baseline_not_comparable"),
+        "{escalation}"
+    );
+}
+
+/// [ORB-15131] A hold confirmed for a diff-selecting check records the
+/// candidate's selection, and a moved base lifts it only when that selection
+/// passes there: a tip that tests nothing of its own keeps the task held.
+#[test]
+fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(&affected_check(true, "."), "after\n");
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+    let hold = BaselineRedHold::from_text(&failure).expect("the claim is confirmed and held");
+    assert_eq!(hold.selection, Some(json!({"packages": ["suite"]})));
+
+    let move_base = |check: &str, message: &str| {
+        git(&fixture.repo, &["checkout", "--quiet", "main"]);
+        std::fs::write(fixture.repo.join("check.sh"), check).unwrap();
+        git(&fixture.repo, &["commit", "--quiet", "-am", message]);
+        git(&fixture.repo, &["checkout", "--quiet", "candidate"]);
+    };
+    move_base(
+        &affected_check(false, "."),
+        "base stops honouring the selection",
+    );
+    match orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold) {
+        orbit_engine::BaselineHoldStatus::Holding(reason) => {
+            assert!(reason.contains("not comparable"), "{reason}");
+        }
+        lifted => panic!("a tip that tests nothing lifted the hold: {lifted:?}"),
+    }
+    move_base(&affected_check(true, "never"), "base passes the selection");
+    assert!(
+        matches!(
+            orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+            orbit_engine::BaselineHoldStatus::Lifted(_)
+        ),
+        "a tip that passes the held selection lifts the hold"
+    );
+}
+
+#[test]
+fn a_deferred_host_pass_never_overrides_the_reviewers_failure() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_deferred_host_pass_never_overrides_the_reviewers_failure",
+    ) {
+        return;
+    }
+    let notice = orbit_exec::bwrap_deferral_notice(
+        "runtime::sandbox_path",
+        "the host cannot apply the sandbox",
+    );
+    let check = format!(
+        "#!/bin/sh\n\
+         i=0\n\
+         while [ \"$i\" -lt 8000 ]; do\n\
+           if [ \"$i\" -eq 4000 ]; then printf '%s\\n' '{notice}'; else printf '%040d\\n' 0; fi\n\
+           i=$((i + 1))\n\
+         done\n\
+         printf '%s' '{{\"schema_version\":1,\"selection\":{{\"packages\":[]}},\"tests_run\":1}}' > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         exit 0\n"
+    );
+    let mut fixture = fixture(&check, "after\n");
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(!settled.validation_complete);
+    assert!(settled.host_overrides.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    let escalation = settled.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused") && escalation.contains(&notice),
+        "the certificate retains the deferred-path reason: {escalation}"
+    );
+
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the candidate run is attached as baseline evidence")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "refused", "{evidence}");
+    assert!(
+        check["detail"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("refused as self_skipped")
+    );
+    assert_eq!(
+        check["candidate"]["passed"], true,
+        "process exited successfully"
+    );
+    assert_eq!(check["candidate"]["summary"]["tests_run"], 1);
+    assert_eq!(
+        check["candidate"]["host_output_refusal"]["reason"],
+        "self_skipped"
+    );
+    assert_eq!(check["candidate"]["host_output_refusal"]["detail"], notice);
+    assert!(
+        !check["candidate"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(&notice),
+        "the notice falls in the omitted middle of the bounded output"
+    );
+}
+
+/// A gated task whose check is the real `scripts/ci-test-affected.py` over a
+/// one-crate Cargo workspace, run by real cargo-nextest [ORB-15161]. The
+/// crate's integration test is `test_body`; the candidate changes the crate so
+/// the gate selects it. `None` when this host lacks cargo-nextest.
+fn nextest_fixture(test_body: &str) -> Option<Fixture> {
+    let nextest = std::process::Command::new("cargo")
+        .args(["nextest", "--version"])
+        .output();
+    if !nextest.is_ok_and(|output| output.status.success()) {
+        // The transport under test is nextest's; the gate falls back to
+        // `cargo test` without it.
+        return None;
+    }
+    // The validation environment is cleared, so hand the toolchain over.
+    let toolchain = ["HOME", "RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN"]
+        .iter()
+        .filter_map(|name| {
+            let value = std::env::var(name).ok()?;
+            Some(format!("{name}='{}' ", value.replace('\'', "'\\''")))
+        })
+        .collect::<String>();
+    let check = format!(
+        "#!/bin/sh\n\
+         {toolchain}CI_TEST_BASE=main BUILD_BUDGET=env CARGO_NET_OFFLINE=true \\\n\
+         CARGO_TARGET_DIR=\"$(git rev-parse --path-format=absolute --git-common-dir)/suite-target\" \\\n\
+         exec python3 scripts/ci-test-affected.py\n"
+    );
+    let fixture = fixture(&check, "after\n");
+    let repo = &fixture.repo;
+    git(repo, &["checkout", "--quiet", "main"]);
+    let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ci-test-affected.py");
+    std::fs::create_dir_all(repo.join("scripts")).unwrap();
+    std::fs::copy(gate, repo.join("scripts/ci-test-affected.py")).unwrap();
+    std::fs::create_dir_all(repo.join("crates/suite/src")).unwrap();
+    std::fs::create_dir_all(repo.join("crates/suite/tests")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/suite\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("crates/suite/Cargo.toml"),
+        "[package]\nname = \"suite\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("crates/suite/src/lib.rs"), "// before\n").unwrap();
+    std::fs::write(repo.join("crates/suite/tests/fixture.rs"), test_body).unwrap();
+    std::fs::write(repo.join(".gitignore"), ".orbit/\nCargo.lock\n").unwrap();
+    git(repo, &["add", "."]);
+    git(
+        repo,
+        &["commit", "--quiet", "-m", "base adds the suite crate"],
+    );
+    git(repo, &["checkout", "--quiet", "candidate"]);
+    git(repo, &["rebase", "--quiet", "main"]);
+    std::fs::write(repo.join("crates/suite/src/lib.rs"), "// changed\n").unwrap();
+    git(
+        repo,
+        &["commit", "--quiet", "-am", "candidate changes the suite"],
+    );
+    Some(fixture)
+}
+
+/// [ORB-15161] A test that passes under nextest after printing the canonical
+/// deferral notice is a self-skipped sandbox path. nextest captures a passing
+/// test's output, so the gate must transport it for the host to judge: the
+/// positive executed-test count never turns it into a host override.
+#[test]
+fn a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure",
+    ) {
+        return;
+    }
+    let notice = orbit_exec::bwrap_deferral_notice(
+        "runtime::sandbox_path",
+        "the host cannot apply the sandbox",
+    );
+    let body = format!("#[test]\nfn sandboxed_path() {{ eprintln!({notice:?}); }}\n");
+    let Some(mut fixture) = nextest_fixture(&body) else {
+        return;
+    };
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(settled.host_overrides.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    let escalation = settled.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused") && escalation.contains(&notice),
+        "the certificate retains the deferred-path reason: {escalation}"
+    );
+
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the candidate run is attached as baseline evidence")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "refused", "{evidence}");
+    assert_eq!(check["candidate"]["passed"], true, "{evidence}");
+    assert_eq!(check["candidate"]["summary"]["tests_run"], 1, "{evidence}");
+    assert_eq!(
+        check["candidate"]["host_output_refusal"]["reason"], "self_skipped",
+        "{evidence}"
+    );
+    assert_eq!(check["candidate"]["host_output_refusal"]["detail"], notice);
+}
+
+/// [ORB-15161] The same gate over a test that ran its path to the end still
+/// lets the host's pass override the reviewer's failed outcome.
+#[test]
+fn a_fully_executed_passing_nextest_gate_still_permits_the_host_override() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_fully_executed_passing_nextest_gate_still_permits_the_host_override",
+    ) {
+        return;
+    }
+    let Some(mut fixture) =
+        nextest_fixture("#[test]\nfn sandboxed_path() { assert_eq!(1 + 1, 2); }\n")
+    else {
+        return;
+    };
+    fixture.admit();
+    fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
+    let passed = fixture
+        .settle()
+        .expect("the host's pass settles the review");
+    assert_eq!(passed["gate"], "passed", "{passed}");
+
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Accept);
+    assert_eq!(
+        settled.host_overrides.len(),
+        1,
+        "{:?}",
+        settled.host_overrides
+    );
+    assert_eq!(settled.host_overrides[0].tests_run, Some(1));
+}
+
+/// [ORB-15122] The before-landing trial's incident shape: the reviewer found
+/// no defect, the trusted check failed only in its own environment, and it
+/// claimed the base fails it too. The host passes the check on the final
+/// candidate, so the review settles accept on the host's run, and the
+/// certificate records that the reviewer's outcome was overridden.
+#[test]
+fn a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(&affected_check(true, "never"), "after\n");
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    fixture.admit();
+    fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
+    let passed = fixture
+        .settle()
+        .expect("the host's pass settles the review");
+    assert_eq!(passed["gate"], "passed", "{passed}");
+
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Accept);
+    assert!(settled.validation_complete);
+    assert!(settled.baseline_red.is_empty());
+    assert_eq!(
+        settled.host_overrides,
+        vec![HostCandidateOverride {
+            command: CHECK.into(),
+            record_id: Some("V1".into()),
+            reviewer_outcome: ValidationOutcome::Failed,
+            run_id,
+            tests_run: Some(1),
+            evidence_artifact: REVIEW_BASELINE_ARTIFACT.into(),
+        }]
+    );
+    let record = &settled.validation[0];
+    assert_eq!(record.outcome, ValidationOutcome::Passed);
+    assert!(
+        record
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("Host override")),
+        "the record says the host's run replaced the reviewer's: {record:?}"
+    );
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the host's run is attached")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "candidate_passed", "{evidence}");
+    assert_eq!(check["candidate"]["passed"], true, "{evidence}");
+}
+
+/// [ORB-15122] A host pass that executed no counted test shows nothing about
+/// the disputed check (F2026-10-211), and a host pass never overrides an open
+/// finding: both keep the review `incomplete`, with no override recorded.
+#[test]
+fn a_host_pass_without_tests_or_under_an_open_finding_never_accepts() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_host_pass_without_tests_or_under_an_open_finding_never_accepts",
+    ) {
+        return;
+    }
+    // The candidate run selects nothing and passes without a test.
+    let mut empty = fixture(NO_TESTS, "after\n");
+    let failure = settle_claim(&mut empty, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&empty);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(settled.host_overrides.is_empty());
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused")
+            && escalation.contains("without executing a test"),
+        "{escalation}"
+    );
+
+    // The check passes on the host, but the reviewer left a finding open.
+    let mut open = fixture(GREEN, "after\n");
+    open.admit();
+    let mut report = claim_report(&open, CHECK, &["check.sh"]);
+    report["findings"] = json!([{
+        "id": "F1", "summary": "Wrong approach", "severity": "high", "disposition": "open",
+    }]);
+    open.put_report(&report);
+    open.settle()
+        .expect_err("an open finding is never accepted by a host run");
+    let settled = certificate(&open);
+    assert_ne!(settled.verdict, ReviewVerdict::Accept);
+    assert!(!settled.verdict.passed());
+    assert!(settled.host_overrides.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    assert!(
+        settled
+            .escalation
+            .as_deref()
+            .is_some_and(|reason| reason.contains("a finding is still open")),
+        "{:?}",
+        settled.escalation
+    );
+}

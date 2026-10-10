@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::build::git_commit_source;
+use super::{ArchiveDigestError, PluginPinError};
 
 pub const PIN_FILE_NAME: &str = "plugins.yaml";
 pub const PIN_FILE_SCHEMA_VERSION: u32 = 1;
@@ -33,17 +34,17 @@ pub fn remote_archive_source(source: &str) -> Option<&str> {
 /// The prefix is required rather than optional so the pin file always says
 /// which algorithm it names, leaving room to add another without guessing
 /// from a digest's length.
-pub fn parse_archive_digest(value: &str) -> Result<String, String> {
+pub fn parse_archive_digest(value: &str) -> Result<String, ArchiveDigestError> {
     let Some(hex) = value.trim().strip_prefix("sha256:") else {
-        return Err(format!(
-            "'{value}' is not a supported digest; use `sha256:<64 hex characters>`"
-        ));
+        return Err(ArchiveDigestError::UnsupportedAlgorithm {
+            value: value.to_string(),
+        });
     };
     let normalized = hex.trim().to_ascii_lowercase();
     if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!(
-            "'{value}' is not a `sha256:` digest of 64 hex characters"
-        ));
+        return Err(ArchiveDigestError::Malformed {
+            value: value.to_string(),
+        });
     }
     Ok(normalized)
 }
@@ -99,30 +100,29 @@ fn default_true() -> bool {
 }
 
 impl PluginPinFile {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), PluginPinError> {
         if self.schema_version != PIN_FILE_SCHEMA_VERSION {
-            return Err(format!(
-                "schemaVersion: unsupported pin file schemaVersion {}; expected {PIN_FILE_SCHEMA_VERSION}",
-                self.schema_version
-            ));
+            return Err(PluginPinError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+            });
         }
         let mut seen = std::collections::BTreeSet::new();
         for (index, pin) in self.plugins.iter().enumerate() {
             if !super::is_valid_namespace(&pin.name) {
-                return Err(format!(
-                    "plugins[{index}].name: '{}' is not a valid plugin namespace",
-                    pin.name
-                ));
+                return Err(PluginPinError::InvalidName {
+                    index,
+                    name: pin.name.clone(),
+                });
             }
             if !seen.insert(pin.name.as_str()) {
-                return Err(format!(
-                    "plugins[{index}].name: '{}' is pinned more than once",
-                    pin.name
-                ));
+                return Err(PluginPinError::DuplicateName {
+                    index,
+                    name: pin.name.clone(),
+                });
             }
             if let Some(version) = &pin.version {
                 super::SemverRange::parse(version)
-                    .map_err(|error| format!("plugins[{index}].version: {error}"))?;
+                    .map_err(|reason| PluginPinError::InvalidVersion { index, reason })?;
             }
             validate_pin_digest(index, pin)?;
             validate_pin_artifact_digest(index, pin)?;
@@ -134,20 +134,17 @@ impl PluginPinFile {
 /// A fetched archive is pinned by digest or it is not installed: Orbit has no
 /// trust-on-first-use path, because the first fetch is exactly the one an
 /// attacker who controls the URL would serve.
-fn validate_pin_digest(index: usize, pin: &PluginPin) -> Result<(), String> {
+fn validate_pin_digest(index: usize, pin: &PluginPin) -> Result<(), PluginPinError> {
     let archive = pin.source.as_deref().and_then(remote_archive_source);
     match (&pin.digest, archive) {
         (Some(digest), Some(_)) => parse_archive_digest(digest)
             .map(|_| ())
-            .map_err(|error| format!("plugins[{index}].digest: {error}")),
-        (Some(_), None) => Err(format!(
-            "plugins[{index}].digest: only an `https://` archive source is digest-verified; \
-             remove the digest or pin an archive URL"
-        )),
-        (None, Some(url)) => Err(format!(
-            "plugins[{index}].digest: the archive source '{url}' must pin a `sha256:` digest; \
-             Orbit does not trust a fetched archive on first use"
-        )),
+            .map_err(|reason| PluginPinError::InvalidDigest { index, reason }),
+        (Some(_), None) => Err(PluginPinError::DigestWithoutArchive { index }),
+        (None, Some(url)) => Err(PluginPinError::ArchiveDigestMissing {
+            index,
+            url: url.to_string(),
+        }),
         (None, None) => Ok(()),
     }
 }
@@ -156,18 +153,14 @@ fn validate_pin_digest(index: usize, pin: &PluginPin) -> Result<(), String> {
 /// accepted only beside a source that names one: a `git+` URL pinned to a
 /// full commit object id. On any other source it would claim a check no
 /// install performs.
-fn validate_pin_artifact_digest(index: usize, pin: &PluginPin) -> Result<(), String> {
+fn validate_pin_artifact_digest(index: usize, pin: &PluginPin) -> Result<(), PluginPinError> {
     let Some(digest) = &pin.artifact_digest else {
         return Ok(());
     };
     if pin.source.as_deref().and_then(git_commit_source).is_none() {
-        return Err(format!(
-            "plugins[{index}].artifact_digest: only a `git+<url>#<full commit id>` source is \
-             built and digested; pin the source to a 40- or 64-character commit or remove the \
-             artifact digest"
-        ));
+        return Err(PluginPinError::ArtifactDigestWithoutCommit { index });
     }
     parse_archive_digest(digest)
         .map(|_| ())
-        .map_err(|error| format!("plugins[{index}].artifact_digest: {error}"))
+        .map_err(|reason| PluginPinError::InvalidArtifactDigest { index, reason })
 }

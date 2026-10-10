@@ -73,6 +73,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.artifact.put",
             "orbit.task.eligible",
             "orbit.task.list",
+            "orbit.task.reconcile_review",
             "orbit.task.review_reset",
             "orbit.task.show",
             "orbit.task.update",
@@ -229,6 +230,7 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
         "orbit.workflow.ship",
         "orbit.agent.invoke",
         "orbit.command.exec",
+        "orbit.task.reconcile_review",
     ] {
         assert_eq!(annotations_of(name).read_only, Some(false), "{name}");
     }
@@ -240,6 +242,10 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
     );
     assert_eq!(annotations_of("orbit.task.add").destructive, Some(false));
     assert_eq!(annotations_of("orbit.command.exec").open_world, Some(true));
+    assert_eq!(
+        annotations_of("orbit.task.reconcile_review").open_world,
+        Some(true)
+    );
     assert_eq!(annotations_of("orbit.task.list").open_world, Some(false));
 }
 

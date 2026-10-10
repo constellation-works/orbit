@@ -1,0 +1,27 @@
+{
+  "recorded_at": "2026-10-08",
+  "description": "Projections of GitHub REST pull-request responses retaining the fields consumed by the gate.",
+  "responses": {
+    "open": {
+      "url": "https://api.github.com/repos/python/cpython/pulls/159019",
+      "number": 159019,
+      "state": "open",
+      "merged": false,
+      "merged_at": null
+    },
+    "merged": {
+      "url": "https://api.github.com/repos/constellation-works/orbit/pulls/3711",
+      "number": 3711,
+      "state": "closed",
+      "merged": true,
+      "merged_at": "2026-10-08T08:25:20Z"
+    },
+    "closed": {
+      "url": "https://api.github.com/repos/python/cpython/pulls/158964",
+      "number": 158964,
+      "state": "closed",
+      "merged": false,
+      "merged_at": null
+    }
+  }
+}

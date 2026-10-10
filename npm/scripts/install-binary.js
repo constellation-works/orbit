@@ -190,13 +190,14 @@ function normalizeTrustedReleaseKeys(trustedKeys) {
     }
     const notAfter = key.notAfter || null;
     const revokedAt = key.revokedAt || null;
-    // Mirror the shell-side awk regex (release_date_number) so a malformed
+    // Mirror the shell-side date format check (release_date_number) so a malformed
     // override like notAfter: "next month" fails closed instead of silently
     // becoming "never expires" under lexicographic comparison.
-    if (notAfter !== null && !/^\d{4}-\d{2}-\d{2}$/.test(notAfter)) {
+    // The length check also rejects trailing newlines, which JS's $ permits.
+    if (notAfter !== null && (notAfter.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(notAfter))) {
       throw new Error(`trusted release signing key ${key.id} has invalid notAfter: ${notAfter} (expected YYYY-MM-DD)`);
     }
-    if (revokedAt !== null && !/^\d{4}-\d{2}-\d{2}$/.test(revokedAt)) {
+    if (revokedAt !== null && (revokedAt.length !== 10 || !/^\d{4}-\d{2}-\d{2}$/.test(revokedAt))) {
       throw new Error(`trusted release signing key ${key.id} has invalid revokedAt: ${revokedAt} (expected YYYY-MM-DD)`);
     }
     return {
@@ -320,6 +321,24 @@ function extractTarGz(archivePath, destDir) {
   validateExtractedBinary(path.join(destDir, 'orbit'));
 }
 
+// Stage the binary beside `destPath` and rename it into place so `destPath`
+// only ever holds a complete, executable file. The bin shim treats an existing
+// file as installed, so a partial copy (ENOSPC, kill) must never land there.
+function installBinary(sourcePath, destPath, fsImpl = fs) {
+  const tempPath = path.join(
+    path.dirname(destPath),
+    `.${path.basename(destPath)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
+  );
+  try {
+    fsImpl.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+    fsImpl.chmodSync(tempPath, 0o755);
+    fsImpl.renameSync(tempPath, destPath);
+  } catch (err) {
+    fsImpl.rmSync(tempPath, { force: true });
+    throw err;
+  }
+}
+
 async function main() {
   if (process.env.ORBIT_SKIP_DOWNLOAD === '1') {
     log('ORBIT_SKIP_DOWNLOAD=1 set; skipping binary download.');
@@ -374,8 +393,7 @@ async function main() {
     if (!fs.existsSync(extractedBinary)) {
       fail(`extracted archive did not contain 'orbit' binary at ${extractedBinary}`);
     }
-    fs.copyFileSync(extractedBinary, BIN_PATH);
-    fs.chmodSync(BIN_PATH, 0o755);
+    installBinary(extractedBinary, BIN_PATH);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -394,6 +412,7 @@ module.exports = {
   acknowledgeTrustedPublicKeyOverride,
   acknowledgeTrustedKeysOverride,
   extractTarGz,
+  installBinary,
   normalizeTrustedReleaseKeys,
   readTrustedReleaseKeys,
   validateArchiveMembers,

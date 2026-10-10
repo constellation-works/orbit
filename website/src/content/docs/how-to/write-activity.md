@@ -81,7 +81,8 @@ Then run the job by name, or by the path to its YAML:
 ```bash
 orbit job show <job_id>                    # the activity each step runs
 orbit run job <job> --input key=value      # submits and prints a run ID
-orbit run job <job> --wait                 # waits; exits nonzero unless the run succeeds
+# Wait for completion and return nonzero unless the run succeeds.
+orbit run job <job> --wait
 ```
 
 `orbit run show <run-id>` names the catalog layer that supplied each activity

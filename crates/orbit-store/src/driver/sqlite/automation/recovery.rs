@@ -1,6 +1,7 @@
 //! Audited configuration, action, and history recovery for a delivery consumer.
 //! The checkpoint and its immutable record commit together.
 
+use super::checkpoint;
 use super::codec::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
@@ -23,6 +24,10 @@ pub(super) fn commit(
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+
         let changed = conn
             .execute(
                 "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
@@ -31,7 +36,7 @@ pub(super) fn commit(
                     encode(next)?,
                     previous.consumer,
                     previous.generation,
-                    encode(previous)?
+                    previous_json
                 ],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -56,7 +61,7 @@ pub(super) fn commit(
 }
 
 /// Drop the consumer row and record what the reset forgot. The generation and
-/// the exact prior state fence the delete, so a consumer another pass already
+/// the decoded prior state fence the delete, so a consumer another pass already
 /// moved is never reset against stale facts.
 pub(super) fn reset(
     store: &Store,
@@ -71,10 +76,14 @@ pub(super) fn reset(
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+
         let changed = conn
             .execute(
                 "DELETE FROM automation_consumers WHERE consumer=?1 AND generation=?2 AND state_json=?3",
-                params![previous.consumer, previous.generation, encode(previous)?],
+                params![previous.consumer, previous.generation, previous_json],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
@@ -156,7 +165,11 @@ pub(super) fn stall(
     }
 
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-        tx.connection()
+        let conn = tx.connection();
+        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
+            return Ok(false);
+        };
+        conn
             .execute(
                 "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
                 params![
@@ -164,7 +177,7 @@ pub(super) fn stall(
                     encode(next)?,
                     previous.consumer,
                     previous.generation,
-                    encode(previous)?
+                    previous_json
                 ],
             )
             .map(|changed| changed == 1)
@@ -247,6 +260,7 @@ fn validate(
         || previous.pending_commits != next.pending_commits
         || previous.unresolved != next.unresolved
         || previous.associations != next.associations
+        || previous.lookup_retries != next.lookup_retries
     {
         return Err(invalid());
     }
@@ -391,6 +405,11 @@ fn validate_history_replay(
             .associations
             .keys()
             .any(|commit| !next.pending_commits.contains(commit))
+        || next.lookup_retries.keys().any(|commit| {
+            !next.pending_commits.contains(commit)
+                || !next.unresolved.contains_key(commit)
+                || next.associations.contains_key(commit)
+        })
     {
         return Err(invalid());
     }
@@ -408,14 +427,14 @@ fn validate_reissue(
 ) -> Result<(), OrbitError> {
     let invalid = || OrbitError::InvalidInput("invalid automation recovery transition".into());
 
-    // An admitted attempt is replaceable only once Automation proved its
+    // A claimed or admitted attempt is replaceable only once Automation proved its
     // action stopped without acceptable evidence; Store cannot see task
     // liveness, so it fences the batch identity, not that proof.
     if settled.batch != claim.batch
         || settled.input_digest != claim.input_digest
         || !matches!(
             settled.state,
-            BatchState::Failed | BatchState::Exhausted | BatchState::Admitted
+            BatchState::Failed | BatchState::Exhausted | BatchState::Claimed | BatchState::Admitted
         )
         || claim.state != BatchState::Claimed
         || claim.action_id.is_some()
@@ -432,7 +451,10 @@ fn validate_reissue(
     };
 
     if authorization != &reissued.authorization
-        || authorization.from_action_id != settled.action_id
+        // A claimed action may have been minted before its id was checkpointed.
+        // Automation supplies that host-resolved identity in the audit record.
+        || (authorization.from_action_id != settled.action_id
+            && !(settled.state == BatchState::Claimed && settled.action_id.is_none()))
         || authorization.by != record.by
         || authorization.reason != record.reason
         || authorization.at != record.at
@@ -442,7 +464,7 @@ fn validate_reissue(
     }
 
     if reissued.batch_id != settled.batch.id
-        || reissued.from_action_id != settled.action_id
+        || reissued.from_action_id != authorization.from_action_id
         || reissued.from_attempt != settled.attempt
         || reissued.from_state != settled.state
         || reissued.from_reason != settled.reason

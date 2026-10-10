@@ -32,9 +32,6 @@ pub struct ClockTickArgs {
     /// Print every routine and auto-task row, including skipped/not-due ones.
     #[arg(long)]
     pub verbose: bool,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 fn report_is_noteworthy(action: &str) -> bool {
@@ -107,7 +104,6 @@ impl ClockTickArgs {
         }
 
         let outcome = run_sweep_for_selected_root(root_override, workspace_selector, options)?;
-        let document = outcome_json(&outcome, self.dry_run);
 
         if let Some(row) = &outcome.no_workspace_loaded {
             eprintln!("{row}");
@@ -125,13 +121,19 @@ impl ClockTickArgs {
             }
         }
 
-        let lines = self.human_lines(&outcome);
-        let exit_code = i32::from(outcome.no_workspace_loaded.is_some());
-        Ok(
-            Payload::blocks(document, vec![Block::text(lines.join("\n"))])
-                .with_exit_code(exit_code)
-                .into(),
-        )
+        Ok(self.output(&outcome))
+    }
+
+    // Command-level projection keeps a failed partial tick reviewable before
+    // the common renderer applies its exit status.
+    pub(super) fn output(&self, outcome: &SweepOutcome) -> crate::command::CommandOutput {
+        let document = outcome_json(outcome, self.dry_run);
+        let lines = self.human_lines(outcome);
+        let exit_code =
+            i32::from(outcome.no_workspace_loaded.is_some() || outcome.deadline_exceeded);
+        Payload::blocks(document, vec![Block::text(lines.join("\n"))])
+            .with_exit_code(exit_code)
+            .into()
     }
 
     fn human_lines(&self, outcome: &SweepOutcome) -> Vec<String> {
@@ -143,6 +145,7 @@ impl ClockTickArgs {
         if outcome.reports.is_empty()
             && outcome.auto_task_reports.is_empty()
             && outcome.load_errors.is_empty()
+            && !outcome.deadline_exceeded
         {
             return vec![format!(
                 "clock tick[{}]: no schedules configured",
@@ -151,7 +154,14 @@ impl ClockTickArgs {
         }
 
         let show_all = self.verbose || self.dry_run;
-        let mut lines = Vec::new();
+        let mut lines = if outcome.deadline_exceeded {
+            vec![format!(
+                "clock tick: deadline exceeded; deferred workspaces: {}",
+                outcome.skipped_workspaces.join(", ")
+            )]
+        } else {
+            Vec::new()
+        };
         for report in &outcome.reports {
             if show_all
                 || report_is_noteworthy(report.action)
@@ -240,6 +250,8 @@ fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {
         "machine_id": outcome.machine_id,
         "dry_run": dry_run,
         "lock_busy": outcome.lock_busy,
+        "deadline_exceeded": outcome.deadline_exceeded,
+        "skipped_workspaces": outcome.skipped_workspaces,
         "fired": outcome.reports.iter().filter(|report| {
             report.action == "fired" || report.action == "retry_fired"
         }).count(),
@@ -251,5 +263,6 @@ fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {
             "message": error.message,
         })).collect::<Vec<_>>(),
         "no_workspace_loaded": outcome.no_workspace_loaded,
+        "clock_env_loaded": outcome.clock_env_loaded,
     })
 }

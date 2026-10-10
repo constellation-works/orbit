@@ -7,7 +7,7 @@
 //!   immutable input, so a later preference edit cannot weaken a gate that
 //!   is already active. Children inherit their parent's snapshot.
 //! - **The gate** runs as two deterministic Core actions around a fresh
-//!   reviewer invocation: `review_gate_admit` reserves a reviewer start,
+//!   reviewer invocation: `review_gate_admit` reserves the candidate's review,
 //!   pins the candidate and hands the reviewer an immutable manifest;
 //!   `review_gate_settle` turns the reviewer's report plus the repository
 //!   state into an honest verdict, commits reviewer repairs under the
@@ -24,37 +24,65 @@ use orbit_common::OrbitError;
 
 mod admission;
 mod coverage;
+pub(crate) mod evidence;
+mod fulfilment;
 mod gate;
 mod handoff;
 mod landing;
 mod projection;
+pub(crate) mod reconciliation;
+mod switches;
+#[cfg(test)]
+mod tests;
 
-pub(crate) use admission::install_review_admission;
+pub(crate) use admission::{
+    install_review_admission, local_route_before_landing_conflict, local_route_before_pr_conflict,
+    run_review_admission, upgrade_resume_admission_mismatch,
+};
 pub(crate) use coverage::exclusions;
+pub(crate) use fulfilment::fulfil_review_evidence;
+pub use fulfilment::{
+    EVIDENCE_FULFILMENT_AUDIT, EvidenceFulfilmentTick, REVIEW_EVIDENCE_FULFILMENT_JOB,
+};
 pub(crate) use gate::{
     record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
+    review_report_correction,
 };
 /// The owner handoff console [ORB-12516]: what an authorized owner surface
 /// reads and the typed refusals it renders. Adapters above Core cannot reach
 /// `orbit-store`, so these are the only shapes they need.
-pub use handoff::{ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal};
+pub use handoff::{
+    DistributedClaimState, ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal,
+};
 pub(crate) use landing::record_review_landing;
 pub use projection::task_review_projection;
+pub use switches::{
+    AfterLandingSwitch, BeforeLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches,
+    review_switches_view,
+};
 
 /// Audit command name shared by every gate decision.
 pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 
-/// The jobs that carry a review admission: the delivery family, so a leaf
-/// PR pipeline can inherit the policy its coordinator captured.
+/// The jobs whose submission captures a review admission: the delivery
+/// family, so a leaf PR pipeline can inherit the `review.before_pr` its
+/// coordinator captured, and the follower's pull drain, which declares its
+/// captured value on every pull [ORB-13992].
+///
+/// A claimed leaf (`CLAIMED_LEAF_JOBS`) is never submitted: the pull store
+/// creates it with the admission its claim's ship contract captured, so this
+/// host's settings never decide its review, and a submission naming the
+/// reserved key for one is refused like any other [ORB-13908].
 pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "workspace_auto_pipeline",
+    "workspace_pull_pipeline",
     "task_auto_pipeline",
     "task_gate_pipeline",
     "task_pr_pipeline",
     "task_local_pipeline",
 ];
 
-/// The job that delivers locally and therefore cannot honour `before-pr`
+/// The job that delivers locally and therefore cannot honour `review.before_pr`
 /// as a final route.
 pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 

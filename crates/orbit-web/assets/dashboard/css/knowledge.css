@@ -18,12 +18,10 @@
   padding: 0 28px 0 10px;
   font: inherit;
   font-size: 13px;
-  outline: none;
 }
 
 #friction-status-filter:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 @media (max-width: 520px) {
@@ -65,18 +63,6 @@
 }
 .friction-row:hover { background: rgba(255, 255, 255, 0.03); }
 .friction-row.active { background: rgba(110, 159, 255, 0.06); }
-.friction-row.header {
-  color: var(--fg-dim);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  cursor: default;
-  position: sticky;
-  top: 0;
-  background: var(--bg-elev);
-  z-index: 1;
-}
 .friction-row .id,
 .friction-row .title,
 .friction-row .reported {
@@ -172,10 +158,6 @@
 .knowledge-row.active {
   background: rgba(255, 255, 255, 0.03);
   border-left-color: var(--fg-dim);
-}
-.knowledge-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 .knowledge-row .top {
   display: flex;
@@ -417,12 +399,6 @@
 }
 .knowledge-side-group h4 {
   margin: 0 0 8px;
-  font-family: var(--font-sans);
-  font-size: 13px;
-  color: var(--fg);
-  text-transform: capitalize;
-  letter-spacing: 0;
-  font-weight: 600;
 }
 .knowledge-side-group .empty {
   font-family: var(--font-mono);

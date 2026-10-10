@@ -4,6 +4,7 @@ mod list;
 mod publication;
 mod remove;
 mod role;
+mod ship_mode;
 mod show;
 mod source_remote;
 mod support;

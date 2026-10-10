@@ -17,7 +17,7 @@ dispatch see [orchestration.md](orchestration.md), and for scheduling it see
 - **Run** — one execution, with a `jrun-*` id, a durable state bundle under
   `.orbit/state/job-runs/`, and an audit trail.
 
-For every task-backed agent activity, Orbit computes
+For a task-backed agent activity using `tools` as an allowlist, Orbit computes
 `effective_tools = deduplicate(activity.tools union task.required_tools)`. Task
 requirements are immutable after creation. The
 activity list remains the baseline; an empty task requirement list preserves it
@@ -25,7 +25,10 @@ exactly. When one agent activity selects a batch, Orbit unions the requirements
 from every selected task into that same effective list. Admission rejects
 invalid required names before provider launch, and
 the run envelope, `ORBIT_ACTIVITY_TOOLS`, and audit evidence carry the effective
-list. Tool inclusion does not bypass later role, capability, policy, sandbox,
+list. A deny-list activity instead exposes registered agent-facing tools except
+those covered by `tool_disallow_list`; a task requirement never overrides that
+list and refuses dispatch when covered. The shipped `agent_implement` uses
+this deny-list mode. Tool inclusion does not bypass later role, capability, policy, sandbox,
 subprocess, or authentication checks.
 
 ## Running a job
@@ -66,12 +69,14 @@ not a rewrite of failed history.
 | `task_local_pipeline` | Implement in a worktree and merge to the configured local base without a PR; optional push. |
 | `task_auto_pipeline` | Discover ready backlog tasks and ship them. |
 | `task_gate_pipeline` | Gated shipment with windowing and starvation handling. Dispatches `task_<mode>_pipeline`, or the plugin delivery job a task selects with a `delivery:<job>` tag (the job must declare `spec.task_delivery.modes`); a selection whose plugin is disabled or uninstalled is refused, never defaulted. |
-| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings even when another assessment is invalid or stale; the overall run still fails while anything is unresolved. Replays use durable per-task operation receipts. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
+| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. Invalid assessments and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
 | `workspace_ship_pipeline` / `workspace_auto_pipeline` | Workspace-scoped wrappers that resolve mode and base branch, then invoke the pipelines above. |
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
 | `worktree_gc_pipeline` | Reclaim settled worktrees. |
-| `blocked_task_recovery_pipeline` | Final recovery for one task blocked outside a delivery pipeline (a failed, interrupted or gate run, or a failed claim settlement). The owner's clock sweep dispatches it once per block episode, at most two at a time. It runs `final_recovery` in a detached checkout of the base and applies the decision through the same applier as the delivery pipelines. It never resumes: `resume` escalates, and `requeue` shares the requeue bound. Not for direct invocation. |
+| `blocked_task_recovery_pipeline` | Final recovery for one task blocked outside a delivery pipeline (a failed, interrupted or gate run, or a failed claim settlement). The owner's clock sweep dispatches it once per block episode, at most two at a time. It runs `final_recovery` in a detached checkout of the base that is never delivered, offering only `complete_no_diff`, `reject`, `archive`, `requeue` and `escalate`, and applies the decision through the same applier as the delivery pipelines. It never resumes: `resume` escalates, and `requeue` shares the requeue bound. The agent input and every escalation name the failed run's retained candidate: its worktree path and changed paths, or why there is none. Resume or salvage that worktree by hand; the backstop only reads it. Not for direct invocation. |
+| `review_evidence_fulfilment_pipeline` | On a Linux owner, runs the named `scripts/codeql-rust-local.sh` command for a review held only for `codeql` evidence. It runs at the held commit, attaches the result and log, and receipt queues a fresh review. A failed or incomplete run attaches only the log, with a typed reason. The owner's clock sweep dispatches it, one at a time. Not for direct invocation. |
+| `baseline_hold_refresh_pipeline` | Re-checks backlog tasks held for a red base whose base ref moved to a tip with no recorded result: runs the held required command there and records the verdict, which lifts the hold only when it passes. The owner's clock sweep dispatches it, one run per workspace at a time, so the sweep itself never runs the command. Not for direct invocation. |
 | `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission — the same test locally and over SSH — changes no task, and is not resumable. See [tool-surface.md](../../orbit/references/tool-surface.md). |
 
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
@@ -90,9 +95,30 @@ candidate onto the new base as uncommitted changes, then:
 | Outcome | When | Implementation step |
 |---|---|---|
 | `resumed_validated` | The failed step is `commit` or later, the candidate applies cleanly, and `workflow.required_validation_commands` pass on it. | Skipped. The candidate goes straight to commit, validation, review and delivery. |
+| `resumed_held` | The last run was held on named external evidence, that evidence arrived (`review_evidence_received` is the task's latest decision), and the held commit applies cleanly. This includes a claimed leaf's hold that the owner's own run resumes from the published held candidate. | Skipped, and validation does not run at resume time. The candidate goes to commit, validation and the fresh review that finds the evidence. When the hold named only evidence a host-evidence rule owed, the held review settles without a reviewer. |
 | `resumed_repaired` | The failed step is the implementation or any step before `commit`, or the candidate conflicts with the new base, a required command fails, or the before-PR review refused it. | Starts from the applied candidate. An unfinished implementation carries trigger `implementation` and the failed step; otherwise the conflict paths, the failing command and output, or the review findings. |
 | `resumed_unjudged` | The failed step is `commit` or later, and a required command's tool is missing, so validation could not judge the candidate. | Skipped. The pipeline's own `validate` step reports the environment failure. |
-| `fresh` | No candidate was preserved, an operator discarded it, the task's description, acceptance criteria or selectors changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason is recorded. |
+| `fresh` | No candidate was preserved, an operator discarded it, the task's description or acceptance criteria changed since that run, the run is a bundle, or the commit is unreachable. | Implements from scratch. The reason and its `reason_code` are recorded. |
+
+Context selectors are preparation hints, not what the task means: a task
+pilot or operator editing them keeps the candidate, and the resumed review
+reads the current selectors.
+
+A candidate held for a red base resumes like any candidate from `commit` or
+later. That includes one the before-PR review held because its only failed
+check also fails on the pinned base. It is `resumed_validated` once the base
+passes, and a fresh review judges it. The implementer runs only if a required
+command now fails. A claimed leaf's resume always runs the implementer.
+
+A resumed held candidate on the hold's own base has the held tree, so the
+evidence matches it directly. On a moved base the review gate counts the
+evidence only while the candidate's whole patch over its base is unchanged
+(`git patch-id --stable`); the review manifest and certificate then record
+`evidence_carried` with the two trees and the patch id. A conflict resolution
+or any other change re-requests the evidence, and the admission output's
+`evidence_carry` names the typed reason (`patch_changed` or
+`source_unavailable`). The same rule applies when completion rebases a
+reviewed head for re-review.
 
 Whenever a candidate was found, the outcome, the source run, branch and SHA
 are written to the task's history as a `candidate_resume` event and returned
@@ -109,11 +135,15 @@ fresh. It is refused while the task is `in-progress`.
 
 Scope limits:
 
-- Claimed (distributed-drain) runs never resume. Their pipelines have no
-  failure handoff, so they never preserve a candidate: a failure settles the
-  claim. Their delivery steps also judge the implementation step's output,
-  which a skipped implementation does not produce. The evidence also lives in
-  the owner's run store, which a follower cannot read.
+- Generic resume of a claimed leaf is refused. A new claim can carry the
+  committed candidate the owner preserved from a failed attempt. The leaf
+  fetches its durable ref from `origin` when needed, applies it onto the new
+  base, and always runs the implementer with `continuation`, `review` or
+  `conflict` repair context. An unpublished candidate that could not be carried
+  to a durable ref resumes only on its original host. A repair claim after a
+  stopped owner landing instead supplies `landing` or `conflict` context.
+  The handoff needs this attempt's implementation output; validation judges
+  the resulting candidate. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md).
 - A failure after the PR opened (completion, CI on the published PR) leaves
   the task in `review` with its PR, not a preserved candidate.
 
@@ -122,8 +152,11 @@ creates `proposed` tasks. The CI job invokes `task_pilot_pipeline` for each new
 task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
-work, conflicts, and warnings leave that task proposed without blocking other
-pilot children. A standalone task-pilot run has no promotion authority. The
+work, conflicts, warnings and a `no-auto-approve` tag leave that task proposed
+without blocking other pilot children. An `orbit run auto --approve-proposed`
+drain hands the same apply boundary a drain-scoped authority instead, verified
+against the drain that dispatched the pilot. A standalone task-pilot run has no
+promotion authority. The
 source run/job/SHA/step remains in the task description, while parent and child
 run state retain the pilot run ID, result, and admission decision. Filing
 clusters failures by a normalized error signature that prefers a concrete test
@@ -249,8 +282,16 @@ Otherwise choose the narrow faithful command from repository instructions and
 code, reproduce at the immutable pre-fix revision and validate at the exact landed
 revision in isolated extracts or fixtures with independent build outputs, and
 capture both outputs as explicitly retrospective records. Attach those records and the structured assessment through
-`orbit.task.artifact.put`; do not invent historical execution artifacts or edit
-run state. Then reassess the same collector snapshot through the filing path.
+`orbit.task.artifact.put`, staging each file under `.orbit/tmp/`:
+
+```bash
+orbit tool run orbit.task.artifact.put --input '{"id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+```
+
+`source_path` is the local file; `path` is the stored artifact name.
+`orbit tool show <tool.name>` prints the tool's schema. Do not invent historical
+execution artifacts or edit run state. Then reassess the same collector snapshot
+through the filing path.
 The original insufficient state remains `unresolved` until the referenced proof
 is available. An existing open owner still takes precedence.
 
@@ -285,7 +326,7 @@ identical to a pre-`--complete` submission. See
 ## Cancelling
 
 ```bash
-orbit run cancel <run_id>
+orbit run cancel <run_id> --confirm
 ```
 
 For a run that is stuck rather than merely slow, diagnose before killing:

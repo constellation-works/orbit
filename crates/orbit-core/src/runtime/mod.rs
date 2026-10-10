@@ -27,7 +27,7 @@ pub(crate) mod cwd;
 pub mod engine;
 pub mod event_bus;
 pub(crate) mod friction;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod git_sandbox;
 pub mod host_resource;
 pub mod host_signal;
@@ -35,6 +35,7 @@ pub mod mutation;
 mod orbit_runtime;
 pub mod plugin;
 pub(crate) mod recovery_authority;
+pub(crate) mod recovery_decision;
 mod resolve;
 pub(crate) mod run_input;
 pub(crate) mod task;
@@ -53,17 +54,19 @@ pub use orbit_runtime::{HostLifetime, OrbitRuntime, OrbitRuntimeRoots};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
 pub(crate) use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
+pub(crate) use worker_coordination::{check_worker_host_input, is_coordination_tool};
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{
-    ResolvedOrbitRoots, WorkspaceRootHint, resolve_bootstrap_roots_with_hint,
-    resolve_initialize_roots_with_hint, try_resolve_initialized_roots_with_hint,
+    ResolvedOrbitRoots, WorkspaceRootHint, initialized_explicit_workspace_root,
+    resolve_bootstrap_roots_with_hint, resolve_initialize_roots_with_hint,
+    try_resolve_initialized_cwd_roots_with_hint, try_resolve_initialized_roots_with_hint,
 };
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{
     is_global_orbit_root, resolve_generation_root, resolve_global_root,
-    resolve_process_generation_root, try_resolve_initialized_roots,
+    resolve_process_generation_root, resolve_root_path_value, try_resolve_initialized_roots,
 };
 // `pub` for host task-store maintenance in `orbit-cmd`, which must recognize
 // the one partition id no registry claims [ORB-12119].

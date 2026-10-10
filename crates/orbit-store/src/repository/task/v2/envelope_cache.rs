@@ -33,12 +33,26 @@
 //! freshness scan already materializes in full; a deleted task's entry is
 //! dropped by a later scan and can never be served in the meantime, because
 //! task IDs are not reused.
+//!
+//! # Across processes
+//!
+//! A fresh process starts with an empty cache, and parsing every envelope to
+//! refill it made the first listing after a restart cost seconds. The scan
+//! therefore also records each proof it makes — this stamp matched an index
+//! row with that fingerprint — in the registry's envelope stamps, and a later
+//! scan in any process accepts a task without parsing it while its file still
+//! reports the recorded stamp and its index row still has the recorded
+//! fingerprint. Only a stamp carrying both identity and modification time is
+//! recorded, the same evidence and the same limits as reuse within a
+//! process. The store's writes rename a newly created file over the old one,
+//! which therefore never shares its inode, and a row rewrite changes the
+//! fingerprint.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, Metadata};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_types::task::TaskEnvelopeV2;
 
@@ -52,6 +66,21 @@ pub(super) struct EnvelopeStamp {
     modified: Option<SystemTime>,
     /// Device and inode on Unix; `None` where the platform reports neither.
     identity: Option<(u64, u64)>,
+}
+
+impl EnvelopeStamp {
+    /// The stamp as the registry records it, or `None` when it lacks the
+    /// identity or modification time a proof across processes needs.
+    pub(super) fn persisted(&self) -> Option<String> {
+        let modified = self.modified?.duration_since(UNIX_EPOCH).ok()?;
+        let (device, inode) = self.identity?;
+        Some(format!(
+            "{}:{}.{:09}:{device}:{inode}",
+            self.len,
+            modified.as_secs(),
+            modified.subsec_nanos()
+        ))
+    }
 }
 
 #[derive(Default)]

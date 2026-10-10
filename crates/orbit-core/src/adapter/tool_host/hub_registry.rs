@@ -18,6 +18,7 @@ pub struct HubCoordinationExecutor;
 impl HubCoordinationExecutor {
     /// Registers the path-free task-registry partition for a logical workspace.
     /// Workspace initialization calls this once; identical repeats are safe.
+    /// Reconciliation preserves a source fingerprint recorded by publication.
     ///
     /// `workspace init` deliberately names the partition after the workspace
     /// registry id it just minted, which is why a freshly initialized
@@ -28,10 +29,14 @@ impl HubCoordinationExecutor {
         slug: impl Into<String>,
     ) -> Result<(), OrbitError> {
         let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
+        let partition_id = partition_id.into();
+        let repo_fingerprint = registry
+            .find_workspace_binding(&partition_id)?
+            .and_then(|binding| binding.repo_fingerprint);
         registry.register_workspace(RegisterWorkspaceParams {
-            partition_id: partition_id.into(),
+            partition_id,
             slug: slug.into(),
-            repo_fingerprint: None,
+            repo_fingerprint,
         })?;
         Ok(())
     }

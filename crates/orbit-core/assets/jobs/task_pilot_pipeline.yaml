@@ -13,15 +13,39 @@
 # Prepare resolves an omitted base branch through the owning workspace's
 # `workflow.base_branch`; a non-empty run input remains an explicit override.
 # Any successful partition reaches apply even if another agent failed.
+# With no partitions, an explicit empty all join records both collection
+# outputs and reaches apply without dispatching a pilot; any joins run only
+# when preparation selected work.
 # Apply rejects untrusted partition envelopes, then isolates stale or malformed
 # assessments by task and applies every independently valid sibling. The guard
-# fails the total run while any task remains unresolved. Bare relative file and
+# fails the total run while any task remains unresolved. Targets admitted to
+# execution, claimed by a follower, or retired during preparation settle as
+# superseded without pilot writes. Durable material edits by an operator or
+# another writer likewise refuse the stale write and settle as superseded.
+# Prepare reads each task's history boundary no later than the snapshot apply
+# compares against; an automatically selected task moved out of selection
+# before its hydration settles superseded in prepare, and apply carries it.
+# Under a routine claim, a task whose selector material the branch head changed
+# since the claim froze its source settles superseded_by_source: prepare sets
+# it aside, apply skips it, and its member is claimed afresh at the head.
+# Superseded members are observed and prepared afresh without failure records
+# or retrying the stale snapshot. A run with applied and superseded tasks succeeds.
+# The host-prepared before list is authoritative; legacy agent echoes are ignored.
+# Active successful preparation checkpoints withhold their tasks from local
+# delivery selection and owner pull admission until the pilot run terminates.
+# Bare relative file and
 # directory targets are normalized only from the pinned source tree. Selector
 # existence is validated against the prepared source revision, not a later
-# checkout. Apply atomically persists context_files, assessed complexity, its
+# checkout; only a selector the task's durable creation grant names (recorded
+# by an operator `allow_missing_context` write) may be missing there, and apply
+# keeps every such target the assessment omits. Apply atomically persists context_files, assessed complexity, its
 # audit rationale/evidence, and a replay receipt. A CI sweep may pass its
 # exact filing record plus literal promotion authority; only then can apply
-# promote a warning-free, selector-backed proposed repair to backlog.
+# promote a warning-free, selector-backed proposed repair to backlog. An
+# `orbit run auto --approve-proposed` drain passes `drain_promotion` (its own
+# run ID) plus the same literal authority instead; apply verifies that the
+# drain is live, opted in, and dispatched this run before it approves any
+# qualifying, warning-free proposed task.
 #
 # Crew resolution
 # - The pilot step names the `system` crew directly, so this definition states
@@ -52,6 +76,7 @@ spec:
     max_partition_size: 5
     promotion_authorized: false
     ci_sweep_filing: null
+    drain_promotion: null
     state_automation: null
     source_revision: ""
 
@@ -67,7 +92,20 @@ spec:
         max_tasks: "{{ input.max_tasks }}"
         max_partition_size: "{{ input.max_partition_size }}"
 
+    - id: pilot_results
+      when: "{{ steps.prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_pilot
+          target: activity:task_pilot
+      fan_in:
+        join: { mode: all }
+        collect: pilots
+
     - id: pilots
+      when: "{{ steps.prepare.output.partition_count }} != 0"
       fan_out:
         items: "{{ steps.prepare.output.partitions }}"
         max_workers: 5
@@ -96,6 +134,7 @@ spec:
         workspace_path: "{{ steps.prepare.output.workspace_path }}"
         promotion_authorized: "{{ input.promotion_authorized }}"
         ci_sweep_filing: "{{ input.ci_sweep_filing }}"
+        drain_promotion: "{{ input.drain_promotion }}"
 
     - id: repair_pilots
       when: "{{ steps.apply.output.repair_count }} != 0"
@@ -129,6 +168,7 @@ spec:
         workspace_path: "{{ steps.prepare.output.workspace_path }}"
         promotion_authorized: "{{ input.promotion_authorized }}"
         ci_sweep_filing: "{{ input.ci_sweep_filing }}"
+        drain_promotion: "{{ input.drain_promotion }}"
         prior_applied_count: "{{ steps.apply.output.applied_count }}"
         carried_task_outcomes: "{{ steps.apply.output.non_repairable_outcomes }}"
 

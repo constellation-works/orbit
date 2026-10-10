@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskStoreBackend;
 use orbit_types::task::{
-    Task, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
+    Task, TaskEnvelopeV2, TaskReferenceIndex, TaskStatus, automatic_dispatch_cmp,
     task_dependencies_ready_with_index,
 };
 
@@ -15,7 +15,9 @@ use crate::runtime::task::locks::{
     TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
 
-pub use orbit_store::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskRow};
+pub use orbit_store::contracts::{
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage, TaskRow,
+};
 
 #[derive(Debug)]
 pub struct TaskListQuery {
@@ -84,16 +86,19 @@ pub(crate) fn list_task_metadata_in(store: &dyn TaskStoreBackend) -> Result<Vec<
         .task_candidates(&TaskListFilter::default(), usize::MAX)?
         .items
         .into_iter()
-        .map(|envelope| {
-            Task::from_envelope_parts(
-                envelope,
-                String::new(),
-                Vec::new(),
-                String::new(),
-                String::new(),
-            )
-        })
+        .map(metadata_task)
         .collect())
+}
+
+/// The envelope of one task as a body-less [`Task`].
+pub(crate) fn metadata_task(envelope: TaskEnvelopeV2) -> Task {
+    Task::from_envelope_parts(
+        envelope,
+        String::new(),
+        Vec::new(),
+        String::new(),
+        String::new(),
+    )
 }
 
 /// Readiness and path matching retain their existing application policy. Both
@@ -164,6 +169,20 @@ impl OrbitRuntime {
             return Ok(TaskCandidates::default());
         }
         self.stores().tasks().task_candidates(filter, limit)
+    }
+
+    /// [`Self::task_candidates`] answered by the generated index alone, for a
+    /// filter it fully covers: the selected ids and creation times, with no
+    /// envelope read. `None` sends the caller to [`Self::task_candidates`].
+    pub fn task_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Some(Default::default()));
+        }
+        self.stores().tasks().task_candidate_keys(filter, limit)
     }
 
     /// Return the bounded registry status projection needed to label one

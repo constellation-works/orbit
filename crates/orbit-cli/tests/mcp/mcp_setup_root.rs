@@ -32,6 +32,10 @@ struct ExternalRootFixture {
 
 impl ExternalRootFixture {
     fn init() -> Self {
+        Self::init_at(None)
+    }
+
+    fn init_at(home_suffix: Option<&str>) -> Self {
         // `--root` is recorded as given, and the assertions below expect the
         // resolved spelling, so root the fixture at a resolved temp directory
         // (the default macOS one sits behind the `/var` symlink).
@@ -39,7 +43,9 @@ impl ExternalRootFixture {
             tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         // Deliberately nested, so a write to the root's parent is visible.
-        let orbit_root = temp.path().join("orbit-data").join("root");
+        let orbit_root = home_suffix
+            .map(|suffix| home.join(suffix))
+            .unwrap_or_else(|| temp.path().join("orbit-data").join("root"));
         let checkout = temp.path().join("checkout");
         let elsewhere = temp.path().join("elsewhere");
         for directory in [&home, &elsewhere] {
@@ -255,6 +261,41 @@ impl ExternalRootFixture {
 }
 
 #[test]
+fn mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment() {
+    for (raw, home_suffix) in [
+        ("~", Some("")),
+        ("~/x", Some("x")),
+        ("~//x", Some("x")),
+        ("~/.orbit", Some(".orbit")),
+        ("../orbit-data/root", None),
+    ] {
+        let fixture = ExternalRootFixture::init_at(home_suffix);
+        for use_flag in [false, true] {
+            let env_root = if use_flag { "unused-env-root" } else { raw };
+            let env = [("ORBIT_ROOT", Path::new(env_root))];
+            let selected = |args: &[&str]| {
+                let mut args = argv(args);
+                if use_flag {
+                    args.splice(0..0, argv(&["--root", raw]));
+                }
+                fixture.orbit_with_env(&fixture.checkout, &args, &env)
+            };
+            selected(&["mcp", "init", "--claude"]).success();
+            assert_eq!(
+                generated_server_args(&fixture.claude_config()),
+                vec!["mcp", "serve", "--workspace", "ws_wsname"],
+                "{raw} must bind the checkout registered at the expanded root"
+            );
+            fixture.assert_no_client_config_outside_the_checkout();
+            selected(&["mcp", "remove", "--claude"]).success();
+            assert!(!fixture.claude_config().exists());
+            assert!(!fixture.checkout.join("~").exists());
+            assert!(!fixture.checkout.join("unused-env-root").exists());
+        }
+    }
+}
+
+#[test]
 fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
     let fixture = ExternalRootFixture::init();
 
@@ -293,14 +334,158 @@ fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
     fixture.assert_no_client_config_outside_the_checkout();
 }
 
+/// Run a federated setup command and return its text and JSON renderings.
+fn federated_setup_outputs(
+    fixture: &ExternalRootFixture,
+    cwd: &Path,
+    rooted: bool,
+    args: &[&str],
+) -> (String, Value) {
+    let run = |extra: &[&str]| {
+        let mut full = argv(args);
+        full.extend(argv(extra));
+        if rooted {
+            let mut with_root = fixture.rooted(&[]);
+            with_root.extend(full);
+            full = with_root;
+        }
+        let assert = fixture.orbit(cwd, &full).success();
+        String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout")
+    };
+    let text = run(&[]);
+    let json = serde_json::from_str(&run(&["--format", "json"])).expect("setup json output");
+    (text, json)
+}
+
+#[test]
+fn federated_home_setup_works_outside_a_workspace_and_reports_no_binding() {
+    let fixture = ExternalRootFixture::init();
+    let codex_config = fixture.home.join(".codex").join("config.toml");
+
+    let (text, json) = federated_setup_outputs(
+        &fixture,
+        &fixture.elsewhere,
+        false,
+        &[
+            "mcp",
+            "init",
+            "--federated",
+            "--client",
+            "codex",
+            "--scope",
+            "home",
+        ],
+    );
+    assert!(
+        !text.contains("ws_") && !text.contains("bound to"),
+        "federated init names no workspace binding: {text}"
+    );
+    assert!(json["workspace_id"].is_null(), "json binding: {json}");
+    assert!(json["repo_root"].is_null(), "json repo_root: {json}");
+    let written = fs::read_to_string(&codex_config).expect("federated codex config");
+    assert!(written.contains("orbit-federated"), "{written}");
+    assert!(
+        !written.contains("--workspace"),
+        "the federated entry is unbound: {written}"
+    );
+
+    let (text, json) = federated_setup_outputs(
+        &fixture,
+        &fixture.elsewhere,
+        false,
+        &[
+            "mcp",
+            "remove",
+            "--federated",
+            "--client",
+            "codex",
+            "--scope",
+            "home",
+        ],
+    );
+    assert!(
+        !text.contains("ws_") && !text.contains("bound to"),
+        "federated remove names no workspace binding: {text}"
+    );
+    assert!(json["workspace_id"].is_null(), "json binding: {json}");
+    let remaining = fs::read_to_string(&codex_config).unwrap_or_default();
+    assert!(!remaining.contains("orbit-federated"), "{remaining}");
+}
+
+#[test]
+fn federated_setup_inside_a_registered_checkout_reports_no_binding() {
+    let fixture = ExternalRootFixture::init();
+
+    for scope in ["home", "workspace"] {
+        for action in ["init", "remove"] {
+            let (text, json) = federated_setup_outputs(
+                &fixture,
+                &fixture.checkout,
+                true,
+                &[
+                    "mcp",
+                    action,
+                    "--federated",
+                    "--client",
+                    "codex",
+                    "--scope",
+                    scope,
+                ],
+            );
+            assert!(
+                !text.contains("ws_wsname") && !text.contains("bound to"),
+                "federated {action} --scope {scope} names a binding: {text}"
+            );
+            assert!(
+                json["workspace_id"].is_null(),
+                "federated {action} --scope {scope} json binding: {json}"
+            );
+        }
+    }
+}
+
 #[test]
 fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
     let fixture = ExternalRootFixture::init();
+    let original_mcp = serde_json::json!({
+        "mcpServers": { "other": { "command": "other-client" } },
+        "userSetting": true,
+    });
+    let original_settings = serde_json::json!({
+        "permissions": {
+            "allow": ["Read(./notes/**)"],
+            "deny": ["Read(./private/**)"],
+        },
+        "userSetting": true,
+    });
+    let settings_dir = fixture.checkout.join(".claude");
+    fs::create_dir_all(&settings_dir).expect("create user settings directory");
+    fs::write(fixture.claude_config(), original_mcp.to_string()).expect("seed user MCP config");
+    fs::write(fixture.claude_settings(), original_settings.to_string())
+        .expect("seed user settings");
+    let entries = |directory: &Path| {
+        fs::read_dir(directory)
+            .expect("read config directory")
+            .map(|entry| entry.expect("read config entry").file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let checkout_entries = entries(&fixture.checkout);
+    let settings_entries = entries(&settings_dir);
+    let read_json = |path: &Path| -> Value {
+        serde_json::from_slice(&fs::read(path).expect("read client config"))
+            .expect("parse client JSON")
+    };
+    // An in-place rewrite would change these open files too. Atomic replacement
+    // must leave the old descriptors' contents intact on Unix.
+    #[cfg(unix)]
+    let old_mcp = fs::File::open(fixture.claude_config()).expect("open original MCP config");
+    #[cfg(unix)]
+    let old_settings = fs::File::open(fixture.claude_settings()).expect("open original settings");
 
     fixture
         .orbit(
             &fixture.checkout,
-            &fixture.rooted(&["mcp", "init", "--claude"]),
+            &fixture.rooted(&["mcp", "init", "--claude", "--scope", "workspace"]),
         )
         .success();
 
@@ -309,8 +494,67 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
         vec!["mcp", "serve", "--workspace", "ws_wsname"],
         "the generated server must carry the registered workspace binding"
     );
-    assert!(fixture.claude_settings().is_file());
+    let mut expected_mcp = original_mcp.clone();
+    expected_mcp["mcpServers"]["orbit"] = serde_json::json!({
+        "command": "orbit",
+        "args": ["mcp", "serve", "--workspace", "ws_wsname"],
+    });
+    assert_eq!(read_json(&fixture.claude_config()), expected_mcp);
+    let settings = read_json(&fixture.claude_settings());
+    let allow = settings["permissions"]["allow"]
+        .as_array()
+        .expect("allow array");
+    assert!(allow.contains(&serde_json::json!("Read(./notes/**)")));
+    assert!(
+        allow.iter().any(|value| value
+            .as_str()
+            .is_some_and(|permission| permission.starts_with("mcp__orbit__"))),
+        "project settings must include Orbit MCP permissions"
+    );
+    let mut user_settings = settings.clone();
+    user_settings["permissions"]["allow"] = original_settings["permissions"]["allow"].clone();
+    assert_eq!(
+        user_settings, original_settings,
+        "preserve unrelated settings"
+    );
+    assert_eq!(
+        entries(&fixture.checkout),
+        checkout_entries,
+        "no MCP staging files left behind"
+    );
+    assert_eq!(
+        entries(&settings_dir),
+        settings_entries,
+        "no settings staging files left behind"
+    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(old_mcp).expect("read old MCP descriptor"),
+            original_mcp
+        );
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(old_settings)
+                .expect("read old settings descriptor"),
+            original_settings
+        );
+    }
     fixture.assert_no_client_config_outside_the_checkout();
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", "--claude"]),
+        )
+        .success();
+    assert_eq!(read_json(&fixture.claude_config()), expected_mcp);
+    assert_eq!(
+        read_json(&fixture.claude_settings()),
+        settings,
+        "init is idempotent"
+    );
+    assert_eq!(entries(&fixture.checkout), checkout_entries);
+    assert_eq!(entries(&settings_dir), settings_entries);
 
     fixture
         .orbit(
@@ -319,8 +563,10 @@ fn mcp_init_binds_an_external_root_checkout_and_remove_reverses_it() {
         )
         .success();
 
-    assert!(!fixture.claude_config().exists());
-    assert!(!fixture.checkout.join(".claude").exists());
+    assert_eq!(read_json(&fixture.claude_config()), original_mcp);
+    assert_eq!(read_json(&fixture.claude_settings()), original_settings);
+    assert_eq!(entries(&fixture.checkout), checkout_entries);
+    assert_eq!(entries(&settings_dir), settings_entries);
 }
 
 #[test]
@@ -603,6 +849,94 @@ fn an_unregistered_root_reports_the_root_and_registered_candidates() {
         stderr.contains(fixture.checkout_a.to_str().expect("utf8 checkout A"))
             && stderr.contains(fixture.checkout_b.to_str().expect("utf8 checkout B")),
         "failure must name candidate checkouts: {stderr}"
+    );
+}
+
+/// A home-scope client config symlinked from a dotfiles repository keeps its
+/// link: init and remove update the file the link points at.
+#[cfg(unix)]
+fn assert_home_scope_config_symlink_survives(
+    client_flag: &str,
+    config_relative: &str,
+    seed: &str,
+    other_entry: &str,
+) {
+    let fixture = ExternalRootFixture::init();
+    let config = fixture.home.join(config_relative);
+    let config_dir = config.parent().expect("config parent");
+    let dotfiles = fixture.home.join("dotfiles");
+    let dotfile = dotfiles.join("client-config");
+    fs::create_dir_all(&dotfiles).expect("create dotfiles directory");
+    fs::create_dir_all(config_dir).expect("create client directory");
+    fs::write(&dotfile, seed).expect("seed dotfiles config");
+    std::os::unix::fs::symlink(&dotfile, &config).expect("link client config into dotfiles");
+    let assert_still_linked = |step: &str| {
+        let metadata = fs::symlink_metadata(&config).expect("inspect client config");
+        assert!(
+            metadata.file_type().is_symlink(),
+            "{step} replaced the symlinked config with a regular file"
+        );
+        assert_eq!(
+            fs::read_link(&config).expect("read config link"),
+            dotfile,
+            "{step} retargeted the config symlink"
+        );
+        for directory in [config_dir, dotfiles.as_path()] {
+            assert_eq!(
+                fs::read_dir(directory).expect("read directory").count(),
+                1,
+                "{step} left staging files in {}",
+                directory.display()
+            );
+        }
+    };
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "init", client_flag, "--scope", "home"]),
+        )
+        .success();
+    assert_still_linked("init");
+    let initialized = fs::read_to_string(&dotfile).expect("read dotfiles config");
+    assert!(
+        initialized.contains("orbit") && initialized.contains(other_entry),
+        "init must write Orbit's entry into the link target and keep the user's: {initialized}"
+    );
+
+    fixture
+        .orbit(
+            &fixture.checkout,
+            &fixture.rooted(&["mcp", "remove", client_flag, "--scope", "home"]),
+        )
+        .success();
+    assert_still_linked("remove");
+    let removed = fs::read_to_string(&dotfile).expect("read dotfiles config");
+    assert!(
+        removed.contains(other_entry) && !removed.contains("orbit"),
+        "remove must drop Orbit's entry from the link target and keep the user's: {removed}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn json_client_home_config_symlink_survives_init_and_remove() {
+    assert_home_scope_config_symlink_survives(
+        "--cursor",
+        ".cursor/mcp.json",
+        r#"{"mcpServers":{"other":{"command":"other-client"}}}"#,
+        "other-client",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn toml_client_home_config_symlink_survives_init_and_remove() {
+    assert_home_scope_config_symlink_survives(
+        "--codex",
+        ".codex/config.toml",
+        "model = \"keep-me\"\n\n[mcp_servers.other]\ncommand = \"other-client\"\n",
+        "other-client",
     );
 }
 

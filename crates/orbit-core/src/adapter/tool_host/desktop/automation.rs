@@ -1,13 +1,8 @@
 //! Bounded Automation projections and operator actions. Definition discovery,
 //! schedule interpretation, atomic edits and dispatch belong to their domain owners.
-use std::path::Path;
-
 use chrono::Utc;
 use orbit_common::{OrbitError, protocol::tool_input::required_string};
-use orbit_types::{
-    workflow::JobRunTrigger,
-    workspace::{Workspace, WorkspaceStatus},
-};
+use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
 use super::read::bounded_text;
@@ -16,51 +11,12 @@ use crate::{
     application::{
         job::JobCatalogFilter,
         routines::{
-            self, DiscoveredWorkspaces, RoutineMachineIdentity, RoutineStatusReport,
-            RoutineToggleOutcome, RoutineWorkspaceProvider,
+            RoutineToggleOutcome,
+            status::{checkout_routine_statuses, toggle_checkout_routine},
         },
     },
 };
 
-// A selected destination is the entire discovery scope. This adapter never
-// discovers another store by cwd or consults a client-supplied filesystem path.
-struct SelectedWorkspace(OrbitRuntime);
-impl RoutineWorkspaceProvider for SelectedWorkspace {
-    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
-        let runtime = &self.0;
-        let workspace = Workspace {
-            id: runtime.workspace_id()?,
-            name: runtime.workspace_label(),
-            owner_machine_id: runtime
-                .workspace_runtime_binding()
-                .and_then(|b| b.owner_machine_id.clone()),
-            git_remote: None,
-            ship_mode: None,
-            base_branch: runtime.workspace_base_branch().into(),
-            status: WorkspaceStatus::Active,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
-        Ok(DiscoveredWorkspaces {
-            entries: vec![(workspace, runtime.clone())],
-            ..DiscoveredWorkspaces::default()
-        })
-    }
-}
-fn routine_report(runtime: &OrbitRuntime) -> Result<RoutineStatusReport, OrbitError> {
-    routines::routine_statuses_with_providers(
-        &runtime.global_root(),
-        RoutineMachineIdentity {
-            machine_id: runtime
-                .automation_machine_identity()
-                .unwrap_or("local")
-                .into(),
-            machine_name: "Selected host".into(),
-        },
-        &SelectedWorkspace(runtime.clone()),
-        Utc::now(),
-    )
-}
 fn text(value: &str) -> String {
     let (value, truncated) = bounded_text(value, 4096);
     if truncated {
@@ -77,25 +33,46 @@ pub(super) fn read(
     limit: usize,
 ) -> Result<Value, OrbitError> {
     let mut notes = Vec::new();
+    // Auto-task and job controls keep the general coordination guard, so a
+    // replica projects them unavailable with the owner named.
+    let coordination_refusal = runtime
+        .ensure_coordination_task_write_permitted()
+        .err()
+        .map(|error| text(&error.to_string()));
     let mut items=match scope {
         "routines"=>{
-            let report=routine_report(runtime)?;
+            let report=checkout_routine_statuses(runtime)?;
             notes.extend(report.load_errors.iter().map(|e|text(&e.message)));
             notes.extend(report.listed_retired(true).map(|r|text(&format!("{}: {}",r.name,r.reason))));
-            report.statuses.iter().map(|s|{
+            let mut rows=report.statuses.iter().map(|s|{
                 let d=&s.routine.definition;
                 json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"effective":s.effective(),
                     "target":d.target.as_ref_string(),"schedule":d.trigger,"state":s.schedule_display_state().as_str(),
                     "next_due":s.next_due,"paused_at":s.paused_at,"last_fire":s.last_fire.as_ref().map(|f|json!({"state":f.state,"at":f.updated_at})),
-                    "toggle_available":true})
-            }).collect::<Vec<_>>()
+                    "toggle_available":true,"toggle_reason":null})
+            }).collect::<Vec<_>>();
+            // A replica lists what its owner schedules so the refusal is
+            // visible before an operator tries to toggle it.
+            rows.extend(report.owner_only.iter().map(|o|{
+                let d=&o.routine.definition;
+                json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"effective":false,
+                    "target":d.target.as_ref_string(),"schedule":d.trigger,"state":"owner_only",
+                    "next_due":null,"paused_at":null,"last_fire":null,
+                    "toggle_available":false,"toggle_reason":text(&o.reason)})
+            }));
+            rows
         }
-        "auto_tasks"=>auto_task_rows(runtime)?,
+        "auto_tasks"=>auto_task_rows(runtime, coordination_refusal.as_deref())?,
         "jobs"=>runtime.list_job_catalog_with_last_run(true,JobCatalogFilter::All)?.iter().map(|(j,last)|{
             let runnable=j.supports_no_input_submission();
+            let run_reason=match (&coordination_refusal,runnable) {
+                (Some(refusal),_)=>refusal.clone(),
+                (None,true)=>"Submit this job with its default input".to_string(),
+                (None,false)=>"Delivery jobs require task input or auto-drain; disabled jobs cannot run here".to_string(),
+            };
             json!({"name":j.job_id,"kind":j.kind(),"state":j.state(),"max_active_runs":j.max_active_runs(),
-                "steps":j.spec.steps.len(),"run_available":runnable,
-                "run_reason":if runnable {"Submit this job with its default input"}else{"Delivery jobs require task input or auto-drain; disabled jobs cannot run here"},
+                "steps":j.spec.steps.len(),"run_available":runnable && coordination_refusal.is_none(),
+                "run_reason":run_reason,
                 "last_run":last.as_ref().map(|r|json!({"run_id":r.run_id,"state":r.state,"at":r.created_at,"duration_ms":r.duration_ms}))})
         }).collect::<Vec<_>>(),
         _=>return Err(invalid("unknown automation scope")),
@@ -115,7 +92,10 @@ pub(super) fn read(
         "observation":"Workspace definitions only. The host clock is independent; enabled does not guarantee a running scheduler."}),
     )
 }
-fn auto_task_rows(runtime: &OrbitRuntime) -> Result<Vec<Value>, OrbitError> {
+fn auto_task_rows(
+    runtime: &OrbitRuntime,
+    coordination_refusal: Option<&str>,
+) -> Result<Vec<Value>, OrbitError> {
     use crate::application::auto_tasks::{
         cursor_state_path, load_cursor_state, schedule::next_scheduled_slot,
     };
@@ -123,7 +103,6 @@ fn auto_task_rows(runtime: &OrbitRuntime) -> Result<Vec<Value>, OrbitError> {
     let cursors = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir))?;
     runtime.auto_task_listing(true)?.iter().map(|s|{
         let d=&s.definition;
-        let enabled_by_review_policy=runtime.auto_task_enabled_by_review_policy(d);
         let effective_enabled=runtime.auto_task_enabled(d);
         let cursor=cursors.definitions.get(&d.name);
         let baseline=cursor.and_then(|c|chrono::DateTime::parse_from_rfc3339(&c.baseline_at).ok()).map(|d|d.with_timezone(&Utc));
@@ -132,8 +111,10 @@ fn auto_task_rows(runtime: &OrbitRuntime) -> Result<Vec<Value>, OrbitError> {
         Ok(json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
             "state":state,"next_due":if state=="scheduled"{next}else{None},
             "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":s.skipped_reason,
-            "enabled_by_review_policy":enabled_by_review_policy,"effective_enabled":effective_enabled,
-            "toggle_available":s.inactive_plugin.is_none(),"mint_available":s.inactive_plugin.is_none(),
+            "effective_enabled":effective_enabled,
+            "toggle_available":s.inactive_plugin.is_none() && coordination_refusal.is_none(),
+            "mint_available":s.inactive_plugin.is_none() && coordination_refusal.is_none(),
+            "control_reason":coordination_refusal,
             "updated_at":d.updated_at}))
     }).collect()
 }
@@ -152,10 +133,14 @@ pub(in crate::adapter::tool_host) fn control(
     input: Value,
     trigger: JobRunTrigger,
 ) -> Result<Value, OrbitError> {
-    runtime.ensure_coordination_task_write_permitted()?;
     let action = required_string(&input, &["action"], "action")?;
     let kind = required_string(&input, &["kind"], "kind")?;
     let name = required_string(&input, &["name"], "name")?;
+    // A routine toggle carries its own checkout-role authority; every other
+    // control is a coordination write.
+    if (kind.as_str(), action.as_str()) != ("routine", "toggle") {
+        runtime.ensure_coordination_task_write_permitted()?;
+    }
     let allowed = match (kind.as_str(), action.as_str()) {
         ("routine", "toggle") => vec!["expected_enabled", "enabled", "target"],
         ("auto_task", "toggle") => vec!["expected_enabled", "enabled"],
@@ -178,20 +163,16 @@ pub(in crate::adapter::tool_host) fn control(
             let expected = boolean(&input, "expected_enabled")?;
             let enabled = boolean(&input, "enabled")?;
             let target = required_string(&input, &["target"], "target")?;
-            let report = routine_report(runtime)?;
-            let status = report
-                .statuses
-                .iter()
-                .find(|s| s.routine.definition.name == name)
-                .ok_or_else(|| invalid("routine unavailable in this workspace"))?;
-            if status.routine.definition.target.as_ref_string() != target {
-                return Err(invalid("routine target changed; refresh before retrying"));
-            }
-            match routines::set_routine_enabled(&status.routine, expected, enabled)? {
+            match toggle_checkout_routine(runtime, &name, &target, expected, enabled)? {
                 RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => {
                     json!({"enabled":enabled})
                 }
-                _ => return Err(invalid("routine changed; refresh before retrying")),
+                RoutineToggleOutcome::TargetConflict { .. } => {
+                    return Err(invalid("routine target changed; refresh before retrying"));
+                }
+                RoutineToggleOutcome::Conflict { .. } => {
+                    return Err(invalid("routine changed; refresh before retrying"));
+                }
             }
         }
         ("auto_task", "toggle") => {
@@ -201,7 +182,6 @@ pub(in crate::adapter::tool_host) fn control(
                 boolean(&input, "enabled")?,
             )?;
             json!({"enabled":d.enabled,
-                "enabled_by_review_policy":runtime.auto_task_enabled_by_review_policy(&d),
                 "effective_enabled":runtime.auto_task_enabled(&d)})
         }
         ("auto_task", "mint") => {

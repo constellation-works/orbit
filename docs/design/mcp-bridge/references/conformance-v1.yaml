@@ -1,21 +1,23 @@
 schema_version: 2
 contract: orbit-mcp-v1
-last_updated: 2026-08-15
-last_validated: 2026-08-15
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 
 source_of_truth:
   exposed_tool_list:
+    - crates/orbit-mcp/src/adapter/dispatch.rs::list_tools
     - crates/orbit-mcp/src/remote/surface.rs::canonical_mcp_tool_definitions
   composed_from:
     - crates/orbit-tools/src/registry.rs::canonical_builtin_mcp_tool_definitions
     - crates/orbit-mcp/src/remote/discovery.rs::discovery_tool_definitions
+    - crates/orbit-mcp/src/adapter/presentation.rs::tools
   protocol_kernel:
     - crates/orbit-mcp/src/lib.rs
     - crates/orbit-mcp/src/adapter
   accepting_server:
     - crates/orbit-cli/src/command/mcp/server.rs::ServerMcpHost
   authoritative_dispatch:
-    - crates/orbit-core/src/command/tool/dispatch.rs
+    - crates/orbit-core/src/adapter/command/dispatch/execute.rs
 
 transport:
   local: stdio
@@ -28,7 +30,7 @@ transport:
     argv_shape: "orbit mcp listen [ADDR] [--allow-non-loopback]"
     implementation: crates/orbit-mcp/src/listener.rs
     default_bind: loopback; a non-loopback bind is refused unless requested explicitly
-    policy: transport only — no capability, placement, owner-routing, or checkout layer
+    policy: unauthenticated transport serving agent authority; no placement, owner-routing, or checkout layer
   forbidden:
     - shared broker process
     - client-side frame parsing or rewriting
@@ -51,10 +53,10 @@ authority:
     - authorization decisions
 
 authorization:
-  status: deferred
-  v1_rule: SSH access is sufficient to reach the remote MCP process
-  enforcement_owner_when_added: orbit-core
-  capability_filtering: false
+  status: per-caller authorization is deferred; server-selected session capabilities are enforced
+  v1_rule: SSH reaches the remote process; it serves agent authority by default and operator authority when its server argv includes --operator
+  enforcement_owner_when_added: orbit-core for per-caller rules; server-selected session capabilities are already enforced there
+  capability_filtering: false # tools/list is not filtered; Core enforces each call
 
 tool_definitions:
   metadata:
@@ -63,7 +65,7 @@ tool_definitions:
   scopes:
     global:
       - orbit.workspace.list
-    workspace_required: all other advertised tools
+    workspace_required: all other canonical domain tools; adapter-owned UI entrypoints use global/thread entrypoint metadata
   forbidden_metadata:
     - placement
     - allowed capabilities
@@ -73,7 +75,7 @@ audit_context:
   caller_machine_id: opaque audit-only label; local fallback is host/local
   caller_ip: best-effort first field of SSH_CONNECTION for SSH sessions, or the accepted peer address for listener sessions
   process_machine_id: derived from the accepting machine registry
-  process_host_id: derived from the accepting machine registry
+  process_machine_name: accepting registry name, or OS hostname if machine identity is absent
   transport: local or ssh-mcp; a listener session is local and is distinguished by caller_ip
 
 workspace_selection:
@@ -104,5 +106,5 @@ validation:
   listener_bind_policy: crates/orbit-mcp/src/tests/listener.rs
   listener_roundtrip: crates/orbit-mcp/tests/boundary/mcp_wire_roundtrip.rs
   server_identity: crates/orbit-mcp/src/remote/tests/identity.rs
-  discovery: crates/orbit-mcp/src/remote/tests/discovery.rs
+  discovery: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs
   unknown_call_audit: crates/orbit-cli/tests/mcp/mcp_roundtrip.rs

@@ -95,7 +95,8 @@ additional activation opportunities.
    exercised `orbit.workflow.ship` and `orbit.workflow.run.resume`. Both calls
    created real runs, but the test did not install the test-only pipeline-worker
    command override.
-3. [`pipeline_worker_command`](../../crates/orbit-core/src/application/job/pipeline.rs#L1240)
+3. `pipeline_worker_command` (commit `6703cafca651e58710506acf896f6d04f1279b5c`,
+   path `crates/orbit-core/src/application/job/pipeline.rs`, line 1240)
    therefore fell back to `std::env::current_exe()`. In a library test this was
    the `orbit_core` test harness. The source's own test-only override comment
    documents the hazard: re-executing that binary makes libtest interpret the

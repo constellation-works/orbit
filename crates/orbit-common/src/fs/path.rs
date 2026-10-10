@@ -18,7 +18,7 @@ pub fn orbit_scratch_dir(workspace_root: impl AsRef<Path>) -> PathBuf {
 /// Create `<workspace_root>/.orbit/tmp` and return its canonical path.
 pub fn ensure_orbit_scratch_dir(workspace_root: impl AsRef<Path>) -> Result<PathBuf, OrbitError> {
     let scratch = orbit_scratch_dir(workspace_root);
-    std::fs::create_dir_all(&scratch).map_err(|error| {
+    crate::fs::io::create_private_dir_all(&scratch).map_err(|error| {
         OrbitError::Io(format!(
             "create scratch dir '{}': {error}",
             scratch.display()

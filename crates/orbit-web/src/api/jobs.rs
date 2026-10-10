@@ -5,13 +5,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
+use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
+use super::{OptionalJson, bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
 use crate::projections::job_catalog_to_json_with_last_run;
 use crate::state::DashboardState;
 
@@ -20,6 +20,13 @@ use super::routines::{
 };
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
+
+/// Failure outcomes shared by the dashboard tile and run-list filters.
+pub(super) const FAILED_RUN_STATES: [JobRunState; 3] = [
+    JobRunState::Failed,
+    JobRunState::Timeout,
+    JobRunState::Interrupted,
+];
 
 /// Submit a catalog job in the selected workspace.
 /// Delivery pipelines need task input and are deliberately unavailable through
@@ -155,7 +162,15 @@ fn job_runs_page(
     let runs = list_job_runs_for_state(runtime, query, state, limit)?;
     let total = count_job_runs_for_state(runtime, query, state)?;
     let truncated = total > runs.len() as u64;
-    let items: Vec<Value> = runs.iter().map(|run| job_run_to_json(run, None)).collect();
+    let titles = super::run_tasks::task_titles(runtime, &runs)?;
+    let items: Vec<Value> = runs
+        .iter()
+        .map(|run| {
+            let mut value = job_run_to_json(run, None);
+            super::run_tasks::add_tasks(&mut value, run, &titles);
+            value
+        })
+        .collect();
     Ok(json!({
         "items": items,
         "total": total,
@@ -179,23 +194,24 @@ fn list_job_runs_for_state(
             Some(limit),
         ))
     };
-    match state {
-        JobRunListState::All => list(None, false),
-        JobRunListState::Failed => list(Some(JobRunState::Failed), false),
-        JobRunListState::Concrete(run_state) => list(Some(run_state), false),
-        JobRunListState::Terminal => list(None, true),
-        JobRunListState::Active => {
-            let mut runs = list(Some(JobRunState::Pending), false)?;
-            runs.extend(list(Some(JobRunState::Running), false)?);
-            runs.sort_by(|left, right| {
-                job_run_timestamp(right)
-                    .cmp(&job_run_timestamp(left))
-                    .then_with(|| left.run_id.cmp(&right.run_id))
-            });
-            runs.truncate(limit);
-            Ok(runs)
-        }
+    let states: &[JobRunState] = match state {
+        JobRunListState::All => return list(None, false),
+        JobRunListState::Concrete(run_state) => return list(Some(run_state), false),
+        JobRunListState::Terminal => return list(None, true),
+        JobRunListState::Failed => &FAILED_RUN_STATES,
+        JobRunListState::Active => &[JobRunState::Pending, JobRunState::Running],
+    };
+    let mut runs = Vec::new();
+    for &run_state in states {
+        runs.extend(list(Some(run_state), false)?);
     }
+    runs.sort_by(|left, right| {
+        job_run_timestamp(right)
+            .cmp(&job_run_timestamp(left))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    runs.truncate(limit);
+    Ok(runs)
 }
 
 fn count_job_runs_for_state(
@@ -206,17 +222,18 @@ fn count_job_runs_for_state(
     let count = |run_state, terminal_only| {
         runtime.count_job_runs(job_run_list_params(query, run_state, terminal_only, None))
     };
-    match state {
-        JobRunListState::All => count(None, false),
-        JobRunListState::Failed => count(Some(JobRunState::Failed), false),
-        JobRunListState::Concrete(run_state) => count(Some(run_state), false),
-        JobRunListState::Terminal => count(None, true),
-        JobRunListState::Active => {
-            let pending = count(Some(JobRunState::Pending), false)?;
-            let running = count(Some(JobRunState::Running), false)?;
-            Ok(pending.saturating_add(running))
-        }
+    let states: &[JobRunState] = match state {
+        JobRunListState::All => return count(None, false),
+        JobRunListState::Concrete(run_state) => return count(Some(run_state), false),
+        JobRunListState::Terminal => return count(None, true),
+        JobRunListState::Failed => &FAILED_RUN_STATES,
+        JobRunListState::Active => &[JobRunState::Pending, JobRunState::Running],
+    };
+    let mut total = 0_u64;
+    for &run_state in states {
+        total = total.saturating_add(count(Some(run_state), false)?);
     }
+    Ok(total)
 }
 
 fn job_run_list_params(
@@ -232,6 +249,7 @@ fn job_run_list_params(
         since: query.since,
         limit,
         order_by: JobRunOrder::Recency,
+        ..Default::default()
     }
 }
 
@@ -251,25 +269,46 @@ pub(super) struct ResumeBody {
 ///
 /// Resume re-runs the first non-successful step and every subsequent step; it
 /// succeeds only when the underlying cause of the source failure is resolved.
+/// Inherited automatic completion requires the current session's authority.
 ///
 /// [ORB-10470] One-shot, like `POST /workflows/ship`: it returns as soon as the
 /// resumed run is persisted and its detached worker is spawned, so the resumed
 /// pipeline never runs on a request thread. Callers poll `/job-runs/:id` for
 /// progress and can cancel the returned run id while it executes.
 pub(super) async fn resume_job_run_action(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Option<Json<ResumeBody>>,
+    OptionalJson(body): OptionalJson<ResumeBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
         Err(message) => return bad_request(message),
     };
-    let Json(body) = body.unwrap_or_default();
     let id = id.to_string();
     let retry_source_run_id = id.clone();
+    let completion_authority =
+        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
     match blocking("resume run", move || {
-        Ok(runtime.submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref()))
+        let source = runtime.show_job_run(&id)?;
+        if source
+            .input
+            .as_ref()
+            .and_then(|input| input.get("completion"))
+            .and_then(Value::as_str)
+            == Some("done")
+            && let Err(denial) = completion_authority
+        {
+            return Ok(Err(authorization_denied(denial)));
+        }
+        Ok(runtime
+            .submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref())
+            .map_err(|error| match error {
+                orbit_core::OrbitError::JobValidation(message) => {
+                    (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
+                }
+                other => map_runtime_error(other),
+            }))
     })
     .await
     {
@@ -282,10 +321,7 @@ pub(super) async fn resume_job_run_action(
             "submitted_at": invoke.submitted_at,
         }))
         .into_response(),
-        Ok(Err(orbit_core::OrbitError::JobValidation(message))) => {
-            (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
-        }
-        Ok(Err(e)) => map_runtime_error(e),
+        Ok(Err(response)) => response,
         Err(response) => *response,
     }
 }

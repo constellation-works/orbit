@@ -79,8 +79,16 @@ pub struct TaskIndexFilter {
 /// the exact number of index rows the filter matched.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskIndexSelection {
-    pub ids: Vec<String>,
+    pub rows: Vec<TaskIndexKey>,
     pub total: usize,
+}
+
+/// One selected index row: the task and the `created_at` the listing orders
+/// by, as the index stores it (RFC 3339).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskIndexKey {
+    pub task_id: String,
+    pub created_at: String,
 }
 
 /// One task's generated index row, in the form the freshness scan compares
@@ -111,6 +119,33 @@ impl IndexedTaskRow {
             && tags.len() == self.tags.len()
             && tags.iter().all(|tag| self.tags.contains(tag))
     }
+
+    /// Every field [`Self::matches`] compares, in one string. A persisted
+    /// envelope stamp is recorded against it, so any rewrite of the row
+    /// retires the stamp.
+    pub fn fingerprint(&self) -> String {
+        let tags = self.tags.iter().cloned().collect::<Vec<_>>().join("\u{1f}");
+        [
+            self.status.as_str(),
+            self.priority.as_str(),
+            self.job_run_id.as_deref().unwrap_or(""),
+            self.created_at.as_str(),
+            self.updated_at.as_str(),
+            tags.as_str(),
+        ]
+        .join("\u{1e}")
+    }
+}
+
+/// A freshness proof the scan recorded for one task: the envelope file's
+/// stamp when its parse matched the index row with this fingerprint
+/// ([`IndexedTaskRow::fingerprint`]). While both still hold, the envelope is
+/// known to match its row without being parsed again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvelopeStampRecord {
+    pub task_id: String,
+    pub stamp: String,
+    pub fingerprint: String,
 }
 
 /// A relation edge whose target uses a locally known task prefix but does not
@@ -130,6 +165,10 @@ pub struct DanglingRelationTarget {
     pub source_task_id: String,
     pub relation_type: String,
     pub target_task_id: String,
+    /// Whether the generated relation index holds this edge. `false` means
+    /// only the canonical bundle names it — the index is stale or missing
+    /// the row the failed rebuild could not publish.
+    pub indexed: bool,
 }
 
 /// Outcome of seeding the task-id allocator.

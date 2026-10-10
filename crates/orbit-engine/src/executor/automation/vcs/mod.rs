@@ -1,6 +1,10 @@
+pub(crate) mod absorbed;
 mod attribution;
+mod base_chase;
 mod base_obsolescence;
+mod baseline;
 mod candidate_resume;
+mod candidate_validate;
 pub mod claim;
 mod commit;
 mod delivery_marker;
@@ -8,6 +12,7 @@ mod failure;
 mod freshness;
 pub(crate) mod git;
 mod handoff;
+mod host_evidence;
 mod landing;
 mod operations;
 mod pr;
@@ -20,10 +25,15 @@ mod worktree;
 #[cfg(test)]
 mod tests;
 
+pub use baseline::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};
 pub(super) use candidate_resume::candidate_resume;
-pub(super) use claim::{candidate_validate, claim_handoff, claim_validate};
+pub(super) use candidate_validate::candidate_validate;
+pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub use commit::validate_claim_new_paths;
+pub(crate) use commit::{
+    RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
+};
 pub(super) use failure::pr_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
@@ -33,7 +43,8 @@ pub(super) use push::push_batch_changes;
 pub(crate) use resume::reconcile_resumed_failure_handoff;
 pub(super) use worktree::setup_worktree;
 pub use worktree::{
-    WorktreeGcOptions, WorktreeGcResult, collect_worktrees, run_worktree_has_build_output,
+    WorktreeGcOptions, WorktreeGcResult, WorktreeReclaimReport, collect_worktrees,
+    run_worktree_has_reclaim_output, run_worktree_paths,
 };
 
 pub(crate) fn run_private_operation(

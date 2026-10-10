@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-09-24
-last_validated: 2026-09-19
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Draft
 feature: federated-mcp
 doc_role: decisions
@@ -11,16 +11,18 @@ summary: Standing rules for the federated MCP mux: destinations are configured, 
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
-related_artifacts: [ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Decisions
 
-Record non-obvious decisions here by title. These are Door 2 standing rules. Code anchors: `crates/orbit-mcp/src/federated/` (`FederatedMcpHost`, destinations file, host-qualified selector, live probe, fail-closed routing). See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions).
+Record non-obvious decisions here by title. These are Door 2 standing rules. Code anchors: `crates/orbit-mcp/src/federated/` (`FederatedMcpHost`, host-file membership, host-qualified selector, live probe, fail-closed routing). See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions).
 
 ## Federated MCP is a mux of operator-configured destinations
 
 **Recorded:** 2026-08 · [ORB-11009] · [ORB-11010] (PR #1139)
+
+**Amended by:** host-registry [The host registry is operator configuration, not a fleet control plane](../host-registry/4_decisions.md#the-host-registry-is-operator-configuration-not-a-fleet-control-plane). Membership is written by `orbit host add` ([ORB-14448]). The gateway still does not register, probe or place hosts.
 
 ### Context
 
@@ -45,7 +47,7 @@ Every `mcp-destinations.toml` row required `ssh` and `machine_id`, so workspaces
 
 ### Decision
 
-Always include the accepting machine as a local destination, keyed by its existing stable `machine_id` and listed from its workspace registry. Local selectors keep the host-qualified `hm_…/ws_*` shape and are delivered through the local MCP host in-process — never over SSH. `mcp-destinations.toml` remains the declaration surface for additional SSH remotes. A missing file or empty remote list is a valid local-only federated server. Local workspaces require no destination row; a machine-id-only row is still invalid and fails closed. If a valid configured row already names this machine, expose exactly one route for that identity (the local in-process destination) rather than duplicate selectors or open loopback SSH.
+Always include the accepting machine as a local destination, keyed by its existing stable `machine_id` and listed from its workspace registry. Local selectors keep the host-qualified `hm_…/ws_*` shape and are delivered through the local MCP host in-process — never over SSH. `mcp-destinations.toml` remains the declaration surface for additional SSH remotes (superseded: since [ORB-14448] remotes are registered with `orbit host add` in `~/.orbit/hosts.toml`; see host-registry [The host registry is operator configuration, not a fleet control plane](../host-registry/4_decisions.md#the-host-registry-is-operator-configuration-not-a-fleet-control-plane)). A missing file or empty remote list is a valid local-only federated server. Local workspaces require no destination row; a machine-id-only row is still invalid and fails closed. If a valid configured row already names this machine, expose exactly one route for that identity (the local in-process destination) rather than duplicate selectors or open loopback SSH.
 
 Rejected alternatives: treating a machine-id-only TOML row as local membership (the operator file would then describe both remotes and this host, and a typo would silently change routing); keeping loopback SSH as the local path (that is the problem being removed).
 
@@ -57,6 +59,8 @@ Rejected alternatives: treating a machine-id-only TOML row as local membership (
 ## Host-qualified selectors are structured and caller-uninterpreted
 
 **Recorded:** 2026-08 · [ORB-11009] · [ORB-11010] (PR #1139)
+
+**Amended by:** host-registry [A task id routes to the host its prefix names](../host-registry/4_decisions.md#a-task-id-routes-to-the-host-its-prefix-names). An id-only call to an id-routed task tool goes to its prefix's host ([ORB-14449]). Selector-bearing calls keep this rule, and `--host` resolves by copying the host's listed `selector`, never by concatenation.
 
 ### Context
 
@@ -178,7 +182,7 @@ Tier 2: bind the Tier 1 caller row to the SSH key through a root-managed `author
 
 **Recorded:** 2026-09 · [ORB-12564]
 
-**Code anchors:** `crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`, `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`, `crates/orbit-mcp/src/remote/legacy.rs`, `crates/orbit-common/src/governance/authorization.rs::agent_context_declared`
+**Code anchors:** `crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`, `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`, `crates/orbit-mcp/src/remote/legacy.rs`, `crates/orbit-common/src/governance/authorization/env.rs::agent_context_declared`
 
 ### Context
 
@@ -204,7 +208,7 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 
 ### Consequences
 
-- `orbit mcp serve --federated --operator` yields operator-capable sessions on every reachable destination with no per-destination configuration. `orbit_agent_invoke`, `orbit.workflow.ship`, `orbit.task.delete`, `orbit.command.exec`, and `orbit.workspace.claim.release` work remotely.
+- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require registration with `orbit host add`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.agent.invoke`, `orbit.workflow.ship`, and `orbit.command.exec`.
 - `crates/orbit-mcp/src/remote/callers.rs` and `ssh_auth.rs` are gone, with `orbit mcp callers`, `--accept-ssh`, `--caller`, `ORBIT_MCP_SSH_ACCEPTANCE`, `~/.orbit/mcp-ssh-acceptance/`, the setgid login-shell launcher, `CallerIdentityProof`, `RemoteAgentInvokeMode`, `RemoteCallerGrant`, and `CallerProvenance::RemoteGrant`. Roughly 2,500 lines of authorization machinery leave with them.
 - Trusted-host admission is `operator`, full stop. The durable admission keeps `caller_machine_id` for attribution and no longer records an identity proof or a trust mode, because there is only one.
 - Cost: **a destination is as exposed as its `authorized_keys` and no more.** That was already true — the file was editable by the same login — but it is now stated rather than obscured by a ceiling that implied otherwise.
@@ -221,5 +225,7 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - [ORB-11184] — kernel-protected Tier 2 exec boundary before userspace startup
 - [ORB-12564] — argv-propagated remote operator; destination-side caller authorization removed
 - [ORB-12563] — the same rationale applied to the dashboard
+- [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (host-registry)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -158,7 +158,7 @@ impl OrbitRuntime {
         let comments = build_task_comments(params.comment.clone(), create_label.as_str())?;
         let dependencies = normalize_task_dependencies(params.dependencies.clone())?;
         self.validate_crew_name(params.crew.as_deref())?;
-        // [ORB-12717] Crew is decided once, here, and never by a later status
+        // [ORB-12717] Crew is initially decided here, and never by a later status
         // transition. A caller-supplied crew is kept verbatim; otherwise the
         // complexity pools (then `default_crew`) choose one for this task.
         let crew_assignment = self.creation_crew_assignment(
@@ -185,8 +185,18 @@ impl OrbitRuntime {
             params.context_files.clone(),
             &self.paths().repo_root,
         )?;
+        if let Some(outside) = params
+            .context_creation
+            .authorize
+            .iter()
+            .find(|selector| !context_files.contains(selector))
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "creation authorization for `{outside}` does not match a selector this task stores"
+            )));
+        }
 
-        let task = self.with_mutation(|| {
+        let task = self.with_optional_mutation_event(|| {
             let (task, replayed) = self.stores().task_records().create_guarded(
                 StoreTaskCreateParams {
                     actor: create_label.clone(),
@@ -212,8 +222,12 @@ impl OrbitRuntime {
                     external_refs: params.external_refs.clone(),
                     source_task_id: params.source_task_id.clone(),
                     crew: params.crew.clone(),
+                    crew_source: crew_assignment
+                        .as_ref()
+                        .map(|assignment| assignment.source.clone()),
                     orchestrator: params.orchestrator.clone(),
                     comments: comments.clone(),
+                    context_creation: params.context_creation.authorize.clone(),
                 },
                 action_key,
                 digest,
@@ -244,12 +258,10 @@ impl OrbitRuntime {
                     })?,
                 _ => task,
             };
-            Ok((
-                task.clone(),
-                OrbitEvent::TaskAdded {
-                    id: task.id.clone(),
-                },
-            ))
+            let event = (!replayed).then(|| OrbitEvent::TaskAdded {
+                id: task.id.clone(),
+            });
+            Ok((task, event))
         })?;
 
         Ok(task)

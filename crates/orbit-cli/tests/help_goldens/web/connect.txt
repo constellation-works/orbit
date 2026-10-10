@@ -1,0 +1,47 @@
+Open a remote workspace's dashboard over an SSH tunnel
+
+Usage: orbit web connect [OPTIONS] <SSH_HOST>
+
+Arguments:
+  <SSH_HOST>
+          SSH destination — anything `ssh` accepts (`host`, `user@host`, or a `~/.ssh/config` alias)
+
+Options:
+      --port <PORT>
+          Local port for the tunnel. Defaults to 7878, falling back to an ephemeral port if 7878 is already in use
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --remote-port <REMOTE_PORT>
+          Port the remote `orbit web serve` listens on (remote loopback)
+          
+          [default: 7878]
+
+      --workspace <SELECTOR>
+          Remote workspace to preselect — a registered name, logical ID (`ws_*`), or remote checkout path — passed through to `orbit web serve --workspace` on the remote host. Omit to use the remote's default workspace resolution
+
+      --global
+          Deprecated, no-op: remote dashboards always serve every registered workspace. Forwarded when spawning a dashboard for compatibility with older remote binaries
+
+      --no-open
+          Do not open the dashboard URL in a browser once the tunnel is ready
+
+      --no-operator
+          Spawn the remote dashboard without operator capability. Operations controls stay read-only. The default is to pass `--operator` because the SSH login is the operator act
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -5,8 +5,8 @@
 //! state.
 //!
 //! The engine lives in `orbit-store` because it needs the canonical bundle I/O
-//! primitives ([`read_bundle_at`]/[`write_bundle_at`]) and the private
-//! [`TaskRegistryStore`] internals. `orbit-core` exposes thin facades over it;
+//! primitives (`read_bundle_at`/`write_bundle_at`) and the private
+//! `TaskRegistryStore` internals. `orbit-core` exposes thin facades over it;
 //! `orbit-cli` wires the `orbit task export/import/reindex` surfaces.
 //!
 //! # Model
@@ -44,9 +44,9 @@
 //! Bundles carry a `artifacts/manifest.yaml` sidecar and the referenced blobs
 //! under `artifacts/files/**`. Export tars the entire canonical bundle tree, so
 //! blobs are always present in the archive. Import validates each blob against
-//! the manifest during staging ([`read_bundle_at`] hashes every file), then
+//! the manifest during staging (`read_bundle_at` hashes every file), then
 //! publishes the bundle and blob tree together with
-//! [`write_bundle_with_artifacts_at`] under the same rollback guard.
+//! `write_bundle_with_artifacts_at` under the same rollback guard.
 //!
 //! ## Backfilling stranded bundles
 //! Before ORB-10042, `write_bundle_at` wrote only the manifest, so any
@@ -83,6 +83,7 @@ mod manifest;
 mod publication;
 mod publish;
 mod reindex;
+mod relation_audit;
 mod restore;
 
 #[cfg(test)]
@@ -122,6 +123,7 @@ pub use publish::{
     PublicationPublishRequest, PublicationPublishStatus, publish_task_snapshot,
 };
 pub use reindex::{ReindexOutcome, reindex_workspace};
+pub use relation_audit::audit_relation_targets;
 pub use restore::{
     PublicationRecoveryCompleteness, PublicationRestoreMode, PublicationRestoreOutcome,
     PublicationRestoreRequest, restore_publication,

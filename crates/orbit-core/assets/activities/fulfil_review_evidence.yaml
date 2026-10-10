@@ -1,0 +1,68 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: fulfil_review_evidence
+spec:
+  type: deterministic
+  description: >
+    Fulfils one review evidence hold on a Linux owner. The hold must still be
+    the in-progress task's latest decision, with only `codeql` and Linux
+    `host_sandbox_test` requirements, and no result yet. A `codeql` command
+    must be `scripts/codeql-rust-local.sh` with its own options and one query
+    selector; a `host_sandbox_test` command must be `cargo test -p <crate>
+    --test <target> [<filter>]` or exactly one of the owner's required
+    validation commands, with no shell metacharacter. Any other command
+    refuses the whole hold before anything runs. The Linux owner must have
+    working Bubblewrap namespaces, and the scratch filesystem must have
+    `min_free_mib` free (default 30 GiB). Each command runs without a shell at
+    the held commit: CodeQL in a standalone shallow checkout confined by
+    Bubblewrap, a sandbox test in a detached worktree outside any sandbox
+    with its own build target, because the namespaces it tests cannot nest.
+    Both scratch trees are removed. It attaches every run's log. Only when
+    every run passed (CodeQL with no findings, a test that executed without
+    skipping or deferring) does it also attach the results, which queues a
+    fresh review; it never approves a candidate. Otherwise `reason` names the
+    refusal and the hold stays in place. Always audited.
+  input_schema_json:
+    type: object
+    required: [task_id, hold_key]
+    properties:
+      task_id:
+        type: string
+        minLength: 1
+      hold_key:
+        type: string
+        minLength: 1
+      attempt_key:
+        type: string
+      min_free_mib:
+        type: integer
+        minimum: 0
+  output_schema_json:
+    type: object
+    required: [task_id, hold_key, fulfilled, retryable, requeued]
+    properties:
+      task_id:
+        type: string
+      hold_key:
+        type: string
+      fulfilled:
+        type: boolean
+      # hold_not_current, command_not_allowed, shell_metacharacter,
+      # argument_not_allowed, artifact_not_allowed, not_owner, host_not_linux,
+      # sandbox_unavailable, disk_insufficient, candidate_unreachable,
+      # tool_missing, platform_refused, analysis_incomplete, command_failed,
+      # timed_out, results_unreadable, findings_reported, self_skipped,
+      # no_tests_ran or test_failed; null when fulfilled.
+      reason:
+        type: [string, "null"]
+      detail:
+        type: string
+      # Whether a later tick may run the same hold again.
+      retryable:
+        type: boolean
+      # Whether receipt moved the task back to the backlog for review.
+      requeued:
+        type: boolean
+  action: fulfil_review_evidence
+  config: {}

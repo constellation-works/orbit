@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Overview"
 owner: codex
 last_updated: 2026-08-15
-last_validated: 2026-09-25
+last_validated: 2026-10-09
 status: Draft
 feature: auditability
 doc_role: overview
@@ -53,13 +53,13 @@ row when it cannot be dispatched.
 
 The v2 activity/job runtime emits `V2AuditEvent` envelopes for run, step, activity, fan-out, loop, filesystem, denial, and CLI-backend lifecycle events into the `v2_audit_events` SQLite store. This layer is the workflow replay spine: it carries `run_id`, `event_id`, `parent_event_id`, `agent_identity`, and optional `workspace_path`. `orbit run events`, `orbit run trace`, `orbit run show -s`, and `orbit run logs -s` expose the same activity DAG `step.id` source of truth after [T20260426-0705] and [T20260426-0709].
 
-### 2.4 Agent-loop audit events preserve provider and tool detail
+### 2.4 Retained audit contracts preserve historical provider and tool detail
 
-The standalone `orbit-agent` HTTP loop emits `LoopAuditEvent` records for sessions, HTTP
-requests/responses, tool requests/results, iteration boundaries, and policy denials. Loop events
-are persisted in the same `v2_audit_events` SQLite store only when emitted; large request,
-response, input, and output bodies are stored as redacted content-addressed blobs under
-`.orbit/state/audit/blobs/`.
+`orbit-agent::loop_engine::audit` retains `LoopAuditEvent` records for sessions, HTTP
+requests/responses, tool requests/results, iteration boundaries, and policy denials so existing
+`v2_audit_events` rows remain readable. The runtime sink still accepts these events;
+provider execution uses CLI subprocesses. Payload bodies are stored as redacted
+content-addressed blobs under `.orbit/state/audit/blobs/`.
 
 ### 2.5 Invocation metrics are adjacent, not a replacement
 
@@ -71,7 +71,7 @@ Blob writes apply pattern-based redaction at write time, and CLI error audit pat
 
 ### 2.7 Process tracing has a global JSONL feed
 
-The default tracing subscriber appends redacted structured events to `~/.orbit/state/logs/orbit.jsonl` after [T20260426-2343] and [T20260426-2349]. The feed is global because logging initializes before workspace resolution. After [T20260427-0023], filesystem policy denials, proc-spawn allowlist denials, and friction record submissions also project stable `tracing::warn!` events beside their canonical stores. Friction records now live in host-global SQLite, scoped by workspace; the old Markdown tree is import/rollback evidence. `orbit-web` surfaces the live records in `Knowledge > Frictions` without re-entering the task lifecycle.
+The default tracing subscriber appends redacted operational events to `~/.orbit/state/logs/orbit.jsonl` and agent relay to the separately budgeted `orbit-agent.jsonl` beside it after [T20260426-2343] and [T20260426-2349]. The feed is global because logging initializes before workspace resolution. After [T20260427-0023], filesystem policy denials, proc-spawn allowlist denials, and friction record submissions also project stable `tracing::warn!` events beside their canonical stores. Friction records now live in host-global SQLite, scoped by workspace; the old Markdown tree is import/rollback evidence. `orbit-web` surfaces the live records in `Knowledge > Frictions` without re-entering the task lifecycle.
 
 ---
 
@@ -85,7 +85,7 @@ The default tracing subscriber appends redacted structured events to `~/.orbit/s
 | V2 activity/job envelopes and SQLite sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002], [T20260426-0519] |
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-core/src/runtime/audit/run.rs` | [T20260426-0705], [T20260426-0709] |
 | Loop audit events and blobs | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/storage/blob_store.rs` | [T20260426-0605] |
-| Redaction utilities | `crates/orbit-common/src/security/redaction.rs` | [T20260426-0605], [T20260426-2349] |
+| Redaction utilities | [crates/orbit-common/src/security/redaction/](../../../crates/orbit-common/src/security/redaction/) | [T20260426-0605], [T20260426-2349] |
 | Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers | [T20260426-2343], [T20260427-0023] |
 | Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | [T20260510-13], [ORB-00062] |
 | V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store/`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | [T20260426-0526] |

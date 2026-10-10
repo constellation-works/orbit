@@ -1,10 +1,8 @@
-//! Structured audit for the HTTP agent loop.
+//! Structured audit contracts used by the runtime's persistent sinks.
 //!
-//! The loop emits a fixed set of structured events — session lifecycle, HTTP
-//! request/response, tool-call request/result, iteration boundaries, policy
-//! denials — to any [`AuditSink`] implementation. Events carry sha256
-//! pointers to redacted payloads stored in a [`BlobStore`]; full bodies live
-//! in a separate content-addressed store so events stay small and queryable.
+//! Session, HTTP, tool and policy event variants are retained for historical
+//! rows in `v2_audit_events`. Events carry hashes pointing to payloads redacted
+//! at write time in a separate content-addressed [`BlobStore`].
 //!
 //! Persistent audit storage is owned by the runtime layer. Tests use
 //! [`InMemorySink`], callers with no need for persistence use [`NullSink`].
@@ -13,16 +11,14 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-// Re-exports for existing `orbit_agent::...` callers. New code should import
-// directly from `orbit_common` — these aliases preserve the public surface
-// for the `redaction_smoke` example and downstream crates that already
-// import via `orbit_agent::loop_engine::audit`.
+// Keep the engine's existing audit imports stable. New code can use the
+// common crate's storage and redaction mechanisms directly.
 pub use orbit_common::security::redaction::PatternRedactor as RedactionMiddleware;
 pub use orbit_common::storage::blob_store::BlobStore;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSnapshot {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -30,7 +26,7 @@ pub struct UsageSnapshot {
     pub cache_creation_input_tokens: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_kind", rename_all = "snake_case")]
 pub enum LoopAuditEvent {
     SessionSpawn {
@@ -86,6 +82,7 @@ pub enum LoopAuditEvent {
         tool_use_id: String,
         outcome: String,
         output_sha256: String,
+        #[serde(deserialize_with = "deserialize_duration_ms")]
         duration_ms: u128,
     },
     IterationBoundary {
@@ -103,6 +100,14 @@ pub enum LoopAuditEvent {
         tool_name: String,
         reason: String,
     },
+}
+
+// Serde's internally tagged buffer does not support deserialize_u128. Persisted
+// millisecond durations fit u64; widen on read without changing serialization.
+fn deserialize_duration_ms<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u128, D::Error> {
+    u64::deserialize(deserializer).map(u128::from)
 }
 
 pub trait AuditSink: Send + Sync {

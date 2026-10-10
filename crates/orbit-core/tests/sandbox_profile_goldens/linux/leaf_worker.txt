@@ -20,11 +20,9 @@ modify:
   !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/.env.*
   !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/*.env
   !<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/**/*.env.*
-  <ROOT>/repo/.orbit
-  <ROOT>/home/.orbit
+  <ROOT>/home/.orbit/tasks
   <ROOT>/home/.orbit/state/logs
   <ROOT>/home/.orbit/state/audit
-  <ROOT>/home/.orbit/tasks
   <ROOT>/home/.orbit/orbit.db
   <ROOT>/home/.orbit/orbit.db-wal
   <ROOT>/home/.orbit/orbit.db-shm
@@ -43,9 +41,9 @@ modify:
   <ROOT>/home/.grok
   !<ROOT>/home/.orbit/state/recovery-authority/**
 runtime write authority:
+  <ROOT>/home/.orbit/tasks
   <ROOT>/home/.orbit/state/logs
   <ROOT>/home/.orbit/state/audit
-  <ROOT>/home/.orbit/tasks
   <ROOT>/home/.orbit/orbit.db
   <ROOT>/home/.orbit/orbit.db-wal
   <ROOT>/home/.orbit/orbit.db-shm
@@ -69,13 +67,16 @@ bwrap:
   --tmpfs /tmp
   --ro-bind <ROOT> <ROOT>
   --ro-bind <ROOT>/home <ROOT>/home
+  --ro-bind <ROOT>/home/.orbit <ROOT>/home/.orbit
+  --ro-bind <ROOT>/home/.orbit/state <ROOT>/home/.orbit/state
   --ro-bind <ROOT>/repo <ROOT>/repo
+  --ro-bind <ROOT>/repo/.orbit <ROOT>/repo/.orbit
+  --ro-bind <ROOT>/repo/.orbit/state <ROOT>/repo/.orbit/state
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees <ROOT>/repo/.orbit/state/worktrees
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
-  --bind <ROOT>/repo/.orbit <ROOT>/repo/.orbit
-  --bind <ROOT>/home/.orbit <ROOT>/home/.orbit
+  --bind-fd <fd> <ROOT>/home/.orbit/tasks
   --bind-fd <fd> <ROOT>/home/.orbit/state/logs
   --bind-fd <fd> <ROOT>/home/.orbit/state/audit
-  --bind-fd <fd> <ROOT>/home/.orbit/tasks
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-wal
   --bind-fd <fd> <ROOT>/home/.orbit/orbit.db-shm
@@ -92,9 +93,6 @@ bwrap:
   --bind <ROOT>/home/.claude <ROOT>/home/.claude
   --bind <ROOT>/home/.gemini <ROOT>/home/.gemini
   --bind <ROOT>/home/.grok <ROOT>/home/.grok
-  --bind <ROOT>/home/.orbit/state <ROOT>/home/.orbit/state
-  --bind <ROOT>/repo/.orbit/state <ROOT>/repo/.orbit/state
-  --bind <ROOT>/repo/.orbit/state/worktrees <ROOT>/repo/.orbit/state/worktrees
   --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines
@@ -108,10 +106,10 @@ bwrap:
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
   --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
   --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace/
-  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
-  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
-  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden /tmp/orbit-workspace
   --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit /tmp/orbit-workspace/.orbit
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/auto_tasks /tmp/orbit-workspace/.orbit/auto_tasks
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/routines /tmp/orbit-workspace/.orbit/routines
@@ -120,9 +118,9 @@ bwrap:
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/.orbit/tmp /tmp/orbit-workspace/.orbit/tmp
   --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
   --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
-  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
-  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
-  --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
+  --ro-bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
   --bind <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden/target /tmp/orbit-build
   --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugins
   --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugin-secrets

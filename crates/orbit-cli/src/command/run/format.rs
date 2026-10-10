@@ -72,10 +72,29 @@ pub(crate) fn format_timestamp(value: Option<chrono::DateTime<chrono::Utc>>) -> 
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// A duration for human output: `3h 39m 51s`, or `250ms` under a second.
+///
+/// Leading zero units are dropped and inner ones kept (`1h 0m 5s`), so every
+/// value reads as one span. Sub-second remainders of longer spans are
+/// truncated; `--json` carries the exact milliseconds.
 pub(crate) fn format_duration(value: Option<u64>) -> String {
-    value
-        .map(|duration| format!("{duration}ms"))
-        .unwrap_or_else(|| "-".to_string())
+    let Some(ms) = value else {
+        return "-".to_string();
+    };
+    if ms < 1000 {
+        return format!("{ms}ms");
+    }
+    let total_seconds = ms / 1000;
+    let (hours, minutes, seconds) = (
+        total_seconds / 3600,
+        total_seconds % 3600 / 60,
+        total_seconds % 60,
+    );
+    match (hours, minutes) {
+        (0, 0) => format!("{seconds}s"),
+        (0, _) => format!("{minutes}m {seconds}s"),
+        _ => format!("{hours}h {minutes}m {seconds}s"),
+    }
 }
 
 /// The tasks holding each selector a run is waiting on, keyed by selector.

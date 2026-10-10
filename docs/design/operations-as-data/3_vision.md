@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Vision
 owner: claude
-last_updated: 2026-07-26
-last_validated: 2026-09-23
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Accepted
 feature: operations-as-data
 doc_role: vision
@@ -33,11 +33,11 @@ schedule migrations.
    argues a REST path is an interface design choice. A weaker version — declaring
    a *default* route shape per verb kind, overridable per noun — might capture
    most of the value without pretending HTTP is generated. Untested.
-3. **What happens to nouns whose verbs are not uniform?** Friction's seven verbs
+3. **What happens to nouns whose verbs are not uniform?** Friction's eight verbs
    are all "one JSON in, one JSON out." Tasks have verbs with side effects on
-   lifecycle state, reservations, and the semantic index. Whether those fit
-   `OperationSpec` unchanged, or need an effects declaration, is unknown until
-   someone tries.
+   lifecycle state, reservations, and the lexical task search index. Whether
+   those fit `OperationSpec` unchanged, or need an effects declaration, is
+   unknown until someone tries.
 4. **Does the split table survive bearing 2?** [North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry) bearing 2 (knowledge /
    execution split) would move the knowledge nouns' handlers away from the
    current `OrbitRuntime`. If handlers end up in a crate that can sit below the
@@ -48,9 +48,9 @@ schedule migrations.
    one file and lose the per-noun compile-time exhaustiveness that makes a
    missing handler a local error.
 6. **Cross-field validation.** Rules like "update needs at least one of status,
-   tags, body" live in handlers and are invisible to every surface, so the CLI
-   cannot pre-reject them and MCP cannot advertise them. Worth declaring, or
-   worth leaving as domain logic?
+   tags, body, title, rehome_to" live in handlers and are invisible to every
+   surface, so the CLI cannot pre-reject them and MCP cannot advertise them.
+   Worth declaring, or worth leaving as domain logic?
 
 ## 2. Prior Work
 
@@ -58,7 +58,7 @@ schedule migrations.
 
 - **[North-star architecture bearing: operations as data behind an operation registry](../orbit-core/4_decisions.md#north-star-architecture-bearing-operations-as-data-behind-an-operation-registry)** — the north-star bearing this feature implements, now carrying the
   pilot outcome and the ratchet.
-- **`crates/orbit-cli/src/command/operation_registry.rs`** — the pre-existing "commands as data"
+- **`crates/orbit-cli/src/command/operation/registry.rs`** — the pre-existing "commands as data"
   table for *top-level CLI dispatch* (runtime need, audit metadata, JSON error
   preference). Same instinct, different axis: it declares cross-cutting policy
   per top-level command, where this feature declares the operation itself. The

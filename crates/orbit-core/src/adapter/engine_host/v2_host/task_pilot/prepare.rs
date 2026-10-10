@@ -1,18 +1,23 @@
 //! Task-pilot preparation: discover and partition the tasks a run assesses.
 
+use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
+use crate::application::job::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
 use crate::application::task::TaskListFilter;
 
 use super::input::{action_failed, bounded_usize, requested_workspace_root, string_array};
-use super::persist::no_target_assessment_marker;
+use super::persist::{no_target_assessment_marker, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
-use super::{VALIDATION_TOOL_WARNINGS, requested_base_branch};
+use super::{
+    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, VALIDATION_TOOL_WARNINGS,
+    requested_base_branch,
+};
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
 const HARD_MAX_PARTITION_SIZE: usize = 5;
@@ -24,6 +29,10 @@ const NO_DIFF_TAGS: [&str; 2] = ["no-diff-needed", "no-diff-expected"];
 /// only the per-task sample so evidence size stops scaling with terminal
 /// workspace history [ORB-11244].
 const MAX_EXCLUDED_SAMPLE: usize = 20;
+/// A task the workspace's PR pipeline could not deliver: no Git remote of the
+/// checkout names a network host. Preparing it would only stage work that
+/// fails at `pr_open`.
+const PR_FORGE_REMOTE_MISSING: &str = "pr_forge_remote_missing";
 
 pub(in super::super) fn prepare(
     runtime: &OrbitRuntime,
@@ -31,7 +40,7 @@ pub(in super::super) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input, &[])
+    let claim = crate::application::automation::members::claim(runtime, input)
         .map_err(|error| action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
@@ -64,8 +73,51 @@ pub(in super::super) fn prepare(
             .map_err(|error| action_failed(action, error.to_string()))?;
     let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
         .map_err(|error| action_failed(action, error.to_string()))?;
+    // A claimed task the branch already changed under is not piloted against
+    // the frozen source: it settles superseded, and its member is claimed
+    // afresh at the head [ORB-14476]. Apply carries these outcomes.
+    let superseded = match &claim {
+        Some(claim) => crate::application::automation::members::stale_tasks(
+            runtime,
+            claim,
+            &policy,
+            &Value::Null,
+            &claim.task_ids(),
+            &BTreeMap::new(),
+        )
+        .map_err(|error| action_failed(action, error.to_string()))?,
+        None => BTreeMap::new(),
+    };
 
-    let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
+    // Shared with delivery admission: the workspace's own ship mode decides
+    // whether a task would take the PR route.
+    let ship_mode = runtime.automatic_delivery_ship_mode();
+    let forge = PrForgeCheck::default();
+    let forge_refused = |tags: &[String]| {
+        tags_route_through_pr_pipeline(tags, ship_mode) && forge.require(runtime).is_err()
+    };
+
+    // Apply proves that a newer owner superseded preparation from the history
+    // past each task's `history_len`, so that boundary must not follow the
+    // snapshot apply compares against. Explicit selections name their tasks
+    // up front, so their boundaries are read before the selection read; a
+    // task absent here had no history yet. The selection read reports a
+    // malformed or missing id.
+    let mut explicit_history_lens = BTreeMap::new();
+    for task_id in &explicit_task_ids {
+        if orbit_types::task::validate_orb_task_id(task_id).is_err() {
+            continue;
+        }
+        match runtime.get_task_history(task_id) {
+            Ok(history) => {
+                explicit_history_lens.insert(task_id.clone(), history.len());
+            }
+            Err(OrbitError::NotFound { .. }) => {}
+            Err(error) => return Err(action_failed(action, error.to_string())),
+        }
+    }
+
+    let (mode, task_ids, task_snapshots, excluded) = if explicit_mode {
         let all_tasks = runtime
             .list_tasks()
             .map_err(|error| action_failed(action, format!("list workspace tasks: {error}")))?;
@@ -94,9 +146,13 @@ pub(in super::super) fn prepare(
             .collect::<Result<Vec<_>, _>>()?;
         let selected = selected
             .into_iter()
+            .filter(|task| !superseded.contains_key(&task.id))
             .filter(|task| {
                 if active_preparations.contains_key(&task.id) {
                     excluded.record(&task.id, "already_preparing", &active_preparations);
+                    false
+                } else if forge_refused(&task.tags) {
+                    excluded.record(&task.id, PR_FORGE_REMOTE_MISSING, &active_preparations);
                     false
                 } else {
                     true
@@ -150,7 +206,8 @@ pub(in super::super) fn prepare(
                 active_preparations
                     .contains_key(&envelope.id)
                     .then_some("active_pilot_prepared")
-            });
+            })
+            .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING));
             let reason = if reason.is_none()
                 && envelope.context_files.is_empty()
                 && fresh_no_target_assessment(
@@ -204,37 +261,76 @@ pub(in super::super) fn prepare(
     // fingerprint and the validation-tool feasibility check. Discovery above
     // deliberately works from envelopes, which carry no acceptance criteria,
     // and the selection is already bounded by `max_tasks` at this point.
+    //
+    // Automatic selection learns its tasks only from the envelope read, so its
+    // boundary is read here and the snapshot is retaken from the hydration
+    // that follows it. A task another writer moved out of automatic selection
+    // in between, such as by a workflow admission, settles superseded now
+    // rather than reaching apply with that change hidden behind its boundary.
+    #[cfg(test)]
+    hydration_test_hook::run(runtime);
     let lane = ImplementationLane::resolve(runtime);
-    for (task_id, snapshot) in task_ids.iter().zip(task_snapshots.iter_mut()) {
-        let task = runtime
-            .get_task(task_id)
-            .map_err(|error| action_failed(action, error.to_string()))?;
-        snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
-
-        let Some(source) = &source else {
-            continue;
+    let mut retained = Vec::with_capacity(task_ids.len());
+    let mut superseded_during_preparation = Vec::new();
+    for (task_id, mut snapshot) in task_ids.into_iter().zip(task_snapshots) {
+        let history_len = if explicit_mode {
+            explicit_history_lens.get(&task_id).copied().unwrap_or(0)
+        } else {
+            runtime
+                .get_task_history(&task_id)
+                .map_err(|error| action_failed(action, error.to_string()))?
+                .len()
         };
-        let fingerprints = crate::application::automation::preparation::fingerprints(
-            runtime,
-            &task,
-            &source.source_revision,
-            &policy,
-        )
-        .map_err(|error| action_failed(action, error.to_string()))?;
-        // Each task is checked against the batch member that claimed it.
-        if claim.as_ref().is_some_and(|claim| {
-            claim
-                .members()
-                .iter()
-                .find(|member| member.task_ids.contains(task_id))
-                .is_none_or(|member| member.fingerprint != fingerprints.material)
-        }) {
-            return Err(action_failed(action, "state-trigger task meaning changed"));
+        let task = runtime
+            .get_task(&task_id)
+            .map_err(|error| action_failed(action, error.to_string()))?;
+        if !explicit_mode {
+            if let Some(outcome) = left_automatic_selection(&snapshot, &task) {
+                superseded_during_preparation.push(outcome);
+                continue;
+            }
+            snapshot = task_snapshot(
+                &task.id,
+                &task.title,
+                task.status,
+                task.complexity,
+                &task.tags,
+                &task.context_files,
+            );
         }
-        snapshot["material_fingerprint"] = json!(fingerprints.material);
-        snapshot["status_neutral_fingerprint"] = json!(fingerprints.status_neutral);
-        snapshot["material_components"] = json!(fingerprints.components);
+        snapshot["history_len"] = json!(history_len);
+        snapshot[VALIDATION_TOOL_WARNINGS] = json!(lane.validation_warnings(&task));
+        let creation = runtime
+            .context_creation_state(&task)
+            .map_err(|error| action_failed(action, error.to_string()))?;
+        snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
+        snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
+
+        if let Some(source) = &source {
+            let fingerprints = crate::application::automation::preparation::fingerprints(
+                runtime,
+                &task,
+                &source.source_revision,
+                &policy,
+            )
+            .map_err(|error| action_failed(action, error.to_string()))?;
+            // Each task is checked against the batch member that claimed it.
+            if claim.as_ref().is_some_and(|claim| {
+                claim
+                    .members()
+                    .iter()
+                    .find(|member| member.task_ids.contains(&task_id))
+                    .is_none_or(|member| member.fingerprint != fingerprints.material)
+            }) {
+                return Err(action_failed(action, "state-trigger task meaning changed"));
+            }
+            snapshot["material_fingerprint"] = json!(fingerprints.material);
+            snapshot["status_neutral_fingerprint"] = json!(fingerprints.status_neutral);
+            snapshot["material_components"] = json!(fingerprints.components);
+        }
+        retained.push((task_id, snapshot));
     }
+    let (task_ids, task_snapshots): (Vec<_>, Vec<_>) = retained.into_iter().unzip();
 
     // Size partitions only. Crew homogeneity is the state-consumer batching
     // step [ORB-12761]: a mixed-crew attempt is rejected at dispatch before
@@ -250,8 +346,16 @@ pub(in super::super) fn prepare(
         })
         .collect::<Vec<_>>();
 
+    let superseded_by_source = superseded
+        .iter()
+        .map(|(task_id, detail)| source_superseded(task_id, detail))
+        .collect::<Vec<_>>();
+
     Ok(json!({
         "state_automation": claim,
+        "superseded_by_source": superseded_by_source,
+        "superseded_during_preparation": superseded_during_preparation,
+        "source_age": source.as_ref().map(|source| source.age(&workspace_root)),
         "mode": mode,
         "workspace_path": workspace_root,
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
@@ -273,6 +377,42 @@ pub(in super::super) fn prepare(
         "excluded_by_reason": excluded.by_reason,
         "excluded_sample_truncated": excluded.total > excluded.sample.len(),
         "excluded_omitted_count": excluded.total.saturating_sub(excluded.sample.len()),
+        // The one refusal behind every `pr_forge_remote_missing` exclusion,
+        // naming the remotes and both ways out.
+        "pr_forge_refusal": excluded
+            .by_reason
+            .contains_key(PR_FORGE_REMOTE_MISSING)
+            .then(|| forge.require(runtime).err().map(|error| error.to_string()))
+            .flatten(),
+    }))
+}
+
+/// The superseded outcome for an automatically selected task that another
+/// writer moved out of automatic selection after its envelope was read, or
+/// `None` while hydration still selects it.
+fn left_automatic_selection(selected: &Value, task: &Task) -> Option<Value> {
+    automatic_exclusion_reason(
+        task.status,
+        &task.context_files,
+        task.complexity,
+        &task.tags,
+    )?;
+    let (reason, detail) = if matches!(
+        task.status,
+        TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
+    ) {
+        ("task_terminal", "task became terminal after selection")
+    } else if selected["status"] != json!(task.status) {
+        (
+            "status_changed",
+            "a durable task transition superseded preparation",
+        )
+    } else {
+        ("task_edited", "task fields changed after selection")
+    };
+    Some(json!({
+        "task_id": task.id, "outcome": "superseded", "reason": reason,
+        "status": task.status, "detail": detail,
     }))
 }
 
@@ -386,4 +526,29 @@ fn task_snapshot(
         "tags": tags,
         "context_files_before": context_files,
     })
+}
+
+/// Runs once between the selection read and hydration, so a test can land a
+/// concurrent write in that window.
+#[cfg(test)]
+pub(super) mod hydration_test_hook {
+    use std::cell::RefCell;
+
+    use crate::OrbitRuntime;
+
+    type Hook = Box<dyn FnOnce(&OrbitRuntime)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = RefCell::new(None);
+    }
+
+    pub(in super::super) fn install(hook: impl FnOnce(&OrbitRuntime) + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn run(runtime: &OrbitRuntime) {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook(runtime);
+        }
+    }
 }

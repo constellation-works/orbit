@@ -61,21 +61,94 @@ mod liveness {
 // macOS: libproc start-time rendering must match persisted ps owner identities exactly.
 #[cfg(target_os = "macos")]
 mod darwin {
+    use std::io;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
     use crate::process::identity::darwin_lstart_utc;
+    use crate::test_env::{PsRun, classify_ps, ps_lstart_utc};
+
+    #[derive(Debug, PartialEq)]
+    enum PsComparison {
+        Matches,
+        Skipped(String),
+    }
+
+    /// Compare a `ps -o lstart=` run with the libproc rendering. A sandbox
+    /// refusal to start `ps` skips; a failed `ps` or different output fails.
+    fn compare_with_ps(ps: PsRun, libproc: Option<&str>) -> Result<PsComparison, String> {
+        let output = match ps {
+            PsRun::Ran(output) => output,
+            PsRun::Denied(reason) => return Ok(PsComparison::Skipped(reason)),
+        };
+        if !output.status.success() {
+            return Err(format!(
+                "ps failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let from_ps = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if libproc == Some(from_ps.as_str()) {
+            Ok(PsComparison::Matches)
+        } else {
+            Err(format!(
+                "libproc rendered {libproc:?}, ps printed {from_ps:?}"
+            ))
+        }
+    }
 
     /// The sandbox-safe probe must produce exactly what `ps` prints, or a
     /// token a worker computes would never match the one the host recorded.
     #[test]
+    // A managed executor's sandbox refuses to exec `ps`; the skip notice goes
+    // to stderr so the run says why nothing was compared.
+    #[allow(clippy::print_stderr)]
     fn libproc_start_time_renders_exactly_as_ps_lstart() {
         let pid = std::process::id();
-        let output = std::process::Command::new("ps")
-            .args(["-o", "lstart=", "-p", &pid.to_string()])
-            .env("TZ", "UTC")
-            .env("LC_ALL", "C")
-            .env("LANG", "C")
-            .output()
-            .expect("run ps");
-        let from_ps = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(darwin_lstart_utc(pid).as_deref(), Some(from_ps.as_str()));
+        match compare_with_ps(ps_lstart_utc(pid), darwin_lstart_utc(pid).as_deref()) {
+            Ok(PsComparison::Matches) => {}
+            Ok(PsComparison::Skipped(reason)) => eprintln!("SKIP: {reason}"),
+            Err(failure) => panic!("{failure}"),
+        }
+    }
+
+    /// A sandbox denial must not hide a real rendering mismatch: everything
+    /// except a `PermissionDenied` spawn still fails the comparison.
+    #[test]
+    fn only_a_denied_ps_spawn_skips_the_comparison() {
+        let lstart = "Wed Oct  7 01:02:03 2026";
+        let ran = |code: i32, stdout: &str| {
+            classify_ps(Ok(Output {
+                status: ExitStatus::from_raw(code << 8),
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            }))
+        };
+
+        assert_eq!(
+            compare_with_ps(ran(0, &format!("{lstart}\n")), Some(lstart)),
+            Ok(PsComparison::Matches)
+        );
+        for (case, ps, libproc) in [
+            (
+                "different output",
+                ran(0, "Wed Oct  7 01:02:04 2026\n"),
+                Some(lstart),
+            ),
+            ("no libproc rendering", ran(0, lstart), None),
+            ("ps ran and failed", ran(1, ""), Some(lstart)),
+        ] {
+            assert!(compare_with_ps(ps, libproc).is_err(), "{case} must fail");
+        }
+        let denied = classify_ps(Err(io::Error::from_raw_os_error(libc::EPERM)));
+        assert!(matches!(
+            compare_with_ps(denied, Some(lstart)),
+            Ok(PsComparison::Skipped(_))
+        ));
+        assert!(
+            std::panic::catch_unwind(|| classify_ps(Err(io::ErrorKind::NotFound.into()))).is_err(),
+            "a missing `ps` is a failure, not a skip"
+        );
     }
 }

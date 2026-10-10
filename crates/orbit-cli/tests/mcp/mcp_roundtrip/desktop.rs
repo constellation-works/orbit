@@ -311,6 +311,119 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
 }
 
+/// [ORB-14173] A replica's routine projection matches what it can actually
+/// change: an operator lists and enables its worktree GC, while owner work —
+/// ship sweep, auto-task minting and toggles — is refused with the owner
+/// named and leaves every definition byte-identical.
+#[test]
+fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest() {
+    let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
+    let selector = workspace.work.to_str().unwrap();
+    let routines = workspace.work.join(".orbit/routines");
+    let gc_path = routines.join("worktree_gc.yaml");
+    let ship_path = routines.join("ship_sweep.yaml");
+    let auto_task_path = workspace.work.join(".orbit/auto_tasks/qa-sweep.yaml");
+    let ship_before = std::fs::read(&ship_path).unwrap();
+    let auto_task_before = std::fs::read(&auto_task_path).unwrap();
+    let mut client = workspace.serve_with_args(&["--operator"]);
+
+    let listed = client.call_tool_ok(
+        "orbit_routine_control",
+        json!({"workspace":selector,"action":"list","limit":50}),
+    );
+    let row = |name: &str| {
+        listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == name)
+            .unwrap_or_else(|| panic!("{name} not listed: {listed}"))
+            .clone()
+    };
+    let gc = row("worktree-gc-mcp-roundtrip");
+    assert_eq!(gc["toggle_available"], true, "{gc}");
+    assert_eq!(gc["enabled"], false, "{gc}");
+    let ship = row("ship-sweep-mcp-roundtrip");
+    assert_eq!(ship["toggle_available"], false, "{ship}");
+    assert_eq!(ship["state"], "owner_only", "{ship}");
+    assert!(
+        ship["toggle_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("hm_remote_owner")),
+        "an unavailable toggle explains owner authority: {ship}"
+    );
+
+    let enabled = client.call_tool_ok(
+        "orbit_routine_control",
+        json!({"workspace":selector,"action":"toggle","name":"worktree-gc-mcp-roundtrip",
+            "target":"job:worktree_gc_pipeline","expected_enabled":false,"enabled":true}),
+    );
+    assert_eq!(enabled["enabled"], true, "{enabled}");
+    assert!(
+        std::fs::read_to_string(&gc_path)
+            .unwrap()
+            .contains("enabled: true"),
+        "the replica GC definition was enabled"
+    );
+
+    let refused = client.call_tool_err(
+        "orbit_routine_control",
+        json!({"workspace":selector,"action":"toggle","name":"ship-sweep-mcp-roundtrip",
+            "target":"job:workspace_ship_pipeline","expected_enabled":false,"enabled":true}),
+    );
+    assert_eq!(refused["code"], "capability_refused", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("hm_remote_owner")),
+        "{refused}"
+    );
+    for (tool, input) in [
+        (
+            "orbit_auto_task_mint",
+            json!({"workspace":selector,"name":"qa-sweep","acknowledge_unconditional":true}),
+        ),
+        (
+            "orbit_auto_task_update",
+            json!({"workspace":selector,"name":"qa-sweep","expected_enabled":false,"enabled":true}),
+        ),
+        (
+            "orbit_task_add",
+            json!({"workspace":selector,"title":"must not fork","description":"replica","complexity":"low","model":"codex"}),
+        ),
+    ] {
+        let refused = client.call_tool_err(tool, input);
+        assert_eq!(refused["code"], "capability_refused", "{tool}: {refused}");
+    }
+    assert_eq!(std::fs::read(&ship_path).unwrap(), ship_before);
+    assert_eq!(std::fs::read(&auto_task_path).unwrap(), auto_task_before);
+
+    // The enabled replica GC is the host clock's to fire: the host listing
+    // schedules it, and keeps the ship sweep as the owner's.
+    drop(client);
+    let listed = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["routine", "list", "--json"]),
+    );
+    let listed: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert!(
+        listed["routines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["name"] == "worktree-gc-mcp-roundtrip" && row["effective"] == true),
+        "{listed}"
+    );
+    assert!(
+        listed["owner_only"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["name"] == "ship-sweep-mcp-roundtrip"),
+        "{listed}"
+    );
+}
+
 #[test]
 fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates() {
     let workspace = McpWorkspace::init();

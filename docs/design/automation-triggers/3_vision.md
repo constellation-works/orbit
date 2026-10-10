@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Vision
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-25
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Draft
 feature: automation-triggers
 doc_role: vision
@@ -16,43 +16,58 @@ related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 
 # Automation Triggers — Vision
 
-This is a proposed direction for [ORB-11315], not shipped behavior. The concrete
-candidate contract is in [Design](./2_design.md). Astra owns unresolved design
-formulation; workers may implement approved, bounded semantics but must escalate
-product/architecture choices that materially change the contract.
+This document records the broader direction first formulated for [ORB-11315].
+Delivery triggers ([ORB-11330]) and bounded state preparation ([ORB-11331]) are
+implemented. The `execution_failed` state trigger still parses, but its
+`task_triage_pipeline` target was retired. The remaining proposals and
+alternatives below are not a description of currently shipped behavior; the
+current contract is in [Design](./2_design.md) and [Operations](./5_operations.md).
+Astra owns unresolved design formulation; workers may implement approved,
+bounded semantics but must escalate product/architecture choices that materially
+change the contract.
 
-## 1. Open Questions
+## 1. Open Questions and Settled V1 Contracts
 
-1. **Delivery evidence coverage.** Approve the PR/explicit direct-receipt unit and
-   policy for repositories whose provider cannot map rebased commits. The candidate
-   leaves uncertain units uncounted and visible; counting arbitrary first-parent
-   commits would be a different product metric. Implementation must prove how
-   receipts are retained/recovered across external landings.
-2. **Operational bounds.** Confirm example thresholds, maximum pending age, scan
-   budgets and retention windows against real delivery rates. These are proposed
-   tuning values, not permission to enable all automation. A busy repository may
-   need more capacity rather than larger invisible backlogs.
-3. **Coverage acceptance.** Agree the minimum QA/review evidence schema and who
-   can accept it. The candidate requires an authorized deterministic validator;
-   process success or unstructured summary prose is insufficient. Review meaning
-   stays with the [review gate](../review-gate/2_design.md).
-4. **Pilot base churn.** Begin with conservative full-revision invalidation or
-   invest in a proven dependency/path fingerprint? The candidate chooses the
-   conservative rule first, accepting more pilot work and possible escalation.
-   Do not silently accept stale readiness just to improve throughput.
-5. **Debt disposition.** Approve the explicit retry/replacement/waiver interface
-   for rejected actions, definition replacement and history divergence. Waived
-   debt must remain distinguishable from covered work. Automatic expiry would
+1. **Delivery evidence coverage.** V1 uses provider-verified PR identities and
+   authorized before/after direct receipts. Unprovable associations remain
+   explicit debt; history replay requires exact patch mapping and renewed provider
+   proof. These contracts are implemented in [Design](./2_design.md#3-delivery-identity-and-captured-coverage)
+   and [Operations](./5_operations.md). Future provider adapters must meet the
+   same evidence bar; arbitrary first-parent commits do not count as deliveries.
+2. **Operational bounds.** The evaluator's scan and admission bounds and recovery
+   retention behavior are documented in [Operations](./5_operations.md).
+   Thresholds, maximum waits and review/QA capacity remain operator tuning values
+   to check against real delivery rates. A busy repository may need more capacity
+   rather than larger invisible backlogs; these values are not permission to
+   enable all automation.
+3. **Coverage acceptance.** V1 requires schema-v1 structured evidence bound to
+   the frozen batch and assigned executor run; Core validates it and Store retains
+   an immutable receipt. Process success and unstructured summary prose are
+   insufficient. The evidence contract is in [Operations](./5_operations.md#evidence-submission);
+   new coverage classes need their own contract. Review meaning stays with the
+   [review gate](../review-gate/2_design.md).
+4. **Pilot freshness.** Shipped preparation consumers fingerprint configured
+   material task fields and optional source selectors or revisions. Full-revision
+   invalidation is a selectable source-sensitivity policy, not the universal
+   rule. Review `freshness.material_fields` and `source_sensitivity` when tuning
+   source churn; the current options are in [Operations](./5_operations.md#state-preparation-orb-11331).
+5. **Debt disposition.** Delivery auto-task consumers have audited settings
+   adoption, action reissue, history replay, explicit waiver and reset operations.
+   These keep waived, failed and exhausted work distinct from accepted coverage;
+   state-member consumers still use the restore-definition path. See
+   [Operations](./5_operations.md#inspection-and-recovery). Automatic expiry would
    weaken the no-lost-coverage contract.
-6. **State layout and recovery proof.** Final table/contract names and task-bundle
-   creation-key representation belong in the first implementation design review.
-   Use the current store owners and prove every crash boundary; no cross-crate
-   dependency or parallel scheduler should be needed.
-7. **Interaction review.** The mode proposal excludes proven before-PR patch
-   coverage while permitting context reads. If integrated architectural review
-   needs distinct obligations even when every patch was reviewed, add an explicit
-   examination class through a scoped follow-up, not an undocumented exception
-   to threshold counts. QA already remains independent.
+6. **State layout and recovery proof.** The v1 implementation uses Store consumer
+   checkpoints, keyed action admission, generation fences and transactional
+   checkpoint/receipt writes over the existing host database. Its ownership and
+   crash boundaries are documented in [Design](./2_design.md#5-crash-safety-concurrency-and-minimal-state);
+   no new database or scheduler loop is needed.
+7. **Interaction review.** The before-PR review gate now produces verified
+   certificates that can exclude matching review obligations after landing while
+   retaining them as context; QA remains independent. The open question is whether
+   integrated architectural review needs a separate examination class even when
+   every patch was reviewed. Resolve that through a scoped follow-up, not an
+   undocumented threshold exception.
 
 ### Alternatives and costs
 
@@ -64,7 +79,7 @@ product/architecture choices that materially change the contract.
 | Independent event logic in each scheduler | Avoids a shared module initially, but duplicates identity, retry and coverage invariants. Use one orbit-automation evaluator with Core task/job action adapters [ORB-11330]. |
 | Resident event bus, webhook handlers, arbitrary expressions | Lower latency and broader extensibility, with another service, authorization surface and replay model. Defer: existing clock plus bounded reconciliation can establish correctness first. |
 | Distributed leases across hosts | Enables automatic failover, but requires authority transfer and side-effect fencing beyond current pins. V1 uses one authoritative state-consumer host. |
-| Hash only task `updated_at` / changed paths | Cheap freshness checks, but summary writes cause loops and indirect source/contract changes can be missed. Use material task data and conservative source revision first. |
+| Hash only task `updated_at` / changed paths | Cheap freshness checks, but summary writes cause loops and indirect source/contract changes can be missed. Use material task data and the explicit `source_sensitivity` policy to make the freshness/cost tradeoff visible. |
 
 The cost of the preferred design is explicit pending state, source-object
 retention, creation-key recovery, and honest stalled consumers when evidence is

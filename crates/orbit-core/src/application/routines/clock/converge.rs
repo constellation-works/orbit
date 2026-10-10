@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 
-use super::inspect::RunningBinary;
+use super::inspect::{RunningBinary, systemd_unit_safety_issue};
 use super::install::{
     launchd_manual_steps, launchd_plist_path, reload_launchd_unit, restart_systemd_unit,
     systemd_manual_steps, write_launchd_unit, write_systemd_units,
@@ -14,7 +14,10 @@ use super::install::{
 use super::manager::{ClockCommandRunner, ClockPlatform, NativeClockCommandRunner};
 use super::program::{discover_clock_unit_program, same_program};
 use super::settings::load_clock_settings;
-use super::status::manager_status_command;
+use super::status::{
+    clock_manager_probe_error, launchd_manager_probe_command, launchd_reports_not_loaded,
+    manager_status_command, systemd_reports_disabled_or_missing,
+};
 
 /// Marker written next to `clock.toml` when a convergence pass rewrote a
 /// registered unit but the manager would not re-register it.
@@ -37,6 +40,8 @@ pub(super) struct InstalledClockUnit {
     pub(super) program: Option<PathBuf>,
     /// Whether the unit still invokes the compatibility alias `orbit sweep`.
     pub(super) legacy_invocation: bool,
+    /// Recovery settings absent from an old systemd unit.
+    pub(super) safety_issue: Option<String>,
 }
 
 /// How an installed unit's program disagreed with the running binary.
@@ -58,13 +63,15 @@ pub enum ClockUnitDrift {
     /// The unit runs this binary through the compatibility alias
     /// `orbit sweep` instead of the canonical `orbit clock tick`.
     InvocationStale,
+    /// The systemd service lacks bounded startup or descendant cleanup.
+    SafetyStale,
 }
 
 impl ClockUnitDrift {
     /// The program path the unit named, when it named one.
     pub fn previous_program(&self) -> Option<&Path> {
         match self {
-            Self::ProgramUnreadable | Self::InvocationStale => None,
+            Self::ProgramUnreadable | Self::InvocationStale | Self::SafetyStale => None,
             Self::ProgramMissing { previous } | Self::ProgramMoved { previous } => {
                 Some(previous.as_path())
             }
@@ -79,6 +86,7 @@ impl ClockUnitDrift {
             }
             Self::ProgramMoved { previous } => format!("ran {}", previous.display()),
             Self::InvocationStale => "invoked the legacy `orbit sweep`".to_string(),
+            Self::SafetyStale => "lacked bounded startup or descendant cleanup".to_string(),
         }
     }
 }
@@ -243,11 +251,13 @@ pub(super) fn converge_clock_unit_with(
     // Ask the manager whether the unit is registered *before* rewriting it: a
     // clock the operator paused must come back paused, not running. A unit an
     // earlier failed reload left unloaded is not paused, so a pending marker
-    // counts as registered.
-    let was_registered = reload_pending
-        || runner
-            .run(&manager_status_command(platform))
-            .unwrap_or(false);
+    // counts as registered and skips the probe. A non-zero status command is
+    // not by itself a pause. For systemd, only diagnostics naming a disabled
+    // or missing unit mean paused; other failures count as registered. For
+    // launchd, an explicit not-loaded diagnostic means paused, and otherwise
+    // the follow-up manager probe distinguishes a reachable manager from an
+    // unqueryable one.
+    let was_registered = reload_pending || clock_unit_registered(platform, runner)?;
     let settings = load_clock_settings(global_root)?;
     let orbit_bin = program.to_string_lossy().to_string();
     let files_written = match platform {
@@ -275,6 +285,46 @@ pub(super) fn converge_clock_unit_with(
         reactivated,
         manual_steps,
     }))
+}
+
+/// Whether the manager currently has the clock unit registered.
+///
+/// Recognized disabled, missing, and not-loaded diagnostics are a paused
+/// clock. The same classification as pause observation applies, except that
+/// an unreachable or ambiguous manager is registered rather than an error:
+/// convergence still rewrites the drifted unit, attempts activation, and
+/// leaves the reload-pending marker when activation fails. A probe that
+/// cannot be spawned is an error, because there is no output to classify.
+fn clock_unit_registered(
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+) -> Result<bool, OrbitError> {
+    let status_command = manager_status_command(platform);
+    let status_output = runner
+        .probe(&status_command)
+        .map_err(|error| clock_manager_probe_error(platform, &status_command, &error))?;
+    if status_output.success {
+        return Ok(true);
+    }
+
+    match platform {
+        ClockPlatform::Systemd if systemd_reports_disabled_or_missing(&status_output) => Ok(false),
+        ClockPlatform::Systemd => Ok(true),
+        ClockPlatform::Launchd if launchd_reports_not_loaded(&status_output) => Ok(false),
+        ClockPlatform::Launchd => {
+            let manager_command = launchd_manager_probe_command();
+            let manager_output = runner
+                .probe(&manager_command)
+                .map_err(|error| clock_manager_probe_error(platform, &manager_command, &error))?;
+            // A manager that answers, while this agent is not loaded, is a
+            // paused clock. A manager that cannot be queried is not.
+            if manager_output.success {
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }
+    }
 }
 
 /// Re-register the installed unit with its manager and name the commands the
@@ -334,6 +384,7 @@ pub(super) fn installed_clock_unit_at(
 ) -> Option<InstalledClockUnit> {
     match discover_clock_unit_program(home, platform)? {
         Ok((unit_path, program, legacy_invocation)) => Some(InstalledClockUnit {
+            safety_issue: systemd_unit_safety_issue(&unit_path, platform),
             unit_path,
             program: Some(program),
             legacy_invocation,
@@ -342,6 +393,7 @@ pub(super) fn installed_clock_unit_at(
             unit_path,
             program: None,
             legacy_invocation: false,
+            safety_issue: None,
         }),
     }
 }
@@ -366,7 +418,7 @@ pub(super) fn clock_unit_drift_warning_at(
     // A unit that runs this binary through the legacy alias is reported by
     // `orbit doctor` and `orbit clock status`; it is not a wrong-binary tick.
     let drift = match clock_unit_drift(&installed, running)? {
-        ClockUnitDrift::InvocationStale => return None,
+        ClockUnitDrift::InvocationStale | ClockUnitDrift::SafetyStale => return None,
         drift => drift,
     };
     Some(format!(
@@ -395,4 +447,10 @@ fn clock_unit_drift(installed: &InstalledClockUnit, running: &Path) -> Option<Cl
     installed
         .legacy_invocation
         .then_some(ClockUnitDrift::InvocationStale)
+        .or_else(|| {
+            installed
+                .safety_issue
+                .as_ref()
+                .map(|_| ClockUnitDrift::SafetyStale)
+        })
 }

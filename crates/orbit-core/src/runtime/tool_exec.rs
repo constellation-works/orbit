@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
+use orbit_common::fs::git::{git_common_dir, run_git};
 use orbit_common::security::redaction::{redact_all_error, redact_sensitive_env_json};
 use orbit_tools::ToolContext;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
-use crate::{NotFoundKind, OrbitError, OrbitRuntime};
+use crate::{OrbitError, OrbitRuntime};
 
 /// Which trusted inputs Core may use when applying its capability registry.
 ///
@@ -30,6 +30,12 @@ impl OrbitRuntime {
         mut tool_context: ToolContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
+        if super::worker_coordination::is_coordination_tool(name) {
+            super::worker_coordination::check_worker_host_input(
+                &input,
+                tool_context.session_context.worker_host_call,
+            )?;
+        }
         if tool_context.cwd.is_none() {
             tool_context.cwd = std::env::current_dir()
                 .ok()
@@ -38,60 +44,11 @@ impl OrbitRuntime {
 
         populate_filesystem_policy_context(self, &mut tool_context)?;
 
-        self.check_tool_enabled(name)?;
-        check_tool_active(self.tool_registry(), name)?;
-
-        // ORB-10453: the capability chokepoint. Every tool caller in the
-        // workspace reaches the registry through this function, so this is the
-        // only place a governed tool operation is authorized — a per-command
-        // guard would be reopened by the next entry point that skips it.
-        self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
-        // Domain extensions preserve the authority of the operations they expose.
-        // Discovery and a client-supplied mode never grant operator capabilities.
-        if name == "orbit.pipeline.invoke"
-            && !orbit_tools::has_pipeline_child_admission(&tool_context)
-        {
-            self.authorize_tool_operation(
-                "orbit.workflow.ship",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-        if (name == "orbit.pipeline.invoke"
-            && input.get("default_input") == Some(&Value::Bool(true)))
-            || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
-            || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
-        {
-            self.authorize_tool_operation(
-                "orbit.routine.control",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-        if name == "orbit.auto_task.list"
-            && input.get("view").and_then(Value::as_str) == Some("bounded")
-        {
-            self.authorize_tool_operation(
-                "orbit.workflow.run.show",
-                &tool_context.session_context,
-                capability_enforcement,
-            )?;
-        }
-        if !tool_context.allowed_tools.is_empty()
-            && !tool_allowed(name, &tool_context.allowed_tools)
-        {
-            return Err(self.deny_activity_tool(
-                name,
-                format!("tool '{name}' is not in the activity allowlist"),
-            ));
-        }
-        if let Some(policy) = tool_context
-            .tool_deny_policy
-            .as_ref()
-            .filter(|policy| policy.denies(name))
-        {
-            return Err(self.deny_activity_tool(name, policy.denial_message(name)));
-        }
+        self.authorize_registered_tool(name, &input, &tool_context, capability_enforcement)?;
+        check_activity_tool_policy(name, &tool_context).map_err(|error| match error {
+            OrbitError::PolicyDenied(reason) => self.deny_activity_tool(name, reason),
+            error => error,
+        })?;
 
         if self.worker_invocation().is_some()
             && super::worker_coordination::is_coordination_tool(name)
@@ -146,6 +103,29 @@ impl OrbitRuntime {
             ))
         })?;
 
+        if (name == "orbit.task.pull" || name.starts_with("orbit.drain."))
+            && let Some(field) = corrupted_drain_identity(&output)
+        {
+            // A mutating call may already have committed. Its caller must
+            // reconcile/replay the same request, never invent a replacement.
+            let message = format!(
+                "owner reply identity field `{field}` contains an environment redaction artefact; retry the same request"
+            );
+            return Err(match name {
+                "orbit.drain.probe" | "orbit.drain.receipt.lookup" | "orbit.drain.claims" => {
+                    OrbitError::OwnerNegotiation(message)
+                }
+                _ => OrbitError::OutcomeUnknown {
+                    mcp_call_id: tool_context
+                        .session_context
+                        .mcp_call_id
+                        .clone()
+                        .unwrap_or_else(|| format!("redacted-reply:{name}")),
+                    message,
+                },
+            });
+        }
+
         Ok(output)
     }
 
@@ -165,44 +145,55 @@ impl OrbitRuntime {
         }
     }
 
-    pub fn run_tool_dry_run(&self, name: &str, input: &Value) -> Result<DryRunResult, OrbitError> {
-        self.ensure_tool_agent_facing(name)?;
+    /// Admission shared by dispatch and dry-run, including input-dependent
+    /// capability floors. This never invokes a tool implementation.
+    pub(crate) fn authorize_registered_tool(
+        &self,
+        name: &str,
+        input: &Value,
+        tool_context: &ToolContext,
+        capability_enforcement: CapabilityEnforcement,
+    ) -> Result<(), OrbitError> {
         self.check_tool_enabled(name)?;
+        check_tool_active(self.tool_registry(), name)?;
 
-        let schema = self
-            .tool_registry()
-            .get_schema(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
-
-        let mut tool_context = ToolContext {
-            cwd: std::env::current_dir()
-                .ok()
-                .map(|cwd| cwd.to_string_lossy().into_owned()),
-            ..Default::default()
-        };
-        tool_context.workspace_root = resolve_workspace_root_from_context(self, &tool_context)?;
-
-        // Validate required parameters are present
-        let mut missing_params = Vec::new();
-        if let Some(obj) = input.as_object() {
-            for param in &schema.parameters {
-                if param.required && !obj.contains_key(&param.name) {
-                    missing_params.push(param.name.clone());
-                }
-            }
-        } else if !schema.parameters.is_empty() {
-            for param in &schema.parameters {
-                if param.required {
-                    missing_params.push(param.name.clone());
-                }
-            }
+        // ORB-10453: the capability chokepoint. Every tool caller in the
+        // workspace reaches the registry through this function, so this is the
+        // only place a governed tool operation is authorized — a per-command
+        // guard would be reopened by the next entry point that skips it.
+        self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
+        // Domain extensions preserve the authority of the operations they expose.
+        // Discovery and a client-supplied mode never grant operator capabilities.
+        if name == "orbit.pipeline.invoke"
+            && !orbit_tools::has_pipeline_child_admission(tool_context)
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.ship",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
         }
-
-        Ok(DryRunResult {
-            tool_name: name.to_string(),
-            policy_allowed: true,
-            missing_params,
-        })
+        if (name == "orbit.pipeline.invoke"
+            && input.get("default_input") == Some(&Value::Bool(true)))
+            || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
+            || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
+        {
+            self.authorize_tool_operation(
+                "orbit.routine.control",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        if name == "orbit.auto_task.list"
+            && input.get("view").and_then(Value::as_str) == Some("bounded")
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.run.show",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        Ok(())
     }
 
     /// A registered-but-inactive entry is refused before it runs.
@@ -222,6 +213,67 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+}
+
+/// Reject scrubbed protocol identities without exempting arbitrary hash-shaped
+/// secrets from redaction. Nested receipt, candidate and review identities are
+/// included; prose may legitimately contain a redaction placeholder.
+pub(crate) fn corrupted_drain_identity(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(fields) => fields.iter().find_map(|(key, value)| {
+            let identity = matches!(
+                key.as_str(),
+                "commit" | "commits" | "tree" | "sha256" | "digest"
+            ) || [
+                "_fingerprint",
+                "_commit",
+                "_commits",
+                "_tree",
+                "_sha",
+                "_sha256",
+                "_hash",
+                "_digest",
+            ]
+            .iter()
+            .any(|suffix| key.ends_with(suffix));
+            if identity && contains_env_redaction(value) {
+                Some(key.as_str())
+            } else {
+                corrupted_drain_identity(value)
+            }
+        }),
+        Value::Array(items) => items.iter().find_map(corrupted_drain_identity),
+        _ => None,
+    }
+}
+
+fn contains_env_redaction(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains("[REDACTED_ENV]"),
+        Value::Array(items) => items.iter().any(contains_env_redaction),
+        _ => false,
+    }
+}
+
+/// Evaluate activity policy without emitting a mutation event. Real dispatch
+/// records a refusal; dry-run only reports the decision.
+pub(crate) fn check_activity_tool_policy(
+    name: &str,
+    tool_context: &ToolContext,
+) -> Result<(), OrbitError> {
+    if !tool_context.allowed_tools.is_empty() && !tool_allowed(name, &tool_context.allowed_tools) {
+        return Err(OrbitError::PolicyDenied(format!(
+            "tool '{name}' is not in the activity allowlist"
+        )));
+    }
+    if let Some(policy) = tool_context
+        .tool_deny_policy
+        .as_ref()
+        .filter(|policy| policy.denies(name))
+    {
+        return Err(OrbitError::PolicyDenied(policy.denial_message(name)));
+    }
+    Ok(())
 }
 
 /// Refuse a *plugin* entry the host registered inactive, reporting the
@@ -326,13 +378,13 @@ fn active_git_checkout_root(
     }
 
     let checkout_root = git_checkout_root(cwd)?;
-    let repo_common_dir = git_common_dir(canonical_repo_root)?;
+    let repo_common_dir = canonical_git_common_dir(canonical_repo_root)?;
     // A linked worktree shares the runtime repository's common directory. A
     // source-inspection slot is a standalone repository the CLI runner
     // materialized for this repository, so it is recognized by its owned
     // layout instead; without it, a pilot's subprocesses would run in the
     // primary rather than at the pinned revision [ORB-13800].
-    let owned_checkout = git_common_dir(&checkout_root)
+    let owned_checkout = canonical_git_common_dir(&checkout_root)
         .is_some_and(|checkout_common_dir| checkout_common_dir == repo_common_dir)
         || orbit_engine::activity_job::cli_runner::is_source_inspection_checkout(
             &repo_common_dir,
@@ -341,17 +393,21 @@ fn active_git_checkout_root(
     owned_checkout.then_some(checkout_root)
 }
 
+/// The checkout `path` sits in, or `None` when Git cannot say. A Git that
+/// could not run or timed out (logged) resolves like no checkout: the caller
+/// falls back to the registered root, never to an owned checkout.
 fn git_checkout_root(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
+    let output = run_git(path, &["rev-parse", "--show-toplevel"])
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve the Git checkout root: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
+    if !output.success {
         return None;
     }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let raw_path = stdout.lines().next()?.trim();
+    let raw_path = output.stdout.lines().next()?.trim();
     if raw_path.is_empty() {
         return None;
     }
@@ -359,33 +415,21 @@ fn git_checkout_root(path: &Path) -> Option<PathBuf> {
     Some(path.canonicalize().unwrap_or(path))
 }
 
-fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .current_dir(path)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
+/// `None` outside Git, and when Git timed out (logged): no common dir then
+/// matches, so the caller falls back to the registered root.
+fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
+    let common = git_common_dir(path)
+        .inspect_err(|error| {
+            if matches!(error, OrbitError::ProcessTimeout { .. }) {
+                tracing::warn!("cannot resolve the Git common dir: {error}");
+            }
+        })
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let raw_path = stdout.lines().next()?.trim();
-    if raw_path.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(raw_path);
-    Some(path.canonicalize().unwrap_or(path))
+    Some(common.canonicalize().unwrap_or(common))
 }
 
 fn read_activity_fs_profile_from_env() -> Option<String> {
     let value = std::env::var("ORBIT_ACTIVITY_FS_PROFILE").ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed.to_string())
-}
-
-#[derive(Debug, Clone)]
-pub struct DryRunResult {
-    pub tool_name: String,
-    pub policy_allowed: bool,
-    pub missing_params: Vec<String>,
 }

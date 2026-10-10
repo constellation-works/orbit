@@ -7,7 +7,7 @@ use std::time::Instant;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
@@ -142,6 +142,20 @@ pub(super) async fn toggle_routine(
         Ok(report) => report,
         Err(response) => return *response,
     };
+    // A replica's owner-only routine is listed with the owner named; a
+    // toggle is refused with the same reason and writes nothing.
+    if let Some(owned) = report
+        .owner_only
+        .iter()
+        .find(|owned| owned.routine.definition.name == body.name)
+    {
+        let refusal = json!({
+            "error": owned.reason,
+            "code": "owner_authority",
+            "owner_machine": owned.owner_machine,
+        });
+        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
+    }
     let Some(status) = report
         .statuses
         .iter()
@@ -363,6 +377,10 @@ pub(super) async fn control_clock(
         let action = body.action;
         let cadence_seconds = body.cadence_seconds;
         move || {
+            #[cfg(test)]
+            if let Some(result) = state.test_clock_mutation() {
+                return Ok(result);
+            }
             Ok(match action {
                 ClockAction::Enable => set_clock_enabled(state.global_root(), true).map(|_| ()),
                 ClockAction::Disable => set_clock_enabled(state.global_root(), false).map(|_| ()),
@@ -400,15 +418,6 @@ pub(super) async fn control_clock(
         .await;
         return map_runtime_error(error);
     }
-    let after = match blocking("clock status after", {
-        let state = state.clone();
-        move || state.clock_status()
-    })
-    .await
-    {
-        Ok(status) => status,
-        Err(response) => return *response,
-    };
     record_operation_audit(
         &runtime,
         workspace,
@@ -422,9 +431,19 @@ pub(super) async fn control_clock(
         started,
     )
     .await;
+    let state_after = state.clone();
+    let after = tokio::task::spawn_blocking(move || state_after.clock_status()).await;
+    let (clock, changed) = match after {
+        Ok(Ok(status)) => (clock_json(&status), json!(before != status)),
+        Ok(Err(error)) => (unavailable_clock_json(&error.to_string()), Value::Null),
+        Err(error) => (
+            unavailable_clock_json(&format!("clock status after panicked: {error}")),
+            Value::Null,
+        ),
+    };
     Json(json!({
-        "clock": clock_json(&after),
-        "changed": before != after,
+        "clock": clock,
+        "changed": changed,
         "message": match body.action {
             ClockAction::Enable => "Sweep clock enabled",
             ClockAction::Disable => "Sweep clock paused",
@@ -464,6 +483,7 @@ pub(super) fn report_json(
             "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
         },
         "clock": clock,
+        "cron_zone": host_cron_zone(),
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
         "retired": report.listed_retired(include_inactive_plugins).map(|routine| json!({
             "name": routine.name,
@@ -473,6 +493,15 @@ pub(super) fn report_json(
             "target": format!("job:{}", routine.job),
             "reason": routine.reason,
             "plugin_inactive": routine.skipped,
+        })).collect::<Vec<_>>(),
+        "owner_only": report.owner_only.iter().map(|owned| json!({
+            "name": owned.routine.definition.name,
+            "source": owned.routine.source_workspace,
+            "origin": owned.routine.origin.as_str(),
+            "target": owned.routine.definition.target.as_ref_string(),
+            "enabled": owned.routine.definition.enabled,
+            "owner_machine": owned.owner_machine,
+            "reason": owned.reason,
         })).collect::<Vec<_>>(),
         "inactive_plugin_counts": inactive_plugin_counts,
         "load_errors": report.load_errors.iter().map(|e| json!({
@@ -495,7 +524,7 @@ fn status_json(status: &RoutineStatus) -> Value {
         "effective": status.effective(),
         "cron": definition.trigger.cron,
             "trigger": definition.trigger,
-            "automation": status.automation,
+            "automation": status.automation.as_ref().map(super::automation::summary),
         "first_observed_at": status.first_observed_at,
         "last_evaluated_slot": status.last_evaluated_slot,
         "next_due": status.next_due,
@@ -505,6 +534,53 @@ fn status_json(status: &RoutineStatus) -> Value {
         ),
         "last_fire": status.last_fire.as_ref().map(fire_json),
     })
+}
+
+/// The zone cron triggers are evaluated in: the host's local zone, as the
+/// routine and auto-task schedulers use. `name` is the IANA name when the
+/// host exposes one (`TZ`, the `/etc/localtime` link, `/etc/timezone`), else
+/// null; `offset_seconds` is the current offset from UTC, so a client can
+/// still label the zone when the name is unknown.
+pub(super) fn host_cron_zone() -> Value {
+    json!({
+        "name": host_zone_name(),
+        "offset_seconds": Local::now().offset().local_minus_utc(),
+    })
+}
+
+fn host_zone_name() -> Option<String> {
+    let tz = std::env::var("TZ").ok();
+    let link = std::fs::read_link("/etc/localtime").ok();
+    let file = std::fs::read_to_string("/etc/timezone").ok();
+    zone_name_from_sources(
+        tz.as_deref(),
+        link.as_deref().and_then(std::path::Path::to_str),
+        file.as_deref(),
+    )
+}
+
+fn zone_name_from_sources(
+    tz_env: Option<&str>,
+    localtime_link: Option<&str>,
+    timezone_file: Option<&str>,
+) -> Option<String> {
+    let plausible = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
+    };
+    let from_env = tz_env.map(|tz| tz.trim().trim_start_matches(':'));
+    let from_link = localtime_link
+        .and_then(|target| target.split_once("zoneinfo/"))
+        .map(|(_, name)| name);
+    let from_file = timezone_file.map(str::trim);
+    [from_env, from_link, from_file]
+        .into_iter()
+        .flatten()
+        .find(|name| plausible(name))
+        .map(str::to_string)
 }
 
 pub(super) fn next_evaluation_json(state: ScheduleDisplayState, at: Option<String>) -> Value {

@@ -21,13 +21,15 @@ spec:
       repo_root:
         type: string
       # Set by the claimed pipelines only. The runner denies
-      # `orbit.task.show` and `orbit.task.update` for a claimed invocation,
-      # whether or not this is set: a claimed leaf's worker binding is enough.
+      # `orbit.task.update` for a claimed invocation, whether or not this is
+      # set: a claimed leaf's worker binding is enough. `orbit.task.show` is
+      # read-only and scoped by the run broker to the claimed task.
       claimed:
         type: boolean
       # Set by `candidate_resume` when the checkout already holds this
       # task's preserved candidate that needs repair: `trigger`
-      # (`implementation`, `conflict`, `validation` or `review`), `output`,
+      # (`implementation`, `conflict`, `validation`, `review`,
+      # `continuation` or, for a claimed repair leaf, `landing`), `output`,
       # and `failed_step_id`, `conflicting_paths` or the failing `command`.
       resume_candidate:
         type: [object, "null"]
@@ -52,6 +54,43 @@ spec:
       # Claimed mode: a task comment the implementer would have posted.
       comment:
         type: string
+      # Claimed mode: findings the owner refused to file. The handoff
+      # attaches them to the claimed task as `unfiled-findings.json`. The
+      # engine does not enforce this schema; the implement step fails an
+      # output whose findings are not `{title, description}` objects before
+      # any commit, push or PR.
+      unfiled_findings:
+        type: array
+        items:
+          type: object
+          required: [title, description]
+          properties:
+            title:
+              type: string
+            description:
+              type: string
+      # Claimed no-diff evidence: the deterministic commit step imports only
+      # these bounded scratch files and verifies them before delivery.
+      no_diff_artifacts:
+        type: array
+        items:
+          type: object
+          required: [path, source_path]
+          additionalProperties: false
+          properties:
+            path:
+              type: string
+            source_path:
+              type: string
+      # A real blocker (item 8). The step boundary records it and stops the run.
+      blocker:
+        type: object
+        required: [kind, evidence]
+        properties:
+          kind:
+            type: string
+          evidence:
+            type: string
   instruction: |
     Complete the Orbit task with validated outputs, following acceptance
     criteria and workspace instructions. Propose only when requested.
@@ -71,16 +110,45 @@ spec:
       refactor, or chore). Search statuses use `task:rejected` or
       `friction:resolved`, never `status:rejected` or a bare status.
 
+    - To attach a file, write it under `.orbit/tmp/` and call
+      `orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'`.
+      `source_path` is the local file; `path` is its stored artifact name.
+      `orbit tool show <tool.name>` prints the tool's schema.
+
     Claimed mode
 
     - When `input.claimed` is true, the pipeline delivers your output to the
-      owning machine. The injected task is authoritative; `orbit.task.show`
-      and `orbit.task.update` are unavailable. Return writes as output fields:
+      owning machine. The injected task is authoritative; `orbit.task.update`
+      is unavailable. `orbit.task.show` can read only the claimed task through
+      the run's coordinator. Return writes as output fields:
       - `execution_summary` (REQUIRED): the item 12 summary.
       - `context_files_added`: selectors from item 4 (reported, not applied;
         the owner widens the claim's footprint over every path the candidate
         adds when it accepts the handoff).
-      - `comment`: any task comment, blocker (item 8) or leftovers (item 11).
+      - `comment`: any task comment or leftovers (item 11). A real blocker
+        (item 8) is `result.blocker` `{kind, evidence}`, not a status write
+        and not only this comment.
+    - In claimed mode, for a clean no-op or already-satisfied base, write the structured
+      `no-diff.json` or `already-landed.json` report and every validation log
+      under the checkout's `.orbit/tmp/`. Return `no_diff_artifacts` as
+      `[{"path":"no-diff.json","source_path":".orbit/tmp/no-diff.json"}, ...]`,
+      including each report-referenced log. The deterministic commit step
+      attaches these bytes through the claim and runs the existing verifier;
+      the sandboxed implementer does not call owner artifact tools. This
+      replaces the artifact-attachment requirement in item 12 for claimed mode.
+      A task tagged `no-diff-expected` needs no such report: leave the
+      worktree clean, and the commit step hands off on the tag.
+    - In claimed mode, `orbit.task.add` relations must include
+      `{"type":"spawned_from","target":"<claimed task ID>"}`. A review task
+      minted by `delivery-code-review` or `code-review` may also give each
+      finding a `regression_from` relation to the task in its workspace that
+      introduced it. `orbit.search` and `orbit.task.list` do not reach the
+      owner, so skip a duplicate search the task asks for and say so in
+      `comment`; the owner's triage dedupes filed tasks. If the owner still
+      refuses a finding, return it in `unfiled_findings` as
+      `[{"title":..., "description":..., "relations":[...]}]`. The handoff
+      attaches these to the claimed task as `unfiled-findings.json` for the
+      owner to file.
     - Other owner-routed tools may be unreachable; that is never a failure or
       blocker. Record it in `comment`; report `failed` only for the work.
 
@@ -128,9 +196,14 @@ spec:
       a partial implementation — complete the task from it; a compiling
       subset is not done), `conflict` (resolve the conflict markers in
       `conflicting_paths` against the new base), `validation` (the `output`
-      of the failing `command`) or `review` (the findings in the review
-      settlement comment). Then rerun the checks and say in the summary that
-      you repaired a resumed candidate.
+      of the failing `command`), `review` (the findings in the review
+      settlement comment), `continuation` (an earlier claim committed it
+      but did not deliver it — check it against the task and finish what is
+      missing) or `landing` (a handed-off candidate whose landing stopped
+      because its base moved; it applied cleanly onto the current base, so
+      confirm it still builds and meets the acceptance criteria there and
+      adapt it to what the base changed). Then rerun the checks and say in
+      the summary that you repaired a resumed candidate.
 
     Scope and implementation
 
@@ -161,8 +234,30 @@ spec:
     7. Follow workspace validation policy. Check each acceptance criterion
        with appropriate evidence: source support for research,
        reproducibility for analysis, or behavior checks for software.
+       Run every check required by the workspace's AGENTS.md and required
+       validation commands before handoff; do not defer a workspace-required
+       check to review. Read required validation commands from a supplied
+       delivery manifest's `required_validation_commands` or
+       `workflow.required_validation_commands`. If workspace guidance requires
+       a check on another platform, record it as not run and arrange the
+       evidence that guidance specifies rather than claiming it passed.
+       When the workspace requires an affected-test gate, run full test
+       targets of changed crates and their transitive workspace dependents;
+       a formatting/guardrail pass and focused test filters do not replace it.
+       Use the workspace's supported mechanism to pin the comparison base
+       when the delivery base is supplied, and include committed, staged,
+       unstaged and untracked candidate paths.
        Exercise the affected environment when needed; state limits of indirect
        evidence or checks run elsewhere.
+       Run build, test, cargo and make validation that can take minutes in the
+       provider's native shell session (for Codex, exec_command/write_stdin),
+       or another long-running transport the lane provides. proc.spawn clamps
+       timeout_ms to the activity's remaining wall-clock budget, at most the
+       configured ceiling (default 45 min; 60000 ms outside an activity), and
+       its result reports timeout_ceiling_ms. A proc.spawn timeout on cargo/make is
+       never a validation blocker: rerun through the long-running transport
+       and await completion, including time waiting for shared build-budget
+       admission. Preserve sandboxing and build-budget admission.
        Sandbox/runner denials (e.g. EPERM) prove neither defects nor correctness.
        Try safe in-scope alternatives without bypassing policy; record the
        exact command, denial, and uncertainty. Return success only for a
@@ -173,9 +268,20 @@ spec:
        command at the base commit or with your diff reverted). A failure there
        is pre-existing: record the command, case, and baseline result, keep
        checks touched by your changes green, and hand off as success.
+       Orbit's own required validation makes the same comparison after you
+       hand off. It reruns a network-inconclusive failure (curl status 000,
+       DNS, TLS timeout), and it reruns a failing required command on the
+       base. When the base fails the same way, the task is held, not blocked,
+       until the base passes. So never weaken, skip or work around a required
+       command to get past a red base, and never set `blocked` or return a
+       blocker for one; a failure the base does not share is yours to fix.
     8. For a real blocker (missing dependency, contradictory requirements, or
-       unresolvable conflict), use `orbit.task.update` to set `blocked` with a
-       reason. A criterion contradicting AGENTS.md or equivalent is not a
+       unresolvable conflict), return `result.blocker` as `{kind, evidence}`.
+       `kind` is a short token: an ASCII letter, then ASCII letters, digits,
+       `_`, `.`, `:`, or `-`, at most 64 bytes. `evidence` is the reason.
+       The step boundary records the kind, stops the run, and keeps the
+       candidate. Do not call `orbit.task.update` to set `blocked`; that write
+       is refused. A criterion contradicting AGENTS.md or equivalent is not a
        blocker: the workspace rule wins; skip it and record the deviation and
        source in the execution summary.
     9. File `orbit.friction.add` with evidence only for a contradicted
@@ -224,7 +330,11 @@ spec:
         context_files, tags, relations, required_tools, type, comments),
         required_commands, criteria_evidence, validation. Use flat
         validation[] objects with sibling fields command, outcome, role,
-        log_artifact.
+        log_artifact. criteria_evidence is an array of non-empty strings, one
+        per acceptance criterion in order (never objects). Each required
+        command's validation[] entry has outcome "passed" and role
+        "required"; the role vocabulary is required, expected_failure,
+        excluded, superseded, diagnostic.
         After required checks pass, for a genuine no-op, attach `no-diff.json`
         and validation logs via `orbit.task.artifact.put`, using the schema in
         the Orbit task-execution reference (schema_version 1, task_id, run_id,

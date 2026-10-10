@@ -118,13 +118,16 @@ pub(super) fn finish_tool_response(
     runtime: &OrbitRuntime,
     action: OrbitBuiltinAction,
     response: &mut Value,
-    report: &ArtifactRedactionReport,
+    report: &mut ArtifactRedactionReport,
     persisted_task_id: Option<&str>,
     agent: Option<&str>,
     model: Option<&str>,
 ) -> Result<(), OrbitError> {
     if !is_covered_mutating_action(action) {
         return Ok(());
+    }
+    if action == OrbitBuiltinAction::TaskReconcileReview {
+        sanitize_response_value(response, "response", report);
     }
     if let Some(object) = response.as_object_mut() {
         object.insert(
@@ -220,16 +223,6 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[NestedObjectPolicy {
 /// for read-only actions and mutations that only persist structural values.
 fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
     match action {
-        OrbitBuiltinAction::AdrAdd
-        | OrbitBuiltinAction::AdrRestore
-        | OrbitBuiltinAction::AdrUpdate => ActionPolicy {
-            free_text_fields: &["title", "body"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
         OrbitBuiltinAction::TaskAdd => ActionPolicy {
             free_text_fields: &["title", "description", "plan", "comment"],
             free_text_arrays: &["acceptance_criteria"],
@@ -253,6 +246,13 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: &[],
         },
+        OrbitBuiltinAction::TaskReconcileReview => ActionPolicy {
+            // `command` selects an already-authorized stored command. Preserve
+            // it byte-for-byte for exact evidence matching, then redact only
+            // serialized reports at the response boundary.
+            free_text_fields: &["reason"],
+            free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
+        },
         OrbitBuiltinAction::TaskReviewReset => ActionPolicy {
             free_text_fields: &["reason"],
             free_text_arrays: &[], path_fields: &[], path_arrays: &[], nested_arrays: &[], nested_objects: &[],
@@ -266,7 +266,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_objects: &[],
         },
         OrbitBuiltinAction::Friction(FrictionVerb::Add) => ActionPolicy {
-            free_text_fields: &["body", "description"],
+            free_text_fields: &["title", "body", "description"],
             free_text_arrays: &[],
             path_fields: &[],
             path_arrays: &[],
@@ -274,7 +274,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_objects: &[],
         },
         OrbitBuiltinAction::Friction(FrictionVerb::Update) => ActionPolicy {
-            free_text_fields: &["body"],
+            free_text_fields: &["title", "body"],
             free_text_arrays: &[],
             path_fields: &[],
             path_arrays: &[],
@@ -289,17 +289,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: AUTO_TASK_TEMPLATE,
         },
-        OrbitBuiltinAction::AdrSupersede => ActionPolicy {
-            free_text_fields: &[],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
-        OrbitBuiltinAction::AdrShow
-        | OrbitBuiltinAction::AdrList
-        | OrbitBuiltinAction::AutoTaskList
+        OrbitBuiltinAction::AutoTaskList
         | OrbitBuiltinAction::AutoTaskMint
         | OrbitBuiltinAction::AutoTaskShow
         | OrbitBuiltinAction::DesktopRead
@@ -358,13 +348,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
 fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
     matches!(
         action,
-        OrbitBuiltinAction::AdrAdd
-            | OrbitBuiltinAction::AdrRestore
-            | OrbitBuiltinAction::AdrUpdate
-            | OrbitBuiltinAction::AdrSupersede
-            | OrbitBuiltinAction::TaskAdd
+        OrbitBuiltinAction::TaskAdd
             | OrbitBuiltinAction::TaskUpdate
             | OrbitBuiltinAction::TaskReject
+            | OrbitBuiltinAction::TaskReconcileReview
             | OrbitBuiltinAction::TaskReviewReset
             | OrbitBuiltinAction::AutoTaskAdd
             | OrbitBuiltinAction::AutoTaskUpdate
@@ -560,6 +547,45 @@ fn pattern_redaction_classes(before: &str, after: &str) -> BTreeSet<&'static str
     .collect()
 }
 
+fn sanitize_response_value(value: &mut Value, path: &str, report: &mut ArtifactRedactionReport) {
+    match value {
+        Value::String(raw) => {
+            let env_scrubbed = redact_sensitive_env_text(raw);
+            let pattern_scrubbed = redact_all(&env_scrubbed);
+            let sanitized = redact_home_dir(&pattern_scrubbed);
+            let mut kinds = BTreeSet::new();
+            let mut classes = BTreeSet::new();
+            if env_scrubbed != *raw {
+                kinds.insert(ArtifactRedactionKind::Env);
+                classes.insert("sensitive_environment_value");
+            }
+            if pattern_scrubbed != env_scrubbed {
+                kinds.insert(ArtifactRedactionKind::Pattern);
+                classes.extend(pattern_redaction_classes(&env_scrubbed, &pattern_scrubbed));
+            }
+            if sanitized != pattern_scrubbed {
+                kinds.insert(ArtifactRedactionKind::HomeDir);
+                classes.insert("home_directory");
+            }
+            if sanitized != *raw {
+                *raw = sanitized;
+                report.push(path.to_string(), kinds, classes);
+            }
+        }
+        Value::Array(values) => {
+            for (index, value) in values.iter_mut().enumerate() {
+                sanitize_response_value(value, &format!("{path}[{index}]"), report);
+            }
+        }
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                sanitize_response_value(value, &format!("{path}.{key}"), report);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 fn emit_audit_events(
     runtime: &OrbitRuntime,
     action: OrbitBuiltinAction,
@@ -644,17 +670,10 @@ fn artifact_target<'a>(
     persisted_task_id: Option<&'a str>,
 ) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
-        OrbitBuiltinAction::AdrAdd
-        | OrbitBuiltinAction::AdrRestore
-        | OrbitBuiltinAction::AdrUpdate
-        | OrbitBuiltinAction::AdrSupersede => Ok(ArtifactTarget {
-            artifact_type: "adr",
-            artifact_id: response_string(response, "id")?,
-            task_id: None,
-        }),
         OrbitBuiltinAction::TaskAdd
         | OrbitBuiltinAction::TaskUpdate
         | OrbitBuiltinAction::TaskReject
+        | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset => {
             let id = persisted_task_id.ok_or_else(|| {
                 OrbitError::Execution("redaction audit missing persisted task id".to_string())
@@ -693,13 +712,10 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
-        OrbitBuiltinAction::AdrAdd => "orbit.adr.add",
-        OrbitBuiltinAction::AdrRestore => "orbit.adr.restore",
-        OrbitBuiltinAction::AdrUpdate => "orbit.adr.update",
-        OrbitBuiltinAction::AdrSupersede => "orbit.adr.supersede",
         OrbitBuiltinAction::TaskAdd => "orbit.task.add",
         OrbitBuiltinAction::TaskUpdate => "orbit.task.update",
         OrbitBuiltinAction::TaskReject => "orbit.task.reject",
+        OrbitBuiltinAction::TaskReconcileReview => "orbit.task.reconcile_review",
         OrbitBuiltinAction::TaskReviewReset => "orbit.task.review_reset",
         OrbitBuiltinAction::Friction(FrictionVerb::Add) => "orbit.friction.add",
         OrbitBuiltinAction::Friction(FrictionVerb::Update) => "orbit.friction.update",

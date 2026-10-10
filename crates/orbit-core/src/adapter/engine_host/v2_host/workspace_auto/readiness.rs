@@ -13,6 +13,9 @@ use crate::adapter::engine_host::v2_host::admission::auto_admission::{
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
 };
+use crate::adapter::engine_host::v2_host::admission::cpu_light::{
+    CPU_LIGHT_BUDGET_FULL, LightBudget, ResourceGate, is_cpu_light,
+};
 use crate::adapter::engine_host::v2_host::admission::leaf_occupancy::{
     occupancy_json, read_leaf_occupancy,
 };
@@ -20,6 +23,7 @@ use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
+use super::approvals::readiness_approvals;
 use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
 use super::drains::{
     DEFAULT_MAX_ACTIVE_LEAF_RUNS, DRAIN_JOB_NAME, LEAF_JOB_NAME, live_pull_drain,
@@ -83,9 +87,8 @@ pub fn explain_workspace_auto_readiness(
     // the submission time plus a browser's chosen duration.
     let ends_at = status_state.as_ref().and_then(|state| {
         state
-            .step_outputs
-            .values()
-            .find_map(|output| output.get("deadline").and_then(Value::as_str))
+            .step_output_entries()
+            .find_map(|(_, output)| output.get("deadline").and_then(Value::as_str))
     });
     let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
         let mut running = 0;
@@ -171,18 +174,37 @@ pub fn explain_workspace_auto_readiness(
     // sampled long enough to judge sustained pressure itself.
     let resource = runtime.admission_resource_throttle();
     let shared_occupancy = shared_leaf_occupancy(runtime)?;
-    let free_slots = if admissions_stopped || host_shutdown.is_some() || resource.throttle.is_some()
-    {
+    let unthrottled_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
             .unwrap_or(usize::MAX)
             .saturating_sub(shared_occupancy.occupied)
     };
+    // [ORB-14624] The classifier's own gate: under a CPU-only throttle,
+    // CPU-light leaves fill the reserved light slots and nothing else starts.
+    let light_budget = LightBudget::new(
+        runtime
+            .context
+            .settings()
+            .resource_throttle()
+            .cpu_light_leaves,
+        claimed_by_task.keys(),
+        &snapshot.task_lookup,
+    );
+    let gate = ResourceGate::new(resource.throttle.as_ref(), &light_budget);
+    let free_slots = gate.free_slots(unthrottled_slots, &light_budget);
     let pending = snapshot
         .admissible_leaves
         .iter()
         .filter(|task_id| !claimed_by_task.contains_key(*task_id))
+        .filter(|task_id| {
+            gate == ResourceGate::Open
+                || snapshot
+                    .task_lookup
+                    .get(*task_id)
+                    .is_some_and(|task| gate.admits(task))
+        })
         .cloned()
         .collect::<Vec<_>>();
     // [ORB-11973] Use the classifier's identical ordered prefix and admission
@@ -231,7 +253,7 @@ pub fn explain_workspace_auto_readiness(
             .values()
             .filter(|task| task.status == TaskStatus::Backlog)
             .collect::<Vec<_>>();
-        sort_tasks_for_automatic_dispatch(&mut backlog);
+        sort_tasks_for_automatic_dispatch(&mut backlog, &snapshot.expiring_batches);
         backlog
             .into_iter()
             .take(limit)
@@ -274,6 +296,15 @@ pub fn explain_workspace_auto_readiness(
             if task.status != TaskStatus::Backlog {
                 return Value::Object(object.clone());
             }
+            // [ORB-14624] Which tasks a CPU-only throttle still admits, and
+            // which sort ahead because their frozen batch nears its deadline.
+            let cpu_light = is_cpu_light(task);
+            if cpu_light {
+                object.insert("cpu_light".to_string(), Value::Bool(true));
+            }
+            if let Some(deadline) = snapshot.expiring_batches.get(&task.id) {
+                object.insert("frozen_batch_deadline".to_string(), json!(deadline));
+            }
             let unmet = unmet_task_dependencies_with_index(
                 task,
                 &snapshot.status_by_id,
@@ -292,6 +323,19 @@ pub fn explain_workspace_auto_readiness(
             }
             if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
                 match excluded.reason {
+                    BacklogTaskExclusionReason::ActivePilotPreparation => {
+                        object.insert("reason".to_string(), json!("active_pilot_preparation"));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
+                    BacklogTaskExclusionReason::PilotDuplicate
+                    | BacklogTaskExclusionReason::PilotAlreadyLanded
+                    | BacklogTaskExclusionReason::OperatorValidationHandoff
+                    | BacklogTaskExclusionReason::HostOperationalHandoff
+                    | BacklogTaskExclusionReason::NativeOsRequired
+                    | BacklogTaskExclusionReason::PrForgeRemoteMissing => {
+                        object.insert("reason".to_string(), json!(excluded.reason));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::UnassessedComplexity => {
                         object.insert(
                             "reason".to_string(),
@@ -322,10 +366,78 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
                     }
+                    BacklogTaskExclusionReason::LocalRouteBeforePr => {
+                        // [ORB-14168] The drain records the same snake_case
+                        // reason. The detail names the deciding layer and the
+                        // remedy the admission refusal already uses.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("local_route_before_pr".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
+                    BacklogTaskExclusionReason::LocalRouteBeforeLanding => {
+                        // [ORB-14849] As above, under its own code.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("local_route_before_landing".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
+                    BacklogTaskExclusionReason::BaselineRedHold => {
+                        // [ORB-14258] Lifts by itself once the command passes
+                        // on a new base tip; the detail names the base and
+                        // the command.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("baseline_red_hold".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
+                    BacklogTaskExclusionReason::ProviderBackoff => {
+                        // [ORB-14266] Lifts by itself at the hold's
+                        // `not_before`; the detail names the run, the
+                        // failure, the excluded crews and the time.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("provider_backoff".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
+                    BacklogTaskExclusionReason::ProviderLimit => {
+                        // [ORB-14697] Lifts by itself at the reading's reset;
+                        // the detail names the provider, window, used
+                        // percent, threshold, reset and skipped crews.
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("provider_limit".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));
                         object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
+                    }
+                    BacklogTaskExclusionReason::SurfaceReserved => {
+                        // [ORB-14310] Clears by itself once the reserving task
+                        // is admitted or leaves backlog; `blocking_task_ids`
+                        // names it so the text view prints `blocked-by`.
+                        let reserved_for = excluded
+                            .conflicts
+                            .iter()
+                            .map(|conflict| conflict.locking_task_id.as_str())
+                            .collect::<BTreeSet<_>>();
+                        object.insert("reason".to_string(), json!(excluded.reason));
+                        object.insert("blocking_task_ids".to_string(), json!(reserved_for));
+                        object.insert(
+                            "conflicts".to_string(),
+                            json!(excluded.conflicts.iter().map(|conflict| json!({
+                                "requested_file": conflict.requested_file,
+                                "reserved_by_task_id": conflict.locking_task_id,
+                            })).collect::<Vec<_>>()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
                     }
                     BacklogTaskExclusionReason::ContextLockConflict
                     | BacklogTaskExclusionReason::GroupMemberConflict => {
@@ -344,6 +456,11 @@ pub fn explain_workspace_auto_readiness(
                                 "locking_task_id": conflict.locking_task_id,
                             })).collect::<Vec<_>>()),
                         );
+                        // [ORB-14310] Present when this task reserves its
+                        // surface against lower-ranked overlapping work.
+                        if let Some(detail) = &excluded.detail {
+                            object.insert("detail".to_string(), json!(detail));
+                        }
                     }
                 }
                 return Value::Object(object.clone());
@@ -357,7 +474,11 @@ pub fn explain_workspace_auto_readiness(
                     Value::String(HOST_SHUTDOWN_SCHEDULED.to_string()),
                 );
                 object.insert("detail".to_string(), json!(shutdown.describe()));
-            } else if let Some(throttle) = resource.throttle.as_ref() {
+            } else if let Some(throttle) = resource
+                .throttle
+                .as_ref()
+                .filter(|_| !(gate == ResourceGate::LightOnly && cpu_light))
+            {
                 object.insert(
                     "reason".to_string(),
                     Value::String(RESOURCE_THROTTLED.to_string()),
@@ -371,6 +492,12 @@ pub fn explain_workspace_auto_readiness(
             } else if admitted.contains(&task.id) {
                 object.insert("eligible".to_string(), Value::Bool(true));
                 object.insert("reason".to_string(), Value::String("ready".to_string()));
+            } else if gate == ResourceGate::LightOnly && light_budget.remaining() == 0 {
+                object.insert(
+                    "reason".to_string(),
+                    Value::String(CPU_LIGHT_BUDGET_FULL.to_string()),
+                );
+                object.insert("detail".to_string(), json!(light_budget.full_detail()));
             } else if !examined.contains(&task.id) {
                 object.insert(
                     "reason".to_string(),
@@ -390,12 +517,52 @@ pub fn explain_workspace_auto_readiness(
         })
         .collect::<Vec<_>>();
 
+    // `total` describes the current view: the full backlog for the default
+    // bounded listing, or the number of explicitly selected tasks.
+    let total = if task_ids.is_empty() {
+        snapshot
+            .task_lookup
+            .values()
+            .filter(|task| task.status == TaskStatus::Backlog)
+            .count()
+    } else {
+        selected_ids.len()
+    };
+
+    // [ORB-14117] The status drain's proposed-task approvals, when it was
+    // started with `--approve-proposed`.
+    let approvals = readiness_approvals(
+        runtime,
+        status_run_id,
+        active_drain
+            .as_ref()
+            .map(|drain| &drain.input)
+            .or_else(|| recent_drain.as_ref().and_then(|run| run.input.as_ref())),
+    )?;
+
+    // [ORB-14880] Build budget inspection is advisory: an invalid setting or
+    // unreadable slots file must not fail readiness.
+    let (build_budget_warnings, build_budget_error) = match runtime.build_budget_capacity_warnings()
+    {
+        Ok(warnings) => (warnings, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+
+    // [ORB-14698] Every live provider usage reading, with whether it keeps
+    // its crews out of admission and until when.
+    let provider_limits = runtime.provider_limits_view(Utc::now());
+    if let Some(error) = &provider_limits.error {
+        tracing::warn!("readiness shows no provider limits: {error}");
+    }
+
     Ok(json!({
         "snapshot": {
             "read_only": true,
             "limitations": "Snapshot only: eligibility can change immediately and does not guarantee a task will start. No stale-run reconciliation, reservation, task mutation, or run submission was performed.",
         },
         "capacity": {
+            "build_budget_warnings": build_budget_warnings,
+            "build_budget_error": build_budget_error,
             "max_active_leaf_runs": max_active_leaf_runs,
             "active_leaf_runs": shared_occupancy.occupied,
             // [ORB-12617] The wrapper subset of that occupancy, and what the
@@ -443,7 +610,13 @@ pub fn explain_workspace_auto_readiness(
             // admission, and readings that could not be used (which admit).
             "resource_throttle": resource.throttle,
             "resource_telemetry_unknown": resource.unknown,
+            // [ORB-14624] Light slots a CPU-only throttle still admits into;
+            // `applies` is true while it is spending them.
+            "cpu_light_budget": light_budget.to_json(gate == ResourceGate::LightOnly),
         },
+        "approvals": approvals,
+        "provider_limits": provider_limits.readings,
+        "total": total,
         "tasks": tasks,
     }))
 }

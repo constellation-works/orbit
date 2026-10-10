@@ -7,7 +7,7 @@
 //! same-directory rename, which is atomic — so a crash can leave a stray
 //! staging file, but never a half-written `orbit`.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -26,16 +26,36 @@ const ARCHIVE_MEMBER: &str = "orbit";
 /// A verified replacement executable staged beside its destination.
 #[derive(Debug)]
 pub struct StagedRelease {
-    /// The staging file, removed on drop unless it was committed.
-    path: PathBuf,
+    executable: StagedExecutable,
     /// SHA-256 of the release archive this came from.
     pub archive_sha256: String,
     /// ID of the release signing key that authenticated the manifest.
     pub signing_key_id: String,
-    committed: bool,
 }
 
 impl StagedRelease {
+    /// Path of the staged executable, runnable for pre-flight checks.
+    pub fn path(&self) -> &Path {
+        self.executable.path()
+    }
+
+    /// Replace `destination` with the staged executable; see
+    /// [`StagedExecutable::commit`].
+    pub fn commit(self, destination: &Path, backup: &Path) -> Result<(), OrbitError> {
+        self.executable.commit(destination, backup)
+    }
+}
+
+/// An executable written beside its destination so the swap is one
+/// same-directory rename.
+#[derive(Debug)]
+pub struct StagedExecutable {
+    /// The staging file, removed on drop unless it was committed.
+    path: PathBuf,
+    committed: bool,
+}
+
+impl StagedExecutable {
     /// Path of the staged executable, runnable for pre-flight checks.
     pub fn path(&self) -> &Path {
         &self.path
@@ -66,12 +86,25 @@ impl StagedRelease {
     }
 }
 
-impl Drop for StagedRelease {
+impl Drop for StagedExecutable {
     fn drop(&mut self) {
         if !self.committed {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+/// Stream at most `limit` bytes of `executable` into a staging file beside
+/// `destination`, without installing it.
+pub(super) fn stage_executable(
+    destination: &Path,
+    executable: impl Read,
+    limit: u64,
+) -> Result<StagedExecutable, OrbitError> {
+    Ok(StagedExecutable {
+        path: write_staging_file(destination, executable, limit)?,
+        committed: false,
+    })
 }
 
 /// Restore `destination` from `backup` after a failed replacement.
@@ -81,6 +114,29 @@ impl Drop for StagedRelease {
 /// instead.
 pub fn restore_backup(destination: &Path, backup: &Path) -> Result<(), OrbitError> {
     restore_backup_with_rename(destination, backup, |from, to| std::fs::rename(from, to))
+}
+
+/// Reject an installed candidate without losing its verification failure if
+/// restoring the previous executable also fails. No workspace state has run yet.
+pub(super) fn reject_installed_candidate(
+    destination: &Path,
+    backup: &Path,
+    verification_failure: String,
+    restore: impl FnOnce(&Path, &Path) -> Result<(), OrbitError>,
+) -> OrbitError {
+    match restore(destination, backup) {
+        Ok(()) => OrbitError::Execution(format!(
+            "{verification_failure}; restored the previous executable and changed no workspace state"
+        )),
+        Err(restore_error) => OrbitError::Execution(format!(
+            "{verification_failure}; restoring the previous executable also failed ({restore_error}); \
+             the rejected candidate remains installed at '{}', and the previous executable's \
+             backup remains at '{}'; no workspace state was changed. Restore the backup before \
+             retrying the update",
+            destination.display(),
+            backup.display()
+        )),
+    }
 }
 
 /// Stage a complete copy of `backup`, then atomically replace `destination`.
@@ -166,12 +222,10 @@ pub fn stage_release(
     verify_sha256_digest(&archive_sha256, &expected, asset)?;
 
     let executable = extract_release_executable(&archive, asset)?;
-    let path = write_staging_file(destination, &executable)?;
     Ok(StagedRelease {
-        path,
+        executable: stage_executable(destination, executable.as_slice(), MAX_ARCHIVE_BYTES)?,
         archive_sha256,
         signing_key_id: signing_key_id.to_string(),
-        committed: false,
     })
 }
 
@@ -243,8 +297,24 @@ fn extract_release_executable(archive: &[u8], asset: &str) -> Result<Vec<u8>, Or
 ///
 /// The file is created fresh (`create_new` never follows a pre-planted
 /// symlink at the predictable name) and synced before the rename, so a crash
-/// cannot swap in a truncated binary.
-fn write_staging_file(destination: &Path, executable: &[u8]) -> Result<PathBuf, OrbitError> {
+/// cannot swap in a truncated binary. More than `limit` bytes is refused, and
+/// the partial file removed. A mode-setting failure also removes the file.
+fn write_staging_file(
+    destination: &Path,
+    executable: impl Read,
+    limit: u64,
+) -> Result<PathBuf, OrbitError> {
+    write_staging_file_with_mode(destination, executable, limit, set_executable_mode)
+}
+
+/// Inject the mode operation to exercise staging cleanup without relying on
+/// filesystem-specific permission failures.
+pub(super) fn write_staging_file_with_mode(
+    destination: &Path,
+    executable: impl Read,
+    limit: u64,
+    set_mode: impl FnOnce(&Path) -> Result<(), OrbitError>,
+) -> Result<PathBuf, OrbitError> {
     let path = sibling_staging_path(destination, ".orbit-update-staged")?;
     let stage_error = |error: std::io::Error| {
         OrbitError::Io(format!(
@@ -264,10 +334,23 @@ fn write_staging_file(destination: &Path, executable: &[u8]) -> Result<PathBuf, 
         .create_new(true)
         .open(&path)
         .map_err(stage_error)?;
-    file.write_all(executable)
-        .and_then(|()| file.sync_all())
-        .map_err(stage_error)?;
-    set_executable_mode(&path)?;
+    let written = std::io::copy(&mut executable.take(limit + 1), &mut file)
+        .and_then(|written| file.sync_all().map(|()| written))
+        .map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            stage_error(error)
+        })?;
+    if written > limit {
+        let _ = std::fs::remove_file(&path);
+        return Err(OrbitError::Execution(format!(
+            "the replacement executable exceeds the {limit}-byte staging limit"
+        )));
+    }
+    drop(file);
+    if let Err(error) = set_mode(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
     Ok(path)
 }
 

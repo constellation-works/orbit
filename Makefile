@@ -1,9 +1,10 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-test-affected ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test web-memory-soak
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
 CARGO ?= cargo
+MSRV ?= 1.89
 BUILD_BUDGET ?= ./scripts/build-budget.py
 BINARY := orbit
 BIN_CRATE := orbit-cli
@@ -19,18 +20,14 @@ INSTALL_BIN_DIR ?= $(HOME)/.orbit/bin
 PROFILE ?= debug
 ifeq ($(PROFILE),release)
 	CARGO_PROFILE := --release
-	TARGET_DIR := target/release
 else
 	CARGO_PROFILE :=
-	TARGET_DIR := target/debug
 endif
 
 ifeq ($(INSTALL_PROFILE),release)
 	INSTALL_CARGO_PROFILE := --release
-	INSTALL_TARGET_DIR := target/release
 else
 	INSTALL_CARGO_PROFILE :=
-	INSTALL_TARGET_DIR := target/debug
 endif
 
 GOLDENS_FLAGS :=
@@ -56,7 +53,8 @@ help:
 	@echo "  make audit        Supply-chain audit (cargo-deny: advisories + licenses)"
 	@echo "  make tree         Print dependency tree"
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
-	@echo "  make ci-fast      Pre-handoff gate for agents (fast guardrail mode; skips full workspace compile/test/doc steps)"
+	@echo "  make ci-fast      Format, repository guardrails, and the MSRV check; runs no Rust tests"
+	@echo "  make ci-test-affected  Full tests for changed crates and workspace dependents (CI_TEST_BASE=<commit> pins the base)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
@@ -72,6 +70,7 @@ help:
 	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
 	@echo "  make compiler-cache-bench   Two-worktree cold/warm/concurrent compiler-cache timings"
 	@echo "  make cross-revision-check-test  Test the provenance-safe before/after validation helper"
+	@echo "  make web-memory-soak  Linux dashboard RSS soak on a large fixture (SOAK_FLAGS=... optional)"
 	@echo "  make watch        Continuous check + test"
 
 # ------------------------------------------------------------
@@ -90,6 +89,7 @@ release:
 # is compilation-capable and must not run after the slot is released.
 define CARGO_EXECUTABLE_FROM_JSON
 import json, sys
+caller = sys.argv[1] if len(sys.argv) > 1 else "run"
 path = None
 for raw in sys.stdin:
     raw = raw.strip()
@@ -103,7 +103,7 @@ for raw in sys.stdin:
     if message.get("reason") == "compiler-artifact" and executable:
         path = executable
 if not path:
-    sys.stderr.write("make run: cargo did not report an executable\n")
+    sys.stderr.write(f"make {caller}: cargo did not report an executable\n")
     raise SystemExit(1)
 print(path)
 endef
@@ -115,13 +115,19 @@ run:
 	json="$$(mktemp)"; \
 	trap 'rm -f "$$json"' EXIT; \
 	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --message-format=json-render-diagnostics >"$$json"; \
-	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" <"$$json")"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" run <"$$json")"; \
 	rm -f "$$json"; \
 	"$$bin" $(ARGS)
 
 # Direct execution (after build)
-dev: build
-	$(TARGET_DIR)/$(BINARY) $(ARGS)
+dev:
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) $(CARGO_PROFILE) --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" dev <"$$json")"; \
+	rm -f "$$json"; \
+	"$$bin" $(ARGS)
 
 # ------------------------------------------------------------
 # Quality
@@ -153,17 +159,29 @@ tree:
 ci:
 	$(BUILD_BUDGET) -- ./scripts/ci-guardrails.sh
 
-# Pre-handoff gate for agents: shared guardrails in fast mode. Full make ci runs on PRs.
+# Format and shared guardrails plus the MSRV compile check: no Rust tests.
+# Full make ci runs on PRs.
 ci-fast:
+	./scripts/require-python.sh
+	$(BUILD_BUDGET) -- $(CARGO) +$(MSRV) check --workspace --locked
 	./scripts/ci-guardrails.sh --fast
 
-# Compile-time pre-handoff gate for agents. Keep both passes aligned with
+# Full test targets of changed crates and all reverse workspace dependents.
+# The selector includes committed and working-tree changes against the base.
+ci-test-affected:
+	CARGO="$(CARGO)" BUILD_BUDGET="$(BUILD_BUDGET)" python3 ./scripts/ci-test-affected.py
+
+# Compile-time pre-handoff gate for agents. Keep these passes aligned with
 # scripts/ci-guardrails.sh: production enforces bounded channels, then all
-# targets retain the other workspace lints without flagging test-only channels.
+# targets retain the other workspace lints without flagging test-only channels,
+# then rustdoc denies warnings (private intra-doc links turned agent-main red
+# twice on 2026-10-07 because no agent gate built docs).
 ci-lint:
+	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
+	RUSTDOCFLAGS="-D warnings" $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, the
 # MCP tools/list snapshot, CI/GitHub log fixtures, and sandbox profile goldens. Compiles orbit-cli
@@ -187,9 +205,14 @@ docs-index:
 # Install
 # ------------------------------------------------------------
 install:
-	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) $(INSTALL_CARGO_PROFILE)
-	install -d $(INSTALL_BIN_DIR)
-	install -m 755 $(INSTALL_TARGET_DIR)/$(BINARY) $(INSTALL_BIN_DIR)/$(BINARY)
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) $(INSTALL_CARGO_PROFILE) --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" install <"$$json")"; \
+	rm -f "$$json"; \
+	install -d $(INSTALL_BIN_DIR); \
+	install -m 755 "$$bin" $(INSTALL_BIN_DIR)/$(BINARY)
 
 uninstall:
 	rm -f $(INSTALL_BIN_DIR)/$(BINARY)
@@ -228,6 +251,17 @@ compiler-cache-bench:
 # docs/runbooks/compiler-cache.md. [ORB-11981]
 cross-revision-check-test:
 	./scripts/test-cross-revision-check.sh
+
+# Dashboard resident-memory soak on a large disposable store (Linux only). See
+# docs/runbooks/web-memory-soak.md. [ORB-14723]
+web-memory-soak:
+	@set -eu; \
+	json="$$(mktemp)"; \
+	trap 'rm -f "$$json"' EXIT; \
+	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) --release --message-format=json-render-diagnostics >"$$json"; \
+	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" web-memory-soak <"$$json")"; \
+	rm -f "$$json"; \
+	python3 scripts/web-memory-soak.py --bin "$$bin" $(SOAK_FLAGS)
 
 # ------------------------------------------------------------
 # Dev Loop

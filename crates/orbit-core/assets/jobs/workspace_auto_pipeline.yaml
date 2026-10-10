@@ -22,6 +22,22 @@
 #   already explicitly not a failure of this sequencer
 #   (`allow_non_success: true`).
 #
+# `--approve-proposed` [ORB-14117]
+# - Opt-in through `approve_proposed`. Each iteration first selects the
+#   qualifying `proposed` tasks (`no-diff-expected`, or context selectors plus
+#   an assessed complexity), pilots them with `task_pilot_pipeline` under this
+#   drain's own promotion authority, and records what was approved. The
+#   admission step that follows the same iteration can then admit them, so a
+#   task filed while the window is open is approved and shipped by this drain.
+# - Approval is the task-pilot apply boundary's decision, not this file's:
+#   it verifies the authority record against this run, refuses any
+#   duplicate, already-landed, conflict or warning finding, and approves
+#   through the ordinary approve transition. Held tasks stay proposed and are
+#   not piloted again until they change. `allowed_crews` and the complexity
+#   pools still decide what gets admitted.
+# - Without the flag the selection step returns no candidates and the pilot
+#   and record steps are skipped.
+#
 # `for_seconds` gates *starting* the next iteration. It never cancels or
 # shortens a child that has already begun. A zero or absent window is expired
 # on its first answer, and `break_when` runs after the body, so the default is
@@ -75,6 +91,8 @@ spec:
     # which is the behavior of every caller that does not pass it. Forwarded
     # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
+    # ORB-14117: opt-in approval of qualifying proposed tasks each pass.
+    approve_proposed: false
     # Complexity pools are captured by Core at coordinator admission from
     # workflow configuration and low/medium/hard/xhard_complexity_crews run
     # overrides.
@@ -97,6 +115,32 @@ spec:
         max_iterations: 4000
         break_when: "{{ steps.window.output.expired }} == true"
         steps:
+          - id: approvals
+            target: activity:select_proposed_approvals
+            default_input:
+              approve_proposed: "{{ input.approve_proposed }}"
+
+          # Blocking, so the admission step below sees what this pass
+          # approved. A failed pilot is data here, not a drain failure: its
+          # tasks stay proposed and the record step reports them.
+          - id: approve_proposed
+            when: "{{ steps.approvals.output.candidate_count }} != 0"
+            target: activity:invoke_and_wait
+            default_input:
+              job_name: task_pilot_pipeline
+              run_input:
+                task_ids: "{{ steps.approvals.output.task_ids }}"
+                base_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
+                promotion_authorized: true
+                drain_promotion: "{{ steps.approvals.output.drain_promotion }}"
+
+          - id: approval_report
+            when: "{{ steps.approvals.output.candidate_count }} != 0"
+            target: activity:record_proposed_approvals
+            default_input:
+              task_ids: "{{ steps.approvals.output.task_ids }}"
+              pilot: "{{ steps.approve_proposed.output }}"
+
           - id: admissible
             target: activity:classify_workspace_auto_tasks
             default_input:

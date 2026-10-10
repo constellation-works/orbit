@@ -23,6 +23,11 @@ pub(super) fn validate_transition(
         || previous.generation.checked_add(1) != Some(next.generation)
         || next.pending.len() > 1000
         || next.pending_commits.len() > 5000
+        || next.lookup_retries.keys().any(|sha| {
+            !next.pending_commits.contains(sha)
+                || !next.unresolved.contains_key(sha)
+                || next.associations.contains_key(sha)
+        })
     {
         return Err(invalid());
     }
@@ -244,11 +249,16 @@ fn validate_excluded_prefix_retirement(
 
     let mut unresolved = previous.unresolved.clone();
     let mut associations = previous.associations.clone();
+    let mut lookup_retries = previous.lookup_retries.clone();
     for sha in prefix {
         unresolved.remove(sha);
         associations.remove(sha);
+        lookup_retries.remove(sha);
     }
-    if next.unresolved != unresolved || next.associations != associations {
+    if next.unresolved != unresolved
+        || next.associations != associations
+        || next.lookup_retries != lookup_retries
+    {
         return Err(invalid());
     }
 

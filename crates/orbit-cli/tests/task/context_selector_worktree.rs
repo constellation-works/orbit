@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command as StdCommand, Output};
+use std::process::Output;
 
 use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -578,7 +578,7 @@ fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
 }
 
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = StdCommand::new("git")
+    let output = crate::git_repo::command()
         .arg("-C")
         .arg(cwd)
         .args(args)

@@ -12,9 +12,16 @@
 #   crash leaves uncertainty the next attempt reconciles against real provider
 #   or Git state before anything is retried.
 # - A stopped landing (changed head or base, conflict, unsatisfied branch
-#   protection, exhausted check budget) fails the run with the task still in
-#   review and durable evidence recorded against the attempt. Repairing the
-#   candidate requires fresh validation and a new handoff, not a resume.
+#   protection, exhausted check budget) fails the run with durable evidence
+#   recorded against the attempt. Repairing the candidate requires fresh
+#   validation and a new handoff, not a resume.
+# - ORB-14261: a stop on a base conflict or a stale base revokes the handoff's
+#   authority and moves its claim to `repair_pending` with the task back in
+#   progress; the next pull by the original executor (or, after a grace
+#   period, the owner's local drain) admits a repair claim that re-applies the
+#   candidate, revalidates it and hands off again. Only one automatic repair:
+#   a second such stop blocks the task with both attempts' evidence. Any other
+#   stop leaves the task in review.
 #
 schemaVersion: 2
 kind: Job

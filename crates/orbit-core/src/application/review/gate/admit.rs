@@ -17,11 +17,16 @@ use serde_json::{Value, json};
 
 use super::super::REVIEW_AUDIT;
 use super::super::admission::run_review_admission;
+use super::super::evidence::{
+    EvidenceCarry, carried_external_evidence, evidence_carry,
+    satisfied_external_evidence as satisfied_external_evidence_on,
+};
 use crate::OrbitRuntime;
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 use super::context::{GateContext, admitted_run_id, not_applicable};
 use super::judgement::write_artifact;
+use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received};
 use super::release::release_abandoned;
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
@@ -77,18 +82,41 @@ pub(crate) fn review_gate_admit(
         }
         return Ok(not_applicable("review_admission_missing", None));
     };
-    if rebase.is_some() && !admission.gates_pr() {
+    if rebase.is_some() && !admission.gates_merge() {
         return Err(refused(
             "review_gate_stale: completion rebased a reviewed head but the run's review \
-             admission no longer gates the PR"
+             admission no longer gates the merge"
                 .to_string(),
         ));
     }
-    if !admission.gates_pr() {
+    let preflight = input
+        .get("preflight")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // [ORB-14849] Which review this step is: the published PR's
+    // (`before_landing`), the pre-push gate's, or — for a completion re-review
+    // or the budget preflight — whichever one the run captured.
+    let landing_step = input
+        .get("before_landing")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let applies = if rebase.is_some() || preflight {
+        admission.gates_merge()
+    } else if landing_step {
+        admission.gates_landing()
+    } else {
+        admission.gates_pr()
+    };
+    if !applies {
+        use orbit_types::workflow::ReviewTiming;
         let reason = match admission.timing {
-            orbit_types::workflow::ReviewTiming::None => "review_policy_none",
-            orbit_types::workflow::ReviewTiming::AfterLanding => "review_policy_after_landing",
-            orbit_types::workflow::ReviewTiming::BeforePr => unreachable!("gates_pr"),
+            ReviewTiming::None if landing_step => "review_before_landing_off",
+            ReviewTiming::None => "review_before_pr_off",
+            // The other layer reviews this run.
+            ReviewTiming::BeforePr => "reviewed_before_pr",
+            ReviewTiming::BeforeLanding => "review_before_landing",
+            // A run captured under the retired `after-landing` policy value.
+            ReviewTiming::AfterLanding => "review_policy_after_landing",
         };
         return Ok(not_applicable(reason, Some(&admission)));
     }
@@ -102,13 +130,18 @@ pub(crate) fn review_gate_admit(
         return Ok(not_applicable("no_diff_exemption", Some(&admission)));
     }
     if input.get("mode").and_then(Value::as_str) == Some("local") {
-        // V1 rejects `before-pr` on a local-only route instead of changing
-        // what the policy means; a pipeline may learn its route late.
-        return Err(refused(
-            "review_policy_local_route_refused: this run carries a before-pr review admission \
-             but delivers locally; ship through the PR route or choose none/after-landing"
-                .to_string(),
-        ));
+        // A review layer before landing on a local-only route is refused
+        // rather than reinterpreted; a pipeline may learn its route late.
+        let key = if admission.gates_landing() {
+            "review.before_landing"
+        } else {
+            "review.before_pr"
+        };
+        return Err(refused(format!(
+            "{}_local_route_refused: this run captured {key} on but delivers locally; ship \
+             through the PR route or turn {key} off",
+            key.replace('.', "_")
+        )));
     }
 
     // A re-review pins the candidate to the base completion rebased onto.
@@ -118,15 +151,13 @@ pub(crate) fn review_gate_admit(
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| failed(error.to_string()))?;
-    let preflight = input
-        .get("preflight")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let outcome = if preflight {
-        preflight_budget(runtime, &context)
-    } else {
-        admit(runtime, &context, &admission, rebase.as_ref())
-    };
+    let outcome = require_external_evidence(runtime, &context).and_then(|()| {
+        if preflight {
+            preflight_budget(runtime, &context)
+        } else {
+            admit(runtime, &context, &admission, rebase.as_ref())
+        }
+    });
     let audit_args = json!({
         "phase": if preflight { "preflight" } else { "admit" },
         "run_id": context.run_id,
@@ -150,6 +181,23 @@ pub(crate) fn review_gate_admit(
         )
         .map_err(|error| failed(error.to_string()))?;
     outcome.map_err(refused_or_failed)
+}
+
+fn require_external_evidence(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+) -> Result<(), OrbitError> {
+    for task in &context.tasks {
+        if let Some(hold) = super::super::evidence::evidence_hold(runtime, &task.id)?
+            && hold.task_meaning_digest == context.task_digests.1
+            && orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?.tree
+                == hold.candidate.tree
+            && !super::super::evidence::evidence_ready(runtime, &task.id, &hold)?
+        {
+            return Err(OrbitError::CapabilityDenied("review_awaiting_evidence: named external checks have not arrived for the held candidate".into()));
+        }
+    }
+    Ok(())
 }
 
 /// The head a completion step rebased onto a new base and left unpublished
@@ -214,7 +262,14 @@ fn admit(
     admission: &ReviewAdmission,
     rebase: Option<&CompletionRebase>,
 ) -> Result<Value, OrbitError> {
-    let crew = resolve_reviewer_crew(runtime, admission, context)?;
+    let required_validation_commands = admission
+        .required_validation_commands
+        .as_ref()
+        .ok_or_else(|| {
+            OrbitError::CapabilityDenied(
+                "review_validation_contract_missing: this admitted run predates the captured host required-check list; dispatch a fresh delivery run after upgrading the workspace".into(),
+            )
+        })?;
     let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
     if let Some(rebase) = rebase
         && candidate.head.commit != rebase.head_sha
@@ -231,7 +286,31 @@ fn admit(
             candidate.head.commit, candidate.base.commit
         )));
     }
+    // A held review whose owed evidence arrived for this exact candidate
+    // settles under its original reviewer; no new reviewer is started.
+    let received = match rebase {
+        None => owed_hold_received(runtime, context, &candidate)?,
+        Some(_) => None,
+    };
+    let reviewer = match &received {
+        Some((_, certificate)) => held_reviewer_json(&certificate.reviewer),
+        None => {
+            let crew = resolve_reviewer_crew(runtime, admission, context)?;
+            reviewer_json(&crew, &admission.crew_source)
+        }
+    };
+    let owed_external_evidence = owed_evidence(runtime, context, &candidate.commits)?;
     let (task_digests, task_meaning_digest) = &context.task_digests;
+    let carry = match context.task_ids.as_slice() {
+        [task_id] => evidence_carry(
+            runtime,
+            task_id,
+            &context.workspace_path,
+            &candidate.base,
+            &candidate.head,
+        )?,
+        _ => EvidenceCarry::None,
+    };
 
     let store = runtime.review_store()?;
     let lineage_key = context.lineage_key();
@@ -259,12 +338,11 @@ fn admit(
         ReviewReservation::Resumed { attempt } => (attempt, true),
         ReviewReservation::Exhausted { reason, consumed } => {
             return Err(OrbitError::CapabilityDenied(format!(
-                "review_budget_exhausted: {reason} for lineage '{lineage_key}' (reviewer starts \
-                 {}/{}, {}s of {}s); an operator can run \
+                "review_budget_exhausted: {reason} for candidate {} in lineage '{lineage_key}' \
+                 ({}s of {}s); each candidate gets one review — an operator can run \
                  orbit task review-reset {} --lineage '{lineage_key}' --reason '<decision>' \
                  before resuming, or dispatch a fresh delivery run",
-                consumed.reviewer_starts,
-                ledger.budget.reviewer_starts,
+                candidate.head.commit,
                 consumed.seconds,
                 u64::from(ledger.budget.minutes) * 60,
                 context.task_ids[0]
@@ -272,12 +350,32 @@ fn admit(
         }
     };
 
+    let previous_report = runtime
+        .get_task_artifact(&context.task_ids[0], REVIEW_REPORT_ARTIFACT)?
+        .and_then(|artifact| orbit_types::workflow::ReviewReport::parse(&artifact.content).ok());
+    let mut satisfied_external_evidence = carried_external_evidence(
+        runtime,
+        &context.task_ids[0],
+        &candidate.head,
+        carry.carried(),
+    )?;
+    satisfied_external_evidence.extend(satisfied_external_evidence_on(
+        runtime,
+        &context.task_ids[0],
+        &candidate.head,
+    )?);
     let manifest = ReviewManifest {
+        satisfied_external_evidence,
+        evidence_carried: carry.carried().cloned(),
+        owed_external_evidence,
+        previous_report,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt.attempt_id.clone(),
         lineage_key: lineage_key.clone(),
         task_ids: context.task_ids.clone(),
         task_digests: task_digests.clone(),
+        required_validation_commands: Some(required_validation_commands.clone()),
+        baseline_commands: admission.baseline_commands.clone(),
         task_meaning_digest: task_meaning_digest.clone(),
         repository: context.repository.clone(),
         base: candidate.base.clone(),
@@ -288,11 +386,11 @@ fn admit(
             .iter()
             .map(|task| (task.id.to_string(), task.execution_summary.clone()))
             .collect(),
-        reviewer_crew: crew.name.clone(),
+        reviewer_crew: reviewer["crew"].as_str().unwrap_or_default().to_string(),
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: admission.policy_version,
         budget: ledger.budget,
-        remaining: ledger.remaining_at(now),
+        remaining: ledger.remaining_for(&candidate.head, task_meaning_digest, now),
         issued_at: now,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)
@@ -312,16 +410,23 @@ fn admit(
         )?;
     }
 
+    let decision = match (&received, resumed) {
+        (Some(_), _) => EVIDENCE_RECEIVED_DECISION,
+        (None, true) => "resumed",
+        (None, false) => "admitted",
+    };
     Ok(json!({
         "applies": true,
-        "decision": if resumed { "resumed" } else { "admitted" },
+        "decision": decision,
+        "held_attempt_id": received.as_ref().map(|(hold, _)| hold.attempt_id.clone()),
         "first_task_id": context.task_ids[0],
         "attempt_id": attempt.attempt_id,
         "attempt_index": attempt.index,
         "lineage_key": lineage_key,
         "timing": admission.timing.as_str(),
         "timing_source": admission.timing_source,
-        "reviewer": reviewer_json(&crew, &admission.crew_source),
+        "reviewer": reviewer,
+        "owed_evidence": manifest.owed_external_evidence,
         "base_sha": candidate.base.commit,
         "base_tree": candidate.base.tree,
         "head_sha": candidate.head.commit,
@@ -329,10 +434,11 @@ fn admit(
         "implementation_commit_count": candidate.commits.len(),
         "task_meaning_digest": manifest.task_meaning_digest,
         "task_selectors": selectors,
+        "evidence_carry": carry.to_json(),
         "manifest_artifact": REVIEW_MANIFEST_ARTIFACT,
         "report_artifact": REVIEW_REPORT_ARTIFACT,
         "budget": ledger.budget,
-        "remaining": ledger.remaining_at(now),
+        "remaining": manifest.remaining,
         "started_at": attempt.started_at.to_rfc3339(),
     }))
 }
@@ -347,7 +453,7 @@ fn resolve_reviewer_crew(
 ) -> Result<Crew, OrbitError> {
     let name = admission.crew.as_deref().ok_or_else(|| {
         OrbitError::CapabilityDenied(
-            "review_crew_unconfigured: before-pr review needs an explicitly configured \
+            "review_crew_unconfigured: before-PR review needs an explicitly configured \
              operation.review_crew; automatic review never inherits the implementer's crew"
                 .to_string(),
         )
@@ -381,6 +487,17 @@ fn reviewer_json(crew: &Crew, source: &str) -> Value {
         "provider": crew.assignment.provider,
         "model": crew.assignment.model,
         "reasoning_effort": crew.assignment.effort,
+    })
+}
+
+/// The reviewer a held review settles under: the one that reviewed it.
+fn held_reviewer_json(reviewer: &ReviewerIdentity) -> Value {
+    json!({
+        "crew": reviewer.crew,
+        "crew_source": "held_review",
+        "provider": reviewer.provider,
+        "model": reviewer.model,
+        "reasoning_effort": reviewer.reasoning_effort,
     })
 }
 
@@ -423,28 +540,24 @@ pub(super) fn reviewer_identity(
     })
 }
 
-/// Fail before implementation when the captured lineage cannot admit another
-/// reviewer. This does not reserve an attempt, load Git objects or write a manifest.
+/// Fail before implementation when the lineage's latest review ran out of
+/// minutes without a verdict: a resumed run would otherwise implement again
+/// only to be refused at admission. A settled review never blocks here — the
+/// next candidate is a new review. This does not reserve an attempt, load Git
+/// objects or write a manifest.
 fn preflight_budget(runtime: &OrbitRuntime, context: &GateContext) -> Result<Value, OrbitError> {
     let lineage = context.lineage_key();
     if let Some(ledger) = runtime
         .review_store()?
         .review_ledger(&context.workspace_id, &lineage)?
+        && let Some(latest) = ledger.latest_attempt()
+        && !ledger.reviewed(&latest.candidate, &latest.task_meaning_digest)
+        && ledger.remaining_at(Utc::now()).seconds == 0
     {
-        let remaining = ledger.remaining_at(Utc::now());
-        let reason = if remaining.seconds == 0 {
-            Some("review_minutes_exhausted")
-        } else if remaining.reviewer_starts == 0 {
-            Some("review_starts_exhausted")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            return Err(OrbitError::CapabilityDenied(format!(
-                "review_budget_exhausted: {reason} for lineage '{lineage}'; an operator can run orbit task review-reset {} --lineage '{lineage}' --reason '<decision>' before resuming, or dispatch a fresh delivery run",
-                context.task_ids[0]
-            )));
-        }
+        return Err(OrbitError::CapabilityDenied(format!(
+            "review_budget_exhausted: review_minutes_exhausted for lineage '{lineage}'; an operator can run orbit task review-reset {} --lineage '{lineage}' --reason '<decision>' before resuming, or dispatch a fresh delivery run",
+            context.task_ids[0]
+        )));
     }
     Ok(json!({"applies": true, "decision": "preflight_passed", "lineage_key": lineage}))
 }

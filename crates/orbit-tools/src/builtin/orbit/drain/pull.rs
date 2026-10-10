@@ -40,10 +40,41 @@ impl Tool for OrbitTaskPullTool {
                 "The caller's distributed-drain wire-protocol schema version.",
             ),
             param(
-                "caller_review_policy",
-                "string",
-                "The executor's effective review policy. Only `none` is admitted in v1.",
+                "caller_before_pr",
+                "boolean",
+                "The `review.before_pr` the executor's drain captured at submission. \
+                 Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` \
+                 contract captures, never the executor's own. After-landing review never \
+                 affects admission.",
             ),
+            ToolParam {
+                required: false,
+                ..param(
+                    "caller_fingerprint",
+                    "string",
+                    "Type-derived pull request fingerprint negotiated with orbit.drain.probe. A mismatch is refused as protocol_skew before deserialization; optional for historical requests.",
+                )
+            },
+            ToolParam {
+                required: false,
+                ..param(
+                    "review_gate",
+                    "boolean",
+                    "Whether the executor's claimed PR leaf runs the before-PR review the `ship` \
+                     contract captures. An owner with `review.before_pr` on refuses an executor \
+                     that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
+                )
+            },
+            ToolParam {
+                required: false,
+                ..param(
+                    "caller_review_policy",
+                    "string",
+                    "Deprecated and ignored: the review-policy label distributed-drain protocol \
+                     revisions before 5 sent. Accepted only so an older caller is refused as \
+                     `protocol_mismatch` rather than for an unknown field.",
+                )
+            },
             param(
                 "run_context",
                 "object",

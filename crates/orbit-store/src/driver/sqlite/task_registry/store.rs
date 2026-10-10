@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::is_readonly_or_access_sqlite_error;
 use rusqlite::{Connection, OpenFlags};
 
 use super::schema::{
@@ -10,6 +11,19 @@ use super::schema::{
 };
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
+
+/// Root of the per-workspace bundle trees, derived from the canonical
+/// registry directory. `workspaces/` is created lazily, so normalizing it
+/// directly would keep a symlinked spelling on a fresh root and canonicalize
+/// it once the directory exists. The task repair gate keys on this path, so
+/// every open of one root must produce the same spelling.
+fn workspaces_dir_of(path: &Path) -> PathBuf {
+    let registry_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    normalize_path(&registry_dir).join("workspaces")
+}
 
 /// Task registry handle: one writer connection behind a mutex plus a
 /// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
@@ -30,12 +44,8 @@ pub struct TaskRegistryStore {
 
 impl TaskRegistryStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
-        let registry_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let workspaces_dir = normalize_path(&registry_dir.join("workspaces"));
         let opened = orbit_common::storage::sqlite::open_private(path)?;
+        let workspaces_dir = workspaces_dir_of(path);
         let mut conn = opened.connection;
         let read_only = opened.read_only;
         if !read_only {
@@ -50,8 +60,7 @@ impl TaskRegistryStore {
         // fsync cost is negligible. Scoped to this connection only — the shared
         // Store::open stays at NORMAL for higher-write stores.
         if !read_only && let Err(error) = conn.pragma_update(None, "synchronous", "FULL") {
-            let mapped = OrbitError::Store(format!("failed to set synchronous=FULL: {error}"));
-            if mapped.is_readonly_or_access_failure() {
+            if is_readonly_or_access_sqlite_error(&error) {
                 orbit_common::tracing::warn!(
                     target: "orbit.store.task_registry",
                     path = %path.display(),
@@ -59,7 +68,9 @@ impl TaskRegistryStore {
                     "could not set synchronous=FULL on a read-only task registry; continuing for reads"
                 );
             } else {
-                return Err(mapped);
+                return Err(OrbitError::Store(format!(
+                    "failed to set synchronous=FULL: {error}"
+                )));
             }
         }
         // Setup, migration and recovery all need a write transaction, so a
@@ -94,11 +105,7 @@ impl TaskRegistryStore {
     /// Open an existing registry without creating files, applying schema, or
     /// taking a writer connection. Used by a differing-generation read-only join.
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
-        let registry_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let workspaces_dir = normalize_path(&registry_dir.join("workspaces"));
+        let workspaces_dir = workspaces_dir_of(path);
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
         assert_readable_schema(&conn, path)?;

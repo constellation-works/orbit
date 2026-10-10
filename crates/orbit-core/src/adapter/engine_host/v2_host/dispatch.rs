@@ -60,11 +60,12 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::PrepareTaskPilot | CoreDeterministicAction::ApplyTaskPilotResults
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
-        let claim = crate::application::automation::members::claim(runtime, claim_input, &[])
-            .map_err(|error| DispatchError::DeterministicActionFailed {
+        let claim = crate::application::automation::members::claim(runtime, claim_input).map_err(
+            |error| DispatchError::DeterministicActionFailed {
                 action: action.into(),
                 message: error.to_string(),
-            })?;
+            },
+        )?;
         if let Some(claim) = claim {
             let owner = tool_context
                 .reservation_owner
@@ -222,6 +223,17 @@ pub(crate) fn run_deterministic(
                 "slept_seconds": started_at.elapsed().as_secs_f64(),
             }))
         }
+        // The opt-in daily retention sweep: audit rows and blobs, then old
+        // terminal runs' pipeline state, under the configured windows.
+        CoreDeterministicAction::StoreGc => {
+            let failed = |error: OrbitError| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            };
+            let audit = runtime.gc_audit(true, None).map_err(failed)?;
+            let runs = runtime.gc_runs(true, None).map_err(failed)?;
+            Ok(serde_json::json!({ "audit": audit, "runs": runs }))
+        }
         // Turn one host-collected CI evidence snapshot into ordinary backlog
         // bug tasks [ORB-11107]. All GitHub access already happened in the
         // engine-private `collect_ci_evidence` step; this action only reads
@@ -256,6 +268,14 @@ pub(crate) fn run_deterministic(
         // reservation, not through a blanket hold.
         CoreDeterministicAction::ClassifyWorkspaceAutoTasks => {
             workspace_auto::classify_workspace_auto_tasks(runtime, action, input)
+        }
+        // `--approve-proposed`: the qualifying proposed tasks this pass pilots
+        // under the drain's authority, and afterwards what that pilot approved.
+        CoreDeterministicAction::SelectProposedApprovals => {
+            workspace_auto::select_proposed_approvals(runtime, action, input)
+        }
+        CoreDeterministicAction::RecordProposedApprovals => {
+            workspace_auto::record_proposed_approvals(runtime, action, input)
         }
         // Stamp a drain deadline, or answer whether a stamped one has passed
         // [ORB-10819]. Gates the start of the next iteration only; nothing
@@ -305,6 +325,23 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ApplyBlockedTaskRecovery => {
             blocked_recovery::apply(runtime, action, input, recovery_run_id(&tool_context))
         }
+        // Run a held candidate's named Linux CodeQL check at the held commit
+        // and attach its log, plus the result when it passed; receipt queues
+        // a fresh review.
+        CoreDeterministicAction::FulfilReviewEvidence => {
+            crate::application::review::fulfil_review_evidence(
+                runtime,
+                action,
+                input,
+                recovery_run_id(&tool_context),
+            )
+        }
+        // [ORB-14823] Re-check every standing baseline-red hold, running the
+        // required command on a base tip with no recorded result. Only a
+        // detached refresh run reaches this; the clock tick never does.
+        CoreDeterministicAction::RefreshBaselineHolds => {
+            crate::application::task::refresh_baseline_holds_step(runtime, action)
+        }
         // [ORB-11333] Reserve a fresh reviewer start for the committed,
         // base-synchronized candidate and hand it a pinned manifest; then
         // settle the reviewer's report into an honest verdict, reviewer-
@@ -315,6 +352,34 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ReviewGateSettle => {
             crate::application::review::review_gate_settle(runtime, action, input)
         }
+        // Operator-admitted review reconciliation of an already-merged
+        // foreign delivery head: re-observe and pin the head, run required
+        // validation at the head (and its base for failures), then settle the
+        // read-only reviewer's report into one recorded outcome.
+        CoreDeterministicAction::ReviewReconciliationPrepare => reconciliation_step(
+            action,
+            crate::application::review::reconciliation::prepare(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
+        CoreDeterministicAction::ReviewReconciliationValidate => reconciliation_step(
+            action,
+            crate::application::review::reconciliation::validate(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
+        CoreDeterministicAction::ReviewReconciliationSettle => reconciliation_step(
+            action,
+            crate::application::review::reconciliation::settle(
+                runtime,
+                input,
+                recovery_run_id(&tool_context),
+            ),
+        ),
         // Guard the auto-dispatch bundle output before fan_out.
         // Rejects duplicated task_ids, unknown ids, and oversize
         // bundles with a structured error so a misgrouped backlog
@@ -710,4 +775,14 @@ fn recovery_run_id(tool_context: &ToolContext) -> Option<&str> {
         .reservation_owner
         .as_ref()
         .map(|owner| owner.owner_run_id.as_str())
+}
+
+fn reconciliation_step(
+    action: &str,
+    result: Result<Value, orbit_common::OrbitError>,
+) -> Result<Value, DispatchError> {
+    result.map_err(|error| DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message: error.to_string(),
+    })
 }

@@ -4,15 +4,10 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![allow(
-    rustdoc::broken_intra_doc_links,
-    rustdoc::invalid_html_tags,
-    rustdoc::private_intra_doc_links
-)]
 
 //! CLI entry point for Orbit: command parsing, dispatch, and output formatting.
 //!
-//! Parses command-line arguments with `clap`, initializes the [`OrbitRuntime`],
+//! Parses command-line arguments with `clap`, initializes the [`OrbitRuntime`](orbit_core::OrbitRuntime),
 //! dispatches to the appropriate command handler, and formats results as JSON
 //! or human-readable table output. Wraps every command in an audit middleware
 //! that records success, failure, or policy-denial events.
@@ -52,13 +47,13 @@ use crate::output::sink::{FormatArg, OutputMode, OutputSink};
 /// Clap id and long name of the global output-format argument.
 const FORMAT_ARG_ID: &str = "format";
 
+/// Clap id and long name of the global JSON shorthand.
+const JSON_ARG_ID: &str = "json";
+
 /// The global `--format`, declared exactly once for the whole CLI.
 ///
-/// It is built here and grafted onto the parsed command rather than added as a
-/// field on [`command::Cli`] because the staged terminal-interface migration
-/// [ORB-10569] owns `main.rs` while concurrent work owns the `command/` tree.
-/// Either declaration site yields the same surface: one declaration, rendered
-/// under `Options:` in `orbit --help` and accepted after a subcommand.
+/// Installed beside [`json_arg`] throughout the assembled command tree,
+/// including plugin groups, so both options work after a subcommand.
 fn format_arg() -> Arg {
     Arg::new(FORMAT_ARG_ID)
         .long(FORMAT_ARG_ID)
@@ -67,20 +62,29 @@ fn format_arg() -> Arg {
         .help("Output format (default: auto — a table on a terminal, plain text when piped)")
 }
 
+/// The global `--json` shorthand, preserving its historical pretty output.
+fn json_arg() -> Arg {
+    Arg::new(JSON_ARG_ID)
+        .long(JSON_ARG_ID)
+        .action(clap::ArgAction::SetTrue)
+        .help("Output as JSON (shorthand for --format json; always pretty-printed)")
+}
+
 /// Whether this command already declares a `--format` of its own.
 ///
 /// `orbit audit export` does, naming its export file's serialization with its
 /// own value type. It keeps that meaning; the global flag is simply not
-/// offered there, and its help says so. `crate::tests::cli_format` pins the
-/// list of such commands.
+/// offered there, and its help says so. `--json` selects the sink mode independently of the exported
+/// file, leaving the existing export confirmation unchanged.
 fn declares_format(command: &Command) -> bool {
     command
         .get_arguments()
         .any(|arg| arg.get_long() == Some(FORMAT_ARG_ID))
 }
 
-/// Add [`format_arg`] to the root and to every subcommand that does not
-/// declare its own `--format`.
+/// Add the output options wherever a local flag does not own their spelling.
+/// A plugin-derived `--json` tool-input flag keeps its meaning; output JSON
+/// remains available at the root/group or through `--format json` there.
 ///
 /// This walks the tree instead of using `Arg::global`, which would be the
 /// obvious spelling but panics here. A global arg is keyed by *id*: clap
@@ -92,7 +96,7 @@ fn declares_format(command: &Command) -> bool {
 /// `FormatArg` under the subcommand's — each one a downcast panic in the other
 /// reader. Declaring the argument per level keeps every value at the level it
 /// was parsed at, where its type is the one that level expects.
-fn install_format_arg(command: Command) -> Command {
+fn install_output_args(command: Command) -> Command {
     let subcommands: Vec<String> = command
         .get_subcommands()
         .map(|sub| sub.get_name().to_string())
@@ -103,8 +107,14 @@ fn install_format_arg(command: Command) -> Command {
     } else {
         command.arg(format_arg())
     };
+    if !command
+        .get_arguments()
+        .any(|arg| arg.get_long() == Some(JSON_ARG_ID))
+    {
+        command = command.arg(json_arg());
+    }
     for name in subcommands {
-        command = command.mut_subcommand(name, install_format_arg);
+        command = command.mut_subcommand(name, install_output_args);
     }
     command
 }
@@ -127,21 +137,17 @@ fn requested_format(matches: &ArgMatches) -> Option<FormatArg> {
     }
 }
 
-/// Clap ids of the per-command boolean flags that have always meant "emit the
-/// machine-readable form".
+/// Flags selecting the historical machine-readable output rung.
 ///
 /// `--ops` is here alongside `--json` because it is the same rung wearing a
 /// different name: on `task list` and `job list` it selects a narrower record
 /// shape and has always forced JSON. Leaving it out would make
 /// `orbit task list --ops` render a table on a terminal.
-const LEGACY_JSON_ARG_IDS: [&str; 2] = ["json", "ops"];
+const LEGACY_JSON_ARG_IDS: [&str; 2] = [JSON_ARG_ID, "ops"];
 
-/// Whether the invoked subcommand's own `--json`/`--ops` boolean was set.
+/// Whether `--json` or a command's `--ops` boolean was set at any level.
 ///
-/// Mode precedence rung 2 (spec §2), read the same way `--format` is: from the
-/// parsed matches rather than from 86 individual argument structs. The flags
-/// stay declared and accepted where they are [ADR-0306]; this is what makes
-/// them route through the resolver instead of each branching for itself.
+/// Both route through the sink's legacy rung to preserve pretty output.
 fn legacy_json(matches: &ArgMatches) -> bool {
     let mut level = matches;
     loop {
@@ -153,6 +159,31 @@ fn legacy_json(matches: &ArgMatches) -> bool {
         match level.subcommand() {
             Some((_, sub)) => level = sub,
             None => return false,
+        }
+    }
+}
+
+/// Resolve explicit output options once, rejecting contradictory spellings.
+///
+/// `--ops` retains its existing precedence behavior; only the global JSON
+/// shorthand conflicts with an explicit non-JSON output format. A local
+/// file-format argument (such as `audit export --format csv`) is unrelated.
+fn requested_output(matches: &ArgMatches) -> Result<(Option<FormatArg>, bool), clap::Error> {
+    let requested = requested_format(matches);
+    let legacy = legacy_json(matches);
+    let mut level = matches;
+    loop {
+        if matches!(level.try_get_one::<bool>(JSON_ARG_ID), Ok(Some(true)))
+            && requested.is_some_and(|format| format != FormatArg::Json)
+        {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--json cannot be combined with a non-JSON --format; use --format json",
+            ));
+        }
+        match level.subcommand() {
+            Some((_, sub)) => level = sub,
+            None => return Ok((requested, legacy)),
         }
     }
 }
@@ -215,9 +246,11 @@ fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
 fn participant_role(command: &command::Commands) -> ParticipantRole {
     use command::Commands;
     match command {
-        Commands::Mcp(mcp) if matches!(mcp.command, command::mcp::McpSubcommand::Serve(_)) => {
-            ParticipantRole::McpServe
-        }
+        Commands::Mcp(mcp) => match mcp.command {
+            command::mcp::McpSubcommand::Serve(_) => ParticipantRole::McpServe,
+            command::mcp::McpSubcommand::Listen(_) => ParticipantRole::McpListen,
+            _ => ParticipantRole::Command,
+        },
         Commands::Web(web) if matches!(web.command, command::web::WebSubcommand::Serve(_)) => {
             ParticipantRole::Dashboard
         }
@@ -231,6 +264,25 @@ fn participant_role(command: &command::Commands) -> ParticipantRole {
         }
         command if is_clock_tick(command) => ParticipantRole::Clock,
         _ => ParticipantRole::Command,
+    }
+}
+
+/// The resume capability this process hands over with when a candidate is
+/// renamed over its executable: a stdio `mcp serve` whose stdin can be
+/// polled, which is what the session needs to hand over without losing
+/// input. A remote proxy relays another host's session and never does.
+fn handover_capability(command: &command::Commands) -> Option<&'static str> {
+    match command {
+        command::Commands::Mcp(mcp) => match &mcp.command {
+            command::mcp::McpSubcommand::Serve(serve)
+                if !matches!(serve.mode, Some(command::mcp::ServeMode::Remote))
+                    && orbit_mcp::stdin_supports_handover() =>
+            {
+                Some(orbit_common::fs::generation::RESUME_MCP_STDIO)
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -300,7 +352,7 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
 }
 
 /// The command tree `orbit` parses argv against: the derived CLI, the given
-/// plugin groups, and the global `--format`.
+/// plugin groups, and the global output options.
 ///
 /// `main` and the help goldens both build it here, so a golden pins the help
 /// the binary prints rather than the bare derive.
@@ -317,7 +369,7 @@ fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Comma
             &format!("{}\nOptions:", plugin_cli::help_section(groups)),
         ))
     };
-    install_format_arg(root)
+    install_output_args(root)
 }
 
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
@@ -328,14 +380,16 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
         .try_get_matches_from(&args)
         .unwrap_or_else(|err| {
             let (requested, legacy) = usage_error::pre_parse_format(&args);
-            usage_error::exit(
-                usage_error::suggest_help_flag(repair_crew_flag_suggestion(err)),
-                requested,
-                legacy,
-            )
+            let err = usage_error::suggest_help_flag(repair_crew_flag_suggestion(err));
+            let err = if usage_error::is_unknown_host_flag(&err) {
+                usage_error::suggest_host_command(err, host_ssh_command(&args))
+            } else {
+                err
+            };
+            usage_error::exit(err, requested, legacy)
         });
-    let requested = requested_format(&matches);
-    let legacy = legacy_json(&matches);
+    let (requested, legacy) = requested_output(&matches)
+        .unwrap_or_else(|err| usage_error::exit(err, Some(FormatArg::Json), true));
     let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
         // A plugin group is not a `Commands` variant clap can build, so the
         // two global arguments are read here and the rest of the invocation
@@ -351,7 +405,83 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
     (cli, requested, legacy)
 }
 
+/// Whether a string is a plain shell word that needs no quoting in a POSIX shell.
+fn is_plain_shell_word(word: &str) -> bool {
+    !word.is_empty()
+        && word.bytes().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    b'-' | b'_' | b'.' | b'/' | b':' | b'@' | b'%' | b'+' | b'=' | b','
+                )
+        })
+}
+
+/// `ssh <target> orbit <args without --host>` for a command that rejected
+/// `--host`, when the named host resolves to a remote entry.
+fn host_ssh_command(args: &[std::ffi::OsString]) -> Option<String> {
+    let args = args
+        .iter()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut host = None;
+    let mut rest = Vec::new();
+    let mut needs_local_quoting = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--host" {
+            host = iter.next();
+        } else if let Some(value) = arg.strip_prefix("--host=") {
+            host = Some(value.to_string());
+        } else {
+            let quoted = if is_plain_shell_word(&arg) {
+                arg
+            } else {
+                needs_local_quoting = true;
+                orbit_common::process::shell::quote_posix_arg(&arg)
+            };
+            rest.push(quoted);
+        }
+    }
+    let global_root = orbit_core::runtime::resolve_global_root().ok()?;
+    let target = orbit_cmd::hosts::host_ssh_target(&global_root, host?.trim()).ok()??;
+    let command = if rest.is_empty() {
+        "orbit".to_string()
+    } else {
+        format!("orbit {}", rest.join(" "))
+    };
+    // Preserve the remote argument quotes through the local shell: SSH joins
+    // its command arguments into a string for the remote login shell to parse.
+    let command = if needs_local_quoting {
+        orbit_common::process::shell::quote_posix_arg(&command)
+    } else {
+        command
+    };
+    Some(format!("ssh {target} {command}"))
+}
+
+/// Whether the public tool CLI is asking for one of a claimed worker's owner
+/// calls. The tool name only selects the bootstrap path; the worker's
+/// protected invocation record supplies and limits its authority.
+fn claimed_owner_tool(command: &command::Commands) -> bool {
+    let command::Commands::Tool(tool) = command else {
+        return false;
+    };
+    let command::tool::ToolSubcommand::Run(args) = &tool.command else {
+        return false;
+    };
+    orbit_types::tool::is_claimed_owner_tool(&args.name)
+}
+
 fn main() {
+    run();
+    // Statics are never dropped, so returning from `main` would not flush the
+    // JSONL feed either.
+    orbit_common::observability::logging::shutdown_jsonl_writer();
+}
+
+fn run() {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
     orbit_core::mark_process_as_pipeline_worker_binary();
@@ -363,7 +493,7 @@ fn main() {
     );
     output::pipe::install_handler();
 
-    let (cli, requested_format, legacy_json) = parse_cli();
+    let (mut cli, requested_format, legacy_json) = parse_cli();
     if command_rotates_jsonl_on_start(&cli.command) {
         orbit_common::observability::logging::rotate_global_jsonl_best_effort();
     }
@@ -387,11 +517,40 @@ fn main() {
     // pin so a read-only unpinned `~/.orbit` cannot block scratch init. A
     // managed macOS child joins its parent's host registry pin even when
     // ORBIT_ROOT selects workspace data; update still checks both roots.
+    let actor = ActorIdentity::from_env();
+    // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
+    // call, which the callback allowlist gates against the plugin's
+    // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
+    // host routing, generation pinning, runtime bootstrap and dispatch — so no
+    // plain command reads governed data around that allowlist.
+    {
+        let operation = cli.command.operation().attribute_to(&actor);
+        if !operation.plugin_callback_entry_point
+            && let Err(error) = refuse_plugin_child_cli(&operation.audit_meta, cli.root.as_deref())
+        {
+            print_error(&error, &sink, operation.json_error_preference);
+            orbit_common::observability::logging::exit(1);
+        }
+    }
+    // A task id another host's prefix names, a selector another host lists,
+    // or `--host` naming one: deliver there and open nothing here. `--host`
+    // naming this machine rewrites the selector and runs on [ORB-14449].
+    match command::host_route::preflight(&mut cli) {
+        Ok(command::host_route::Preflight::Local) => {}
+        Ok(command::host_route::Preflight::Remote(result)) => {
+            let json_error_preference = cli.command.operation().json_error_preference;
+            finish_command(result, &sink, false, json_error_preference);
+            return;
+        }
+        Err(error) => {
+            print_error(&error, &sink, cli.command.operation().json_error_preference);
+            orbit_common::observability::logging::exit(1);
+        }
+    }
     let inspection =
         matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
     let root_override = cli.root.clone();
     let workspace_selector = cli.workspace.clone();
-    let actor = ActorIdentity::from_env();
     let CommandOperation {
         runtime_need,
         task_owner_id,
@@ -400,23 +559,18 @@ fn main() {
         suppress_errors,
         dispatch,
         governed,
-        plugin_callback_entry_point,
+        plugin_callback_entry_point: _,
     } = cli.command.operation().attribute_to(&actor);
-    // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
-    // call, which the callback allowlist gates against the plugin's
-    // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
-    // generation pinning, runtime bootstrap and dispatch — so no plain command
-    // reads governed data around that allowlist.
-    if !plugin_callback_entry_point
-        && let Err(error) = refuse_plugin_child_cli(&audit_meta, root_override.as_deref())
-    {
-        print_error(&error, &sink, json_error_preference);
-        std::process::exit(1);
-    }
     let clock_tick = is_clock_tick(&cli.command);
     let quiet_clock_tick =
         clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
-    let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
+    // Invalid `orbit tool run` input cannot run. Reporting it before generation
+    // pin keeps a typo from resolving a workspace or applying pending migrations.
+    let unusable_tool_input = matches!(runtime_need, RuntimeNeed::UnusableToolInput { .. });
+    let _generation = if matches!(&cli.command, command::Commands::Update(_))
+        || inspection
+        || unusable_tool_input
+    {
         None
     } else {
         let root =
@@ -424,7 +578,7 @@ fn main() {
                 Ok(root) => root,
                 Err(error) => {
                     print_error(&error, &sink, None);
-                    std::process::exit(1);
+                    orbit_common::observability::logging::exit(1);
                 }
             };
         let root_source = explicit_root_source(root_override.as_deref());
@@ -433,7 +587,7 @@ fn main() {
             && let Err(error) = root_check::validate_explicit_root(&root, source)
         {
             print_error(&error, &sink, None);
-            std::process::exit(1);
+            orbit_common::observability::logging::exit(1);
         }
         match pin_executable_generation_as(
             &root,
@@ -442,6 +596,7 @@ fn main() {
                 RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
             ),
             participant_role(&cli.command),
+            handover_capability(&cli.command),
         ) {
             Ok(guard) => {
                 if clock_tick
@@ -469,7 +624,7 @@ fn main() {
                     .is_ok()
                     && quiet_clock_tick
                 {
-                    std::process::exit(1);
+                    orbit_common::observability::logging::exit(1);
                 }
                 let error = match root_source {
                     Some(source) if !root_existed => {
@@ -478,68 +633,105 @@ fn main() {
                     _ => error,
                 };
                 print_error(&error, &sink, None);
-                std::process::exit(1);
+                orbit_common::observability::logging::exit(1);
             }
         }
     };
 
-    let bootstrapped = match &runtime_need {
-        RuntimeNeed::Forbidden => {
-            // A runtime-forbidden command has no store to authorize or audit
-            // against. None is governed; `Commands::operation` is exhaustive, so
-            // a future one that is would have to resolve this first.
-            debug_assert!(
-                governed.is_none(),
-                "a governed operation must be able to reach the authorization chokepoint"
-            );
-            let result = dispatch(
-                cli.command,
-                DispatchContext::without_runtime(
+    // A claimed worker addresses the owner's task by ID, but the follower's
+    // task registry intentionally has no local copy. Bootstrap its owner
+    // calls in the worker's bound checkout so Core can carry them over the
+    // authenticated run broker. The worker binding is restored from the
+    // host's protected invocation record; request fields never select this
+    // path. ToolRunArgs validates any explicit selector against that binding.
+    let claimed_owner_call = claimed_owner_tool(&cli.command);
+    let claimed_owner_worker = if unusable_tool_input {
+        false
+    } else if claimed_owner_call {
+        let global_root = match orbit_core::runtime::resolve_global_root() {
+            Ok(root) => root,
+            Err(error) => {
+                print_error(&error, &sink, json_error_preference);
+                orbit_common::observability::logging::exit(1);
+            }
+        };
+        match orbit_core::OrbitRuntime::current_worker_invocation(&global_root) {
+            Ok(binding) => binding
+                .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id),
+            Err(error) => {
+                print_error(&error, &sink, json_error_preference);
+                orbit_common::observability::logging::exit(1);
+            }
+        }
+    } else {
+        false
+    };
+    let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
+        Err(orbit_core::OrbitError::InvalidInput(message.clone()))
+    } else if claimed_owner_worker {
+        RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
+    } else {
+        match &runtime_need {
+            RuntimeNeed::UnusableToolInput { message } => {
+                Err(orbit_core::OrbitError::InvalidInput(message.clone()))
+            }
+            RuntimeNeed::Forbidden => {
+                // A runtime-forbidden command has no store to authorize or audit
+                // against. None is governed; `Commands::operation` is exhaustive, so
+                // a future one that is would have to resolve this first.
+                debug_assert!(
+                    governed.is_none(),
+                    "a governed operation must be able to reach the authorization chokepoint"
+                );
+                let result = dispatch(
+                    cli.command,
+                    DispatchContext::without_runtime(
+                        root_override.as_deref(),
+                        workspace_selector.as_deref(),
+                    ),
+                );
+                finish_command(result, &sink, suppress_errors, json_error_preference);
+                return;
+            }
+            RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            ),
+            RuntimeNeed::SelectedWorkspace { selector } => {
+                RegisteredRuntimeFactory::initialize_with_overrides(
+                    root_override.as_deref(),
+                    Some(selector),
+                )
+            }
+            RuntimeNeed::PipelineWorker => {
+                RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
+            RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
+                Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                    task_id,
+                ),
+                None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
                     root_override.as_deref(),
                     workspace_selector.as_deref(),
                 ),
-            );
-            finish_command(result, &sink, suppress_errors, json_error_preference);
-            return;
-        }
-        RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
-            root_override.as_deref(),
-            workspace_selector.as_deref(),
-        ),
-        RuntimeNeed::SelectedWorkspace { selector } => {
-            RegisteredRuntimeFactory::initialize_with_overrides(
-                root_override.as_deref(),
-                Some(selector),
-            )
-        }
-        RuntimeNeed::PipelineWorker => {
-            RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
-                root_override.as_deref(),
-                workspace_selector.as_deref(),
-            )
-        }
-        RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
-            Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
+            },
+            RuntimeNeed::PluginReadOnly => {
+                RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
+            RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
                 root_override.as_deref(),
                 workspace_selector.as_deref(),
                 task_id,
             ),
-            None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
-                root_override.as_deref(),
-                workspace_selector.as_deref(),
-            ),
-        },
-        RuntimeNeed::PluginReadOnly => {
-            RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
-                root_override.as_deref(),
-                workspace_selector.as_deref(),
-            )
         }
-        RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
-            root_override.as_deref(),
-            workspace_selector.as_deref(),
-            task_id,
-        ),
     };
 
     let runtime = match bootstrapped {
@@ -549,7 +741,7 @@ fn main() {
                 return;
             }
             print_error(&err, &sink, json_error_preference);
-            std::process::exit(1);
+            orbit_common::observability::logging::exit(1);
         }
     }
     .with_actor(actor);
@@ -631,10 +823,10 @@ fn finish_command(
             return;
         }
         print_error(&err, sink, json_error_preference);
-        std::process::exit(1);
+        orbit_common::observability::logging::exit(1);
     }
     if exit_code != 0 {
-        std::process::exit(exit_code);
+        orbit_common::observability::logging::exit(exit_code);
     }
 }
 

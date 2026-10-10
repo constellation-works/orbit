@@ -4,14 +4,14 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use orbit_common::process::identity::ProcessLiveness;
+use orbit_common::process::identity::{ProcessLiveness, probe_process_stopped};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
 use serde_json::Value;
 
 use super::run::{
     MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunProviderProcess, RunRecoveryAttempt,
-    RunRecoveryAttempts,
+    RunRecoveryAttempts, RunRecoveryDecision, RunStoppedDescendant,
 };
 
 const MAX_RECOVERY_DIAGNOSTIC_CHARS: usize = 1024;
@@ -114,6 +114,46 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
     steps
 }
 
+/// Preserve each finished attempt instead of overwriting earlier completions
+/// when a step is resumed. Step indices still follow first-started order.
+pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditStep> {
+    let mut starts = HashMap::new();
+    let mut attempts = Vec::new();
+    for event in events {
+        let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
+            continue;
+        };
+        match event.body_kind.as_deref() {
+            Some("step_started") => {
+                let index = starts.len() as u32;
+                let start = starts.entry(step_id).or_insert((index, None));
+                start.1 = event.timestamp;
+            }
+            Some("step_finished") => {
+                let index = starts.len() as u32;
+                let start = starts.entry(step_id).or_insert((index, None));
+                let outcome = event.raw.get("outcome").and_then(Value::as_str);
+                attempts.push(RunAuditStep {
+                    step_index: start.0,
+                    step_id: step_id.to_string(),
+                    started_at: start.1,
+                    finished_at: event.timestamp,
+                    state: outcome.map(str::to_string),
+                    outcome: outcome.map(str::to_string),
+                    error_message: event
+                        .raw
+                        .get("error_message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
+                start.1 = event.timestamp;
+            }
+            _ => {}
+        }
+    }
+    attempts
+}
+
 /// Index each activity step by id so a provider process can name its position
 /// in the run as well as its step.
 pub(super) fn step_index_by_id(steps: &[RunAuditStep]) -> HashMap<String, u32> {
@@ -192,6 +232,47 @@ where
                     latest_message: None,
                     latest_message_truncated: false,
                     stdout_blob_ref: None,
+                    build_budget_waits: None,
+                    stopped_descendants: Vec::new(),
+                });
+            }
+            Some("cli_invocation_stopped_descendant") => {
+                let Some(pid) = event
+                    .raw
+                    .get("pid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok())
+                else {
+                    continue;
+                };
+                let Some(record) = matching_provider_process_for_completion(
+                    &mut records,
+                    &invocation_parent_by_process_event,
+                    &event,
+                ) else {
+                    continue;
+                };
+                let text = |key: &str| {
+                    event
+                        .raw
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                };
+                record.stopped_descendants.push(RunStoppedDescendant {
+                    ts: event.timestamp,
+                    pid,
+                    pid_start_time: text("pid_start_time"),
+                    command: text("command"),
+                    stopped_ms: event.raw.get("stopped_ms").and_then(Value::as_u64),
+                    ended: event
+                        .raw
+                        .get("ended")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    error: text("error"),
+                    // Probed below, for open children only.
+                    still_stopped: false,
                 });
             }
             Some("cli_invocation_activity") => {
@@ -214,6 +295,16 @@ where
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                 }
+            }
+            Some("cli_invocation_build_budget") => {
+                let Some(record) = matching_provider_process_for_completion(
+                    &mut records,
+                    &invocation_parent_by_process_event,
+                    &event,
+                ) else {
+                    continue;
+                };
+                record.build_budget_waits = serde_json::from_value(event.raw.clone()).ok();
             }
             Some("cli_invocation_finished") => {
                 let Some(record) = matching_provider_process_for_completion(
@@ -244,6 +335,10 @@ where
     for record in &mut records {
         if !record.finished {
             record.liveness = probe(record.pid, record.pid_start_time.as_deref());
+            for descendant in &mut record.stopped_descendants {
+                descendant.still_stopped =
+                    probe_process_stopped(descendant.pid, descendant.pid_start_time.as_deref());
+            }
         }
     }
 
@@ -426,6 +521,25 @@ fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<Run
         .map_or((None, false), |(diagnostic, truncated)| {
             (Some(diagnostic), truncated)
         });
+    let decision = event.raw.get("decision").and_then(|decision| {
+        Some((
+            RunRecoveryDecision {
+                status: decision.get("status")?.as_str()?.to_string(),
+                verdict: decision
+                    .get("verdict")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                detail: decision
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(|detail| bounded_recovery_diagnostic(detail).0),
+            },
+            decision.get("retry_admitted")?.as_bool()?,
+        ))
+    });
+    // A historical or slotless completion kept the single re-attempt.
+    let retry_admitted =
+        recovery_succeeded && decision.as_ref().is_none_or(|(_, admitted)| *admitted);
 
     Some(RunRecoveryAttempt {
         run_id: event
@@ -450,6 +564,8 @@ fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<Run
             .map(str::to_string),
         diagnostic,
         diagnostic_truncated,
+        decision: decision.map(|(decision, _)| decision),
+        retry_admitted,
     })
 }
 

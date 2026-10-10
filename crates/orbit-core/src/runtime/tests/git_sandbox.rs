@@ -1,8 +1,47 @@
+/// Pathname sockets have to fit in `sockaddr_un.sun_path` (108 bytes,
+/// including the trailing NUL). The longest path these fixtures bind is
+/// `{dir}/workspace/.git/objects/maintenance.lock`. A managed run's `TMPDIR`
+/// is already longer than that, so the directory moves to a short parent
+/// when the process temp dir cannot hold it. `/dev/shm` is that parent.
+/// This is the socket path only: CLI fixtures stay on the nested temp dir,
+/// and nothing here falls back to `/tmp`.
+fn short_socket_dir() -> tempfile::TempDir {
+    const RELATIVE: &str = "workspace/.git/objects/maintenance.lock";
+    const MAX_LEN: usize = 107;
+    let parents = [std::env::temp_dir(), std::path::PathBuf::from("/dev/shm")];
+    for parent in parents {
+        let Ok(canonical) = std::fs::canonicalize(&parent) else {
+            continue;
+        };
+        // "ogs" plus the random suffix tempfile appends, with separators.
+        let estimate = canonical.as_os_str().len() + 1 + 24 + 1 + RELATIVE.len();
+        if estimate >= MAX_LEN {
+            continue;
+        }
+        let Ok(temp) = tempfile::Builder::new()
+            .prefix("ogs")
+            .rand_bytes(4)
+            .tempdir_in(&parent)
+        else {
+            continue;
+        };
+        let longest = temp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| temp.path().to_path_buf())
+            .join(RELATIVE);
+        if longest.as_os_str().len() < MAX_LEN {
+            return temp;
+        }
+    }
+    panic!("no directory short enough for a Git-sandbox Unix socket path");
+}
+
 #[test]
 fn metadata_aliases_and_invalid_pointers_fail_closed() {
     use std::fs;
 
-    use super::super::git_sandbox::append_linux_git_denies;
+    use super::super::git_sandbox::append_git_denies;
     use orbit_types::policy::ResolvedFsProfile;
 
     for case in [
@@ -14,7 +53,7 @@ fn metadata_aliases_and_invalid_pointers_fail_closed() {
         "special-pointer",
         "invalid-common-pointer",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = short_socket_dir();
         let workspace = temp.path().join("workspace");
         let git_dir = workspace.join(".git");
         fs::create_dir_all(&workspace).unwrap();
@@ -50,7 +89,7 @@ fn metadata_aliases_and_invalid_pointers_fail_closed() {
             modify: Vec::new(),
         };
         assert!(
-            append_linux_git_denies(&workspace, &mut profile).is_err(),
+            append_git_denies(&workspace, &mut profile).is_err(),
             "{case}"
         );
         assert_eq!(fs::read_to_string(outside).unwrap(), "host state");
@@ -65,7 +104,7 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use super::super::git_sandbox::{GitScanHookGuard, GitScanStage, append_linux_git_denies};
+    use super::super::git_sandbox::{GitScanHookGuard, GitScanStage, append_git_denies};
 
     for case in [
         "symlink-leaf",
@@ -78,7 +117,7 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
         "replaced-ancestor",
         "missing-root",
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = short_socket_dir();
         let root = temp.path().canonicalize().unwrap();
         let workspace = root.join("workspace");
         let git_dir = workspace.join(".git");
@@ -140,7 +179,7 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
             read: Vec::new(),
             modify: Vec::new(),
         };
-        let error = append_linux_git_denies(&workspace, &mut profile).unwrap_err();
+        let error = append_git_denies(&workspace, &mut profile).unwrap_err();
         assert!(
             matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
             "{case}: {error}"

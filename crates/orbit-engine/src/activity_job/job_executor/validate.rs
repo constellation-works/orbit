@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     if let Some(name) = &job.recovery_activity
@@ -58,13 +59,20 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
 /// after the loop body — so the loop's own guard *is* covering there.
 fn validate_step_output_readiness(job: &JobV2) -> Result<(), DispatchError> {
     let mut guards = HashMap::new();
+    let mut step_ids = HashSet::new();
     for step in &job.steps {
-        record_step_guards(step, &[], &mut guards);
+        record_step_guards(step, &[], &mut guards, &mut step_ids)?;
     }
     for step in &job.steps {
         check_step_output_refs(step, &[], &guards)?;
     }
     Ok(())
+}
+
+#[derive(Clone)]
+struct OutputGuards {
+    step_id: String,
+    chain: Vec<String>,
 }
 
 /// Every `when:` whose false branch skips this step — the step's own guard
@@ -80,32 +88,57 @@ fn guard_chain(step: &JobV2Step, inherited: &[String]) -> Vec<String> {
 fn record_step_guards(
     step: &JobV2Step,
     inherited: &[String],
-    guards: &mut HashMap<String, Vec<String>>,
-) {
+    guards: &mut HashMap<String, Vec<OutputGuards>>,
+    step_ids: &mut HashSet<String>,
+) -> Result<(), DispatchError> {
+    if !step_ids.insert(step.id.clone()) {
+        return Err(DispatchError::JobValidation(format!(
+            "duplicate step id `{}` — step ids must be unique throughout the job",
+            step.id
+        )));
+    }
     let chain = guard_chain(step, inherited);
+    let output_guards = OutputGuards {
+        step_id: step.id.clone(),
+        chain: chain.clone(),
+    };
+    // Collect aliases share the output namespace with step ids. Keep every
+    // producer's guards so a later writer cannot hide a skippable output.
+    if let Some(alias) = fan_in_alias(step)
+        && alias != step.id
+    {
+        guards
+            .entry(alias.to_string())
+            .or_default()
+            .push(output_guards.clone());
+    }
+    guards
+        .entry(step.id.clone())
+        .or_default()
+        .push(output_guards);
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {
             for branch in &parallel.branches {
-                record_step_guards(branch, &chain, guards);
+                record_step_guards(branch, &chain, guards, step_ids)?;
             }
         }
         JobV2StepBody::FanOut { fan_out, .. } => {
-            record_step_guards(&fan_out.worker, &chain, guards);
+            record_step_guards(&fan_out.worker, &chain, guards, step_ids)?;
         }
         JobV2StepBody::Loop { loop_ } => {
             for body in &loop_.steps {
-                record_step_guards(body, &chain, guards);
+                record_step_guards(body, &chain, guards, step_ids)?;
             }
         }
         JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
     }
-    guards.insert(step.id.clone(), chain);
+    Ok(())
 }
 
 fn check_step_output_refs(
     step: &JobV2Step,
     inherited: &[String],
-    guards: &HashMap<String, Vec<String>>,
+    guards: &HashMap<String, Vec<OutputGuards>>,
 ) -> Result<(), DispatchError> {
     let chain = guard_chain(step, inherited);
     if let Some(expr) = &step.when {
@@ -145,26 +178,29 @@ fn check_expr_output_refs(
     referencing_step: &str,
     expr: &str,
     reader_guards: &[String],
-    guards: &HashMap<String, Vec<String>>,
+    guards: &HashMap<String, Vec<OutputGuards>>,
 ) -> Result<(), DispatchError> {
     for referenced_step in output_step_refs(expr) {
-        let Some(referenced_guards) = guards.get(&referenced_step) else {
+        let Some(producers) = guards.get(&referenced_step) else {
             continue;
         };
         // A guard the reader itself sits under skips both steps together, so
         // it can never strand the reader; only a guard outside the reader's
         // own chain can leave the reader running with nothing recorded.
-        let Some(guard) = referenced_guards
-            .iter()
-            .find(|guard| !reader_guards.contains(guard))
-        else {
+        let Some((producer, guard)) = producers.iter().find_map(|producer| {
+            producer
+                .chain
+                .iter()
+                .find(|guard| !reader_guards.contains(guard))
+                .map(|guard| (&producer.step_id, guard))
+        }) else {
             continue;
         };
-        let cause = if *guard == referenced_step {
-            format!("step `{referenced_step}` carries its own `when:` and may be skipped")
+        let cause = if guard == producer {
+            format!("step `{producer}` carries its own `when:` and may be skipped")
         } else {
             format!(
-                "step `{referenced_step}` runs inside step `{guard}`, which carries a `when:` \
+                "step `{producer}` runs inside step `{guard}`, which carries a `when:` \
                  and skips its whole body"
             )
         };
@@ -332,11 +368,27 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
 
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {
+            if let JoinMode::Quorum { n } = &parallel.join
+                && (*n == 0 || *n as usize > parallel.branches.len())
+            {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` parallel quorum n={n} must be at least 1 and at most \
+                     the branch count ({})",
+                    step.id,
+                    parallel.branches.len()
+                )));
+            }
             for branch in &parallel.branches {
                 validate_step(branch)?;
             }
         }
-        JobV2StepBody::FanOut { fan_out, .. } => {
+        JobV2StepBody::FanOut { fan_out, fan_in } => {
+            if matches!(fan_in.join, JoinMode::Quorum { n: 0 }) {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` fan-in quorum n=0 must be at least 1",
+                    step.id
+                )));
+            }
             validate_step(&fan_out.worker)?;
         }
         JobV2StepBody::Loop { loop_ } => {

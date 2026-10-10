@@ -12,11 +12,39 @@
 #   the implementation; `review_validate` attributes its paths (widening
 #   selectors) and reruns owner validation on that head. A `reject` verdict, or fixes that fail
 #   there, stop delivery through the failure handoff with the findings on the
-#   task. Nothing goes back to the implementer and there is no second review.
+#   task. Final recovery may append a repair commit once; that new candidate
+#   reruns commit, owner validation and fresh before-PR review before delivery.
+# - An evidence-only verdict ends the run as `held`, before recovery or the
+#   failure handoff. The task stays in-progress awaiting named artifacts;
+#   matching evidence queues a fresh review rather than approving delivery.
+#   The next run resumes the held candidate without implementing it again
+#   (ORB-14450); the review gate counts that evidence on the resumed tree, or
+#   on a rebase of it whose patch is unchanged. When the hold named only
+#   evidence a host-evidence rule owed and the resumed tree is unchanged,
+#   admission decides `evidence_received`: the review step is skipped and
+#   settlement passes the held review on the arrived evidence.
 # - When the run itself terminalizes before PR completion, its recoverable
-#   candidate is published and the task is blocked for reconciliation. Once a
+#   candidate is published and the task is blocked for reconciliation. A
+#   required command its base fails the same way (`baseline_red`) is one
+#   exception: the candidate is kept unpublished and the task is held in the
+#   backlog until the required command passes on a new base tip. An
+#   implementer-declared blocker (`task_blocked_by_agent`) is the other: the
+#   worktree is left as the implementer left it, nothing is committed or
+#   pushed, no `[BLOCKED]` PR is opened, and the task is blocked under that
+#   event with the blocker kind. Resume does not move that task back. Once a
 #   PR was published and the task promoted to review, a completion-stage merge
 #   failure preserves that exact candidate and review state for a safe retry.
+# - ORB-14849: with `review.before_landing` captured instead, the pre-push
+#   gate does not apply and the PR opens at once; the `landing_review*` steps
+#   then review the published head while hosted CI runs on it, and
+#   completion merges only the head they settled. Any outcome but an approve
+#   leaves the PR open and unmerged and the task in review with the failed
+#   step's typed reason; no outcome closes the PR.
+# - A reviewed PR that conflicts at completion is rebased (conflict recovery
+#   repairing each stop), re-reviewed and republished, for at most two rounds;
+#   a conflict after the second keeps the PR and the task in review. A base
+#   that advances again after a completion step's recovery is followed a
+#   bounded number of times before failing as base_chase_exhausted.
 #
 schemaVersion: 2
 kind: Job
@@ -98,7 +126,11 @@ spec:
     # candidate and that output to repair. A candidate preserved from
     # `implement_bundle` or any step before `commit` is unfinished
     # (ORB-14024): the implementer always runs on it. A discarded candidate,
-    # a changed spec or a bundle implements fresh.
+    # a changed spec or a bundle implements fresh. ORB-14450: a candidate held
+    # on named evidence whose receipt arrived resumes as `resumed_held`,
+    # skipping `implement_bundle`; selector edits keep any candidate.
+    # ORB-14603: after a failed claim, the candidate the owner kept from it
+    # is continued, never a local run that shares the leaf's id.
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:
@@ -107,6 +139,7 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.worktree.output.base_sha }}"
         prior_job_run_id: "{{ steps.worktree.output.prior_job_run_id }}"
+        prior_foreign_run: "{{ steps.worktree.output.prior_foreign_run }}"
 
     - id: implement_bundle
       when: "{{ steps.resume_candidate.output.implement }} == true"
@@ -151,6 +184,12 @@ spec:
       # Only the typed unmerged-index conflict emitted by git_rebase may
       # dispatch this leaf. Other VCS failures preserve the original error and
       # fall through to the terminal candidate handoff without an agent.
+      # ORB-14668: a recovery that leaves the branch exactly on its base,
+      # because a base commit already carries the candidate's change, fails
+      # the retry as `[candidate_absorbed]`. Final recovery re-verifies the
+      # certified evidence and settles it as `complete_no_diff` for that
+      # commit without dispatching its agent; any refusal reaches the agent
+      # as `absorbed_refusal`.
       recovery_activity: pr_conflict_recovery
       target: activity:git_rebase
       default_input:
@@ -170,10 +209,19 @@ spec:
     # on the exact synchronized candidate, before review and publication. An
     # agent's report that it ran them is not evidence; this step's attached
     # logs are. A failing command fails here, so step recovery can repair the
-    # candidate (committing the fix) and the post-recovery attempt reruns the
-    # whole suite on the new head. It precedes the review gate so such a
-    # repair is reviewed and pinned like any other candidate change. An empty
-    # list is a no-op.
+    # candidate and the post-recovery attempt reruns the whole suite on the
+    # new head. ORB-14822: the recovery sandbox keeps Git metadata read-only,
+    # so the agent leaves its repair uncommitted and Orbit commits it, with
+    # recovery provenance, before that attempt. A repair touching Git or
+    # `.orbit` metadata, an environment file, a symlink or a gitlink is
+    # refused with a typed `recovery_commit_refused` reason and nothing is
+    # committed. It precedes the review gate so such a repair is reviewed and
+    # pinned like any other candidate change. An empty list is a no-op.
+    # ORB-14258: a network-inconclusive failure is rerun first, and one that
+    # survives is rerun on `base_sha`. A failure the base shares fails as a
+    # typed `baseline_red`: no recovery runs, and the failure handoff keeps
+    # the candidate without a PR and holds the task in the backlog until
+    # `base_ref` moves to a commit where the command passes.
     - id: validate
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
@@ -183,20 +231,29 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
 
     # ORB-11333: the before-PR review gate sits after the final planned base
     # synchronization and before push/PR creation. `review_gate_admit` and
     # `review_gate_settle` always run so later steps can read their output;
-    # they report `applies: false` under `none`, `after-landing`, and a
-    # checked no-diff exemption. Transient gate and reviewer failures retry,
+    # they report `applies: false` when the run captured `review.before_pr`
+    # off (`review.before_landing` reviews after `pr_open` instead), and for
+    # a checked no-diff exemption. Transient gate and reviewer failures retry,
     # then get one diagnosed recovery before the run fails.
     #
     # ORB-13989: one fresh reviewer per candidate fixes what it finds. The
     # settlement commits its changes as the candidate's reviewer commit
     # (`review: <summary>`) over the untouched implementation commit and posts
     # the findings on the task. `reject` or `incomplete` refuses
-    # `review_gate_settle` (no retry): the failure handoff preserves the
-    # candidate and blocks the task without opening a PR.
+    # `review_gate_settle` (no retry): substantive failures preserve the
+    # candidate and block the task; evidence-only gaps hold it in progress.
+    # A reviewer timeout preserves partial work and allows one automatic
+    # backlog requeue per task/implementation tree (the candidate tree beneath
+    # the reviewer's partial-repair commits); another timeout on that tree
+    # blocks with review_timeout_requeue_exhausted. Fresh runs have new review
+    # lineages and budgets, but neither rewriting the commit nor the reviewer's
+    # partial work resets this bound.
+    # None of these outcomes opens a PR.
     - id: review_gate_admit
       retry:
         max_attempts: 3
@@ -215,7 +272,7 @@ spec:
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
 
     - id: review
-      when: "{{ steps.review_gate_admit.output.applies }} == true"
+      when: "{{ steps.review_gate_admit.output.applies }} == true && {{ steps.review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000
@@ -263,6 +320,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.sync_base.output.base_sha }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
         ownership_base_sha: "{{ steps.review_gate_settle.output.implementation_head_sha }}"
 
     - id: push
@@ -328,6 +386,96 @@ spec:
         no_diff_expected: true
         already_landed_checkpoint: "{{ steps.commit.output }}"
 
+    # ORB-14849: the before-landing review of the published PR, while hosted
+    # CI runs on its head. The gate steps always run and report `applies:
+    # false` unless the run captured `review.before_landing` on, and for a
+    # checked no-diff exemption; they run whatever `completion` is, so a
+    # review-only run hands off a reviewed PR. One fresh reviewer from the
+    # run's lineage and budget fixes what it finds as one reviewer commit
+    # (ORB-13989). `landing_review_validate` reruns owner validation and the
+    # ownership check on that commit, and `landing_push` pushes it to the PR
+    # branch under a lease on the published head, which restarts hosted CI.
+    # `complete_pr` merges only the head this settle reviewed. Every step
+    # here is completion-stage: a reject, incomplete, timeout, lost lease or
+    # settle error keeps the PR open and unmerged and the task in review with
+    # that step's typed reason.
+    - id: landing_review_gate_admit
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        before_landing: true
+
+    - id: landing_review
+      when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.landing_review_gate_admit.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.landing_review_gate_admit.output.attempt_id }}"
+        lineage_key: "{{ steps.landing_review_gate_admit.output.lineage_key }}"
+        manifest_artifact: "{{ steps.landing_review_gate_admit.output.manifest_artifact }}"
+        report_artifact: "{{ steps.landing_review_gate_admit.output.report_artifact }}"
+        crew: "{{ steps.landing_review_gate_admit.output.reviewer.crew }}"
+
+    - id: landing_review_gate_settle
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.landing_review_gate_admit.output }}"
+
+    - id: landing_review_validate
+      when: "{{ steps.landing_review_gate_settle.output.reviewer_fixed }} == true"
+      target: activity:candidate_validate
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
+        ownership_base_sha: "{{ steps.landing_review_gate_settle.output.implementation_head_sha }}"
+
+    - id: landing_push
+      when: "{{ steps.landing_review_gate_settle.output.reviewer_fixed }} == true"
+      target: activity:git_push
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        branch: "{{ steps.sync_base.output.head }}"
+        base: "{{ steps.sync_base.output.base }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
+        lease_remote_sha: "{{ steps.push.output.local_sha }}"
+
     - id: complete_pr
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true"
       # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
@@ -336,6 +484,11 @@ spec:
       # ORB-13890: a DIRTY PR whose head the gate reviewed is rebased locally
       # but not published; `re_review_required` routes it through the steps
       # below instead of leaving the task in review as review_gate_stale.
+      # ORB-14393: the retry after conflict recovery re-pins to the base it
+      # fetches. A base that advanced past the certified recovery is chased:
+      # a clean rebase of the recovered head is certified for the new base, a
+      # conflicting one is redone from the published head for another bounded
+      # recovery, and a step that keeps chasing fails as base_chase_exhausted.
       recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
@@ -346,18 +499,21 @@ spec:
         completion: "{{ input.completion }}"
         head: "{{ steps.sync_base.output.head }}"
         published_head_sha: "{{ steps.push.output.local_sha }}"
+        previous_published_head_sha: "{{ steps.push.output.remote_sha_before }}"
         reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
+        # ORB-14849: set only when the before-landing review settled; it then
+        # is the head to merge, and the published head after a reviewer fix.
+        landing_reviewed_head_sha: "{{ steps.landing_review_gate_settle.output.reviewed_head_sha }}"
         re_review_on_conflict: true
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"
 
     # ORB-13890: review the rebased head with a fresh reviewer start from the
     # same lineage, republish it under the rebase lease, then complete it.
-    # A second conflict is review_gate_stale; any failure here keeps the
-    # published PR and the task in review. `complete_pr` may be skipped, so no
-    # `when:` reads its output: `re_review_gate_admit` always runs, reads the
-    # run's recorded `complete_pr` checkpoint itself, and its `applies` gates
-    # the rest.
+    # Any failure here keeps the published PR and the task in review.
+    # `complete_pr` may be skipped, so no `when:` reads its output:
+    # `re_review_gate_admit` always runs, reads the run's recorded
+    # `complete_pr` checkpoint itself, and its `applies` gates the rest.
     - id: re_review_gate_admit
       retry:
         max_attempts: 3
@@ -414,8 +570,9 @@ spec:
         admission: "{{ steps.re_review_gate_admit.output }}"
 
     # ORB-13989: a reviewer commit on the rebased head is revalidated exactly
-    # like `review_validate` before it is republished; a failure keeps the
-    # published PR and the task in review.
+    # like `review_validate` before it is republished. A baseline-red failure
+    # holds the task in backlog with the old published PR unchanged; the
+    # failing rebased head is not pushed.
     - id: re_review_validate
       when: "{{ steps.re_review_gate_settle.output.reviewer_fixed }} == true"
       target: activity:candidate_validate
@@ -424,6 +581,7 @@ spec:
         completed_task_ids: "{{ input.task_ids }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         base_sha: "{{ steps.complete_pr.output.rebased.base_sha }}"
+        base_ref: "{{ steps.complete_pr.output.rebased.base_ref }}"
         ownership_base_sha: "{{ steps.re_review_gate_settle.output.implementation_head_sha }}"
 
     - id: re_push
@@ -440,8 +598,13 @@ spec:
         rewrite_head_before: "{{ steps.complete_pr.output.rebased.head_sha_before }}"
         expected_remote_sha: "{{ steps.complete_pr.output.rebased.remote_sha_before }}"
 
+    # ORB-14332: the base can move again while the rebased head is under
+    # re-review. A conflict here rebases and recovers exactly like
+    # `complete_pr` and asks for one more re-review round below, instead of
+    # stopping an accepted candidate as review_gate_stale.
     - id: complete_reviewed_pr
       when: "{{ steps.re_review_gate_admit.output.applies }} == true"
+      recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
         job_run_id: "{{ steps.worktree.output.job_run_id }}"
@@ -451,7 +614,110 @@ spec:
         completion: "{{ input.completion }}"
         head: "{{ steps.complete_pr.output.rebased.head }}"
         published_head_sha: "{{ steps.re_push.output.local_sha }}"
+        previous_published_head_sha: "{{ steps.re_push.output.remote_sha_before }}"
         reviewed_head_sha: "{{ steps.re_review_gate_settle.output.reviewed_head_sha }}"
+        re_review_on_conflict: true
+        base: "{{ steps.sync_base.output.base }}"
+        base_sync: "{{ input.base_sync }}"
+
+    # ORB-14332: the bounded second re-review round, the same steps over the
+    # head `complete_reviewed_pr` rebased. `complete_reviewed_pr` is skipped
+    # unless the first round applied, so `re_review_gate_admit_2` always runs
+    # and reads its recorded checkpoint. A third conflict is
+    # review_gate_stale: the published PR and the task stay in review.
+    - id: re_review_gate_admit_2
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_admit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        mode: pr
+        completion: "{{ input.completion }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+        re_review_after: complete_reviewed_pr
+
+    - id: re_review_2
+      when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
+      retry:
+        max_attempts: 2
+        initial_backoff_ms: 5000
+        backoff_cap_ms: 5000
+        backoff_strategy: linear
+      recovery_activity: step_failure_recovery
+      target: activity:agent_review_repair
+      default_input:
+        task_id: "{{ steps.re_review_gate_admit_2.output.first_task_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        repo_root: "{{ steps.worktree.output.workspace_path }}"
+        attempt_id: "{{ steps.re_review_gate_admit_2.output.attempt_id }}"
+        lineage_key: "{{ steps.re_review_gate_admit_2.output.lineage_key }}"
+        manifest_artifact: "{{ steps.re_review_gate_admit_2.output.manifest_artifact }}"
+        report_artifact: "{{ steps.re_review_gate_admit_2.output.report_artifact }}"
+        crew: "{{ steps.re_review_gate_admit_2.output.reviewer.crew }}"
+
+    - id: re_review_gate_settle_2
+      retry:
+        max_attempts: 3
+        initial_backoff_ms: 1000
+        backoff_cap_ms: 10000
+        backoff_strategy: exponential
+      recovery_activity: step_failure_recovery
+      target: activity:review_gate_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        admission: "{{ steps.re_review_gate_admit_2.output }}"
+
+    - id: re_review_validate_2
+      when: "{{ steps.re_review_gate_settle_2.output.reviewer_fixed }} == true"
+      target: activity:candidate_validate
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.complete_reviewed_pr.output.rebased.base_sha }}"
+        base_ref: "{{ steps.complete_reviewed_pr.output.rebased.base_ref }}"
+        ownership_base_sha: "{{ steps.re_review_gate_settle_2.output.implementation_head_sha }}"
+
+    - id: re_push_2
+      when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
+      target: activity:git_push
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        branch: "{{ steps.complete_reviewed_pr.output.rebased.head }}"
+        base: "{{ steps.complete_reviewed_pr.output.rebased.base }}"
+        base_ref: "{{ steps.complete_reviewed_pr.output.rebased.base_ref }}"
+        rewrite_performed: "{{ steps.complete_reviewed_pr.output.rebased.rewritten }}"
+        rewrite_head_before: "{{ steps.complete_reviewed_pr.output.rebased.head_sha_before }}"
+        expected_remote_sha: "{{ steps.complete_reviewed_pr.output.rebased.remote_sha_before }}"
+
+    - id: complete_reviewed_pr_2
+      when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
+      target: activity:pr_complete
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pr_number: "{{ steps.pr_open.output.pr_number }}"
+        completion: "{{ input.completion }}"
+        head: "{{ steps.complete_reviewed_pr.output.rebased.head }}"
+        published_head_sha: "{{ steps.re_push_2.output.local_sha }}"
+        previous_published_head_sha: "{{ steps.re_push_2.output.remote_sha_before }}"
+        reviewed_head_sha: "{{ steps.re_review_gate_settle_2.output.reviewed_head_sha }}"
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"
 

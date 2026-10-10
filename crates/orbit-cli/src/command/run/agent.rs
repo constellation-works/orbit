@@ -75,10 +75,6 @@ pub struct RunAgentArgs {
     /// support are refused.
     #[arg(long)]
     pub provider_sandbox: Option<String>,
-
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
 }
 
 fn parse_agent_timeout(raw: &str) -> Result<u64, String> {

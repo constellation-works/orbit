@@ -224,8 +224,13 @@ fn is_first_party_remote(url: &str) -> bool {
 /// handling both `scheme://[user@]host[:port]/org/repo` and the SCP-like
 /// `[user@]host:org/repo` form `git@github.com:org/repo` uses. Returns `None`
 /// when `url` does not decompose into a host and a non-empty first segment,
-/// so an unrecognised shape fails closed rather than matching by substring.
+/// or when the path holds a dot segment (`.`, `..`, or their percent-encoded
+/// forms) or an empty segment: Git's HTTP transport resolves those before it
+/// fetches, so the organisation read from the text would not be the
+/// repository fetched. An unrecognised shape fails closed rather than
+/// matching by substring.
 fn remote_host_and_org(url: &str) -> Option<(String, String)> {
+    let url = url.split('#').next().unwrap_or(url);
     let url = url.trim().trim_end_matches(".git").trim_end_matches('/');
     if let Some((_scheme, rest)) = url.split_once("://") {
         let (authority, path) = rest.split_once('/')?;
@@ -233,11 +238,7 @@ fn remote_host_and_org(url: &str) -> Option<(String, String)> {
             .rsplit_once('@')
             .map_or(authority, |(_, host)| host);
         let host = host.split(':').next().unwrap_or(host);
-        let org = path
-            .split('/')
-            .next()
-            .filter(|segment| !segment.is_empty())?;
-        return Some((host.to_lowercase(), org.to_string()));
+        return Some((host.to_lowercase(), organisation(path)?));
     }
     let (host_part, path) = url.split_once(':')?;
     if host_part.is_empty() || host_part.contains('/') {
@@ -246,9 +247,23 @@ fn remote_host_and_org(url: &str) -> Option<(String, String)> {
     let host = host_part
         .rsplit_once('@')
         .map_or(host_part, |(_, host)| host);
-    let org = path
-        .split('/')
-        .next()
-        .filter(|segment| !segment.is_empty())?;
-    Some((host.to_lowercase(), org.to_string()))
+    Some((host.to_lowercase(), organisation(path)?))
+}
+
+/// The first segment of a remote's repository path, or `None` when any
+/// segment is empty or a (possibly percent-encoded) dot segment.
+fn organisation(path: &str) -> Option<String> {
+    let mut segments = path.split('/');
+    let org = segments.clone().next()?;
+    if segments.any(|segment| segment.is_empty() || is_dot_segment(segment)) {
+        return None;
+    }
+    Some(org.to_string())
+}
+
+fn is_dot_segment(segment: &str) -> bool {
+    matches!(
+        segment.to_ascii_lowercase().replace("%2e", ".").as_str(),
+        "." | ".."
+    )
 }

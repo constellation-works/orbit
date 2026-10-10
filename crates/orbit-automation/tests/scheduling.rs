@@ -6,7 +6,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration as WaitDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::{Europe::Berlin, Tz, UTC};
@@ -28,10 +27,10 @@ use orbit_automation::routines::loader::{RoutineCatalogLookup, RoutineSource, co
 use orbit_automation::routines::sweep::{
     RoutineDispatch, RunOwnerLiveness, SweepOptions, run_sweep_core,
 };
-use orbit_common::{OrbitError, process::run_bounded_capped, test_env};
+use orbit_common::{OrbitError, test_env};
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::{
-    AutomationDiagnostic, SourceRevision,
+    AutomationDiagnostic, AutomationState, SourceRevision,
     members::{
         MemberAttempt, MemberBatchEvidence, MemberEvidence, StateMember, StateTrigger,
         StateTriggerKind,
@@ -42,6 +41,13 @@ use orbit_types::workflow::{
     MissedRunPolicy,
 };
 
+#[path = "scheduling/failed_members.rs"]
+mod failed_members;
+#[path = "scheduling/pending_mints.rs"]
+mod pending_mints;
+#[path = "scheduling/released_attempts.rs"]
+mod released_attempts;
+
 fn at(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .unwrap()
@@ -49,35 +55,41 @@ fn at(value: &str) -> DateTime<Utc> {
 }
 
 /// Re-exec only the requested test, without the enclosing managed run's authority.
-/// The shared supervisor drains both pipes and kills/reaps the child on timeout.
+/// The shared child-test hang guard kills and reaps the child on overrun.
 fn isolated(test: &str) -> bool {
     if std::env::var("ORBIT_AUTOMATION_TEST_CHILD").as_deref() == Ok(test) {
         return false;
     }
     let fixture = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-    let home = fixture.path().join("home");
-    std::fs::create_dir(&home).unwrap();
+    run_child(test, fixture.path());
+    true
+}
+
+/// Run one isolated child of `test` with `dir` as its working directory, so
+/// successive children can share a fixture root.
+fn run_child(test: &str, dir: &Path) {
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
     command
         .args([test, "--exact", "--nocapture", "--test-threads=1"])
-        .current_dir(fixture.path())
+        .current_dir(dir)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env_remove("ORBIT_HOME")
         .env("TZ", "UTC")
         .env("ORBIT_AUTOMATION_TEST_CHILD", test);
-    let output = run_bounded_capped(&mut command, WaitDuration::from_secs(30), 64 * 1024)
-        .expect("isolated automation fixture completes within its deadline");
+    let logs = tempfile::tempdir().unwrap();
+    let output = test_env::run_child_test(&mut command, test, logs.path());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success() && stdout.contains("1 passed; 0 failed"),
         "{test}: {stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    true
 }
 
 #[test]
@@ -398,6 +410,7 @@ impl RoutineDispatch for RoutineHost {
 struct AutoHost {
     root: PathBuf,
     minted: Cell<usize>,
+    skip_version: RefCell<Option<String>>,
 }
 
 impl AutoTaskDispatch for AutoHost {
@@ -417,6 +430,18 @@ impl AutoTaskDispatch for AutoHost {
     }
     fn has_open_instance(&self, _: &AutoTaskDefinition) -> Result<Option<String>, OrbitError> {
         Ok(None)
+    }
+    fn skip_reason(
+        &self,
+        _: &AutoTaskDefinition,
+    ) -> Option<orbit_automation::auto_tasks::scheduler::InactivePluginSkip> {
+        self.skip_version.borrow().as_ref().map(|version| {
+            orbit_automation::auto_tasks::scheduler::InactivePluginSkip {
+                plugin: "fixture".into(),
+                version: version.clone(),
+                reason: "inactive fixture plugin".into(),
+            }
+        })
     }
     fn mint_task(&self, _: &AutoTaskDefinition) -> Result<String, OrbitError> {
         let count = self.minted.get() + 1;
@@ -531,6 +556,7 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
         let host = AutoHost {
             root,
             minted: Cell::new(0),
+            skip_version: RefCell::new(None),
         };
         for (now, action, count, slot) in [
             ("2026-10-01T00:07:00Z", "baselined", 0, None),
@@ -698,6 +724,7 @@ fn forged_member_outputs_never_advance_coverage() {
             action_id: attempt.action_id.clone().unwrap(),
             attempt_id: attempt.id.clone(),
             failed: BTreeMap::new(),
+            superseded: BTreeMap::new(),
             applied: vec![MemberEvidence {
                 action_id: attempt.action_id.clone().unwrap(),
                 attempt_id: attempt.id.clone(),
@@ -765,5 +792,136 @@ fn forged_member_outputs_never_advance_coverage() {
             1,
             "{forgery}: correct evidence still advances coverage exactly once"
         );
+    }
+}
+
+#[test]
+fn inactive_plugin_warning_is_deduplicated_across_scheduler_passes() {
+    if isolated("inactive_plugin_warning_is_deduplicated_across_scheduler_passes") {
+        return;
+    }
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+    struct Capture(Arc<Mutex<Vec<tracing::Level>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit.automation.auto_tasks" {
+                self.0.lock().unwrap().push(*event.metadata().level());
+            }
+        }
+    }
+    let levels = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(levels.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        for workspace in ["one", "two"] {
+            let root = std::env::current_dir()
+                .unwrap()
+                .join(workspace)
+                .join(".orbit");
+            std::fs::create_dir_all(root.join("auto_tasks")).unwrap();
+            std::fs::create_dir_all(root.join("state")).unwrap();
+            std::fs::write(root.join("auto_tasks/parked.yaml"), "schemaVersion: 1\nname: parked\nenabled: true\nschedule:\n  every_minutes: 60\ndedupe: always\ntemplate:\n  title: Parked fixture\n").unwrap();
+            let host = AutoHost {
+                root,
+                minted: Cell::new(0),
+                skip_version: RefCell::new(Some("1.0".into())),
+            };
+            let versions: &[&str] = if workspace == "one" {
+                &["1.0", "1.0", "2.0", "2.0"]
+            } else {
+                &["1.0"]
+            };
+            for version in versions {
+                *host.skip_version.borrow_mut() = Some((*version).into());
+                let outcome = run_auto_task_scheduler_at(
+                    &host,
+                    at("2026-10-07T00:00:00Z"),
+                    SchedulerOptions::default(),
+                )
+                .unwrap();
+                assert!(outcome.errors.is_empty());
+                assert_eq!(outcome.reports.len(), 1);
+                assert_eq!(outcome.reports[0].action, "skipped");
+                assert_eq!(host.minted.get(), 0);
+            }
+        }
+    });
+    assert_eq!(
+        *levels.lock().unwrap(),
+        [
+            tracing::Level::WARN,
+            tracing::Level::DEBUG,
+            tracing::Level::WARN,
+            tracing::Level::DEBUG,
+            tracing::Level::WARN
+        ],
+        "repeat passes must downgrade while a new version or workspace warns once"
+    );
+}
+
+/// Each clock tick is a new process, so the warned key must outlive the
+/// process: two ticks against one root warn once in total.
+#[test]
+fn inactive_plugin_warning_is_deduplicated_across_clock_tick_processes() {
+    const TEST: &str = "inactive_plugin_warning_is_deduplicated_across_clock_tick_processes";
+    let levels_path = Path::new("levels.log");
+    if std::env::var("ORBIT_AUTOMATION_TEST_CHILD").as_deref() != Ok(TEST) {
+        let fixture = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+        run_child(TEST, fixture.path());
+        run_child(TEST, fixture.path());
+        let levels = std::fs::read_to_string(fixture.path().join(levels_path)).unwrap();
+        assert_eq!(
+            levels.lines().collect::<Vec<_>>(),
+            ["WARN", "DEBUG"],
+            "the second tick process must not repeat the first one's warning"
+        );
+        return;
+    }
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+    struct Capture(Arc<Mutex<Vec<tracing::Level>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit.automation.auto_tasks" {
+                self.0.lock().unwrap().push(*event.metadata().level());
+            }
+        }
+    }
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    std::fs::create_dir_all(root.join("auto_tasks")).unwrap();
+    std::fs::write(root.join("auto_tasks/parked.yaml"), "schemaVersion: 1\nname: parked\nenabled: true\nschedule:\n  every_minutes: 60\ndedupe: always\ntemplate:\n  title: Parked fixture\n").unwrap();
+    let host = AutoHost {
+        root,
+        minted: Cell::new(0),
+        skip_version: RefCell::new(Some("1.0".into())),
+    };
+    let levels = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(levels.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        let outcome = run_auto_task_scheduler_at(
+            &host,
+            at("2026-10-07T00:00:00Z"),
+            SchedulerOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome.reports[0].action, "skipped");
+    });
+    assert_eq!(host.minted.get(), 0);
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(levels_path)
+        .unwrap();
+    for level in levels.lock().unwrap().iter() {
+        writeln!(log, "{level}").unwrap();
     }
 }

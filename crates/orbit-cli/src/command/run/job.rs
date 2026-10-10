@@ -9,9 +9,8 @@ use serde_json::{Value, json};
 
 use clap::Args;
 
+use super::support::{WaitArgs, wait_for_run};
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
-
-use super::support::FAILED_WAIT_STATUSES;
 
 #[derive(Args)]
 #[command(
@@ -24,50 +23,35 @@ pub struct JobRunArgs {
     /// Example: --input task_id=T123 --input base=main
     #[arg(long)]
     pub input: Vec<String>,
-    /// Block until the submitted run reaches a terminal state, and exit
-    /// nonzero unless it succeeded.
-    #[arg(long)]
-    pub wait: bool,
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub(super) wait: WaitArgs,
 }
 
 impl Execute for JobRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let input = build_job_run_input(&self.input)?;
+        let timeout_seconds = self.wait.timeout_seconds()?;
         // Submission failure — an unknown job, an invalid asset, a worker that
         // could not start — is this command's own failure and surfaces as an
         // error. Everything the submitted run does afterwards is reported by
         // `--wait`, so the two outcomes never share an exit path.
         let invoke = runtime.submit_job_run(&self.job_id, input, None)?;
-        if !self.wait {
+        super::support::warn_unset_env_pass(runtime);
+        let Some(timeout_seconds) = timeout_seconds else {
             return render_submission(&invoke);
-        }
+        };
 
-        wait_for_submission(runtime, &invoke)
+        wait_for_submission(runtime, &invoke, timeout_seconds)
     }
 }
 
-fn wait_for_submission(runtime: &OrbitRuntime, invoke: &PipelineInvokeResult) -> CommandOut {
-    let timeout_seconds = OrbitRuntime::normalize_pipeline_wait_timeout(None)?;
-    let poll_interval_seconds = OrbitRuntime::normalize_pipeline_wait_poll_interval(None);
-    let wait = runtime.wait_pipeline_runs(
-        std::slice::from_ref(&invoke.run_id),
-        timeout_seconds,
-        poll_interval_seconds,
-        None,
-    )?;
-    let entry = wait
-        .results
-        .into_iter()
-        .find(|entry| entry.run_id == invoke.run_id)
-        .ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "wait returned no result for run '{}'",
-                invoke.run_id
-            ))
-        })?;
-    render_wait(invoke, &entry)
+fn wait_for_submission(
+    runtime: &OrbitRuntime,
+    invoke: &PipelineInvokeResult,
+    timeout_seconds: u64,
+) -> CommandOut {
+    let (entry, wait_timeout) = wait_for_run(runtime, &invoke.run_id, timeout_seconds)?;
+    render_wait(invoke, &entry, wait_timeout)
 }
 
 fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
@@ -85,7 +69,11 @@ fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
 
 /// Render a completed `--wait`, then fail the command for a non-success
 /// terminal state so a caller can branch on the exit status alone.
-fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> CommandOut {
+fn render_wait(
+    invoke: &PipelineInvokeResult,
+    entry: &PipelineWaitEntry,
+    wait_timeout: bool,
+) -> CommandOut {
     let doc = json!({
         "job_id": invoke.job_name,
         "run_id": invoke.run_id,
@@ -93,13 +81,15 @@ fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Comm
         "queued": invoke.queued,
         "submitted_at": invoke.submitted_at,
         "waited": true,
+        "wait_timeout": wait_timeout,
         "finished_at": entry.finished_at,
         "duration_ms": entry.duration_ms,
         "error": entry.error,
         "pipeline": entry.pipeline,
     });
-    let payload = Payload::detail(doc, wait_lines(invoke, entry).join("\n"));
-    if FAILED_WAIT_STATUSES.contains(&entry.status.as_str()) {
+    let payload = Payload::detail(doc, wait_lines(invoke, entry, wait_timeout).join("\n"));
+    // Match core's canonical success token and its legacy wait-envelope alias.
+    if wait_timeout || !matches!(entry.status.as_str(), "success" | "succeeded") {
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())
@@ -118,12 +108,22 @@ fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Vec<String> {
     ]
 }
 
-fn wait_lines(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Vec<String> {
+fn wait_lines(
+    invoke: &PipelineInvokeResult,
+    entry: &PipelineWaitEntry,
+    wait_timeout: bool,
+) -> Vec<String> {
     let mut lines = vec![
         format!("Job: {}", invoke.job_name),
         format!("Run ID: {}", invoke.run_id),
         format!("State: {}", entry.status),
     ];
+    if wait_timeout {
+        lines.push(
+            "wait_timeout=true; the wait deadline expired. Inspect this run before resubmitting."
+                .to_string(),
+        );
+    }
     if let Some(finished_at) = &entry.finished_at {
         lines.push(format!("Finished: {finished_at}"));
     }
@@ -150,15 +150,16 @@ fn single_line(value: &str) -> String {
 pub struct JobReplayArgs {
     /// Source job run ID to replay from step 0.
     pub run_id: String,
-    /// Output replay result as JSON.
+    /// Workspace claim token held by this caller.
     #[arg(long)]
-    pub json: bool,
+    pub claim_token: Option<String>,
 }
 
 impl Execute for JobReplayArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let source_run_id = self.run_id;
-        let result = runtime.replay_job_run(&source_run_id)?;
+        let result =
+            runtime.replay_job_run_with_claim(&source_run_id, self.claim_token.as_deref())?;
         let doc = json!({
             "run_id": result.run_id,
             "source_run_id": source_run_id,
@@ -179,7 +180,11 @@ impl Execute for JobReplayArgs {
             "pipeline: {}",
             serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
         ));
-        Ok(Payload::detail(doc, lines.join("\n")).into())
+        let payload = Payload::detail(doc, lines.join("\n"));
+        if !result.success {
+            return Ok(payload.with_exit_code(1).into());
+        }
+        Ok(payload.into())
     }
 }
 
@@ -190,19 +195,16 @@ impl Execute for JobReplayArgs {
 pub struct JobResumeArgs {
     /// Source job run ID to resume from its persisted step checkpoints.
     pub run_id: String,
-    /// Block until the detached run reaches a terminal state; exit nonzero unless it succeeded.
-    #[arg(long)]
-    pub wait: bool,
-    /// Output submission or waited result as JSON.
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub(super) wait: WaitArgs,
 }
 
 impl Execute for JobResumeArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let timeout_seconds = self.wait.timeout_seconds()?;
         let invoke = runtime.submit_resume_run(&self.run_id, None, None)?;
-        if self.wait {
-            wait_for_submission(runtime, &invoke)
+        if let Some(timeout_seconds) = timeout_seconds {
+            wait_for_submission(runtime, &invoke, timeout_seconds)
         } else {
             render_submission(&invoke)
         }

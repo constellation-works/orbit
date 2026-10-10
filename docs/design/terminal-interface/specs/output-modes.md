@@ -1,12 +1,12 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-09-26
+last_validated: 2026-10-08
 ---
 
 # Spec: Output Modes and Sink Resolution
 
-Every `orbit` command produces a structured payload and hands it to a renderer. The renderer resolves one output mode — `auto`, `table`, `json`, or `ndjson` — from global flags, environment, and the properties of the sink, once per invocation. A command body never decides how it is displayed, never asks whether stdout is a terminal, and never writes to stdout directly.
+Every `orbit` command produces a structured payload and hands it to a renderer. The renderer resolves one output mode — `auto`, `table`, `plain`, `json`, or `ndjson` — from global flags, environment, and the properties of the sink, once per invocation. A command body never decides how it is displayed, never asks whether stdout is a terminal, and never writes to stdout directly.
 
 ## Why This Exists
 
@@ -31,13 +31,13 @@ The sink is resolved once at startup and answers every environment question. Not
 Precedence, first match wins:
 
 1. `--format <mode>` explicitly passed.
-2. `--json` (per-command legacy alias) → `json`.
+2. `--json` (global shorthand), or a command-local `--ops` → `json`.
 3. `ORBIT_FORMAT` environment variable.
 4. `auto`.
 
-`auto` resolves to `table` when `is_tty`, and to the **plain** form otherwise. Plain is `table` with the header suppressed, borders and ANSI absent, truncation disabled, and single-tab field separators — the form `cut -f` expects. Plain is a rendering of `table`, not a fourth mode a command can request.
+`auto` resolves to `table` when `is_tty`, and to the **plain** form otherwise. Plain is `table` with the header suppressed, borders and ANSI absent, truncation disabled, and single-tab field separators — the form `cut -f` expects. `--format plain` explicitly selects this form on any sink, with the same bytes as the default piped rendering.
 
-`--format` is one global user-facing argument installed across the command tree so it is accepted at the root and after subcommands; command-local `--format` arguments keep their own meaning. The existing per-command `--json` flags remain accepted as legacy aliases, and their visibility in help follows each command's declaration.
+`--format` and `--json` are each declared once and installed across the assembled command tree, including plugin-derived groups. Both are accepted at the root and after subcommands, and appear in help. `--json` selects JSON through the existing compatibility rung, preserving its always-pretty output. Combining it with an explicit non-JSON output `--format` is a usage error (exit 2), reported as JSON on stderr. `--json --format json` is accepted. Command-local `--format` arguments keep their own meaning: `audit export --format json|csv` selects the exported file's serialization; `--json` independently selects the sink's output mode; the existing file export and human confirmation remain unchanged. There are no built-in command exclusions. A plugin schema may derive a `--json` tool-input flag with a different meaning; that flag is preserved. Select output JSON at the root/group (for example `orbit --json plugin-ns verb --json`), or use `--format json` on that leaf.
 
 ## 3. Mode Contracts
 
@@ -48,7 +48,7 @@ Precedence, first match wins:
 | `json` | one document | no | no | no |
 | `ndjson` | one document per line | no | no | **yes** |
 
-- `json` for a list command emits a single array; for a detail command, a single object. `--format json` is pretty-printed only when `is_tty`; legacy `--json` keeps its historical pretty form (see Migration). Commands with no table or plain view preserve pretty JSON in those human modes.
+- `json` for a list command emits a single array; for a detail command, a single object. `--format json` is pretty-printed only when `is_tty`; `--json` keeps its historical pretty form (see Migration). Commands with no table or plain view preserve pretty JSON in those human modes.
 - `ndjson` emits one complete JSON value per line and flushes per record. List commands assemble their record payload before rendering, so records flush incrementally only after collection. Command-specific stream payloads such as `orbit log tail` emit as data arrives using their selected line format.
 - `table` and `json` for the same invocation describe the same records. The table may omit fields and reformat values; it may not contain a value absent from the payload, and it may not omit a record the payload includes.
 
@@ -77,7 +77,7 @@ Precedence, first match wins:
 ## 7. Migration
 
 1. ~~Introduce the sink and the global `--format`; leave every command body untouched.~~ Done [ORB-10569].
-2. ~~Route the existing per-command `--json` branches through the resolver so precedence is centralized.~~ Done [ORB-10586]. `main` reads the invoked subcommand's `--json`/`--ops` boolean out of the parsed matches — the same walk `--format` uses — rather than from 86 argument structs, and passes it as `OutputSink::resolve`'s `legacy_json` rung.
+2. ~~Route the existing per-command `--json` branches through the resolver so precedence is centralized.~~ Done [ORB-10586]. That routing now reads the global `--json` and command-local `--ops` booleans from parsed matches at any level — the same walk `--format` uses — and passes them as `OutputSink::resolve`'s `legacy_json` rung. The individual output-only `json` fields are removed.
 3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. One remaining bypass has a separate owner and is not an omission: `orbit doctor --fix-*` repair counts ([ORB-11597]). Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
 4. ~~Once a command returns a payload, delete its inline table construction and let the renderer own it.~~ Done for every list and detail command [ORB-10586]. A command builds a `Table` and hands it back inside the payload; `Table::print` is gone, and `Table::emit` is called only by the renderer.
 5. ~~Move error output to stderr and audit exit codes.~~ Done [ORB-10570].
@@ -89,7 +89,9 @@ Step 5 is the only user-visible break for existing scripts (an error object move
 Steps 2–4 shipped together in [ORB-10586] and change three things for existing callers, none of them the bytes of a successful `--json` invocation (verified by diffing the pre-change binary against the new one across 20 commands):
 
 - The **default piped form** of a list command is now plain — no header, tab-separated — where it used to be the header-bearing table. That is §2's contract finally taking effect; `--format table` asks for the old shape from a pipe.
-- An explicit **`--format` now outranks `--json`** (rungs 1 and 2). While `--format` was inert, `orbit task list --json --format table` emitted JSON; it emits a table now.
+- An explicit **`--format` initially outranked `--json`** (rungs 1 and 2). The global shorthand now rejects contradictory combinations such as `orbit task list --json --format table`, with exit 2 and a JSON usage error on stderr. `--ops` retains its original precedence behavior.
 - A **failing `--json` command reports its error as JSON on stderr**, because `--json` resolves the mode and §5 makes json-mode errors machine-readable. stdout is unaffected and still carries nothing on failure.
 
 One deliberate deviation from §3, recorded here because it is a deviation: `--json` pretty-prints in every sink, while `--format json` pretty-prints only for a terminal. Every branch `--json` replaced called `print_pretty` unconditionally, and byte-identity for those invocations is an [Terminal Output Is a Rendering of a Structured Payload](../4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload) requirement, so the legacy rung keeps the bytes it had.
+
+The global shorthand replaces the redundant per-command fields and the registry-level switch that declared them. Streaming commands (`log tail`, `run logs --follow`) retain their JSONL behavior; their internal rendering booleans are derived from the sink, not parsed as separate flags.

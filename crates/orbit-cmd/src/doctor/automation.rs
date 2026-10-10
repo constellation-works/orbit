@@ -65,6 +65,50 @@ pub(super) fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
     )
 }
 
+/// The latest pull window remains actionable after it ends on wire skew.
+/// A newer healthy window supersedes that diagnosis, avoiding stale warnings.
+pub(super) fn doctor_check_pull_protocol(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "pull-protocol";
+    let inspect = || -> Result<Option<String>, OrbitError> {
+        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
+            job_id: Some(orbit_core::application::distributed::PULL_DRAIN_JOB.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        })?;
+        let Some(run) = runs.first() else {
+            return Ok(None);
+        };
+        let state = runtime.read_run_state(&run.run_id)?;
+        let pass = state
+            .as_ref()
+            .and_then(|state| state.drain_last_pass.as_ref());
+        let failure = run
+            .steps
+            .iter()
+            .find(|step| step.error_code.as_deref() == Some("protocol_skew"));
+        if failure.is_some()
+            || pass
+                .is_some_and(|pass| pass.last_pass_error_code.as_deref() == Some("protocol_skew"))
+        {
+            let detail = failure
+                .and_then(|step| step.error_message.as_deref())
+                .or_else(|| pass.and_then(|pass| pass.last_pass_error.as_deref()))
+                .unwrap_or("pull request schema mismatch");
+            return Ok(Some(format!(
+                "{} ended {} with protocol_skew: {detail}",
+                run.run_id, run.state
+            )));
+        }
+        Ok(None)
+    };
+    match inspect() {
+        Ok(Some(message)) => actionable_check(CHECK, WorkspaceDoctorStatus::Warning, message,
+            "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain.".to_string()),
+        Ok(None) => check(CHECK, WorkspaceDoctorStatus::Ok, "no protocol skew recorded on the latest pull drain".to_string()),
+        Err(error) => check(CHECK, WorkspaceDoctorStatus::Warning, format!("cannot inspect pull protocol: {error}")),
+    }
+}
+
 /// Follower pull settlements recorded locally but never delivered to the
 /// owner. Nothing retries delivery on a timer, so the owner keeps the claim
 /// `running` until an operator runs a settle-only pass; this row is what makes
@@ -159,6 +203,38 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
     }
 }
 
+/// `execution.env.pass` variables this process does not hold [ORB-14777].
+///
+/// Agents inherit the launching environment through the allowlist, so a
+/// pass-listed variable missing here (a dedicated worker token, say) silently
+/// leaves agents on another login. A warning, never an error: optional
+/// provider keys can legitimately be absent. Names only, never values.
+pub(super) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let unset = runtime.unset_env_pass_names();
+    if unset.is_empty() {
+        return check(
+            "env-pass",
+            WorkspaceDoctorStatus::Ok,
+            "every operator-added `execution.env.pass` variable is set in this environment"
+                .to_string(),
+        );
+    }
+    actionable_check(
+        "env-pass",
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "`execution.env.pass` names variables unset or empty in this environment: {}; \
+             agents started from it will not receive them",
+            unset.join(", ")
+        ),
+        "Export the variables before starting the drain or service. Drains inherit the \
+         launching shell's environment, so start them from a login shell (or set the \
+         variables in the unit's environment), or remove the names from \
+         `execution.env.pass`, then rerun `orbit doctor`."
+            .to_string(),
+    )
+}
+
 /// Where required validation finds the user's toolchain [ORB-13987].
 ///
 /// Required commands run with PATH and toolchain locators resolved from the
@@ -166,7 +242,9 @@ pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoc
 /// resolves that environment the way a delivery run would and warns when the
 /// login shell cannot be probed (validation then falls back to the launcher's
 /// PATH), when resolution is disabled without a configured PATH, or when the
-/// resolved PATH drops login-shell entries.
+/// resolved PATH drops login-shell entries. It also reports the successful
+/// probe mode, interactive fallback reason and tool locations, warning when a
+/// later PATH entry contains a different executable shadowed by an earlier one.
 pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     if runtime.workflow_required_validation_commands().is_empty() {
         return check(
@@ -177,30 +255,68 @@ pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDo
         );
     }
     let environment = runtime.validation_environment();
-    match environment.preflight_warning() {
-        Some(warning) => actionable_check(
+    let mut details = vec![format!(
+        "required validation PATH comes from {}{}; probe mode: {}; PATH={}",
+        environment.source.as_str(),
+        environment
+            .login_shell
+            .as_ref()
+            .map(|shell| format!(" ({})", shell.display()))
+            .unwrap_or_default(),
+        environment.probe_mode.map_or(
+            if environment.login_shell_enabled {
+                "failed"
+            } else {
+                "disabled"
+            },
+            |mode| mode.as_str()
+        ),
+        environment.path().unwrap_or("<unset>")
+    )];
+    let mut warning = false;
+    if let Some(reason) = &environment.fallback_reason {
+        details.push(format!("interactive fallback reason: {reason}"));
+        warning = true;
+    }
+    if let Some(reason) = environment.preflight_warning() {
+        details.push(reason);
+        warning = true;
+    }
+    for tool in ["python3", "git", "make"] {
+        let paths = environment.program_paths(tool);
+        if let Some((first, later)) = paths.split_first() {
+            details.push(format!("{tool} resolves to {}", first.display()));
+            if !later.is_empty() {
+                details.push(format!(
+                    "{tool}: {} shadows later PATH executables: {}",
+                    first.display(),
+                    later
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                warning = true;
+            }
+        } else {
+            details.push(format!("{tool} is absent from PATH"));
+        }
+    }
+    let message = details.join("; ");
+    if warning {
+        actionable_check(
             "validation-env",
             WorkspaceDoctorStatus::Warning,
-            warning,
-            "Make the login shell's profile export the toolchain PATH (`$SHELL -l -c 'echo \
-             $PATH'` should list it), or set `workflow.validation_env.path` with `orbit config \
-             set`, then rerun `orbit doctor`."
+            message,
+            "Make the interactive login shell export the intended toolchain PATH (`$SHELL \
+             -i -l -c 'echo $PATH'` should list it first), fix rc failures or set \
+             `workflow.validation_env.interactive = false` to use login profiles only, or \
+             set `workflow.validation_env.path` with `orbit config set`, then rerun \
+             `orbit doctor`."
                 .to_string(),
-        ),
-        None => check(
-            "validation-env",
-            WorkspaceDoctorStatus::Ok,
-            format!(
-                "required validation PATH comes from {}{}: PATH={}",
-                environment.source.as_str(),
-                environment
-                    .login_shell
-                    .as_ref()
-                    .map(|shell| format!(" ({})", shell.display()))
-                    .unwrap_or_default(),
-                environment.path().unwrap_or("<unset>")
-            ),
-        ),
+        )
+    } else {
+        check("validation-env", WorkspaceDoctorStatus::Ok, message)
     }
 }
 
@@ -400,62 +516,108 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
     )
 }
 
-/// `operation.review_policy = after-landing` is carried out by one delivery
-/// consumer alone, `delivery-code-review` [ORB-13896]. A policy that cannot
-/// run here reviews nothing while every other surface looks healthy, so
-/// anything short of a healthy consumer is an error, not a warning: missing,
-/// owned by another machine, wedged, stalled, held for an operator, watching a
-/// branch that does not resolve, or naming a crew that does not. Under any
-/// other policy the row is skipped.
-pub(super) fn doctor_check_after_landing_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    const CHECK: &str = "review-after-landing";
-    let health = match orbit_core::application::automation::after_landing_health(
-        runtime,
-        chrono::Utc::now(),
-    ) {
-        Ok(Some(health)) => health,
-        Ok(None) => {
-            return check(
-                CHECK,
-                WorkspaceDoctorStatus::Skipped,
-                format!(
-                    "operation.review_policy is `{}`, not after-landing",
-                    runtime.operation_policy().review_policy.value.as_str()
-                ),
-            );
-        }
-        Err(error) => {
-            return actionable_check(
-                CHECK,
-                WorkspaceDoctorStatus::Error,
-                format!("cannot establish whether after-landing review runs here: {error}"),
-                "Resolve the error, then rerun `orbit doctor`.".to_string(),
-            );
-        }
-    };
-    if health.healthy() {
-        return check(CHECK, WorkspaceDoctorStatus::Ok, health.line());
+/// Every automatic-review switch in one row [ORB-13992]: before-PR review
+/// (`review.before_pr`, its minutes and crew), before-landing review
+/// (`review.before_landing`, sharing them) and after-landing review (the
+/// `delivery-code-review` auto-task, with when its next batch is due), each
+/// with its source. A switch that is on but cannot run here reviews nothing
+/// while every other surface looks healthy, so that is an error, not a
+/// warning: before-PR or before-landing review on a local-only ship
+/// workspace [ORB-14168], either without a resolvable crew, or an after-landing
+/// consumer that is missing, owned by another machine, wedged, stalled, held
+/// for an operator, watching a branch that does not resolve, naming a crew
+/// that does not, or trailing `origin/<branch>` past the batch's
+/// `max_wait_minutes`. The trail is the remote-tracking ref already in the
+/// checkout; this check does not fetch.
+pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "review";
+    let switches =
+        match orbit_core::application::review::review_switches(runtime, chrono::Utc::now()) {
+            Ok(switches) => switches,
+            Err(error) => {
+                return actionable_check(
+                    CHECK,
+                    WorkspaceDoctorStatus::Error,
+                    format!("cannot establish which automatic review runs here: {error}"),
+                    "Resolve the error, then rerun `orbit doctor`.".to_string(),
+                );
+            }
+        };
+    let message = format!(
+        "before-PR review: {}. before-landing review: {}. after-landing review: {}",
+        switches.before_pr_line(),
+        switches.before_landing_line(),
+        switches.after_landing_line()
+    );
+    let mut remediation = Vec::new();
+    if switches.before_pr.local_route_incompatible {
+        remediation.push(
+            "`review.before_pr` is on and this workspace ships locally, so every local delivery \
+             is refused before it can run. Turn it off with `orbit config set review.before_pr \
+             false`, or ship through the PR route. After-landing review is the \
+             `delivery-code-review` auto-task, not this switch."
+                .to_string(),
+        );
     }
+    if switches.before_landing.local_route_incompatible {
+        remediation.push(
+            "`review.before_landing` is on and this workspace ships locally, which opens no pull \
+             request to review, so every local delivery is refused before it can run. Turn it \
+             off with `orbit config set review.before_landing false`, or ship through the PR \
+             route."
+                .to_string(),
+        );
+    }
+    let crew_unusable = |problems: usize, local_route: bool| problems > usize::from(local_route);
+    if crew_unusable(
+        switches.before_pr.problems.len(),
+        switches.before_pr.local_route_incompatible,
+    ) || crew_unusable(
+        switches.before_landing.problems.len(),
+        switches.before_landing.local_route_incompatible,
+    ) {
+        let (layer, key) = if switches.before_landing.enabled {
+            ("Before-landing", "review.before_landing")
+        } else {
+            ("Before-PR", "review.before_pr")
+        };
+        remediation.push(format!(
+            "{layer} review needs `operation.review_crew` set to a crew that resolves on this \
+             host; set it, or turn `{key}` off."
+        ));
+    }
+    if let Some(health) = switches
+        .after_landing
+        .health
+        .as_ref()
+        .filter(|health| !health.healthy())
+    {
+        remediation.push(format!(
+            "After-landing review runs only through `{consumer}` on the machine that owns this \
+             workspace. Fix each problem named above (`orbit auto-task show {consumer} \
+             --preview` shows the consumer), or turn it off with `orbit auto-task toggle \
+             {consumer} off`.",
+            consumer = health.consumer
+        ));
+    }
+    if remediation.is_empty() {
+        return check(CHECK, WorkspaceDoctorStatus::Ok, message);
+    }
+    remediation.push("Then rerun `orbit doctor`.".to_string());
     actionable_check(
         CHECK,
         WorkspaceDoctorStatus::Error,
-        health.line(),
-        format!(
-            "After-landing review runs only through `{consumer}` on the machine that owns this \
-             workspace. Fix each problem named above (`orbit auto-task show {consumer} \
-             --preview` shows the consumer), or set `operation.review_policy` to `none` or \
-             `before-pr`; then rerun `orbit doctor`.",
-            consumer = health.consumer
-        ),
+        message,
+        remediation.join(" "),
     )
 }
 
 /// Task relation/dependency targets that no longer resolve to a registered
 /// task bundle — the "grandfathered" relations that make a generated task
-/// index fail to rebuild against its relation validator, forcing an unbounded
-/// bundle-scan fallback (ORB-10305). Scoped to the current
-/// workspace; surfacing them here lets an operator fix or remove the offending
-/// relation before the validator trips over it at rebuild time.
+/// index fail to rebuild against its relation validator, so task reads serve
+/// from a bundle scan (ORB-10305). Audited from the canonical bundles and
+/// scoped to the current workspace: an edge the generated index lost is the
+/// one blocking its repair, so it is reported (and marked) rather than hidden.
 pub(super) fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let workspace_id = match runtime.workspace_id() {
         Ok(id) => id,
@@ -483,8 +645,15 @@ pub(super) fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDo
                 .iter()
                 .map(|target| {
                     format!(
-                        "{} ({}) -> {}",
-                        target.source_task_id, target.relation_type, target.target_task_id
+                        "{} ({}) -> {}{}",
+                        target.source_task_id,
+                        target.relation_type,
+                        target.target_task_id,
+                        if target.indexed {
+                            ""
+                        } else {
+                            " [missing from generated index]"
+                        }
                     )
                 })
                 .collect::<Vec<_>>()
@@ -493,11 +662,11 @@ pub(super) fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDo
                 "task-relations",
                 WorkspaceDoctorStatus::Warning,
                 format!(
-                    "{} unresolved relation/dependency target(s) will block index rebuild \
-                     until fixed or removed: {detail}",
+                    "{} unresolved relation/dependency target(s) block task-index rebuild, so \
+                     task reads fall back to a bundle scan until fixed or removed: {detail}",
                     dangling.len()
                 ),
-                "Inspect each named source with `orbit task show <task-id>` and update or remove its unresolved relation/dependency target.".to_string(),
+                "Inspect each named source with `orbit task show <task-id>`, then drop the unresolved edge from its `relations` through `orbit.task.update` or restore the target task; reads repair the index automatically once either lands.".to_string(),
             )
         }
     }
@@ -537,7 +706,7 @@ pub(super) fn doctor_check_definition_artifacts(
                     format!("no {} on disk yet", health.kind.as_str())
                 } else {
                     format!(
-                        "{} {} loaded, none residual, stale, deprecated, faulty, or missing",
+                        "{} {} loaded, none residual, stale, forked, deprecated, faulty, or missing",
                         health.scanned,
                         health.kind.as_str()
                     )
@@ -588,9 +757,11 @@ pub(super) fn doctor_check_definition_artifacts(
             let breakdown = [
                 ArtifactCondition::Missing,
                 ArtifactCondition::Stale,
+                ArtifactCondition::Forked,
                 ArtifactCondition::Faulty,
                 ArtifactCondition::Residual,
                 ArtifactCondition::Deprecated,
+                ArtifactCondition::DanglingLink,
             ]
             .into_iter()
             .filter_map(|condition| {

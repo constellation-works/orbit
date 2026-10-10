@@ -1,6 +1,7 @@
 use clap::Args;
 use orbit_core::application::auto_tasks::{
-    AutoTaskCursor, cursor_state_path, definition_path, load_cursor_state,
+    AutoTaskBody, AutoTaskCursor, AutoTaskLayering, cursor_state_path, definition_path,
+    load_cursor_state,
 };
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
@@ -13,9 +14,6 @@ use super::output::definition_to_json;
 pub struct AutoTaskShowArgs {
     /// Definition name
     pub name: String,
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
     /// Preview the baseline and source observations without admitting actions.
     #[arg(long)]
     pub preview: bool,
@@ -35,14 +33,21 @@ impl Execute for AutoTaskShowArgs {
         doc["plugin_inactive"] = Value::Bool(listed.inactive_plugin.is_some());
         doc["inactive_plugin"] = json!(listed.inactive_plugin);
         doc["skipped_reason"] = json!(listed.skipped_reason);
-        let enabled_by_policy = runtime.auto_task_enabled_by_review_policy(&definition);
-        doc["enabled_by_review_policy"] = Value::Bool(enabled_by_policy);
+        let effective_enabled = runtime.auto_task_enabled(&definition);
+        doc["effective_enabled"] = Value::Bool(effective_enabled);
         let definition_root = runtime.local_root();
         let source_path = definition_path(&definition_root, &self.name);
         doc["definition_source"] = json!({
             "root": definition_root,
             "path": source_path,
         });
+        // Whether the bundled body is still managed, and which settings apply
+        // over it. A failure is reported, never rendered as managed.
+        let layering = runtime.auto_task_layering(&self.name);
+        match &layering {
+            Ok(layering) => doc["layering"] = json!(layering),
+            Err(error) => doc["layering_error"] = json!(error.to_string()),
+        }
         // The host-local cursor explains why a due definition minted nothing:
         // an unreadable file is reported, never rendered as "never observed".
         match load_cursor_state(&cursor_state_path(&runtime.paths().state_dir)) {
@@ -92,10 +97,10 @@ impl Execute for AutoTaskShowArgs {
             definition.name,
             if listed.inactive_plugin.is_some() {
                 "inactive"
-            } else if enabled_by_policy {
-                "enabled by operation.review_policy = after-landing"
             } else if definition.enabled {
                 "enabled"
+            } else if effective_enabled {
+                "enabled by the deprecated operation.review_policy = after-landing"
             } else {
                 "disabled"
             }
@@ -108,6 +113,26 @@ impl Execute for AutoTaskShowArgs {
         }
         let _ = writeln!(out, "  definition root: {}", definition_root.display());
         let _ = writeln!(out, "  definition source: {}", source_path.display());
+        match &layering {
+            Ok(layering) => {
+                let _ = writeln!(out, "  body: {}", body_summary(layering));
+                if let Some(settings) = layering.settings.as_ref() {
+                    let fields = settings.field_names();
+                    let _ = writeln!(
+                        out,
+                        "  settings: {}",
+                        if fields.is_empty() {
+                            "no overrides".to_string()
+                        } else {
+                            fields.join(", ")
+                        }
+                    );
+                }
+            }
+            Err(error) => {
+                let _ = writeln!(out, "  body: unknown ({error})");
+            }
+        }
         let _ = writeln!(
             out,
             "  schedule: {}",
@@ -157,6 +182,21 @@ impl Execute for AutoTaskShowArgs {
             );
         }
         Ok(Payload::detail(doc, out).into())
+    }
+}
+
+fn body_summary(layering: &AutoTaskLayering) -> String {
+    match layering.body {
+        AutoTaskBody::Managed => "managed bundled default".to_string(),
+        AutoTaskBody::UserAuthored => "user-authored".to_string(),
+        AutoTaskBody::Forked if layering.forked_fields.is_empty() => format!(
+            "forked from the bundled default in settings only ({}); `orbit workspace sync` moves them to the settings table",
+            layering.settings_fields.join(", ")
+        ),
+        AutoTaskBody::Forked => format!(
+            "forked from the bundled default (body fields: {}); upstream template changes no longer apply",
+            layering.forked_fields.join(", ")
+        ),
     }
 }
 

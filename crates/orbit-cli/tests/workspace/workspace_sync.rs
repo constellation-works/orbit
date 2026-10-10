@@ -93,8 +93,8 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
             sha256_hex(&read(&auto_task))
         );
         if operator_edit {
-            // Routine opt-in is a supported lifecycle edit. An auto-task's
-            // handwritten schedule is preserved against the old managed digest.
+            // Routine opt-in and an auto-task's handwritten schedule are
+            // supported settings; both survive the body upgrade.
             let opted_in = std::fs::read_to_string(&routine)
                 .unwrap()
                 .replace("enabled: false", "enabled: true");
@@ -166,22 +166,36 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
             parse_auto_task_yaml(&std::fs::read_to_string(&auto_task).unwrap()).unwrap();
         assert_eq!(definition.name, "friction-curation");
         if operator_edit {
-            assert_eq!(
+            assert_ne!(
                 read(&auto_task),
                 auto_before,
-                "a handwritten schedule survives materialization"
+                "a known shipped body upgrades even with a handwritten schedule"
             );
             assert_eq!(
                 migrated_auto["assets"]["friction-curation"],
-                old_auto["assets"]["friction-curation"],
-                "preservation retains the digest Orbit actually wrote"
+                sha256_hex(&read(&auto_task)),
+                "migration records the current managed body's digest"
             );
             assert!(
                 actions.iter().any(|a| a["kind"] == "auto_task"
                     && a["name"] == "friction-curation"
-                    && a["outcome"] == "preserved"),
+                    && a["outcome"] == "migrated"),
                 "{report}"
             );
+            let output = orbit(&repo, home.path())
+                .args(["auto-task", "show", "friction-curation", "--json"])
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let effective: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(effective["schedule"]["cron"], "45 7 * * *");
+            assert_eq!(
+                effective["layering"]["settings"]["schedule"]["cron"],
+                "45 7 * * *"
+            );
+            assert_eq!(effective["layering"]["body"], "managed");
         } else {
             assert!(
                 actions.iter().any(|a| a["kind"] == "auto_task"
@@ -624,7 +638,7 @@ fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
         "exactly one `.orbit/` ignore: {migrated}"
     );
     for path in [".orbit/config.toml", ".orbit/config.yaml"] {
-        let ignored = std::process::Command::new("git")
+        let ignored = git_repo::command()
             .args(["check-ignore", "--quiet", path])
             .current_dir(&repo)
             .status()
@@ -718,7 +732,7 @@ fn relocated_root_checkout_ignores_its_delivery_worktrees() {
 /// The untracked set the primary-checkout snapshot reads must not reach into
 /// `.orbit/`, where Orbit keeps its own nested delivery worktrees.
 fn assert_snapshot_omits_orbit_dir(repo: &Path, when: &str) {
-    let output = std::process::Command::new("git")
+    let output = git_repo::command()
         .args(["status", "--porcelain=v2", "--untracked-files=all"])
         .current_dir(repo)
         .output()
@@ -732,7 +746,7 @@ fn assert_snapshot_omits_orbit_dir(repo: &Path, when: &str) {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = git_repo::command()
         .args([
             "-c",
             "user.name=fixture",

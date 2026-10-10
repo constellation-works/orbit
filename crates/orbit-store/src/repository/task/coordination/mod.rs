@@ -41,18 +41,34 @@
 //!
 //! Every runtime composition participates in the same filesystem locks. A
 //! durable required marker prevents legacy task stores from accessing a
-//! partition after coordinated composition has activated it. A shared host
-//! lock additionally protects dependency reads across workspace partitions;
-//! admission takes it exclusively before its partition lock.
+//! partition after coordinated composition has activated it. A host lock,
+//! always taken before the partition lock, additionally protects dependency
+//! reads across workspace partitions. Ordinary sections, claim mutations,
+//! commits and an admission whose decision reads only its own partition hold
+//! it shared, so they never stall another partition's work. Only an admission
+//! that reads a dependency another partition holds takes it exclusively, and
+//! only for that decision.
 //!
 //! # Recovery before exposure
 //!
 //! The pending marker is the cheap signal that a commit is in flight or was
-//! interrupted. Any participant that sees it takes the boundary exclusively
-//! and replays the journal before it reads or writes anything, so no caller
-//! observes a committed reservation whose task transition has not landed. A
-//! compensation or replay that fails leaves the marker in place and returns
-//! the error: the partition stays closed until recovery succeeds.
+//! interrupted. Any participant that sees it first waits for the partition as
+//! a reader, which waits out a live commit's exclusive section; a marker still
+//! there once a reader gets in belongs to an interrupted commit, so the
+//! participant takes the boundary exclusively and replays the journal before
+//! it reads or writes anything. No caller observes a committed reservation
+//! whose task transition has not landed. A compensation or replay that fails
+//! leaves the marker in place and returns the error: the partition stays
+//! closed until recovery succeeds.
+//!
+//! # Diagnosing contention
+//!
+//! Every section names itself to the locks it takes: its kind (ordinary,
+//! admission, recovery, ...) and the call site that entered the boundary.
+//! Exclusive and shared holders both record that label with their pid and
+//! acquisition time, so a waiter's contention warning and a lock timeout name
+//! whoever holds the lock, and a section that holds it past a threshold logs
+//! its label and held duration on release.
 //!
 //! # Who takes the boundary
 //!
@@ -113,6 +129,8 @@ pub struct TaskCommitBoundary {
     bundle_store: TaskBundleStoreV2,
     workspace_id: String,
     partition_dir: PathBuf,
+    /// Deadlines and holder diagnostics for the host and partition locks.
+    lock_options: orbit_common::fs::io::FileLockOptions,
 }
 
 mod admission;
@@ -121,8 +139,13 @@ mod commit;
 mod handoff;
 mod landing;
 mod lifecycle;
+mod repair;
+mod selection;
+
+#[cfg(test)]
+mod tests;
 
 // Shared with sibling modules through `super::`.
-use boundary::BoundaryDepth;
+use boundary::{BoundaryDepth, Section};
 
 pub use admission::admission_refusal;

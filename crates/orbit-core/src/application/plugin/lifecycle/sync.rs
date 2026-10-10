@@ -95,7 +95,7 @@ pub fn sync_plugins(
 ) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
     // Kept as the parsed set, not a name list: a `--grant fs=<root>` consent
     // has to carry its roots through to the row each pin records.
-    let grants = parse_grants(grants).map_err(OrbitError::InvalidInput)?;
+    let grants = parse_grants(grants)?;
     let Some(pins) = read_pin_file(&runtime.shared_root())? else {
         return Ok(Vec::new());
     };
@@ -103,20 +103,45 @@ pub fn sync_plugins(
     // disk, rather than from the runtime's build-time snapshot.
     let toggles = workspace_plugin_toggles(runtime)?;
     let mut outcomes = Vec::new();
+    // Pins whose installed build does not satisfy them; the final projection
+    // must keep that visible rather than report the host row as `Active`.
+    let mut unsatisfied = std::collections::HashSet::new();
     for pin in &pins.plugins {
         let installed = runtime.stores().plugins().get_plugin(&pin.name)?;
-        match installed {
+        let drift = installed
+            .as_ref()
+            .and_then(|installed| build_pin_drift(pin, installed));
+        match (installed, drift) {
             // §3.7: an installed build that differs from what the pin
             // expects is unsatisfied here, and is neither enabled, toggled on
-            // nor seeded. A differing pin never causes a rebuild.
-            Some(installed) if build_pin_drift(pin, &installed).is_some() => {
+            // nor seeded. A differing pin never causes a rebuild. A pin's
+            // `enabled: false` is the safe direction, so it still applies.
+            (Some(_), Some(drift)) => {
+                unsatisfied.insert(pin.name.clone());
+                let message = if pin.enabled {
+                    drift
+                } else {
+                    let switched_off = if toggles.get(&pin.name) == Some(&false) {
+                        "switched off in this workspace".to_string()
+                    } else if dry_run {
+                        "would switch off in this workspace".to_string()
+                    } else {
+                        match disable_plugin_in_workspace(runtime, &pin.name) {
+                            Ok(_) => "switched off in this workspace by the pin".to_string(),
+                            Err(error) => format!(
+                                "cannot switch off in this workspace to match the pin: {error}"
+                            ),
+                        }
+                    };
+                    format!("{drift}; {switched_off}")
+                };
                 outcomes.push(PluginSyncOutcome {
                     name: pin.name.clone(),
                     status: PluginStatus::Inactive,
-                    message: build_pin_drift(pin, &installed).unwrap_or_default(),
+                    message,
                 });
             }
-            Some(installed) => {
+            (Some(installed), None) => {
                 let satisfied = pin
                     .version
                     .as_deref()
@@ -261,7 +286,7 @@ pub fn sync_plugins(
                     message,
                 });
             }
-            None => {
+            (None, _) => {
                 let Some(source) = pin.source.clone() else {
                     outcomes.push(PluginSyncOutcome {
                         name: pin.name.clone(),
@@ -303,6 +328,25 @@ pub fn sync_plugins(
                     &options,
                 ) {
                     Ok(summary) if pin.enabled => {
+                        // §3.7: the fresh install is held to the same build
+                        // check as an existing one before anything enables it.
+                        let drift = runtime
+                            .stores()
+                            .plugins()
+                            .get_plugin(&pin.name)?
+                            .and_then(|installed| build_pin_drift(pin, &installed));
+                        if let Some(drift) = drift {
+                            unsatisfied.insert(pin.name.clone());
+                            outcomes.push(PluginSyncOutcome {
+                                name: pin.name.clone(),
+                                status: PluginStatus::Inactive,
+                                message: format!(
+                                    "installed v{} from {source}, but left disabled; {drift}",
+                                    summary.version
+                                ),
+                            });
+                            continue;
+                        }
                         let (status, message) = match enable_for_sync(runtime, &pin.name, &grants) {
                             Ok(SyncEnable::Enabled(result)) => {
                                 let (status, reopened) = reopen_workspace_toggle(
@@ -396,7 +440,18 @@ pub fn sync_plugins(
         let Some(installed) = runtime.stores().plugins().get_plugin(&outcome.name)? else {
             continue;
         };
-        let (status, diagnostic) = sync_effective_status(runtime, &installed)?;
+        let (mut status, diagnostic) = sync_effective_status(runtime, &installed)?;
+        if unsatisfied.contains(&outcome.name) {
+            // Unsatisfied is not active, and an unsatisfied entry the pin
+            // wants enabled stays unsatisfied even though its row is disabled.
+            let pin_enabled = pins
+                .plugins
+                .iter()
+                .any(|pin| pin.name == outcome.name && pin.enabled);
+            if status == PluginStatus::Active || pin_enabled {
+                status = PluginStatus::Inactive;
+            }
+        }
         outcome.status = status;
         if let Some(diagnostic) = diagnostic {
             outcome.message.push_str("; ");

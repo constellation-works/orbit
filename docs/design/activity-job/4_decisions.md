@@ -796,7 +796,7 @@ ORB-10557's env gate is left in place: it is a cheap first line of defense for t
 ## Classify independent-review startup separately from reviewer rejection
 
 **Recorded:** 2026-08-08 20:34:04.798005Z · [ORB-10606]
-**Paths:** `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`, `crates/orbit-core/src/runtime/v2_host/pipeline_actions.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure.rs`
+**Paths:** `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`, `crates/orbit-core/src/runtime/v2_host/pipeline_actions.rs`, `crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs`
 
 ### Context
 A parent shipment previously treated every failed review child identically, so a pre-review infrastructure failure triggered the same blocked/manual-reconciliation handoff as a reviewer rejection. The alternatives were to keep generic child-status gating, weaken the worktree guard, or make the review boundary classify whether a durable reviewer checkpoint exists.
@@ -1342,7 +1342,7 @@ Declare action names and their core-or-engine ownership once in `orbit-types`, g
 ## Job execution crosses one RuntimeHost boundary
 
 **Recorded:** 2026-08-09 07:21:03.861806Z · [ORB-10633]
-**Paths:** `crates/orbit-engine/src/context/hosts.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs`
+**Paths:** `crates/orbit-engine/src/context/hosts/runtime_host.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs`
 
 ### Context
 The job executor depended on a dispatcher host and a separate deterministic/task/environment/run host family, both implemented by OrbitRuntime. Keeping both families with a documented ownership rule was a real alternative, but it would preserve two call graphs and let capabilities drift between them.
@@ -1375,7 +1375,7 @@ Persist a per-resource-kind managed manifest containing the SHA-256 digest last 
 ## All five definition-artifact kinds carry managed provenance, and doctor reports it
 
 **Recorded:** 2026-08 · [ORB-10800]
-**Code anchors:** `crates/orbit-core/src/application/managed_assets.rs::ManagedAssetLayout`, `crates/orbit-core/src/application/skill.rs::seed_default_skills`, `crates/orbit-core/src/application/routines/materialize.rs::seed_default_routines`, `crates/orbit-core/src/application/auto_tasks/mod.rs::seed_default_auto_tasks`, `crates/orbit-core/src/application/health/`
+**Code anchors:** `crates/orbit-core/src/application/managed_assets/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/application/skill.rs::seed_default_skills`, `crates/orbit-core/src/application/routines/materialize.rs::seed_default_routines`, `crates/orbit-core/src/application/auto_tasks/mod.rs::seed_default_auto_tasks`, `crates/orbit-core/src/application/health/`
 
 ### Context
 
@@ -1506,7 +1506,7 @@ The commit step derives the summary from the change it is about to deliver, and 
 1. `commit_batch_changes` calls `ensure_durable_execution_summary` after read-only checkout resolution and validation, and before the delivery gate. It no-ops when `meaningful_execution_summary` already finds one, so an agent-authored summary always wins.
 2. The derived text is read out of `git status --porcelain=v1 --untracked-files=all -z` in the delivery worktree — the same file set `git add --all` will stage — and names each path with its change kind, capped at 25 entries plus a remainder count. It claims no outcome, only what the diff shows.
 3. It is persisted to the task record through `apply_task_automation_update` with a `execution_summary_derived` event, so it is durable before any Git mutation and re-checkable afterwards with `git show --stat` on the delivery commit.
-4. When there is no change to describe, nothing is derived and nothing is persisted; the gate rejects as before.
+4. When there is no change to describe, nothing is derived from the worktree. A delivery automation action (a review batch) is the one exception: its deliverable is coverage evidence, not a diff. The host returns that action's `automation-coverage.json` only when settlement accepts or would accept it for the frozen batch (complete examination, and matching batch, epoch, input digest and action), and the summary restates its reviewed range, commit and delivery counts, and findings, under the same `execution_summary_derived` event [ORB-14837]. Otherwise nothing is persisted and the gate rejects as before.
 
 The gate's contract is untouched. What changed is that its rejection is no longer reachable in the ordinary case.
 
@@ -1524,7 +1524,7 @@ The gate's contract is untouched. What changed is that its rejection is no longe
 - Checkout resolution and branch/merge validation now run before the delivery gate, since the derived summary reads the worktree the gate protects. Nothing ahead of the gate mutates Git state.
 - `Cost:` a derived summary describes the shape of a change, not its intent. A PR whose body carries one tells a reviewer which files moved and nothing about why, which is weaker than an agent-authored account and could be mistaken for one if the opening line is not read.
 - `Cost:` the parser is coupled to `git status --porcelain=v1 -z` record framing, including the rename/copy source field that follows its record.
-- `Cost:` a task tagged `no-diff-expected` with an empty summary still has nothing to derive from and still fails the gate, unchanged from before this decision.
+- `Cost:` a task tagged `no-diff-expected` with an empty summary and no accepted coverage evidence still has nothing to derive from and still fails the gate.
 
 ## Shipped activities move from tool allowlists to disallow lists; allowlists stay for custom jobs
 
@@ -1560,7 +1560,7 @@ Every shipped `agent_loop` activity names the exact Orbit tools its agent may ca
 ## Final recovery decides; a deterministic applier acts
 
 **Recorded:** 2026-10-04 · [ORB-13897]
-**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-types/src/workflow/final_recovery.rs`, `crates/orbit-core/src/application/task/final_recovery.rs`, `crates/orbit-core/src/application/job/crew_pools.rs`, `crates/orbit-config/src/registry/settings.rs`, `crates/orbit-core/assets/activities/step_failure_recovery.yaml`
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-types/src/workflow/final_recovery.rs`, `crates/orbit-core/src/application/task/final_recovery.rs`, `crates/orbit-core/src/application/job/crew_pools.rs`, `crates/orbit-config/src/registry/settings/table.rs`, `crates/orbit-core/assets/activities/step_failure_recovery.yaml`
 
 ### Context
 
@@ -1593,8 +1593,8 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 
 ## A backstop recovers tasks blocked outside pipelines
 
-**Recorded:** 2026-10-04 · [ORB-13898]
-**Paths:** `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
+**Recorded:** 2026-10-04 · [ORB-13898] · amended [ORB-14685]
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/blocked_recovery.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep.rs`
 
 ### Context
 
@@ -1609,10 +1609,12 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
    - was written after the block by a change with no recorded actor: the task's `updated_at` is newer than its newest attributed write (history, comment or artifact). A field-only edit records no history, so the backstop cannot rule out a human and fails closed;
    - is older than 72 h, which also bounds the first tick after an upgrade.
 3. Each remaining episode gets one `blocked_task_recovery_pipeline` run, admitted under the episode key, with at most two live at once.
-   - `prepare_blocked_task_recovery` re-checks the episode against the revision the tick observed, gathers the failed run's step and error, and opens a detached linked worktree of the base. The declared worktree pair refuses the primary checkout.
+   - `prepare_blocked_task_recovery` re-checks the episode against the revision the tick observed, gathers the failed run's step and error, identifies the failed run's retained candidate, and opens a detached linked worktree of the base. The declared worktree pair refuses the primary checkout.
    - `final_recovery` runs there with a crew from `workflow.final_recovery_crews`.
    - `apply_blocked_task_recovery` calls `OrbitRuntime::apply_final_recovery` and removes the checkout. A verified `complete_no_diff` moves the task to `review`.
 4. The backstop never resumes. A blocked task has no live run, so `resume` is applied as `escalate`; `requeue` is how work restarts, and it shares the applier's requeue bound.
+   - The agent's contract says so. The shared `final_recovery` activity takes optional `decisions` and `lane_contract` inputs; the backstop sends `decisions` without `resume` and a `lane_contract` stating that its checkout is discarded, so implementing or validating the task there delivers nothing. It sends no `step_ids`. The in-pipeline lane sends neither field, so its agent may still repair its worktree and `resume`.
+   - The *retained candidate* is the failed run's own worktree, where unfinished work stays after the run ends [F2026-10-159]. Preparation locates it with the rule its setup used and lists up to 20 changed paths through `git status` with optional locks off. It never writes, copies or runs Git writes there. The agent input carries the path and paths, or `absent` with a reason: no failed run, a run executed on another machine, or a worktree already removed. Every escalation's `human_action` names it, including one converted from `resume` and one for a missing or malformed decision.
 5. A recovery run that ends without applying a decision — agent failure, timeout, a dead worker — is settled on a later tick as an `escalate` carrying that run's id. Every dispatched episode therefore ends with exactly one recorded decision.
 6. `orbit task show` prints the last final-recovery decision (JSON `final_recovery`). `orbit doctor` reports the `blocked-task-recovery` row: tasks still blocked after a decision, counts of pending, human-held and expired episodes, and the tasks held for an unattributed edit.
 
@@ -1722,8 +1724,10 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 - [ORB-10449] — split step-completion protocol from response content so a stalled agent-loop step fails where it happened.
 - [ORB-10464] — refuse workflow admission when a done dependency's work is not in the base the worktree would be cut from.
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
+- [ORB-14837] — derive a clean review batch's `execution_summary` from its accepted coverage evidence.
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
+- [ORB-14685] — backstop lane contract: offer only the decisions the backstop applies and name the failed run's retained candidate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

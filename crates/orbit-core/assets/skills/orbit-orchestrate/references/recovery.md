@@ -10,11 +10,48 @@ and admission evidence rather than duplicating that work. See
 
 Before filing or dispatching a repair, compare the failing run/job and SHA
 with the current landing branch and prior fix PRs. An old CI failure can arrive
-after the repair merged. Attach the exact failing command/log excerpt and
+after the repair merged; the sweep holds such failures in
+`pending_supersession` rather than filing them, so read that list in the
+sweep's step output before filing by hand. A red run is held there for a newer
+push run still in flight at a descendant commit only while it is a lone
+failure: once the previous completed run failed the same job with the same
+normalized error signature, the sweep files it (`reproduced_on`), and a hold older than
+`pending_supersession_window_minutes` (default 30) is filed with the pending
+run named in the task (`held_past_window`). A failure that sits in
+`pending_supersession` across sweeps on a busy branch is therefore not
+waiting on you; one that never gets filed is a sweep defect. Attach the exact failing command/log excerpt and
 current reproducibility evidence to one bounded task. Search open and closed
 history; reject proven duplicates with a link to the delivered fix. Cancel a
 duplicate's active child only within authorization and after inspecting its
 state; do not cancel the whole drain.
+
+When a hand fix is open, archive the sweep finding with a `covered_by`
+relation in the same task update. Preserve all existing relations and append
+`{"type":"covered_by","target":"<covering task id>"}` or
+`{"type":"covered_by","target":"github-pr:https://github.com/OWNER/REPO/pull/NUMBER"}`.
+`github-pr:NUMBER` uses the checkout's GitHub repository. This is durable
+operator coverage of the exact failure key: later sweeps report `covered`
+with the archived owner and cover, and create no pilot candidate. A compiler
+error's key includes the checkout, so the hold also follows the same complete
+diagnostic set (paths and messages, ignoring line and column) to later
+checkouts; an owner filed before that set was recorded in its description
+holds only at its own checkout. A rejected finding can carry the same
+relation. A missing or unreadable cover remains withheld with
+`operator_cover_unavailable`; inspect that reason rather than assuming the PR
+is open. A closed, unmerged PR (or archived/rejected cover task)
+releases the key. After a merged cover's commit is in the failing checkout,
+the sweep files a new repair and names that cover as a fix that did not hold;
+older checkouts stay covered while waiting for the fix.
+
+A plain archive or rejection without `covered_by` suppresses the exact key
+(and, for compiler errors, the same diagnostic set at later checkouts) for
+`ci_failure.operator_suppression_hours` (default 6) from the operator's
+status decision. Its report entry is `withheld`, reason `operator_archived`,
+with the owner and expiry. After expiry a current failure can file again.
+Matching normalized failing-test signatures across jobs share one task with
+all job names and source identities; different signatures remain separate.
+Read `file.withheld` and its matching audit entries alongside
+`skipped_existing` and `pending_supersession` when assessing CI relief.
 
 Post-merge code review and QA follow the same loop. Exercise real user paths
 and report concrete defects; do not replace verification with an agent's
@@ -37,8 +74,10 @@ orbit run show <run-id> --json
 orbit run logs <run-id> --step <step-id> --json
 ```
 
-A failed run leaves its task `blocked` with the failure attached; nothing
-classifies or re-backlogs it automatically. Read the evidence yourself, then
+A failed run can leave its task `blocked` with the failure attached. The owner's
+clock can dispatch final recovery for an eligible block; inspect its decision
+and current task state first. See [automation.md](../../orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+If it remains blocked, read the evidence yourself, then
 make the transition deliberately — return the task to `backlog` only once you
 know why it failed and that a rerun can succeed. A sandbox denial or provider
 failure is not inherently transient; repeated identical failures need a repair
@@ -49,6 +88,38 @@ Re-poll the same run and inspect current process liveness. Conversely, a stale
 lock file alone does not prove a worker is alive. Follow
 [run-debugging.md](run-debugging.md) before process-level
 intervention, and never weaken protected-path policies to make a retry pass.
+
+## Close a rescued blocked task
+
+When a blocked task's work landed outside its run (its PR was merged by hand),
+close the task rather than rerunning it. First confirm that no run is live on
+it and that the merged commit meets its acceptance criteria. Then, as an
+operator in the owning workspace's checkout, run:
+
+```bash
+export ORBIT_OPERATOR=1
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","execution_summary":"<what landed: PR, commit, evidence>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"review"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"done"}'
+```
+
+The `execution_summary` on the `blocked → in-progress` write makes it a close
+rather than a start. No work starts, so another run's execution claim on the
+same files does not refuse the write, and you don't need `--force`. Add `plan`
+to that write if the task has none. Operator capability comes from an
+interactive terminal or `ORBIT_OPERATOR=1`; an `ssh host '<command>'`
+invocation has no terminal, so it needs the variable. Don't pass `model`,
+because naming an agent makes the write an agent's. Without the summary, from
+an agent, or without operator capability, the write starts work. While a
+claim overlaps, that start is refused with the claim's task and run named.
+
+The CLI subcommand also closes without `--force`: run
+`orbit task update <task-id> --status in-progress --execution-summary "<…>"`,
+then `--status review` and `--status done`. From an agent shell (`ORBIT_AGENT_*`
+or a managed run), the CLI's move into `in-progress` starts work like the tool
+does and is refused with the claim's task and run named while another run's
+claim overlaps. Keep `--force` for an edge the lifecycle refuses. It records an
+override in task history.
 
 ## A PR exists but completion failed
 

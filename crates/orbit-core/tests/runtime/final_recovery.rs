@@ -22,6 +22,7 @@ use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
 use serde_json::json;
 use tempfile::TempDir;
 
+mod repair_commit;
 mod terminalization;
 
 struct Fixture {
@@ -153,6 +154,7 @@ impl Fixture {
                 failed_step_id: "implement".to_string(),
                 decision,
                 resume_step_index,
+                repair_commit: None,
                 workspace_path: self.repo.clone(),
                 completion_done: false,
             },
@@ -174,7 +176,11 @@ impl Fixture {
         connection
             .execute_batch(
                 "CREATE TRIGGER fail_final_recovery_outcome \
-                 BEFORE UPDATE OF pipeline_state_json ON job_runs \
+                 BEFORE UPDATE ON job_run_states \
+                 WHEN NEW.pipeline_state_json LIKE '%\"final_recovery\"%\"outcome\"%' \
+                 BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END; \
+                 CREATE TRIGGER fail_final_recovery_outcome_insert \
+                 BEFORE INSERT ON job_run_states \
                  WHEN NEW.pipeline_state_json LIKE '%\"final_recovery\"%\"outcome\"%' \
                  BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END;",
             )
@@ -236,7 +242,10 @@ struct OutcomeWriteFault(rusqlite::Connection);
 impl Drop for OutcomeWriteFault {
     fn drop(&mut self) {
         self.0
-            .execute_batch("DROP TRIGGER IF EXISTS fail_final_recovery_outcome;")
+            .execute_batch(
+                "DROP TRIGGER IF EXISTS fail_final_recovery_outcome; \
+                 DROP TRIGGER IF EXISTS fail_final_recovery_outcome_insert;",
+            )
             .unwrap();
     }
 }
@@ -487,4 +496,132 @@ fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
     );
     assert_eq!(fixture.status(&task), "archived");
     assert_eq!(fixture.decision_comments(&task), 1);
+}
+
+#[test]
+fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::final_recovery_log_tail_reads_only_the_requested_runs_bounded_log",
+    ) {
+        return;
+    }
+    let fixture = fixture("[]");
+    let logs = &fixture.runtime.paths().logs_dir;
+    std::fs::create_dir_all(logs).unwrap();
+    std::fs::write(
+        logs.join("jrun-own.worker.log"),
+        format!("discarded-prefix{}own-end", "界".repeat(100_000)),
+    )
+    .unwrap();
+    std::fs::write(logs.join("jrun-other.worker.log"), "foreign-log").unwrap();
+    let tail = RuntimeHost::final_recovery_log_tail(&fixture.runtime, "jrun-own")
+        .unwrap()
+        .unwrap();
+    assert!(
+        tail.len() < 64 * 1024,
+        "worker log stays within the recovery text bound"
+    );
+    assert!(tail.ends_with("own-end"));
+    assert!(!tail.contains("discarded-prefix"));
+    assert!(!tail.contains("foreign-log"));
+    assert_eq!(
+        RuntimeHost::final_recovery_log_tail(&fixture.runtime, "jrun-missing").unwrap(),
+        None
+    );
+    assert!(
+        RuntimeHost::final_recovery_log_tail(&fixture.runtime, "../jrun-other").is_err(),
+        "run identity cannot escape the log directory"
+    );
+}
+
+#[test]
+fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
+    if !super::dispatch_admission::isolated(
+        "final_recovery::final_recovery_keeps_run_observers_and_every_declared_tool_write_denied",
+    ) {
+        return;
+    }
+    use orbit_common::OrbitError;
+    use orbit_common::security::child_env::{
+        ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    };
+    use orbit_types::workflow::ActivityV2Spec;
+
+    let fixture = fixture("[]");
+    for activity in [
+        "final_recovery",
+        "step_failure_recovery",
+        "pr_conflict_recovery",
+    ] {
+        let yaml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{activity}.yaml")),
+        )
+        .unwrap();
+        let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+        let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+            panic!("agent activity")
+        };
+        let denied = spec.tool_disallow_list.unwrap();
+        for observer in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
+            assert!(
+                denied.iter().any(|tool| tool == observer),
+                "ORB-14267: {activity} must withhold {observer}; recovery receives run evidence without operator authority"
+            );
+        }
+        let resolved = fixture
+            .runtime
+            .resolve_activity_tool_denials(&[], activity, &denied)
+            .unwrap();
+        assert!(
+            resolved
+                .effective_tools
+                .iter()
+                .any(|tool| tool == "orbit.task.show")
+        );
+        for tool in &denied {
+            assert!(
+                !resolved.effective_tools.contains(tool),
+                "denied tool {tool} must never be delegated to the harness"
+            );
+        }
+
+        // An agent envelope alone cannot observe runs, even before the activity
+        // deny list is applied. Advertising or requiring a tool grants no capability.
+        {
+            let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
+            for tool in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
+                let error = fixture
+                    .runtime
+                    .execute_tool_command(tool, json!({"id": "jrun-missing"}), None, None)
+                    .unwrap_err();
+                assert!(
+                    matches!(error, OrbitError::CapabilityDenied(_)),
+                    "{tool} must retain capability_denied for an agent envelope: {error}"
+                );
+            }
+        }
+
+        let deny_env = denied.join(",");
+        let _env = orbit_common::test_env::scoped([
+            ("ORBIT_AGENT_NAME", Some("codex")),
+            ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
+            (ACTIVITY_NAME_ENV, Some(activity)),
+            (ACTIVITY_TOOL_POLICY_ENV, Some("deny")),
+            (ACTIVITY_TOOLS_DENY_ENV, Some(deny_env.as_str())),
+        ]);
+        for tool in &denied {
+            let error = fixture
+                .runtime
+                .execute_tool_command(tool, json!({}), None, None)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    OrbitError::CapabilityDenied(_) | OrbitError::PolicyDenied(_)
+                ),
+                "{tool} must be rejected before domain execution: {error}"
+            );
+        }
+    }
 }

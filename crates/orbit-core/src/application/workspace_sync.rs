@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
@@ -15,8 +16,9 @@ use super::managed_assets::{
 use super::routines::materialize::reconcile_default_routines;
 use super::routines::seed::RoutineSeedIdentity;
 use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
-    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, render_default_auto_task,
+    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, cursor_state_path, render_default_auto_task,
 };
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
@@ -98,8 +100,8 @@ impl WorkspaceManagedArtifactSyncReport {
 
 /// Reconcile the host-global and workspace-local managed definitions used by
 /// one already-initialized workspace. This use case deliberately knows
-/// nothing about workspace registration, identity, role, config, or runtime
-/// state, so callers cannot accidentally turn convergence into bootstrap:
+/// nothing about workspace registration, identity, role, config, or scheduler
+/// cursor contents, so callers cannot accidentally turn convergence into bootstrap:
 /// the caller supplies the registered `base_branch` the delivery defaults are
 /// rendered against, exactly as it supplies the routine identity.
 pub fn reconcile_workspace_managed_artifacts(
@@ -109,69 +111,131 @@ pub fn reconcile_workspace_managed_artifacts(
     base_branch: &str,
     check: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
-    crate::bootstrap::product_profile::ProductProfile::Orbit
-        .validate_roots(&[global_root, workspace_orbit_root])?;
     let mode = if check {
         ManagedAssetReconcileMode::Check
     } else {
         ManagedAssetReconcileMode::Apply
     };
+    reconcile_managed_artifacts(
+        global_root,
+        workspace_orbit_root,
+        routine_identity,
+        base_branch,
+        mode,
+        true,
+    )
+}
+
+/// Create the shipped workspace-local defaults (routines and auto-tasks) that
+/// are absent from one workspace, and nothing else.
+///
+/// Host-level `orbit init` calls this for every registered workspace after it
+/// has converged the host-global catalogs, so a release that ships a new
+/// workspace default reaches each workspace without a manual sync. It is
+/// create-only: a definition that exists — edited or user-authored — keeps its
+/// bytes and recorded provenance, and nothing is retired. A created routine
+/// takes the `enabled` value it ships with.
+pub fn seed_absent_workspace_managed_artifacts(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    routine_identity: &RoutineSeedIdentity,
+    base_branch: &str,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    reconcile_managed_artifacts(
+        global_root,
+        workspace_orbit_root,
+        Some(routine_identity),
+        base_branch,
+        ManagedAssetReconcileMode::CreateAbsent,
+        false,
+    )
+}
+
+fn reconcile_managed_artifacts(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    routine_identity: Option<&RoutineSeedIdentity>,
+    base_branch: &str,
+    mode: ManagedAssetReconcileMode,
+    host_global: bool,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    crate::bootstrap::product_profile::ProductProfile::Orbit
+        .validate_roots(&[global_root, workspace_orbit_root])?;
     let mut report = WorkspaceManagedArtifactSyncReport {
-        check,
+        check: mode == ManagedAssetReconcileMode::Check,
         actions: Vec::new(),
         warnings: Vec::new(),
     };
 
-    let skills = reconcile_managed_assets_in_mode(
-        &global_root.join("skills"),
-        "skill",
-        ManagedAssetLayout::RelativePath,
-        &DEFAULT_SKILL_FILES,
-        false,
-        mode,
-        |_, content| {
-            Ok(Cow::Owned(inject_skill_template_tokens(
-                content,
-                global_root,
-            )))
-        },
-    )?;
-    append_actions(
-        &mut report,
-        ManagedArtifactScope::HostGlobal,
-        "skill",
-        skills,
-    );
+    if host_global {
+        let skills = reconcile_managed_assets_in_mode(
+            &global_root.join("skills"),
+            "skill",
+            ManagedAssetLayout::RelativePath,
+            &DEFAULT_SKILL_FILES,
+            false,
+            mode,
+            |_, content| {
+                Ok(Cow::Owned(inject_skill_template_tokens(
+                    content,
+                    global_root,
+                )))
+            },
+        )?;
+        append_actions(
+            &mut report,
+            ManagedArtifactScope::HostGlobal,
+            "skill",
+            skills,
+        );
 
-    let activities = reconcile_managed_assets_in_mode(
-        &global_root.join("resources/activities"),
-        "activity",
-        ManagedAssetLayout::YamlStem,
-        DEFAULT_ACTIVITY_FILES,
-        false,
-        mode,
-        |_, content| Ok(Cow::Borrowed(content)),
-    )?;
-    append_actions(
-        &mut report,
-        ManagedArtifactScope::HostGlobal,
-        "activity",
-        activities,
-    );
+        let activities = reconcile_managed_assets_in_mode(
+            &global_root.join("resources/activities"),
+            "activity",
+            ManagedAssetLayout::YamlStem,
+            DEFAULT_ACTIVITY_FILES,
+            false,
+            mode,
+            |_, content| Ok(Cow::Borrowed(content)),
+        )?;
+        append_actions(
+            &mut report,
+            ManagedArtifactScope::HostGlobal,
+            "activity",
+            activities,
+        );
 
-    let jobs = reconcile_managed_assets_in_mode(
-        &global_root.join("resources/jobs"),
-        "job",
-        ManagedAssetLayout::YamlStem,
-        DEFAULT_JOB_FILES,
-        false,
-        mode,
-        |_, content| Ok(Cow::Borrowed(content)),
-    )?;
-    append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
+        let jobs = reconcile_managed_assets_in_mode(
+            &global_root.join("resources/jobs"),
+            "job",
+            ManagedAssetLayout::YamlStem,
+            DEFAULT_JOB_FILES,
+            false,
+            mode,
+            |_, content| Ok(Cow::Borrowed(content)),
+        )?;
+        append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
+    }
 
-    let auto_tasks = reconcile_managed_assets_in_mode(
-        &auto_tasks_dir(workspace_orbit_root),
+    // A fork that differs from its bundled body only in operator settings is
+    // moved into the settings table first, so reconciliation below finds the
+    // restored body managed instead of preserving the fork [ORB-14909].
+    let auto_tasks_root = auto_tasks_dir(workspace_orbit_root);
+    let migrated = if mode.creates_only() {
+        Vec::new()
+    } else {
+        let migrate = || migrate_settings_only_forks(&auto_tasks_root, base_branch, mode);
+        if mode.writes() {
+            // Serialize the whole settings read-modify-write and body restore
+            // with CRUD, which uses this same workspace cursor sidecar.
+            let state_path = cursor_state_path(&workspace_orbit_root.join("state"));
+            with_exclusive_file_lock(&state_path, "auto-task cursor", migrate)?
+        } else {
+            migrate()?
+        }
+    };
+    let mut auto_tasks = reconcile_managed_assets_in_mode(
+        &auto_tasks_root,
         "auto_task",
         ManagedAssetLayout::YamlStem,
         DEFAULT_AUTO_TASK_FILES,
@@ -194,6 +258,22 @@ pub fn reconcile_workspace_managed_artifacts(
             Ok(rendered)
         },
     )?;
+    // One row per migrated definition: in `Check` mode reconciliation still
+    // sees the fork and would also report it preserved.
+    let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
+        .into_iter()
+        .partition(|action| {
+            migrated
+                .iter()
+                .any(|migration| migration.name == action.name)
+        });
+    auto_tasks.warnings.retain(|warning| {
+        !superseded
+            .iter()
+            .any(|action| action.detail.as_ref() == Some(warning))
+    });
+    kept.extend(migrated);
+    auto_tasks.actions = kept;
     append_actions(
         &mut report,
         ManagedArtifactScope::WorkspaceLocal,

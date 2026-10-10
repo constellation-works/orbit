@@ -316,6 +316,7 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         relations: Vec::new(),
         job_run_id: Some("batch-1".to_string()),
         crew: None,
+        crew_source: None,
         orchestrator: None,
         created_at: now,
         updated_at: now,

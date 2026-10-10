@@ -10,9 +10,19 @@ use orbit_store::compose::auto_task::{
 };
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord, DedupePolicy,
-    SkipIfUnchanged,
+    InactivePluginWarning, SkipIfUnchanged,
 };
 use std::path::{Path, PathBuf};
+
+/// A plugin-inactive skip with stable provenance for warning deduplication.
+pub struct InactivePluginSkip {
+    /// Plugin namespace that seeded the definition.
+    pub plugin: String,
+    /// Seeded plugin version.
+    pub version: String,
+    /// Operator-facing explanation.
+    pub reason: String,
+}
 
 #[cfg(test)]
 use std::sync::{Arc, Barrier};
@@ -44,7 +54,7 @@ pub trait AutoTaskDispatch {
     /// The one caller is a definition a plugin seeded whose plugin is no
     /// longer active: it stays on disk, does not fire, and the reason names
     /// the plugin. Hosts without plugins answer `None`.
-    fn skip_reason(&self, _definition: &AutoTaskDefinition) -> Option<String> {
+    fn skip_reason(&self, _definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
         None
     }
 
@@ -168,14 +178,28 @@ fn fire_definition(
     options: SchedulerOptions,
 ) -> Result<AutoTaskFireReport, OrbitError> {
     // A plugin-seeded definition whose plugin is inactive cannot admit work.
-    if let Some(reason) = host.skip_reason(definition) {
-        tracing::warn!(
-            target: "orbit.automation.auto_tasks",
-            auto_task = %definition.name,
-            reason = %reason,
-            "skipping auto-task definition",
-        );
-        return Ok(skipped(definition, &reason));
+    if let Some(skip) = host.skip_reason(definition) {
+        let warning = InactivePluginWarning {
+            definition: definition.name.clone(),
+            plugin: skip.plugin,
+            version: skip.version,
+        };
+        if first_inactive_plugin_warning(state_path, warning, options.dry_run) {
+            tracing::warn!(
+                target: "orbit.automation.auto_tasks",
+                auto_task = %definition.name,
+                reason = %skip.reason,
+                "skipping auto-task definition",
+            );
+        } else {
+            tracing::debug!(
+                target: "orbit.automation.auto_tasks",
+                auto_task = %definition.name,
+                reason = %skip.reason,
+                "skipping auto-task definition",
+            );
+        }
+        return Ok(skipped(definition, &skip.reason));
     }
 
     // Dry runs leave no cursor state or lock file behind. They perform no
@@ -217,6 +241,34 @@ fn fire_definition(
         }
         fire_locked(host, definition, session, now)
     })
+}
+
+/// Whether this workspace has not yet warned about `warning`. The record
+/// lives in the cursor state file because every clock tick is a new process.
+/// A dry run records nothing. State that cannot be read or written warns
+/// rather than hiding the skip.
+fn first_inactive_plugin_warning(
+    state_path: &Path,
+    warning: InactivePluginWarning,
+    dry_run: bool,
+) -> bool {
+    let recorded = load_cursor_state(state_path)
+        .is_ok_and(|state| state.inactive_plugin_warnings.contains(&warning));
+    if recorded {
+        return false;
+    }
+    if dry_run {
+        return true;
+    }
+    // Recheck under the lock so overlapping ticks warn once between them.
+    with_cursor_lock(state_path, |session| {
+        if !session.state.inactive_plugin_warnings.insert(warning) {
+            return Ok(false);
+        }
+        session.save()?;
+        Ok(true)
+    })
+    .unwrap_or(true)
 }
 
 /// Admission acts only on the revision discovery loaded. Deletion and the
@@ -283,17 +335,22 @@ fn dry_run_definition(
     state_path: &Path,
     now: DateTime<Utc>,
 ) -> Result<AutoTaskFireReport, OrbitError> {
+    let state = load_cursor_state(state_path)?;
+    if let Some(pending) = state
+        .definitions
+        .get(&definition.name)
+        .and_then(|cursor| cursor.pending.as_ref())
+    {
+        return Ok(pending_claim_report(definition, pending));
+    }
+
     if !definition.enabled {
         return Ok(skipped(definition, "disabled"));
     }
 
-    let state = load_cursor_state(state_path)?;
     let Some(cursor) = state.definitions.get(&definition.name) else {
         return Ok(action(definition, "would_baseline"));
     };
-    if let Some(pending) = &cursor.pending {
-        return Ok(unresolved_pending(definition, pending));
-    }
 
     let baseline = parse_rfc3339(&cursor.baseline_at)?;
     let last_slot = cursor.last_slot.as_deref().map(parse_rfc3339).transpose()?;
@@ -450,18 +507,7 @@ fn recover_pending(
     if let Some(task_id) = pending.task_id.clone() {
         return match checkpoint_consumed(session, definition, &cursor, &pending.slot, &task_id, now)
         {
-            Ok(()) => Ok(Some(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "fired",
-                reason: Some(format!(
-                    "reconciled pending mint for slot {} as {task_id}",
-                    pending.slot
-                )),
-                slot: Some(pending.slot),
-                task_id: Some(task_id),
-                blocking_task_id: None,
-                automation: None,
-            })),
+            Ok(()) => Ok(Some(pending_claim_report(definition, &pending))),
             Err(error) => Ok(Some(AutoTaskFireReport {
                 name: definition.name.clone(),
                 action: "fired",
@@ -476,7 +522,7 @@ fn recover_pending(
         };
     }
 
-    Ok(Some(unresolved_pending(definition, &pending)))
+    Ok(Some(pending_claim_report(definition, &pending)))
 }
 
 fn fire_slot(
@@ -635,10 +681,23 @@ fn checkpoint_consumed(
     session.save()
 }
 
-fn unresolved_pending(
+/// Preview the same recovery outcome a live pass reports after checkpointing.
+fn pending_claim_report(
     definition: &AutoTaskDefinition,
     pending: &AutoTaskPendingClaim,
 ) -> AutoTaskFireReport {
+    if let Some(task_id) = &pending.task_id {
+        return AutoTaskFireReport {
+            reason: Some(format!(
+                "reconciled pending mint for slot {} as {task_id}",
+                pending.slot
+            )),
+            slot: Some(pending.slot.clone()),
+            task_id: Some(task_id.clone()),
+            ..action(definition, "fired")
+        };
+    }
+
     AutoTaskFireReport {
         slot: Some(pending.slot.clone()),
         ..skipped(

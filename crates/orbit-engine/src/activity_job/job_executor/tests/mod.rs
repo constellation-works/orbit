@@ -15,7 +15,6 @@ use super::*;
 
 mod resume;
 mod step;
-mod validate;
 
 fn test_writer(run_id: &str) -> V2AuditWriter {
     let inner: std::sync::Arc<dyn AuditSink> = std::sync::Arc::new(NullSink);

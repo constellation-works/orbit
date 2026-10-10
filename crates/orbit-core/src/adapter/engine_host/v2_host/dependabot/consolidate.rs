@@ -166,11 +166,18 @@ fn plan(sources: Vec<SourceTask>) -> (Vec<Consolidation>, Vec<Value>) {
     let mut consolidations = Vec::new();
     let mut unchanged = Vec::new();
     for (repository, sources) in by_repository {
-        let mut owners: BTreeMap<String, SourceTask> = BTreeMap::new();
+        let mut owners: BTreeMap<String, Vec<SourceTask>> = BTreeMap::new();
         let mut alerts = Vec::new();
         for source in sources {
-            alerts.push(source.alert.clone());
-            owners.insert(cause_alert_id(&repository, &source.alert), source);
+            let alert_owners = owners
+                .entry(cause_alert_id(&repository, &source.alert))
+                .or_default();
+            // Historical double filings still need every owner retired, but
+            // each alert consumes only one slot in the bounded group.
+            if alert_owners.is_empty() {
+                alerts.push(source.alert.clone());
+            }
+            alert_owners.push(source);
         }
 
         for group in group_code_alerts(&repository, alerts) {
@@ -178,6 +185,7 @@ fn plan(sources: Vec<SourceTask>) -> (Vec<Consolidation>, Vec<Value>) {
                 .alerts
                 .iter()
                 .filter_map(|alert| owners.get(&cause_alert_id(&repository, alert)))
+                .flatten()
                 .collect::<Vec<_>>();
             let source_ids = members
                 .iter()

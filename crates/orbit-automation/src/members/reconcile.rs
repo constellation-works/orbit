@@ -1,6 +1,6 @@
 //! Settle the in-flight member attempt against Core's outcome.
 
-use super::admission::retire_attempt;
+use super::admission::{fit_failed, retire_attempt};
 use super::evaluate::member_state;
 use super::{MemberAdmission, MemberHost, MemberOutcome};
 use crate::AutomationError;
@@ -44,16 +44,17 @@ pub(super) fn reconcile(
         if now >= active.deadline {
             let mut next = state.clone();
             let members = member_state(&mut next)?;
-            if let Some(expired) = members.active.take() {
+            let expired = members.active.take();
+            if let Some(expired) = expired.clone() {
                 for member in expired.members() {
                     members
                         .withheld
                         .insert(member.key.clone(), "input_stale_or_deadline_expired".into());
                 }
-                retire_attempt(members, expired);
+                retire_attempt(host, members, expired)?;
             }
 
-            return commit(store, &state, next, None);
+            return commit_retiring(store, host, &state, next, None, expired);
         }
 
         // A member whose input went stale leaves the batch: a retired identity
@@ -85,6 +86,7 @@ pub(super) fn reconcile(
         let Some(mut shrunk) = members.active.take() else {
             return Ok(state);
         };
+        let mut retired = None;
         if let Some(first) = kept.first().cloned() {
             shrunk.member = first;
             shrunk.members = kept;
@@ -97,10 +99,11 @@ pub(super) fn reconcile(
                         .insert(member.key.clone(), "input_stale_or_deadline_expired".into());
                 }
             }
-            retire_attempt(members, shrunk);
+            retired = Some(shrunk.clone());
+            retire_attempt(host, members, shrunk)?;
         }
 
-        return commit(store, &state, next, None);
+        return commit_retiring(store, host, &state, next, None, retired);
     }
 
     match host.outcome(active)? {
@@ -119,6 +122,10 @@ pub(super) fn reconcile(
                         || applied.result.is_null()
                         || !applied_keys.insert(applied.member_key.clone())
                 })
+                || evidence
+                    .superseded
+                    .keys()
+                    .any(|key| active.member_for(key).is_none() || applied_keys.contains(key))
             {
                 return Err(AutomationError::Evidence(
                     "member_provenance_mismatch".into(),
@@ -129,7 +136,8 @@ pub(super) fn reconcile(
                 .map_err(|e| AutomationError::Evidence(e.to_string()))?;
 
             // One receipt certifies every member the run applied; members it
-            // did not apply are failed at their fingerprint beside it.
+            // did not apply are failed at their fingerprint beside it, and
+            // superseded ones are released for a fresh claim.
             let input_digest = digest(
                 &active
                     .identity_bytes()
@@ -174,12 +182,20 @@ pub(super) fn reconcile(
                 }
             }
 
-            let Some(mut settled) = members.active.take() else {
+            let Some(settled) = members.active.take() else {
                 return Ok(state);
             };
-            settled.exhausted = true;
-            for member in settled.members().to_vec() {
+            let head = if evidence.superseded.is_empty() {
+                None
+            } else {
+                Some(host.head(&state.branch)?.1)
+            };
+            for member in settled.members() {
                 if applied_keys.contains(&member.key) {
+                    continue;
+                }
+                if evidence.superseded.contains_key(&member.key) {
+                    release_superseded(members, member, head.as_ref());
                     continue;
                 }
                 let reason = evidence
@@ -188,10 +204,13 @@ pub(super) fn reconcile(
                     .cloned()
                     .unwrap_or_else(|| "no_member_evidence".into());
                 members.withheld.insert(member.key.clone(), reason);
-                members.failed.insert(member.key, settled.clone());
+                if let Some(record) = settled.failure_record(&member.key) {
+                    members.failed.insert(member.key.clone(), record);
+                }
             }
+            fit_failed(host, members, &settled)?;
 
-            commit(store, &state, next, receipt.as_ref())
+            commit_retiring(store, host, &state, next, receipt.as_ref(), Some(settled))
         }
         MemberOutcome::Failed(reason) => {
             let mut next = state.clone();
@@ -214,16 +233,61 @@ pub(super) fn reconcile(
                 }
             }
 
+            let mut retired = None;
             if members
                 .active
                 .as_ref()
                 .is_some_and(|active| active.exhausted)
                 && let Some(exhausted) = members.active.take()
             {
-                retire_attempt(members, exhausted);
+                retired = Some(exhausted.clone());
+                retire_attempt(host, members, exhausted)?;
             }
 
-            commit(store, &state, next, None)
+            commit_retiring(store, host, &state, next, None, retired)
         }
     }
+}
+
+/// Release a member the branch superseded under its attempt [ORB-14476]: no
+/// failure record, no retry against the frozen source. A pending entry still
+/// at that source moves to `head` and keeps its timestamps, so the next
+/// admission claims it there at once; admission still recomputes its
+/// fingerprint at the head before claiming. When the head is back at the
+/// frozen source the entry leaves pending and is observed afresh.
+fn release_superseded(
+    members: &mut MemberState,
+    member: &StateMember,
+    head: Option<&SourceRevision>,
+) {
+    let Some(pending) = members.pending.get_mut(&member.key) else {
+        return;
+    };
+    if pending.source != member.source {
+        return;
+    }
+    match head.filter(|head| **head != member.source) {
+        Some(head) => pending.source = head.clone(),
+        None => {
+            members.pending.remove(&member.key);
+        }
+    }
+}
+
+/// Commit `next`, then let the host release the attempt it retired. Only a
+/// checkpoint that won the generation fence proves no retry or run can still
+/// claim that attempt; a lost race keeps it, and what it retained, intact.
+fn commit_retiring(
+    store: &dyn AutomationStoreBackend,
+    host: &dyn MemberHost,
+    state: &AutomationState,
+    next: AutomationState,
+    receipt: Option<&AcceptedCoverage>,
+    retired: Option<MemberAttempt>,
+) -> Result<AutomationState, AutomationError> {
+    let committed = commit(store, state, next, receipt)?;
+    if let Some(attempt) = retired {
+        host.release(&attempt);
+    }
+    Ok(committed)
 }

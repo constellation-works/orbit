@@ -3,31 +3,31 @@ summary: "Host Registry — Overview"
 type: design
 title: "Host Registry — Overview"
 owner: codex
-last_updated: 2026-09-25
-last_validated: 2026-09-25
+last_updated: 2026-10-07
+last_validated: 2026-10-07
 status: Accepted
 feature: host-registry
 doc_role: overview
 tags: [host-registry, machine-identity, workspace-catalog]
-paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-config/src/registry/settings.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
+paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-config/src/registry/settings/**", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/hosts.rs", "crates/orbit-cmd/src/hosts/**", "crates/orbit-cli/src/command/host.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11009]
+related_artifacts: [ORB-11009, ORB-14448, ORB-14449, ORB-14451]
 ---
 
 # Host Registry — Overview
 
 The live host-registry feature is a machine-local identity and workspace catalog. It tells an Orbit process who the accepting machine is, which logical workspaces this installation knows, and which local checkout may be opened for each workspace.
 
-It is not a fleet router. V1 has no host-registration, host-list, host-retirement, workspace-link, presence, placement, lease, or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
+It is not a fleet router. The operator registers remote hosts with `orbit host add` into a CLI-owned host file that stores only identity the host cannot change, and `orbit host list|show` read everything else live from each host ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Task ids route to the host their prefix names, and `--host` names a host for `--workspace` and `--pull` ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). The dashboard's Settings › Hosts view over the same operations is specified but not yet implemented ([ORB-14451]). There is still no presence, placement, lease, workspace-link or registry-cache workflow. A proposed federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); that surface is not this catalog and is not current v1 behavior.
 
 ## Ownership
 
 | Layer | Current responsibility |
 |---|---|
 | orbit-types | Persistence-neutral host and workspace primitives: identifier validators and constants, workspace/catalog DTOs, roles, status, and schema constants |
-| orbit-registry | machine identity lifecycle and legacy migration, workspaces.json catalog operations, validation, atomic file persistence, and checkout-path health |
-| orbit-cmd | RegisteredRuntimeFactory and the composition that joins a selected registry checkout to a Core runtime |
-| orbit-cli | Global initialization, workspace mutations and display, machine-name configuration, and MCP server bootstrap |
+| orbit-registry | machine identity lifecycle and legacy migration, workspaces.json catalog operations, the hosts.toml host file, validation, atomic file persistence, and checkout-path health |
+| orbit-cmd | RegisteredRuntimeFactory and the composition that joins a selected registry checkout to a Core runtime; the `orbit host` operations and their live identity probe |
+| orbit-cli | Global initialization, workspace mutations and display, `orbit host`, machine-name configuration, and MCP server bootstrap |
 | orbit-web | Registry-backed workspace snapshots, health projection, lazy runtime caching, and HTTP selection |
 | orbit-mcp plus the CLI MCP server | Server identity presentation, local workspace discovery, and authoritative per-call workspace resolution |
 
@@ -40,6 +40,7 @@ orbit-types does not read machine files. orbit-registry does not dispatch Core t
   `orbit init` creates it. A legacy `~/.orbit/host.toml` is migrated into
   `[machine]` and removed on first identity load.
 - ~/.orbit/workspaces.json is schema v1. It separates logical workspace records from this machine's checkout paths and owner or replica role.
+- `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. It replaces the hand-edited `~/.orbit/mcp-destinations.toml`, which is still read for one release while it is the only file ([specs/host-commands.md](./specs/host-commands.md)).
 - A workspace runtime is opened only from a local checkout binding. A checkoutless logical catalog entry can be listed but cannot execute.
 
 The accepting machine is authoritative for its files and runtime. Remote MCP simply carries MCP stdio over SSH to that machine; it does not copy or interpret registry state locally.

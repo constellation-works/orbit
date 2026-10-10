@@ -40,7 +40,7 @@ fn claude_state_dir(home: Option<&OsStr>, claude_config_dir: Option<&OsStr>) -> 
         .or_else(|| non_empty_env_path(home).map(|path| path.join(".claude")))
 }
 
-/// Process-env wrapper around [`claude_state_dir`]. Returns the writable
+/// Process-env wrapper around `claude_state_dir`. Returns the writable
 /// state directory Claude Code uses at runtime — `$CLAUDE_CONFIG_DIR` if
 /// set, otherwise `$HOME/.claude`. Returns `None` only when both env vars
 /// are unset or empty. Callers in `backend: cli` use this to land

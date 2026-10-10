@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute};
 
-use super::support::{dispatch_workflow, workflow_dispatch_payload};
+use super::support::{WaitArgs, dispatch_workflow, workflow_dispatch_payload};
 
 pub(super) const TASK_PILOT_WORKFLOW: &str = "task-pilot";
 
@@ -32,24 +32,27 @@ pub struct TaskPilotCommand {
     /// Maximum tasks per pilot partition. Omit to use the job default (5).
     #[arg(long = "max-partition-size", value_name = "N")]
     pub max_partition_size: Option<u32>,
-    /// Output as JSON.
-    #[arg(long)]
-    pub json: bool,
-    /// Block until the submitted run reaches a terminal state, and exit
-    /// nonzero unless it succeeded.
-    #[arg(long)]
-    pub wait: bool,
+    #[command(flatten)]
+    pub(super) wait: WaitArgs,
 }
 
 impl Execute for TaskPilotCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let timeout_seconds = self.wait.timeout_seconds()?;
         let input = build_task_pilot_input(
             &self.task_ids,
             self.base_branch.as_deref(),
             self.max_tasks,
             self.max_partition_size,
         )?;
-        let runs = dispatch_workflow(runtime, TASK_PILOT_WORKFLOW, &input, false, self.wait, 1)?;
+        let runs = dispatch_workflow(
+            runtime,
+            TASK_PILOT_WORKFLOW,
+            &input,
+            false,
+            timeout_seconds,
+            1,
+        )?;
         workflow_dispatch_payload(TASK_PILOT_WORKFLOW, &runs)
     }
 }

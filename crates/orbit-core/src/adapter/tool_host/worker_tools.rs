@@ -1,6 +1,6 @@
 //! Generic coordination writes translated into owner claim transactions.
-use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, ClaimWorkerUpdate,
 };
@@ -29,6 +29,7 @@ pub(crate) fn execute(
             | OrbitBuiltinAction::TaskAdd
             | OrbitBuiltinAction::TaskDelete
             | OrbitBuiltinAction::TaskReject
+            | OrbitBuiltinAction::TaskReconcileReview
             | OrbitBuiltinAction::TaskReviewReset
             | OrbitBuiltinAction::TaskLocksRelease
             | OrbitBuiltinAction::TaskLocksReserve
@@ -38,10 +39,11 @@ pub(crate) fn execute(
     ) {
         return Ok(None);
     }
+    crate::runtime::check_worker_host_input(input, session.worker_host_call)?;
     let Some(binding) = &session.worker_invocation else {
         return Ok(None);
     };
-    binding.validate().map_err(OrbitError::InvalidInput)?;
+    binding.validate()?;
     let machine = session
         .process_machine_id
         .as_deref()
@@ -125,12 +127,21 @@ pub(crate) fn execute(
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         return Ok(Some(value));
     }
+    if action == OrbitBuiltinAction::TaskArtifactGet {
+        require_active_claim(runtime, session)?;
+        return Ok(None);
+    }
     let mut friction_tag_substitutions = Vec::new();
     let mutation = match action {
         OrbitBuiltinAction::TaskUpdate => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
+            // Artifact attachments can reach the mutation receipt path, which
+            // intentionally reconciles a lost reply before rechecking claim
+            // authority. Check the current claim first so a stale replay cannot
+            // turn an old successful report upload into a new apparent success.
+            if input.get("artifacts").is_some() {
+                require_active_claim(runtime, session)?;
+            }
             if input
                 .get("id")
                 .is_some_and(|id| id.as_str() != Some(&binding.task_id))
@@ -196,9 +207,7 @@ pub(crate) fn execute(
             })
         }
         OrbitBuiltinAction::Friction(FrictionVerb::Add) => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
             let (mut params, substitutions) =
                 super::friction_tools::add_params(input, model.map(str::to_owned))?;
             friction_tag_substitutions = substitutions;
@@ -213,7 +222,6 @@ pub(crate) fn execute(
         OrbitBuiltinAction::TaskShow
         | OrbitBuiltinAction::TaskList
         | OrbitBuiltinAction::TaskEligible
-        | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskLint
         | OrbitBuiltinAction::TaskLocks
         | OrbitBuiltinAction::Friction(
@@ -222,14 +230,38 @@ pub(crate) fn execute(
         // These writes use the owner's checkout-backed definition root. They
         // must pass the worker destination check above before ordinary CRUD.
         OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
-            binding
-                .validate_arguments(input)
-                .map_err(OrbitError::InvalidInput)?;
+            binding.validate_arguments(input)?;
             return Ok(None);
         }
-        OrbitBuiltinAction::TaskAdd
-        | OrbitBuiltinAction::TaskDelete
+        // [ORB-14260] A claimed worker files follow-up work as ordinary
+        // creation, but only work spawned from its own claimed task, and only
+        // while the owner still holds that claim as active. [ORB-14792] A
+        // claimed review task's findings may also name the task in this
+        // workspace that introduced each, as `regression_from`.
+        OrbitBuiltinAction::TaskAdd => {
+            binding.validate_arguments(input)?;
+            let findings = orbit_types::workflow::files_regression_findings(
+                &runtime.get_task(&binding.task_id)?.tags,
+            );
+            let culprits = binding.validate_spawned_relations(input, findings)?;
+            for culprit in culprits {
+                match runtime.get_task(&culprit) {
+                    Ok(_) => {}
+                    Err(OrbitError::NotFound { .. }) => {
+                        return Err(OrbitError::PolicyDenied(format!(
+                            "a claimed review worker's regression_from target `{culprit}` is \
+                             not a task in the claimed task's workspace"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            require_active_claim(runtime, session)?;
+            return Ok(None);
+        }
+        OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskReject
+        | OrbitBuiltinAction::TaskReconcileReview
         | OrbitBuiltinAction::TaskReviewReset
         | OrbitBuiltinAction::TaskLocksRelease
         | OrbitBuiltinAction::TaskLocksReserve
@@ -257,6 +289,48 @@ fn optional_field<T: serde::de::DeserializeOwned>(
         .transpose()
 }
 
+/// The claim invocation a bound worker's call acts under: its own claim and
+/// bound run, never anything the call's input names.
+fn worker_auth(binding: &orbit_types::tool::WorkerInvocation) -> ClaimInvocation {
+    ClaimInvocation::trusted_worker(
+        binding.task_id.clone(),
+        binding.claim_id.clone(),
+        binding.execution.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: binding.execution.machine_id.clone(),
+            run_id: binding.bound_run_id.clone(),
+        }),
+    )
+}
+
+/// [ORB-14221] A worker's artifact read stands on the authority its artifact
+/// write does: the owner answers only while the claim could still take that
+/// worker's update. Once the claim is released, failed, revoked, landed or
+/// superseded, or bound to another run, the read is refused as `stale_claim`
+/// whatever the worker's own records still show — a claimed reviewer's
+/// manifest read through its run's broker included.
+fn require_active_claim(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+) -> Result<(), OrbitError> {
+    let binding = session
+        .worker_invocation
+        .as_ref()
+        .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
+    runtime
+        .verify_worker_claim(&worker_auth(binding))
+        .map_err(|error| match error.claim_refusal() {
+            Some(ClaimRefusalKind::StaleClaim) => OrbitError::PolicyDenied(
+                "stale_claim: the owner no longer holds this worker's claim as active (it was \
+                 released, failed, revoked, landed or superseded, or is bound to another run), \
+                 so the owner refuses its artifact reads as it refuses its writes. Do not retry \
+                 or route around the owner; report the work incomplete and let the run end"
+                    .into(),
+            ),
+            _ => error,
+        })
+}
+
 fn apply(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
@@ -267,15 +341,7 @@ fn apply(
         .worker_invocation
         .as_ref()
         .ok_or_else(|| OrbitError::PolicyDenied("worker binding missing".into()))?;
-    let auth = ClaimInvocation::trusted_worker(
-        binding.task_id.clone(),
-        binding.claim_id.clone(),
-        binding.execution.machine_id.clone(),
-        Some(ClaimRun {
-            machine_id: binding.execution.machine_id.clone(),
-            run_id: binding.bound_run_id.clone(),
-        }),
-    );
+    let auth = worker_auth(binding);
     let mut identity = mutation.clone();
     if let ClaimMutation::Friction(params) = &mut identity {
         params.created_at = chrono::DateTime::UNIX_EPOCH;

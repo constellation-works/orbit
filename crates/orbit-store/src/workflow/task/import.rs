@@ -10,7 +10,7 @@ use crate::driver::sqlite::task_registry::{
     RegisterWorkspaceParams, TaskBundleBinding, TaskRegistryStore, parse_orb_task_number,
 };
 use orbit_common::OrbitError;
-use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::fs::io::{atomic_write_bytes, with_exclusive_file_lock};
 use orbit_types::task::{ORB_TASK_ID_MAX, task_id_prefix, validate_orb_task_id};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -572,7 +572,7 @@ fn write_id_map(
     let path = PathBuf::from(os);
     let json = serde_json::to_vec_pretty(id_remap)
         .map_err(|e| OrbitError::Store(format!("failed to encode id map: {e}")))?;
-    std::fs::write(&path, json).map_err(|e| OrbitError::Io(e.to_string()))?;
+    atomic_write_bytes(&path, &json).map_err(|e| OrbitError::Io(e.to_string()))?;
     Ok(path)
 }
 

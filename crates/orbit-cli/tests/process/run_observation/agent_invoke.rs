@@ -2,13 +2,15 @@
 
 use super::*;
 
+const AGENT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn operator_json(fixture: &Fixture, args: &[&str]) -> Value {
     let output = fixture
         .orbit()
         .env("ORBIT_OPERATOR", "1")
         .env_remove("RUST_LOG")
         .args(args)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(AGENT_COMMAND_TIMEOUT)
         .output()
         .unwrap();
     assert!(output.status.success(), "{args:?}: {output:?}");
@@ -133,6 +135,7 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
         .env("ORBIT_OPERATOR", "1")
         .env_remove("RUST_LOG")
         .args(["run", "agent", "probe", "--wait", "--timeout", "30s"])
+        .timeout(AGENT_COMMAND_TIMEOUT)
         .assert()
         .success()
         .get_output()
@@ -143,9 +146,14 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
         "the human wait view prints the answer"
     );
 
-    for (body, timeout, reason) in [
-        ("printf '%s\\n' 'no envelope'", "30", "response envelope"),
-        ("/bin/sleep 30", "1", "wall-clock timeout"),
+    for (body, timeout, reason, expected_log) in [
+        (
+            "printf '%s\\n' 'no envelope'",
+            "30",
+            "response envelope",
+            Some("no envelope"),
+        ),
+        ("/bin/sleep 30", "1", "wall-clock timeout", None),
     ] {
         plant_invoke_provider(&fixture, body);
         let output = fixture
@@ -161,7 +169,7 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
                 timeout,
                 "--json",
             ])
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(AGENT_COMMAND_TIMEOUT)
             .output()
             .unwrap();
         assert!(
@@ -169,6 +177,7 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
             "a failed invocation must fail --wait: {output:?}"
         );
         let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["waited"], true, "{result}");
         assert!(
             result["agent_invocation"]["failure_reason"]
                 .as_str()
@@ -177,18 +186,31 @@ fn agent_wait_prints_the_answer_and_exits_nonzero_for_failed_invocations() {
             "{result}"
         );
         assert_eq!(result["answer"], Value::Null);
-        fixture
+        let run_id = result["run_id"].as_str().unwrap();
+        assert_eq!(fixture.run_state(run_id), "failed", "{result}");
+        // ORB-14397: the old five-second assertion deadline killed this new
+        // CLI process under full-suite load, even after --wait finished the run.
+        // Allow the same startup budget as the agent commands; the provider's
+        // one-second timeout above still exercises invocation termination.
+        let logs = fixture
             .orbit()
-            .args([
-                "run",
-                "logs",
-                result["run_id"].as_str().unwrap(),
-                "--follow",
-                "--json",
-            ])
-            .timeout(std::time::Duration::from_secs(5))
+            .env_remove("RUST_LOG")
+            .args(["run", "logs", run_id, "--follow", "--json"])
+            .timeout(AGENT_COMMAND_TIMEOUT)
             .assert()
-            .success();
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let mut captured = String::new();
+        for line in String::from_utf8(logs).unwrap().lines() {
+            let record: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(record["run_id"], run_id, "{record}");
+            captured.push_str(record["text"].as_str().unwrap());
+        }
+        if let Some(expected_log) = expected_log {
+            assert!(captured.contains(expected_log), "{captured}");
+        }
     }
 }
 
@@ -342,12 +364,13 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     use std::time::{Duration, Instant};
     let fixture = Fixture::init();
     let release = fixture.work.join("release-provider");
+    test_env::create_fixture_fifo(&release).unwrap();
     let live = serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":"live fixture line"}}).to_string();
     let final_frame = serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":AGENT_TEST_ANSWER}}).to_string();
     plant_invoke_provider(
         &fixture,
         &format!(
-            "printf '%s\\n' '{live}'\nprintf '%s\\n' 'live diagnostic' >&2\nwhile [ ! -f '{}' ]; do /bin/sleep 0.05; done\nprintf '%s\\n' '{final_frame}'",
+            "printf '%s\\n' '{live}'\nprintf '%s\\n' 'live diagnostic' >&2\nread -r _ < '{}'\nprintf '%s\\n' '{final_frame}'",
             release.display()
         ),
     );
@@ -360,16 +383,19 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    let mut child = command
-        .current_dir(&fixture.work)
-        .env("HOME", &fixture.home)
-        .env("USERPROFILE", &fixture.home)
-        .env_remove("RUST_LOG")
-        .args(["run", "logs", run_id, "--follow", "--json"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    // Own the child before any assertion so every panic path reaps it.
+    let mut child = crate::child_guard::ChildGuard::new(
+        command
+            .current_dir(&fixture.work)
+            .env("HOME", &fixture.home)
+            .env("USERPROFILE", &fixture.home)
+            .env_remove("RUST_LOG")
+            .args(["run", "logs", run_id, "--follow", "--json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let stdout = child.stdout.take().unwrap();
     let (send, receive) = std::sync::mpsc::sync_channel(16);
     let reader = std::thread::spawn(move || {
@@ -382,7 +408,7 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     let first = receive.recv_timeout(Duration::from_secs(15));
     // Release on assertion failures too: never leave a fixture provider alive.
     let state_before_release = fixture.run_state(run_id);
-    fs::write(&release, "go").unwrap();
+    test_env::release_fixture_fifo(&release, Instant::now() + Duration::from_secs(15)).unwrap();
     let first = first.expect("--follow must emit before the provider finishes");
     let first: Value = serde_json::from_str(&first).unwrap();
     assert_eq!(first["run_id"], run_id);
@@ -394,7 +420,8 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     while let Ok(line) = receive.recv_timeout(Duration::from_secs(15)) {
         records.push(serde_json::from_str(&line).unwrap());
     }
-    reader.join().unwrap();
+    // Bound the exit wait and kill before joining: the reader only ends at EOF,
+    // so joining first would hang on a follow that never stops.
     let deadline = Instant::now() + Duration::from_secs(15);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -402,10 +429,13 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         }
         if Instant::now() >= deadline {
             child.kill().unwrap();
+            child.wait().unwrap();
+            reader.join().unwrap();
             panic!("--follow did not stop at terminal");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    reader.join().unwrap();
     assert!(status.success());
     assert_eq!(
         fixture.run_state(run_id),
@@ -448,13 +478,13 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         );
     }
     // A rotated or disabled live feed must not hide the retained capture.
-    let feed = fixture.home.join(".orbit/state/logs/orbit.jsonl");
+    let feed = fixture.home.join(".orbit/state/logs/orbit-agent.jsonl");
     fs::rename(&feed, feed.with_file_name("rotated.jsonl")).unwrap();
     let fallback = fixture
         .orbit()
         .env("RUST_LOG", "warn")
         .args(["run", "logs", run_id, "--follow", "--json"])
-        .timeout(Duration::from_secs(5))
+        .timeout(AGENT_COMMAND_TIMEOUT)
         .assert()
         .success()
         .get_output()
@@ -471,5 +501,68 @@ fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
         stdout,
         format!("{live}\n{final_frame}\n"),
         "follow must recover the complete retained stdout when tracing is unavailable"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_logs_follow_exits_cleanly_when_merged_output_reader_closes_early() {
+    let fixture = Fixture::init();
+    // Keep the captured stderr larger than a pipe buffer so `head` closes its
+    // read end while `--follow` is still writing the retained capture.
+    plant_invoke_provider(
+        &fixture,
+        &format!("printf '%2097152s\\n' x >&2\nprintf '%s\\n' '{AGENT_TEST_ANSWER}'"),
+    );
+    let submitted = fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .env_remove("RUST_LOG")
+        .env("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "4194304")
+        .args([
+            "run",
+            "agent",
+            "pipe probe",
+            "--wait",
+            "--timeout",
+            "30",
+            "--json",
+        ])
+        .timeout(AGENT_COMMAND_TIMEOUT)
+        .output()
+        .unwrap();
+    assert!(submitted.status.success(), "{submitted:?}");
+    let submission: Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    let run_id = submission["run_id"].as_str().unwrap();
+    assert_eq!(fixture.run_state(run_id), "success", "{submission}");
+
+    let mut shell = Command::new("/bin/bash");
+    test_env::clear_inherited_authority(|name| {
+        shell.env_remove(name);
+    });
+    let output = shell
+        .current_dir(&fixture.work)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .env("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "4194304")
+        .env("ORBIT_BINARY", env!("CARGO_BIN_EXE_orbit"))
+        .env("ORBIT_RUN_ID", run_id)
+        .args([
+            "-o",
+            "pipefail",
+            "-c",
+            "\"$ORBIT_BINARY\" run logs \"$ORBIT_RUN_ID\" --follow 2>&1 | head -c 1",
+        ])
+        .timeout(AGENT_COMMAND_TIMEOUT)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "a closed merged output pipe must end follow successfully, without a panic: {output:?}"
+    );
+    assert_eq!(
+        output.stdout.len(),
+        1,
+        "the reader must receive one byte before closing: {output:?}"
     );
 }

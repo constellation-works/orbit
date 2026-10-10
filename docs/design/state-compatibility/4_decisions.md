@@ -1,13 +1,13 @@
 ---
 title: State Compatibility — Decisions
 owner: claude
-last_updated: 2026-09-13
-last_validated: 2026-09-13
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: state-compatibility
 doc_role: decisions
 type: design
-summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, and why a forward-compatible open is enforced read-only by SQLite itself.
+summary: Why forward compatibility is declared by the writing binary rather than inferred from a version number, and why read-compatible store opens are enforced read-only by SQLite itself.
 tags: [state-compatibility, migrations, upgrades]
 paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/driver/sqlite/connection.rs", "crates/orbit-store/src/workflow/layout/marker.rs"]
 related_features: [state-compatibility]
@@ -37,14 +37,18 @@ migration, which has already run by the time an older binary shows up.
 
 ### Decision
 
-Each migration entry declares `Additive` or `Breaking`, and the binary that
-applies a migration writes that classification into the state beside the
-version it stamps (`state/layout.compat`; the `migration.compat` row in
-`schema_meta`). An older binary reads the record and refuses only when a
+Each migration entry declares `Additive`, `ReadCompatible`, or `Breaking`,
+and the binary that applies a migration writes that classification into the
+state beside the version it stamps (`state/layout.compat`; the
+`migration.compat` row in `schema_meta`). An older binary refuses when a
 breaking migration sits above its own supported version — and then names that
-migration. A missing, stale, unknown-format, or unreadable record refuses
-exactly as before, so the contract fails closed in every case it cannot
-evaluate.
+migration. A newer store with a `ReadCompatible` migration opens read-only;
+the workspace layout cannot enforce read-only writes, so it refuses that
+migration. Where the record carries writer-compatibility data, additive-only
+newer state remains readable and writable. Older store records without that
+data remain read-only. A missing, stale, unknown-format, or unreadable record
+refuses exactly as before, so the contract fails closed in every case it
+cannot evaluate.
 
 `Additive` is a claim about binaries that *lack* the migration: they must
 still read the state correctly, and — for the layout, which has no single
@@ -55,20 +59,21 @@ when in doubt.
 ### Consequences
 
 - A schema bump is no longer a flag day: an old `orbit task list`,
-  `orbit run history`, or `orbit search` keeps working against an
-  additive-newer workspace instead of failing at open.
-- The refusal that remains is actionable — it names the first breaking
-  migration the binary lacks instead of a version number.
+  `orbit run history`, or `orbit search` keeps working against an additive-newer
+  workspace, and can read a newer store with a `ReadCompatible` migration
+  without writing it.
+- A refusal that remains is actionable — it names the first incompatible
+  migration the binary lacks instead of only giving a version number.
 - Cost: the classification is a hand-written claim that nothing verifies, and
   the registries are append-only, so a migration mismarked `Additive` cannot
-  be corrected for state already stamped — only a later breaking migration
-  raises the floor again. A wrong marker is strictly worse than the flag day
-  it avoids, which is why "when in doubt, `Breaking`" is part of the rule and
-  not advice.
+  be withdrawn from state already stamped. A later `ReadCompatible` migration
+  makes newer stores read-only; a later `Breaking` migration raises the reader
+  floor. A wrong marker is strictly worse than the flag day it avoids, which
+  is why "when in doubt, `Breaking`" is part of the rule and not advice.
 - Cost: nothing is gained for binaries that predate the contract; forward
   compatibility only begins with the first release that writes records.
 
-## A forward-compatible open is pinned read-only in SQLite, not by convention
+## A read-compatible store open is pinned read-only in SQLite, not by convention
 
 **Recorded:** 2026-09 · [ORB-12434]
 **Code anchors:** `crates/orbit-store/src/driver/sqlite/connection.rs::Store::open`, `crates/orbit-store/src/driver/sqlite/connection.rs::Store::refuse_forward_compatible_write`
@@ -84,13 +89,14 @@ standing reminder that old writers do reach state they should not.
 
 ### Decision
 
-When the schema ledger reports a forward-compatible open, `Store::open`
-issues `PRAGMA query_only=ON` on the writer connection before the handle
-exists. SQLite then rejects every write through every path that connection
-reaches. The store's own write entry points additionally refuse early with a
-scoped `OrbitError::Migration` that names the attempted operation, the
-supported version, and the recorded version — a diagnostic layer over the
-guarantee, not the guarantee.
+When the schema ledger reports a newer store that is not write-safe for this
+binary, `Store::open` issues `PRAGMA query_only=ON` on the writer connection
+before the handle exists. SQLite then rejects every write through every path
+that connection reaches. Additive-only newer stores remain writable. The
+store's own write entry points additionally refuse early with a scoped
+`OrbitError::Migration` that names the attempted operation, the supported
+version, and the recorded version — a diagnostic layer over the guarantee,
+not the guarantee.
 
 ### Consequences
 

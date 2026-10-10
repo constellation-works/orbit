@@ -35,7 +35,7 @@ use serde_json::Value;
 /// `workspace` as an optional filter, and behavior must agree.
 ///
 /// `pub(crate)` and re-exported through `command::mcp` so the CLI path in
-/// `command/tool/run.rs` (and `command/operation_registry.rs`'s task-artifact routing)
+/// `command/tool/run.rs` (and `command/operation/registry.rs`'s task-artifact routing)
 /// share this single list instead of keeping a second one that can drift
 /// [ORB-12263].
 pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =
@@ -54,16 +54,19 @@ pub(super) fn serve_mcp_stdio(
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
     internal_drain: bool,
+    worker_host: bool,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
     orbit_mcp::warn_ignored_caller_authorization(&global_root);
-    let (host, session_context) = compose_server(
+    let (host, mut session_context) = compose_server(
         global_root,
         remote_caller_machine_id,
         authority,
         bound_workspace,
         bound_orchestrator,
     )?;
+    // This is launch provenance, never initialize or per-call metadata.
+    session_context.worker_host_call = worker_host;
     let exit = if internal_drain {
         block_on_server(orbit_mcp::serve_internal_drain_stdio(host, session_context))?
     } else {
@@ -77,15 +80,15 @@ pub(super) fn serve_mcp_stdio(
 ///
 /// Local workspaces are an implicit destination and are listed and routed
 /// through [`ServerMcpHost`] in-process. Remote membership comes from the
-/// machine-global destinations file, whose duplicate-`machine_id` check runs
-/// here, before any tool is advertised. A missing or empty file is a valid
+/// machine-global host file (`orbit host`), whose validation runs here,
+/// before any tool is advertised. A missing or empty file is a valid
 /// local-only configuration.
 pub(super) fn serve_mcp_federated_stdio(
     bound_orchestrator: Option<String>,
     authority: McpSessionAuthority,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
-    let remotes = federated::load_destinations(&federated::destinations_path(&global_root))?;
+    let remotes = federated::load_destinations(&global_root)?;
     // The mux is a client to each remote, and identifies itself with the same
     // audit label the v1 proxy forwards. `authority` is one statement serving
     // two roles: the local host stamps it on the sessions it answers directly,
@@ -113,6 +116,7 @@ pub(super) fn serve_mcp_federated_stdio(
         identity.process_machine_name.clone(),
         remotes,
     );
+    let global_root_for_bridge = global_root.clone();
     let local_machine = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id.clone(),
@@ -135,10 +139,23 @@ pub(super) fn serve_mcp_federated_stdio(
             authority,
         )),
     );
-    let host: Arc<dyn McpHost> = Arc::new(federated::FederatedMcpHost::new(
-        destinations,
-        Arc::new(probe),
-    ));
+    // An id-only task call goes to the host its prefix names [ORB-14449].
+    // The table is the same host file membership came from.
+    let task_prefixes = orbit_registry::hosts::load_task_prefix_table(&global_root_for_bridge)?;
+    let mirror_root = global_root_for_bridge.clone();
+    let host: Arc<dyn McpHost> = Arc::new(
+        federated::FederatedMcpHost::new(destinations, Arc::new(probe))
+            .with_task_prefix_routing(task_prefixes)
+            .with_local_mirror_hint(Arc::new(move |task_id| {
+                orbit_cmd::hosts::local_mirror_workspace(&mirror_root, task_id)
+            })),
+    );
+    let host = with_claimed_owner_bridge(
+        host,
+        &identity.session_context,
+        &global_root_for_bridge,
+        &identity.process_machine_id,
+    );
     tracing::info!(
         machine_id = %identity.process_machine_id,
         "serving the federated MCP mux"
@@ -240,12 +257,39 @@ fn compose_server(
     }
     identity.session_context.workspace = normalized_selector(bound_workspace);
     identity.session_context.orchestrator = normalized_selector(bound_orchestrator);
-    let host = Arc::new(ServerMcpHost::new(
-        global_root,
-        identity.process_machine_id,
+    let host: Arc<dyn McpHost> = Arc::new(ServerMcpHost::new(
+        global_root.clone(),
+        identity.process_machine_id.clone(),
         identity.process_machine_name,
     ));
+    let host = with_claimed_owner_bridge(
+        host,
+        &identity.session_context,
+        &global_root,
+        &identity.process_machine_id,
+    );
     Ok((host, identity.session_context))
+}
+
+/// A managed worker's host, with a claimed worker's owner calls routed
+/// through its run's broker as its CLI routes them.
+fn with_claimed_owner_bridge(
+    host: Arc<dyn McpHost>,
+    session_context: &ToolSessionContext,
+    global_root: &Path,
+    process_machine_id: &str,
+) -> Arc<dyn McpHost> {
+    #[cfg(unix)]
+    if session_context.worker_invocation.is_some() {
+        return Arc::new(super::claimed_owner::ClaimedOwnerBridge {
+            inner: host,
+            global_root: global_root.to_path_buf(),
+            process_machine_id: process_machine_id.to_string(),
+        });
+    }
+    #[cfg(not(unix))]
+    let _ = (session_context, global_root, process_machine_id);
+    host
 }
 
 /// Reduce a launch-time selector to the value a session should carry, so an
@@ -389,16 +433,20 @@ struct ServerMcpHost {
     global_root: PathBuf,
     process_machine_id: String,
     process_machine_name: String,
+    /// What every discovery envelope says about this host [ORB-14448].
+    host_facts: orbit_mcp::HostFacts,
     /// Runtimes this long-lived host has already opened.
     workspace_runtimes: WorkspaceRuntimeCache,
 }
 
 impl ServerMcpHost {
     fn new(global_root: PathBuf, process_machine_id: String, process_machine_name: String) -> Self {
+        let host_facts = orbit_cmd::hosts::local_host_facts(&global_root, &process_machine_id);
         Self {
             global_root,
             process_machine_id,
             process_machine_name,
+            host_facts,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
         }
     }
@@ -510,11 +558,8 @@ impl ServerMcpHost {
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
-        let mut listing = orbit_mcp::execute_discovery_tool(
-            "orbit.workspace.list",
-            &registry,
-            &self.process_machine_id,
-        )?;
+        let mut listing =
+            orbit_mcp::execute_discovery_tool("orbit.workspace.list", &registry, &self.host_facts)?;
         if include_crews {
             self.attach_crews(&mut listing);
         }
@@ -527,7 +572,7 @@ impl ServerMcpHost {
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
         let mut listing =
-            orbit_mcp::execute_federated_workspace_discovery(&registry, &self.process_machine_id);
+            orbit_mcp::execute_federated_workspace_discovery(&registry, &self.host_facts);
         if include_crews {
             self.attach_crews(&mut listing);
         }
@@ -641,6 +686,9 @@ impl ServerMcpHost {
     /// addressing an ID. Linked-worktree runtime identities are also ambient
     /// and must not become a filter. An explicit per-call `workspace` stays a
     /// filter on every tool, so a task owned elsewhere is not found there.
+    /// The other id-routed task tools resolve their id the same way when the
+    /// session is unbound, which is how a federated route that carries only
+    /// the id lands [ORB-14449].
     fn workspace_selection(
         &self,
         name: &str,
@@ -648,9 +696,22 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let explicit = call_workspace_selector(input)?;
-        if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name) && explicit.is_none() {
+        if explicit.is_none() && federated::is_id_routed_tool(name) {
             let task_id = required_string(input, &["id"], "id")?;
-            return task_owner::resolve_task_owner(&self.global_root, &task_id);
+            // A v1 server does not relay [ORB-14449]: an id another
+            // registered host writes is refused with where it lives, never
+            // answered from a local mirror or reported as not found.
+            if let Some(holder) = orbit_cmd::hosts::remote_task_holder(&self.global_root, &task_id)?
+            {
+                return Err(orbit_cmd::hosts::task_prefix_remote(&task_id, &holder));
+            }
+            // An unbound session — including a federated route that carried
+            // only the id — resolves it through this host's task registry.
+            if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name)
+                || Self::workspace_selector(None, context).is_none()
+            {
+                return task_owner::resolve_task_owner(&self.global_root, &task_id);
+            }
         }
         let selector = Self::workspace_selector(explicit, context)
             .ok_or_else(|| self.workspace_required(name))?;
@@ -693,27 +754,24 @@ impl ServerMcpHost {
             } else {
                 name
             };
+            if let Some(selector) = call_workspace_selector(&input)?
+                && selector != binding.owner_destination
+                && selector != binding.owner_workspace_id
+                && !std::env::current_dir().ok().is_some_and(|cwd| {
+                    std::fs::canonicalize(selector).is_ok_and(|path| path == cwd)
+                })
+            {
+                return Err(OrbitError::PolicyDenied(
+                    "worker workspace binding mismatch".into(),
+                ));
+            }
             if let Some(object) = input.as_object_mut() {
-                if object.get("workspace").is_some_and(|value| {
-                    value.as_str() != Some(&binding.owner_destination)
-                        && value.as_str() != Some(&binding.owner_workspace_id)
-                        && !value.as_str().is_some_and(|selector| {
-                            std::env::current_dir().ok().is_some_and(|cwd| {
-                                std::fs::canonicalize(selector).is_ok_and(|path| path == cwd)
-                            })
-                        })
-                }) {
-                    return Err(OrbitError::PolicyDenied(
-                        "worker workspace binding mismatch".into(),
-                    ));
-                }
                 object.insert(
                     "workspace".into(),
                     Value::String(binding.owner_destination.clone()),
                 );
             }
-            let remotes =
-                federated::load_destinations(&federated::destinations_path(&self.global_root))?;
+            let remotes = federated::load_destinations(&self.global_root)?;
             let destinations = federated::federated_membership(
                 self.process_machine_id.clone(),
                 self.process_machine_name.clone(),

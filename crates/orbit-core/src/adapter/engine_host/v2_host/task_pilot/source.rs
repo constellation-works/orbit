@@ -7,11 +7,12 @@
 
 use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
 
+use orbit_common::OrbitError;
 use orbit_common::fs::git::{
-    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, run_git, should_retry_git_ref_cas,
-    with_git_fetch_lock,
+    GIT_FETCH_CAS_ATTEMPTS, GIT_REMOTE_TIMEOUT, git_fetch_cas_retry_delay, run_git, run_git_within,
+    should_retry_git_ref_cas, with_git_fetch_lock,
 };
 use orbit_engine::DispatchError;
 use serde_json::{Value, json};
@@ -132,6 +133,34 @@ impl SourceSnapshot {
         }
     }
 
+    /// When the pinned revision was committed and how old it was at
+    /// preparation, or `null` when Git cannot say [ORB-14476]. State pilots
+    /// best-effort fetch origin before pinning; this also exposes the age of
+    /// the local fallback when that fetch is unavailable.
+    pub(super) fn age(&self, workspace: &Path) -> Value {
+        // `committer <name> <email> <epoch> <zone>` in the raw commit header.
+        let committed = run_git(workspace, &["cat-file", "commit", &self.source_revision])
+            .ok()
+            .filter(|output| output.success)
+            .and_then(|output| {
+                let committer = output
+                    .stdout
+                    .lines()
+                    .take_while(|line| !line.is_empty())
+                    .find_map(|line| line.strip_prefix("committer "))?
+                    .to_owned();
+                let epoch = committer.rsplit(' ').nth(1)?.parse::<i64>().ok()?;
+                chrono::DateTime::from_timestamp(epoch, 0)
+            });
+        match committed {
+            Some(at) => json!({
+                "committed_at": at,
+                "age_seconds": (chrono::Utc::now() - at).num_seconds().max(0),
+            }),
+            None => Value::Null,
+        }
+    }
+
     pub(super) fn path_kind(
         &self,
         action: &str,
@@ -211,7 +240,7 @@ pub(super) fn resolve_source_snapshot(
     // `orbit-task-pilot-fetch` lock left that writer uncoordinated.
     let (source_ref, source_revision) = with_git_fetch_lock(workspace_root, || {
         let source_ref = if has_origin {
-            fetch_origin_branch(action, workspace_root, &base_branch)
+            fetch_origin_branch(action, workspace_root, &base_branch, GIT_REMOTE_TIMEOUT)
                 .map_err(FetchLockError::Dispatch)?;
             format!("origin/{base_branch}")
         } else {
@@ -296,28 +325,36 @@ fn has_origin_remote(action: &str, workspace: &Path) -> Result<bool, DispatchErr
         .any(|name| name == "origin"))
 }
 
-fn fetch_origin_branch(action: &str, workspace: &Path, branch: &str) -> Result<(), DispatchError> {
+/// Fetch `origin/<branch>` with each attempt bounded by `deadline`. The
+/// caller holds the shared fetch lock, so a stalled remote is killed at the
+/// deadline rather than holding every other workspace fetch behind it.
+pub(super) fn fetch_origin_branch(
+    action: &str,
+    workspace: &Path,
+    branch: &str,
+    deadline: Duration,
+) -> Result<(), DispatchError> {
     let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
     let mut last_stderr = String::new();
     for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
-        let output = Command::new("git")
-            .args(["fetch", "origin", &spec])
-            .current_dir(workspace)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|error| {
+        let output =
+            run_git_within(workspace, &["fetch", "origin", &spec], deadline).map_err(|error| {
+                let failure = match error {
+                    OrbitError::ProcessTimeout { .. } => "remote failure: timed out fetching",
+                    _ => "failed to fetch",
+                };
                 action_failed(
                     action,
                     format!(
-                        "failed to fetch origin/{branch} in '{}': {error}",
+                        "{failure} origin/{branch} in '{}': {error}",
                         workspace.display()
                     ),
                 )
             })?;
-        if output.status.success() {
+        if output.success {
             return Ok(());
         }
-        last_stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        last_stderr = output.stderr.trim().to_string();
         if should_retry_git_ref_cas(attempt, &last_stderr) {
             tracing::warn!(
                 attempt,

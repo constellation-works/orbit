@@ -31,17 +31,18 @@ Options:
       --provider-sandbox <PROVIDER_SANDBOX>
           Per-invocation provider inner-sandbox override (Codex: read-only, workspace-write, or danger-full-access). Values the provider does not support are refused
 
-      --json
-          Output as JSON
-
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
           Possible values:
           - auto:   Decide from the sink: a table on a terminal, plain text otherwise
           - table:  Aligned columns with a header
+          - plain:  Untruncated text with tab-separated fields and no header
           - json:   A single JSON document
           - ndjson: One complete JSON document per line
+
+      --json
+          Output as JSON (shorthand for --format json; always pretty-printed)
 
   -h, --help
           Print help (see a summary with '-h')

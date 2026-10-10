@@ -1,17 +1,17 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-09-19
+last_updated: 2026-10-06
+last_validated: 2026-10-06
 status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, before-PR review on claimed leaves, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
-paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
+paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks/"]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488]
+related_artifacts: [ORB-12488, ORB-13992, ORB-13908, ORB-14247]
 ---
 
 # Distributed Drain — Decisions
@@ -51,7 +51,7 @@ claims remain until settlement or deliberate recovery.
 **Superseded by:** [Requests identify admissions and claims identify attempts](#requests-identify-admissions-and-claims-identify-attempts). The original rationale below is retained as history.
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml`, `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`
+**Code anchors:** `crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml`, `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`
 
 ### Context
 
@@ -184,7 +184,7 @@ claims to be. Fields are additive and nullable; absent means unknown.
 ## Epic is a tag, not a pipeline
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`, `crates/orbit-core/assets/jobs/epic_pipeline.yaml`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks/index.rs::lock_context_files_for_task`, `crates/orbit-types/src/task/epic.rs::EPIC_TAG`, `crates/orbit-core/src/application/epic_retirement.rs::assess_epic_retirement`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
 
 ### Context
 
@@ -212,7 +212,7 @@ top-tier crew*, read by crew selection and ignored by admission.
 ## Blocked tasks wait for a reader, not a classifier
 
 **Recorded:** 2026-09 · [ORB-12488]
-**Code anchors:** `crates/orbit-core/assets/jobs/task_triage_pipeline.yaml`, `crates/orbit-core/src/application/automation/incidents.rs`
+**Code anchors:** `crates/orbit-core/src/application/automation/incidents.rs`, `crates/orbit-core/src/application/task/final_recovery.rs::apply_final_recovery`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`
 
 ### Context
 
@@ -245,7 +245,7 @@ uncertain still parks the task in `blocked`, now with a diagnosis and a named hu
 ## Requests identify admissions and claims identify attempts
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs`, `crates/orbit-engine/src/executor/automation/vcs/handoff.rs::load_handoff_context`
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-engine/src/executor/automation/vcs/handoff.rs::load_handoff_context`
 
 ### Context
 
@@ -270,7 +270,7 @@ No heartbeat or automatic reclamation is introduced. Age and TTL support inspect
 ## Owner ordering does not require a materialized queue
 
 **Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/backlog_exclusion.rs::sort_tasks_for_automatic_dispatch`
+**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs::sort_tasks_for_automatic_dispatch`
 
 ### Context
 
@@ -371,6 +371,7 @@ whether a sweep or drain is running.
 ## V1 review policy is none
 
 **Recorded:** 2026-09 · Daniel narrowed v1 after review of the contract authored by [ORB-12488].
+**Superseded by:** [A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)
 **Code anchors:** `crates/orbit-core/src/application/review/gate/`, `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`
 
 ### Context
@@ -389,13 +390,84 @@ handoff state; completion still requires explicit authorization and verified lan
 ### Consequences
 
 - Default no-review execution can produce a valid handoff without pretending a review happened.
-- Cost: workspaces configured for before-PR or after-landing review must explicitly change policy
-  or wait for a later version; pull never silently downgrades their policy.
+- Cost: workspaces configured for before-PR review must explicitly turn it off or wait for a later
+  version; pull never silently downgrades their policy.
+- Narrowed by [ORB-13992]: `operation.review_policy` became the `review.before_pr` switch plus the
+  `delivery-code-review` auto-task flag. Admission keys only on the `before_pr` each endpoint
+  captured; after-landing review runs on the owner after landing and never refuses a pull. Protocol
+  revision 5 carries `caller_before_pr` and `ship.before_pr`.
+- Prepared by [ORB-13895]: revision 6 captures the owner's before-PR review contract on the claim
+  and lets a handoff carry typed before-PR evidence the owner verifies and records. Admission still
+  refuses `before_pr` until an executor declares the gate.
+
+## A claimed leaf runs the before-PR review its claim captured
+
+**Recorded:** 2026-10-04 · [ORB-13908], at Daniel's direction to run the [ORB-13989] reviewer model
+on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-13992], [ORB-13895]).
+**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission.rs::admission_refusal`,
+`crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs` (`CreateLeaf`, `claim_review_admission`),
+`crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
+`crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
+`crates/orbit-core/src/adapter/engine_host/v2_host/pull/refill.rs::reviewer_refusal`,
+`crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml`
+
+### Context
+
+V1 admitted pulls only with `review.before_pr` off on both endpoints, so a workspace that wanted
+every candidate reviewed before its PR could not use followers. The claim already pins the owner's
+review contract (crew, minutes, contract version) and the owner already verifies typed before-PR
+evidence at acceptance; what was missing was a leaf that runs the gate on a follower, where the
+task lives in the owner's store and the follower may not write it.
+
+### Decision
+
+The owner's captured contract alone decides whether a claimed leaf is reviewed. The executor's own
+`review.before_pr` is diagnostic and never refuses or changes a pull; the store seeds the leaf's
+review admission from the claim's ship contract when it creates the leaf, so the follower's
+settings never reach it. An executor declares `review_gate` because its PR leaf runs the gate; the
+ladder still refuses an owner with `before_pr` on for a leaf that does not, or for the local ship
+mode, where no gate runs.
+
+On the follower the gate is the owner pipeline's gate with three substitutions:
+
+- **Task facts come from the claim.** The gate reviews exactly the claimed task as the bound run,
+  read through the worker binding, instead of matching a local `job_run_id`.
+- **The ledger stays on the follower, keyed to the claim.** The claim ID is the lineage root: a
+  claim is one delivery attempt and is never resumed.
+- **Every task write crosses the binding as claim evidence.** The manifest, report, certificate
+  and verdict comment land on the owner's task; selector widening does not happen on the leaf
+  (the claim footprint is fixed until handoff) and the certificate lists the selectors the owner's
+  acceptance will add.
+
+A follower that cannot run the captured reviewer crew — unset, unresolvable, or excluded from its
+window — refuses before it requests a claim, at `orbit run auto --pull` and on every drain pass,
+rather than claiming a task whose gate would escalate.
+
+The alternatives were to keep requiring both endpoints to agree, which made a follower's local
+setting able to veto or, worse, skip a review the owner asked for; or to run the review on the
+owner after handoff, which would put an agent on the owner for every follower delivery and review
+a PR that is already open.
+
+### Consequences
+
+- A `reject` or `incomplete` verdict fails the leaf before push; its failure settlement blocks the
+  task on the owner, where the findings comment already is, the same escalation as the owner path.
+- The owner checks the handed-off certificate against its own copy and observation at acceptance,
+  so a follower cannot claim a review it did not record on the owner.
+- Cost: the certificate's task-meaning digest is the claim's footprint before acceptance widens it.
+  A delivery whose candidate touched paths outside the footprint no longer matches the certificate
+  once accepted, so after-landing coverage reviews it again; the fail-safe direction, paid in
+  reviewer time.
+- Cost: report staleness compares the owner's artifact timestamp with the follower's attempt start,
+  so owner/follower clock skew larger than the reviewer's runtime can read a fresh report as stale
+  and escalate the review as `incomplete`.
+- Cost: every follower serving a before-PR owner must have the owner's review crew configured and
+  runnable; one that does not stops pulling until it does.
 
 ## Declared context survives missing filesystem targets
 
 **Recorded:** 2026-09 · Daniel requested removal of context-file pruning after review of [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/runtime/task/mod.rs::declared_context_files`, `crates/orbit-core/src/runtime/task/locks.rs::TaskLockIndex::declared_lock_surface`, `crates/orbit-core/src/application/task/context_repair.rs` (landed in [ORB-12490], replacing `locks.rs::existing_envelope_context_files_at_root`)
+**Code anchors:** `crates/orbit-core/src/runtime/task/mod.rs::declared_context_files`, `crates/orbit-core/src/runtime/task/locks/index.rs::TaskLockIndex::declared_lock_surface`, `crates/orbit-core/src/application/task/context_repair.rs` (landed in [ORB-12490], replacing `locks.rs::existing_envelope_context_files_at_root`)
 
 ### Context
 
@@ -465,7 +537,7 @@ ACL: an owner operator retains cross-attempt receipt inspection and deliberate r
 **Recorded:** 2026-09-27 · [ORB-13637], after the first live follower drain [ORB-13625].
 **Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff.rs::accept_typed_handoff`,
 `crates/orbit-core/src/application/distributed/contract.rs::owner_completion_authority`,
-`crates/orbit-config/src/registry/settings.rs` (`workflow.distributed_completion`)
+`crates/orbit-config/src/registry/settings/table.rs` (`workflow.distributed_completion`)
 
 ### Context
 
@@ -519,7 +591,7 @@ claim-scoped handoff approval instead of the refused status write.
 `jrun-20260928-0230-c1` and both commit steps failed.
 **Code anchors:** `crates/orbit-core/src/application/task/query.rs::list_run_tasks`,
 `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` (`filtered` owner read),
-`crates/orbit-engine/src/context/hosts.rs::RuntimeHost::list_run_tasks`
+`crates/orbit-engine/src/context/hosts/runtime_host.rs::RuntimeHost::list_run_tasks`
 
 ### Context
 
@@ -567,7 +639,7 @@ was cancelled at 04:14Z and its six live leaves finished with four handoffs reco
 undelivered, two failures recorded nowhere, and every owner claim left `running`.
 **Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/pull/settle.rs`
 (`OrbitRuntime::best_effort_settle_terminal_claimed_leaf`, `OrbitRuntime::settle_pending_pulls`),
-`crates/orbit-core/src/adapter/engine_host/v2_host/pull/drain.rs::PullDrain::carry_settlement`,
+`crates/orbit-core/src/adapter/engine_host/v2_host/pull/drain/settlement.rs::PullDrain::carry_settlement`,
 `crates/orbit-core/src/runtime/task/reservation_cleanup.rs::finalize_job_run_with_cleanup_after_prior_read`,
 `crates/orbit-core/src/application/job/run/actions.rs::cancel_job_run_with_reason`
 
@@ -631,6 +703,33 @@ is off on the Mac by design.
 - Cost: a cancelled drain's unlaunched claims end as `blocked` with evidence rather than returning
   to the backlog; returning work to the backlog stays an owner-operator recovery.
 
+## No-diff-expected work does not hold context locks
+
+**Recorded:** 2026-10-06 · [ORB-14247]
+**Paths:** `crates/orbit-core/src/runtime/task/locks/`, `crates/orbit-core/src/adapter/engine_host/v2_host/admission/backlog_exclusion.rs`, `crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs`
+
+### Context
+
+Full-crate review chores tagged `no-diff-expected` sit `in-progress` for hours. Every `in-progress` or `review` task was an exclusive context-lock holder, so those chores serialized the backlog, including CI repairs that overlapped the same `dir:` selectors. The tag already means the run's durable result is outside the repository. Holding a lock on files it is not supposed to change spends the lock on a reader.
+
+The open question was what happens when that contract is wrong and the task ends with a diff. Refusing the commit would fail the run closed. Letting the existing commit and `sync_base` path deliver it reuses the conflict handling every other shipment already has.
+
+### Decision
+
+A task tagged `no-diff-expected` does not hold context locks. Readiness, backlog exclusion, eligibility, lock listing, and `task_lock_conflicts_indexed` omit it. It still waits on its own dependencies, on locks other tasks hold, and on its claim: the claim journal still fences its own writes, and a live claim is still not dispatched twice.
+
+Its `reserve_locks` grant, once other holders are clear, records a reservation with no files. Release still has an id. The row does not block a later overlapping task. An explicit `files` reservation is unchanged.
+
+An unexpected diff is committed. `git_commit` treats a non-empty stage as a normal shipment commit (`decision: performed`). A clean stage still skips. `sync_base` (`git_rebase`) is the conflict boundary and reports `RecoverableVcsConflict` the same way it does for any other task. The tag does not refuse the diff.
+
+### Consequences
+
+- Overlapping backlog work stays eligible while a `no-diff-expected` task is `in-progress` or `review`, and a drain can admit it.
+- Two ordinary overlapping tasks still conflict.
+- A tagged task that produces a diff lands through the same rebase conflict path as every other shipment, including a clean merge when the edits do not overlap.
+- Cost: a tagged run that edits files can race an implementation task on the same paths. The race is visible at `sync_base`, not prevented by admission. A mistagged implementation task therefore no longer serializes its neighbours.
+- Cost: the empty reservation means `orbit task locks` does not show the tagged task's selectors as held. Operators inspecting locks will not see that review as a holder, which is the point of the exemption.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
@@ -638,5 +737,9 @@ is off on the Mac by design.
 - [ORB-13637] — added the owner completion policy ([An owner completion policy lands accepted handoffs without per-task approval](#an-owner-completion-policy-lands-accepted-handoffs-without-per-task-approval)).
 - [ORB-13649] — scoped run-keyed task lookups to the executing machine ([A run is its id plus the machine that executes it](#a-run-is-its-id-plus-the-machine-that-executes-it)).
 - [ORB-13663] — moved settlement from the admitting drain to the admission record ([Settlement belongs to the admission record, not to the drain that admitted it](#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)).
+- [ORB-13992] — narrowed [V1 review policy is none](#v1-review-policy-is-none) to the `review.before_pr` switch.
+- [ORB-13895] — prepared [V1 review policy is none](#v1-review-policy-is-none) for before-PR review on claims and handoffs.
+- [ORB-13908] — superseded it ([A claimed leaf runs the before-PR review its claim captured](#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured)).
+- [ORB-14247] — stopped `no-diff-expected` tasks holding context locks, and kept an unexpected diff on the ordinary commit and `sync_base` path ([No-diff-expected work does not hold context locks](#no-diff-expected-work-does-not-hold-context-locks)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

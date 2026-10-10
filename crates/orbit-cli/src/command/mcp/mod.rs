@@ -6,15 +6,15 @@
 //! JSON schemas, and `orbit mcp listen` serves that same surface on a TCP
 //! socket for deployments that need one.
 
+#[cfg(unix)]
+mod claimed_owner;
 mod command;
 mod listen;
 mod server;
 mod setup;
 
-pub use command::{McpCommand, McpSubcommand};
+pub use command::{McpCommand, McpSubcommand, ServeMode};
+pub(crate) use orbit_cmd::mcp_clients::ORBIT_MCP_SERVER_ID;
 pub(crate) use orbit_mcp::safe_mcp_tool_names;
 pub(crate) use server::ID_RESOLVED_WORKSPACE_TOOLS;
 pub(crate) use setup::init_auto_for_workspace;
-pub(crate) use setup::registered_clients_for_workspace;
-
-pub(crate) const ORBIT_MCP_SERVER_ID: &str = "orbit";

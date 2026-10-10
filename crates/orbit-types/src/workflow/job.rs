@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::identity::OrbitId;
+use crate::workflow::JobRunStateError;
 
 pub const fn default_job_max_active_runs() -> u32 {
     1
@@ -100,6 +101,9 @@ pub enum JobRunState {
     /// run's persisted step checkpoints can seed a resumed follow-up run
     /// (ORB-10002).
     Interrupted,
+    /// Delivery ended awaiting external review evidence. Receipt starts a
+    /// fresh review; this run is terminal and must not trigger failure recovery.
+    Held,
 }
 
 /// [ORB-10965] Outcome of applying a `Start` event to a job run.
@@ -159,6 +163,8 @@ pub enum RunEvent {
     Abandon,
     /// Owner process died without finalizing the run (orphan reconciliation).
     Interrupt,
+    /// A settled review is awaiting named external evidence.
+    Hold,
 }
 
 impl Display for RunEvent {
@@ -171,6 +177,7 @@ impl Display for RunEvent {
             RunEvent::Cancel => write!(f, "cancel"),
             RunEvent::Abandon => write!(f, "abandon"),
             RunEvent::Interrupt => write!(f, "interrupt"),
+            RunEvent::Hold => write!(f, "hold"),
         }
     }
 }
@@ -180,18 +187,20 @@ impl JobRunState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Success | Self::Failed | Self::Timeout | Self::Cancelled | Self::Interrupted
+            Self::Success
+                | Self::Failed
+                | Self::Timeout
+                | Self::Cancelled
+                | Self::Interrupted
+                | Self::Held
         )
     }
 
     /// Validate and compute the next state for a given event.
-    pub fn try_transition(self, event: RunEvent) -> Result<JobRunState, String> {
+    pub fn try_transition(self, event: RunEvent) -> Result<JobRunState, JobRunStateError> {
         // Terminal states reject all events
         if self.is_terminal() {
-            return Err(format!(
-                "invalid job run state transition: {} + {:?} (state is terminal)",
-                self, event
-            ));
+            return Err(JobRunStateError::Terminal { state: self, event });
         }
 
         match (self, event) {
@@ -207,26 +216,22 @@ impl JobRunState {
             (Self::Running, RunEvent::Cancel) => Ok(Self::Cancelled),
             (Self::Running, RunEvent::Abandon) => Ok(Self::Failed),
             (Self::Running, RunEvent::Interrupt) => Ok(Self::Interrupted),
-            _ => Err(format!(
-                "invalid job run state transition: {} + {:?}",
-                self, event
-            )),
+            (Self::Running, RunEvent::Hold) => Ok(Self::Held),
+            _ => Err(JobRunStateError::Transition { state: self, event }),
         }
     }
 
     /// Validates that a step result state is one of the allowed write-once values.
-    pub fn validate_step_state(self) -> Result<(), String> {
+    pub fn validate_step_state(self) -> Result<(), JobRunStateError> {
         match self {
             Self::Success
             | Self::Failed
             | Self::Timeout
             | Self::Skipped
             | Self::Cancelled
-            | Self::Interrupted => Ok(()),
-            other => Err(format!(
-                "invalid step result state: {} (must be success, failed, timeout, skipped, cancelled, or interrupted)",
-                other
-            )),
+            | Self::Interrupted
+            | Self::Held => Ok(()),
+            state => Err(JobRunStateError::StepState { state }),
         }
     }
 }
@@ -243,6 +248,7 @@ impl Display for JobRunState {
             JobRunState::Retrying => write!(f, "retrying"),
             JobRunState::Cancelled => write!(f, "cancelled"),
             JobRunState::Interrupted => write!(f, "interrupted"),
+            JobRunState::Held => write!(f, "held"),
         }
     }
 }
@@ -261,6 +267,7 @@ impl FromStr for JobRunState {
             "retrying" => Ok(JobRunState::Retrying),
             "cancelled" => Ok(JobRunState::Cancelled),
             "interrupted" => Ok(JobRunState::Interrupted),
+            "held" => Ok(JobRunState::Held),
             other => Err(format!("unknown job run state: {other}")),
         }
     }

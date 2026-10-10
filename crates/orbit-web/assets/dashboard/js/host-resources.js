@@ -1,5 +1,6 @@
-// These live chips always observe the HTTP serving host, independently of workspace scope.
-import { el } from './common.js';
+// These live chips observe the selected host (the serving host unless the host
+// picker names another), independently of workspace scope.
+import { el, isHostUnavailable, withHost } from './common.js';
 
 /// The throttle verdict as the topbar chips and the Settings System tab both
 /// state it: `held`, `open`, `disabled`, or `unknown` (stale or no payload).
@@ -24,24 +25,49 @@ export function hostReading(payload, resource) {
   return { reading, known, severity, held: pressures.length > 0, pressures, note };
 }
 
+const RESOURCES = ['cpu', 'memory', 'disk'];
+const CPU_MEASURE = 'cpu load: the 1-minute load average divided by online cores. 100% means every core is busy; above 100% means work is queueing.';
+
+/// CPU load as a multiple of online cores ("1.6×"), the one unit the top bar
+/// and the Drain card's throttle note both state it in. `percent` is the host
+/// API's cpu percent, where 100 means every core is busy. A `threshold` keeps
+/// up to two decimals, so 75% reads 0.75× rather than rounding to 0.8×.
+export function cpuLoadMultiple(percent, threshold = false) {
+  return `${threshold ? Number((percent / 100).toFixed(2)) : (percent / 100).toFixed(1)}×`;
+}
+
+/// How one resource reads in its chip and in the title. CPU is load relative to
+/// cores, so it can pass 100%; it is never labelled as a plain CPU percentage.
+function describeResource(payload, resource) {
+  const { reading, known, severity, held, note } = hostReading(payload, resource);
+  const path = resource === 'disk' && reading?.path ? ` ${reading.path}` : '';
+  const label = resource === 'cpu' ? 'load' : resource === 'memory' ? 'mem' : 'disk';
+  const value = !known ? '-' : resource === 'cpu' ? cpuLoadMultiple(reading.percent) : `${reading.percent.toFixed(0)}%`;
+  const detail = !known ? `${resource}${path} ${note}`
+    : resource === 'cpu' ? `${CPU_MEASURE} Now ${reading.percent.toFixed(1)}% of cores (${note}).`
+    : `${resource}${path} ${reading.percent.toFixed(1)}% (${note})`;
+  return { label, value, suffix: known && resource === 'cpu' ? ' cores' : '', detail, severity, held };
+}
+
+/// Three chips for the serving host: load, mem and disk, each with its own
+/// severity, held state and title. Throttling is a state of the chip that
+/// holds admission (class, dot, outline, accessible text), never visible text,
+/// and each chip is sized for its widest usual reading, so neither a verdict
+/// flip nor a new reading moves the top bar.
 export function renderHostResources(payload, host = document.getElementById('host-resource-chips')) {
   if (!host) return;
   const { age, status, reason } = hostVerdict(payload);
-  const chip = resource => {
-    const { reading, known, severity, held, note } = hostReading(payload, resource);
-    const path = resource === 'disk' && reading?.path ? ` · ${reading.path}` : '';
-    const node = el('span', {
-      class: `kpi host-resource ${severity}${held ? ' throttled' : ''}`,
-      title: `${resource}${path} · ${note} · sampled ${age} · Throttle verdict: ${status} · ${reason}`,
-    }, [
-      el('span', { class: 'v', text: known ? `${reading.percent.toFixed(1)}%` : '-' }),
-      el('span', { class: 'k', text: resource }),
+  host.replaceChildren(...RESOURCES.map(resource => {
+    const { label, value, suffix, detail, severity, held } = describeResource(payload, resource);
+    const title = `${detail} · sampled ${age} · Throttle verdict: ${status}${held ? ' on this resource' : ''} · ${reason}`;
+    const node = el('span', { class: `host-resource ${severity}${held ? ' throttled' : ''}`, title, role: 'group', 'aria-label': title }, [
+      el('span', { class: 'k', text: label }),
+      el('span', { class: 'v', text: value }, suffix ? [el('span', { class: 'unit', text: suffix })] : []),
       ...(held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
     ]);
-    node.tabIndex = 0;
+    node.dataset.resource = resource;
     return node;
-  };
-  host.replaceChildren(chip('cpu'), chip('memory'), chip('disk'));
+  }));
 }
 
 const listeners = new Set();
@@ -51,16 +77,31 @@ export function onHostResources(listener) {
   return () => listeners.delete(listener);
 }
 
+/// The selected host, with no workspace or window query. Bounded like
+/// `fetchJson`: a stalled snapshot (hung mount, half-open connection) rejects
+/// instead of pending for the rest of the page's life.
+export async function fetchHostResourcePayload() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(withHost('/api/host/resources'), { signal: controller.signal });
+    if (!response.ok) throw new Error(`Host resource API: HTTP ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Request timed out after 30 seconds');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 let sequence = 0;
 let lastPayload = null;
 let receivedAt = 0;
 export async function fetchAndRenderHostResources() {
   const current = ++sequence;
   try {
-    // Deliberately bypass workspace/window URL augmentation.
-    const response = await fetch('/api/host/resources');
-    if (!response.ok) throw new Error(`Host resource API: HTTP ${response.status}`);
-    const payload = await response.json();
+    const payload = await fetchHostResourcePayload();
     if (current === sequence) {
       lastPayload = payload;
       receivedAt = Date.now();
@@ -77,11 +118,20 @@ export async function fetchAndRenderHostResources() {
   }
 }
 
+/// Forget the last reading when the selected host changes, so one host's
+/// readings never show under another's name; a reading still in flight for
+/// the previous host is dropped with it.
+export function resetHostResources() {
+  sequence += 1;
+  lastPayload = null;
+  renderHostResources(null);
+  for (const listener of listeners) listener(null);
+}
 
 export function initHostResources() {
   let pending = false;
   setInterval(async () => {
-    if (document.hidden || pending) return;
+    if (document.hidden || pending || isHostUnavailable()) return;
     pending = true;
     try { await fetchAndRenderHostResources(); }
     catch (error) { console.error(error); }

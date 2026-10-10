@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, tracing};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::Provider;
 
@@ -41,11 +41,15 @@ use crate::credential_paths::{
 ///   (`$CARGO_HOME/registry`, `$CARGO_HOME/git`, and the two
 ///   `.package-cache*` locks) so a build can populate the host registry, for a
 ///   profile that already grants some write — see
-///   [`emit_cargo_download_cache_write_allows`];
+///   `emit_cargo_download_cache_write_allows`;
 /// - emits resolved `read` / `modify` rules in order, including explicit
 ///   `(deny ...)` clauses for negated entries and narrow host-policy or
 ///   runtime re-allows after their enclosing deny, preserving SBPL's
-///   last-match-wins evaluation.
+///   last-match-wins evaluation;
+/// - then denies writes to each existing writable ancestor entry of a negated
+///   `modify` or `read` entry, and of each path a negated glob matches today,
+///   so a denied path cannot be renamed aside with its parent — see
+///   `emit_denied_ancestor_pins`.
 ///
 /// Callers must resolve workspace-relative globs to absolute paths before
 /// invoking this function — a relative `subpath` is meaningless to the kernel.
@@ -160,9 +164,9 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     );
     out.push_str("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+\"))\n");
 
-    out.push_str("(allow file-write* (subpath \"/tmp\"))\n");
-    out.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
-    out.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
+    for scratch in HOST_SCRATCH_WRITE_ROOTS {
+        out.push_str(&format!("(allow file-write* (subpath \"{scratch}\"))\n"));
+    }
     out.push_str("(allow file-write* (subpath \"/dev\"))\n");
     if let Some(home) = non_empty_env_path(home) {
         let home = home.display().to_string();
@@ -279,6 +283,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             super::sbpl_filter::sbpl_filter_for_allow_rule(rule)
         ));
     }
+    emit_denied_ancestor_pins(rules, &mut out)?;
 
     // Clause order below is the security contract, not a formatting choice.
     // SBPL is last-match-wins, so the default credential denies come first, the
@@ -305,8 +310,9 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 ///
 /// Claude Code, Copilot CLI, and Cursor Agent CLI do: each keeps its login
 /// session in a login-keychain item (`Claude Code-credentials`,
-/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`) and
-/// does not persist a readable token under its state directory by default.
+/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`). The
+/// Antigravity CLI (`agy`) also stores its OAuth token in the login keychain
+/// and does not persist a readable token under its state directory by default.
 /// Codex, Gemini, and Grok keep credentials in plain files under their own
 /// state directories, which are already granted, so they keep the deny. Names
 /// that do not resolve to a canonical [`Provider`] keep the deny too — the
@@ -317,7 +323,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
     matches!(
         Provider::parse(provider).ok(),
-        Some(Provider::Claude | Provider::Copilot | Provider::Cursor)
+        Some(Provider::Claude | Provider::Copilot | Provider::Cursor | Provider::Antigravity)
     )
 }
 
@@ -381,9 +387,10 @@ pub fn macos_login_keychain_access(
 /// Re-allow the confined provider's own credential store after
 /// [`emit_default_credential_read_denies`], so last-match-wins grants it.
 ///
-/// Without this, a sandboxed Claude, Copilot, or Cursor CLI cannot see its
-/// Keychain item and reports a fake login failure (Claude: OAuth expiry;
-/// Copilot: no authentication information; Cursor: authentication required) —
+/// Without this, a sandboxed Claude, Copilot, Cursor, or Antigravity CLI cannot
+/// see its Keychain item and reports a fake login failure (Claude: OAuth
+/// expiry; Copilot: no authentication information; Cursor and Antigravity:
+/// authentication required) —
 /// an authentication failure no re-login can clear, because the credential is
 /// present and simply unreadable. The carve-out is deliberately narrow:
 /// - it applies only to those providers, so a Codex or Grok agent still cannot
@@ -444,6 +451,185 @@ fn emit_default_credential_read_denies(
 /// and no convenience grant may quietly turn it into a writer.
 fn profile_grants_write(rules: &ResolvedFsProfile) -> bool {
     rules.modify.iter().any(|rule| !rule.starts_with('!'))
+}
+
+/// Host scratch trees every confined process may write.
+const HOST_SCRATCH_WRITE_ROOTS: [&str; 3] = ["/tmp", "/private/tmp", "/private/var/folders"];
+
+/// Deny writes to each existing writable ancestor entry of a `modify` deny.
+///
+/// Seatbelt matches pathnames, and a rename is checked against the moved
+/// entry only, never its descendants. Without these clauses a process could
+/// move a writable directory holding a denied path aside (a worktree holding
+/// its `.git` pointer, say), rewrite the path at its new name, and move the
+/// directory back. A `literal` deny covers the entry itself, so it can be
+/// neither renamed nor replaced, while names beneath it keep the answer of
+/// their own rules. This mirrors the Linux compiler, which binds the same
+/// ancestors as mount points.
+///
+/// Writable means beneath a positive `modify` rule or strictly beneath a host
+/// scratch root.
+///
+/// A glob deny is anchored at the directory above its first wildcard, but its
+/// regex reaches entries at any depth below it, so pinning the anchor's
+/// ancestors alone would leave a subdirectory holding a match free to move.
+/// Each existing match is therefore expanded at compile time and its writable
+/// ancestors up to the anchor are pinned too, so a subdirectory holding a
+/// `.env` cannot be moved out of `**/.env`'s reach and back. A name created
+/// after compile gets no pins. Negated `read` rules pin the same ancestors, so a read-denied
+/// match cannot be carried out of its read deny either; the match itself is
+/// not pinned, as that would also deny writing it.
+fn emit_denied_ancestor_pins(
+    rules: &ResolvedFsProfile,
+    out: &mut String,
+) -> Result<(), OrbitError> {
+    let writable: Vec<(PathBuf, bool)> = rules
+        .modify
+        .iter()
+        .filter(|rule| !rule.starts_with('!'))
+        .map(|rule| super::sbpl_filter::rule_anchor(rule))
+        .collect();
+    let is_writable = |entry: &Path| {
+        writable
+            .iter()
+            .any(|(root, matched)| entry.starts_with(root) && (*matched || entry != root))
+            || HOST_SCRATCH_WRITE_ROOTS
+                .iter()
+                .any(|scratch| entry.starts_with(scratch) && entry != Path::new(scratch))
+    };
+    let denies = rules
+        .modify
+        .iter()
+        .filter_map(|rule| rule.strip_prefix('!'))
+        .map(|rule| (rule, true))
+        .chain(
+            rules
+                .read
+                .iter()
+                .filter_map(|rule| rule.strip_prefix('!'))
+                .map(|rule| (rule, false)),
+        );
+    let mut pins = std::collections::BTreeSet::new();
+    let mut globs = Vec::new();
+    // Each search root is walked once, however many globs share it: the
+    // default policy carries eight `.env` globs rooted at the workspace.
+    let mut globs_by_search_root: std::collections::BTreeMap<PathBuf, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (denied, denies_write) in denies {
+        let (root, matched) = super::sbpl_filter::rule_anchor(denied);
+        for entry in root.ancestors().skip(usize::from(matched)) {
+            if is_writable(entry) && std::fs::symlink_metadata(entry).is_ok() {
+                pins.insert(entry.to_path_buf());
+            }
+        }
+        let Some(regex) = super::sbpl_filter::glob_deny_matcher(denied)? else {
+            continue;
+        };
+        // Only matches under a writable directory can be moved, so search the
+        // glob's root when it is writable and otherwise only the positive
+        // `modify` roots beneath it. Host scratch beneath it is not searched.
+        let search_roots: Vec<PathBuf> = if is_writable(&root) {
+            vec![root.clone()]
+        } else {
+            writable
+                .iter()
+                .map(|(writable_root, _)| writable_root)
+                .filter(|writable_root| writable_root.starts_with(&root))
+                .cloned()
+                .collect()
+        };
+        for search_root in search_roots {
+            globs_by_search_root
+                .entry(search_root)
+                .or_default()
+                .push(globs.len());
+        }
+        globs.push((root, regex, denies_write));
+    }
+    for (search_root, indices) in globs_by_search_root {
+        let mut entries = Vec::new();
+        collect_entries(&search_root, &mut entries)?;
+        for path in entries {
+            let rendered = path.to_string_lossy();
+            for &index in &indices {
+                let (root, regex, denies_write) = &globs[index];
+                if !regex.is_match(&rendered) {
+                    continue;
+                }
+                for entry in path.ancestors().skip(1) {
+                    if entry == root {
+                        break;
+                    }
+                    // A write deny already covers an ancestor its own regex
+                    // matches; a read deny does not stop that ancestor's rename.
+                    if *denies_write && regex.is_match(&entry.to_string_lossy()) {
+                        continue;
+                    }
+                    if is_writable(entry) {
+                        pins.insert(entry.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+    for entry in pins {
+        out.push_str(&format!(
+            "(deny file-write* (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&entry.display().to_string())
+        ));
+    }
+    Ok(())
+}
+
+/// Append every existing entry strictly beneath `dir`. Symlinks are not
+/// followed: Seatbelt checks the physical path a write lands on, which is the
+/// walked one only for a non-link entry. A permission-denied listing is
+/// skipped with a warning; other unexpected listing failures remain errors.
+fn collect_entries(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), OrbitError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                target: "orbit.sandbox.macos",
+                directory = %dir.display(),
+                "skipping unreadable directory while compiling macOS sandbox glob denies"
+            );
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(OrbitError::Execution(format!(
+                "list `{}` for macOS sandbox glob denies: {error}",
+                dir.display()
+            )));
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                tracing::warn!(
+                    target: "orbit.sandbox.macos",
+                    directory = %dir.display(),
+                    "skipping unreadable directory while compiling macOS sandbox glob denies"
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(OrbitError::Execution(format!(
+                    "list `{}` for macOS sandbox glob denies: {error}",
+                    dir.display()
+                )));
+            }
+        };
+        let path = entry.path();
+        out.push(path.clone());
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            collect_entries(&path, out)?;
+        }
+    }
+    Ok(())
 }
 
 /// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.

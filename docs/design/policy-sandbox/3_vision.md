@@ -3,12 +3,12 @@ summary: "Policy & Sandboxing — Vision"
 type: design
 title: "Policy & Sandboxing — Vision"
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-10-09
 status: Draft
 feature: policy-sandbox
 doc_role: vision
 tags: ["policy-sandbox"]
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Policy & Sandboxing — Vision
@@ -41,17 +41,22 @@ the seam where macOS turns an activity's resolved `FsProfile` into an outer proc
 
 The shipped first version is deliberately a **write-confinement backend**, not a claim of byte-for-byte
 SBPL parity. It materially improves today's bare Linux execution while keeping unsupported policy
-semantics visible instead of silently calling them enforced. The one read boundary it does carry is the
-shared list of well-known credential locations (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish
-tokens), masked after every other mount so the two platforms hide the same secrets.
+semantics visible instead of silently calling them enforced. The fixed read masks
+combine the shared credential-path list (`~/.ssh`, `~/.aws`,
+`~/.config/gh`, Cargo credentials, and platform-specific keychain/browser trees) with
+masks for Orbit plugin state and secrets. Linux applies them after policy and cache
+mounts; other host reads remain delegated. macOS retains its provider-specific
+login-keychain rule.
 
 #### Backend and availability contract
 
 - `linux-bwrap` is a concrete `ExecutorSandboxKind`; shipped agent executors select it on Linux,
   while `local-shell` remains explicitly unsandboxed. Custom executor definitions keep their
   concrete backend choice.
-- Resolve Bubblewrap only from a trusted absolute location, initially `/usr/bin/bwrap`. Never
-  accept a `PATH`-shadowed wrapper as the security boundary.
+- Resolve Bubblewrap only from trusted absolute locations: `/usr/bin/bwrap`, or the
+  root-owned `/usr/local/libexec/orbit/bwrap` when the host binary is missing or lacks
+  `--bind-fd` or `--ro-bind-fd`. Never accept a `PATH`-shadowed wrapper as the security
+  boundary.
 - Probe capability, not just file existence. The probe must prove that the installed binary can
   create the required user and mount namespaces and execute a trivial child on the running host.
   A present binary with disabled unprivileged user namespaces is unavailable.
@@ -64,8 +69,10 @@ tokens), masked after every other mount so the two platforms hide the same secre
 
 The wrapper constructs a deterministic Bubblewrap argv with these properties:
 
-1. Start from the host filesystem mounted read-only, then bind only resolved positive `modify`
-   roots and Orbit-owned provider/runtime state roots back as writable.
+1. Start from the host filesystem mounted read-only. Bind resolved positive `modify`
+   roots, Cargo download caches for profiles that already grant writes, the shared host
+   `cache/` root for write-capable profiles, and Orbit-owned provider/runtime state roots
+   as writable. Later deny mounts still take precedence.
 2. Give the child private user, PID, IPC, and UTS namespaces, a fresh session, parent-death
    cleanup, a minimal `/proc` and `/dev`, and isolated scratch space. Keep the host network
    namespace because CLI agents must reach provider APIs; network restriction is not smuggled
@@ -114,9 +121,11 @@ and kernel ABI/boot enablement varies by host.
   wrapper selection, provider flag handling, audit argv, and supervision in `orbit-engine`.
 - Audit the effective backend, trusted wrapper path, probe outcome, read/write enforcement level,
   and redacted argv. Do not emit `write_enforced` when bare fallback ran.
-- Unit-test argv compilation and mount ordering on every platform. Linux runtime tests must use a
-  real `/usr/bin/bwrap` when the capability probe succeeds and otherwise skip with the probe
-  reason. End-to-end tests must prove an allowed worktree write succeeds, an outside write fails,
+- Unit-test argv compilation and mount ordering on every platform. Linux runtime tests must use
+  the trusted Bubblewrap binary selected by the resolver (the host `/usr/bin/bwrap` or its
+  validated bundled fallback) when the capability probe succeeds, and otherwise skip with the
+  probe reason. End-to-end tests must prove an allowed worktree write succeeds, an
+  outside write fails,
   a subtree denial such as `.orbit/**` stays read-only beneath a writable workspace, provider
   network access is not isolated, a forbidden new glob match is rejected before worktree commit,
   a non-worktree invocation with the same unrepresentable rule fails closed, and missing/disabled

@@ -12,7 +12,7 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
                 ctx.task_id(),
                 V2AuditEventKind::StepSkipped {
                     step_id: step.id.clone(),
-                    reason: format!("when:{expr} => false"),
+                    reason: when_false_skip_reason(expr),
                 },
             );
             return Ok(StepOutcome {
@@ -39,6 +39,8 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
     let (outcome_str, error_message) = match &result {
         Ok(StepOutcome { success: true, .. }) => ("success", None),
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
+        Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
+        Err(error @ DispatchError::ForgeUnavailableHold(_)) => ("held", Some(error.to_string())),
         Err(err) => ("error", Some(err.to_string())),
     };
     emit_job_event_lossy(
@@ -96,6 +98,20 @@ pub(super) fn run_step_with_retry(
             Ok(outcome) => {
                 if outcome.success {
                     return Ok(outcome);
+                }
+                // [ORB-14269] An implementer blocker is not a flaky attempt.
+                // Another try would spend another provider invocation on a
+                // stop the agent already declared.
+                if outcome.message.as_deref().is_some_and(|message| {
+                    orbit_types::workflow::is_task_blocked_by_agent(None, Some(message))
+                }) {
+                    return recover_or_return_original(
+                        step,
+                        ctx,
+                        StepFailure::Outcome(outcome),
+                        attempt + 1,
+                        max_attempts,
+                    );
                 }
                 // Treat a "not-success-but-no-error" outcome as retryable:
                 // another attempt may succeed. This is the block-level outcome

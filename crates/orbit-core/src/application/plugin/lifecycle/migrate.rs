@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{load_sidecar_manifest, migrate_sidecars};
 use orbit_types::plugin::{MANIFEST_FILE_NAME, plugin_root_in};
 
@@ -26,6 +27,10 @@ pub struct PluginMigrateRequest {
 
 /// Write a v2 manifest from a set of v1 sidecars (§4.8). The v1 sidecars and
 /// `orbit tool add` keep working; this only produces the new file.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "migration writes a user-selected plugin source tree, outside Orbit state"
+)]
 pub fn migrate_plugin_sidecars(
     request: &PluginMigrateRequest,
 ) -> Result<(String, Option<PathBuf>), OrbitError> {
@@ -101,7 +106,7 @@ pub fn migrate_plugin_sidecars(
             backend_target.display()
         ))
     })?;
-    std::fs::write(&path, &yaml)
+    atomic_write_text(&path, &yaml)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
     Ok((yaml, Some(path)))
 }

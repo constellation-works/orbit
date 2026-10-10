@@ -68,6 +68,9 @@ pub struct ExecRequest {
 /// In particular, children inherit macOS Seatbelt restrictions and Linux
 /// descendants inherit the Bubblewrap mount namespace of an outer provider
 /// sandbox.
+///
+/// On Unix, termination signals are intercepted before spawning and forwarded
+/// to the previous disposition after the child's process group is cleaned up.
 pub fn run_process(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
@@ -75,7 +78,7 @@ pub fn run_process(
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let child = sandbox.spawn(req)?;
+    let child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),
         StdinMode::Inherit | StdinMode::Null => None,
@@ -124,6 +127,12 @@ pub struct SupervisedOutcome {
 /// Passing `Some(Vec::new())` closes stdin immediately, which is what a
 /// non-interactive step wants: a piped-but-never-closed stdin leaves a reader
 /// blocked until the deadline.
+///
+/// If pipe or signal-handler setup, or the supervised wait, fails, supervision
+/// kills the child's process group and reaps the child before returning the error.
+/// The caller owns the interval before this function receives the child;
+/// [`run_process`] and [`spawn_supervised_cancellable`] also protect their own spawn
+/// operation from termination signals; prefer the latter when post-spawn work follows.
 pub fn supervise_child(
     child: Child,
     timeout_ms: Option<u64>,
@@ -143,7 +152,42 @@ pub fn supervise_child_cancellable(
     let started = Instant::now();
     let result =
         crate::supervision::wait_with_cancellation(child, timeout_ms, stdin_payload, cancelled)?;
-    Ok(SupervisedOutcome {
+    Ok(supervised_outcome(result, started))
+}
+
+/// Spawn and supervise a child, intercepting termination signals before
+/// `spawn` runs.
+///
+/// [`supervise_child_cancellable`] only protects a child once it receives it,
+/// so a SIGTERM that lands between the caller's spawn and that call takes the
+/// previous disposition (`SIG_DFL` for `orbit mcp listen`) and exits the
+/// process without touching the child's process group. Use this entry point
+/// when the caller does any work after spawning: `spawn` runs with the
+/// intercept installed, a signal during it stays pending, and supervision then
+/// terminates and reaps the child's group before the signal is re-raised.
+/// An error from `spawn` after it created a child must kill and reap that
+/// child itself, as the child never reaches supervision.
+pub fn spawn_supervised_cancellable(
+    spawn: impl FnOnce() -> Result<Child, OrbitError>,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<SupervisedOutcome, OrbitError> {
+    let started = Instant::now();
+    let result = crate::supervision::wait_with_spawn_cancellation(
+        spawn,
+        timeout_ms,
+        stdin_payload,
+        cancelled,
+    )?;
+    Ok(supervised_outcome(result, started))
+}
+
+fn supervised_outcome(
+    result: crate::supervision::WaitResult,
+    started: Instant,
+) -> SupervisedOutcome {
+    SupervisedOutcome {
         result: ExecutionResult {
             success: result.exit_success,
             timed_out: result.timed_out,
@@ -154,7 +198,7 @@ pub fn supervise_child_cancellable(
             output: None,
         },
         timed_out: result.timed_out,
-    })
+    }
 }
 
 /// Run a process while consuming stdout incrementally instead of retaining it.
@@ -169,6 +213,10 @@ pub fn supervise_child_cancellable(
 /// output: at the child's EOF, or once the drain budget has elapsed after the
 /// child is gone while a descendant outside its process group still holds
 /// stdout. `consume` should read to EOF or drop the stream.
+///
+/// If stdout relay setup or supervision fails after spawning, the runner
+/// kills the child's process group and reaps the child before returning the error.
+/// As with [`run_process`], termination signals are intercepted before spawning.
 pub fn run_process_streaming_stdout<T, F>(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
@@ -181,8 +229,10 @@ where
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let mut child = sandbox.spawn(req)?;
-    let (stdout, relay) = stdout_relay(&mut child)?;
+    // Own cleanup before allocating the relay, and transfer the same guard
+    // into supervision so no fallible setup operation can strand the child.
+    let mut child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
+    let (stdout, relay) = stdout_relay(child.process_mut())?;
     let stdout_thread = thread::spawn(move || consume(stdout));
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),

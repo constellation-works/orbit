@@ -22,8 +22,8 @@ What changed and why, in 1–3 sentences. Focus on intent, not a diff dump.
 Commands you actually ran, with results. The full `make ci` runs in CI.
 -->
 
-- [ ] `make ci-fast`, `make ci-lint`, and `make goldens` pass
-- [ ] Targeted tests for the affected crate(s) pass
+- [ ] `make ci-fast` (no Rust tests), `make ci-test-affected`, `make ci-lint`, and `make goldens` pass
+- [ ] Additional focused checks (if needed) pass
 - [ ] Manual verification steps (if applicable):
 
 ## Design docs

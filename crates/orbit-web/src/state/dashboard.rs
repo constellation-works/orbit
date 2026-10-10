@@ -12,6 +12,14 @@ struct CachedRuntime {
     runtime: Arc<OrbitRuntime>,
 }
 
+/// Test override for native clock status reads.
+#[cfg(test)]
+pub(crate) type ClockStatusHook = Arc<dyn Fn() -> Result<ClockStatus, OrbitError> + Send + Sync>;
+
+/// Test override for a successful native clock mutation.
+#[cfg(test)]
+pub(crate) type ClockMutationHook = Arc<dyn Fn() -> Result<(), OrbitError> + Send + Sync>;
+
 pub(super) struct StateInner {
     /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
     /// `global_root` when building per-workspace runtimes and observing host resources.
@@ -20,6 +28,10 @@ pub(super) struct StateInner {
     host_disk_paths: Vec<PathBuf>,
     /// Atomically-swapped registered workspace set + default selection.
     snapshot: Mutex<Arc<Snapshot>>,
+    /// The serving host's host file, swapped by the same rule [ORB-14451].
+    hosts: HostFileState,
+    /// SSH tunnels to registered hosts behind `/api/on/<host>/…` [ORB-14679].
+    host_tunnels: Arc<HostTunnels>,
     /// Lazily-built, cached runtimes keyed by workspace id.
     runtimes: Mutex<HashMap<String, CachedRuntime>>,
     /// Registry to reload from on refresh; `None` disables refresh (single /
@@ -44,12 +56,20 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
     /// and the raw `since` window so relative cutoffs (`24h`) still hit.
     audit_summary: RuntimeMemo<String>,
+    /// Per-server scoreboard memo, keyed by live workspace runtime and window.
+    scoreboard: RuntimeMemo<String>,
     /// Per-server single-flight TTL memo for audited plugin panel reads.
     /// Keyed by `(namespace, panel)`.
     plugin_panels: RuntimeMemo<(String, String)>,
-    /// Per-server memo for `/api/diagnostics/errors`, keyed by the bounded
-    /// row limit. Collapses overlapping Errors-tab polls into one scan.
-    diagnostics_errors: RuntimeMemo<usize>,
+    /// Per-server memo for `/api/diagnostics/errors`, keyed by time range and
+    /// bounded row limit. Collapses overlapping Errors-tab polls into one scan.
+    diagnostics_errors: RuntimeMemo<(String, usize)>,
+    /// Per-server memo for `/api/diagnostics/friction`, keyed by month and
+    /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
+    diagnostics_friction: RuntimeMemo<(String, usize)>,
+    /// Per-server cache of the last `orbit doctor` report for each workspace
+    /// runtime, behind `/api/doctor`.
+    doctor_reports: DoctorReports,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope regardless of TTY
     /// or `ORBIT_OPERATOR`.
@@ -57,6 +77,11 @@ pub(super) struct StateInner {
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     on_pre_publish: Mutex<Option<PrePublishHook>>,
+    /// Test-only fault injection for clock observations and changes.
+    #[cfg(test)]
+    clock_status_hook: Mutex<Option<ClockStatusHook>>,
+    #[cfg(test)]
+    clock_mutation_hook: Mutex<Option<ClockMutationHook>>,
 }
 
 impl StateInner {
@@ -273,6 +298,7 @@ impl DashboardState {
                 logical_workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                 task_partition_id: SINGLE_WORKSPACE_ID.to_string(),
                 owner_machine_id: None,
+                checkout_role: None,
                 repo_root: PathBuf::new(),
                 ship_mode: ShipMode::Local,
                 base_branch: None,
@@ -289,6 +315,7 @@ impl DashboardState {
                     logical_workspace_id: SINGLE_WORKSPACE_ID.to_string(),
                     task_partition_id: SINGLE_WORKSPACE_ID.to_string(),
                     owner_machine_id: None,
+                    checkout_role: None,
                     repo_root: PathBuf::new(),
                     ship_mode: ShipMode::Local,
                     base_branch: None,
@@ -364,6 +391,8 @@ impl DashboardState {
         };
         Self {
             inner: Arc::new(StateInner {
+                hosts: HostFileState::new(global_root.clone()),
+                host_tunnels: Arc::new(HostTunnels::new(TunnelConfig::default())),
                 global_root,
                 host_resources: Mutex::new(None),
                 host_disk_paths,
@@ -376,11 +405,18 @@ impl DashboardState {
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: RuntimeMemo::new("audit summary aggregation"),
+                scoreboard: RuntimeMemo::new("scoreboard aggregation"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
+                diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
+                doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
+                #[cfg(test)]
+                clock_status_hook: Mutex::new(None),
+                #[cfg(test)]
+                clock_mutation_hook: Mutex::new(None),
             }),
         }
     }
@@ -429,9 +465,27 @@ impl DashboardState {
         Ok(monitor.snapshot(&paths))
     }
 
+    /// The serving host's host file: its last valid snapshot, reloaded when
+    /// the file changes, and the error of a newer file that failed to load.
+    /// May read files and must be called through `blocking`.
+    pub(crate) fn hosts(&self) -> PinnedHosts {
+        self.inner.hosts.pin()
+    }
+
+    /// The tunnels this dashboard owns to registered hosts. `run_server`
+    /// stops them on shutdown and before a handover exec.
+    pub(crate) fn host_tunnels(&self) -> &Arc<HostTunnels> {
+        &self.inner.host_tunnels
+    }
+
     /// Process-local `/api/audit/summary` memo for this server instance.
     pub(crate) fn audit_summary_memo(&self) -> &RuntimeMemo<String> {
         &self.inner.audit_summary
+    }
+
+    /// Process-local scoreboard memo shared by every dashboard tab.
+    pub(crate) fn scoreboard_memo(&self) -> &RuntimeMemo<String> {
+        &self.inner.scoreboard
     }
 
     /// Process-local plugin panel memo shared by every dashboard tab.
@@ -440,8 +494,18 @@ impl DashboardState {
     }
 
     /// Process-local `/api/diagnostics/errors` memo for this server instance.
-    pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<usize> {
+    pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<(String, usize)> {
         &self.inner.diagnostics_errors
+    }
+
+    /// Process-local `orbit doctor` report cache for this server instance.
+    pub(crate) fn doctor_reports(&self) -> &DoctorReports {
+        &self.inner.doctor_reports
+    }
+
+    /// Process-local `/api/diagnostics/friction` memo for this server instance.
+    pub(crate) fn diagnostics_friction_memo(&self) -> &RuntimeMemo<(String, usize)> {
+        &self.inner.diagnostics_friction
     }
 
     /// Whether this server was started with `--operator`, granting operator
@@ -458,7 +522,48 @@ impl DashboardState {
 
     /// Observe the native host clock.
     pub(crate) fn clock_status(&self) -> Result<ClockStatus, OrbitError> {
+        #[cfg(test)]
+        if let Some(hook) = self
+            .inner
+            .clock_status_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        {
+            return hook();
+        }
         orbit_core::application::routines::clock_status(&self.inner.global_root)
+    }
+
+    /// Install a test-only override for native clock observations.
+    #[cfg(test)]
+    pub(crate) fn set_clock_status_hook(&self, hook: ClockStatusHook) {
+        *self
+            .inner
+            .clock_status_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Install a test-only override for the native clock mutation.
+    #[cfg(test)]
+    pub(crate) fn set_clock_mutation_hook(&self, hook: ClockMutationHook) {
+        *self
+            .inner
+            .clock_mutation_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Run the test-only clock mutation override, if one is installed.
+    #[cfg(test)]
+    pub(crate) fn test_clock_mutation(&self) -> Option<Result<(), OrbitError>> {
+        self.inner
+            .clock_mutation_hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .map(|hook| hook())
     }
 
     /// Resolve (and lazily build + cache) the runtime for workspace `id` against

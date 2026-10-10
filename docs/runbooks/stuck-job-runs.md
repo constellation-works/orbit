@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-09-12
+last_validated: 2026-10-06
 ---
 
 # Recover Stuck Job Runs
@@ -28,6 +28,14 @@ orbit run trace  <run_id>           # parent/child event tree
 
 Before changing run state, confirm the recorded owner PID and whether that exact process
 is still alive. A long-running run is not necessarily stuck.
+
+`orbit run job`, `orbit run task-pilot`, and `orbit job resume` accept `--wait`.
+The default wait deadline is 3600 seconds; `--timeout-seconds` overrides it with
+a value from 0 to 21600 and requires `--wait`. If the deadline expires, the CLI
+exits 1 and reports `wait_timeout=true` alongside the run's actual `state` in
+both text and JSON. The run continues independently. Inspect the reported run
+ID before resubmitting work. A run whose own execution ends in `timeout`
+retains that state; its JSON `wait_timeout` is `false`.
 
 ## Check the agent subprocess before cancelling
 
@@ -56,11 +64,31 @@ Agent: provider=codex pid=154953 step=agent_implement liveness=alive started_at=
 - `liveness=exited` — the child is gone (or its PID was recycled by an unrelated process)
   while the step never recorded an exit. This is the lost-child case worth acting on.
 - `liveness=unknown` — the host cannot probe liveness. Never read this as dead.
+- `liveness=alive blocked=stopped-descendant` — the child is alive but waiting on a
+  descendant that has stayed stopped (state `T`) past the supervisor's threshold and is still
+  stopped, because the supervisor could not end it. The `stopped descendant:` line under it
+  names the pid, command, how long it was stopped and why it was not ended. The agent makes no
+  progress until that process goes: `kill -KILL <pid>` it (never the agent pid), after checking
+  that the pid still names that command.
+
+A descendant that stops itself — an interactive shell probe such as `bash -i` in a sandbox
+without a terminal, or `kill -STOP $$` — would otherwise hold its parent's wait until the
+activity's wall clock ends. The agent supervisor samples the child's process tree, and ends
+with `SIGKILL` any descendant that stayed stopped for the whole threshold (10 minutes by
+default; `ORBIT_STOPPED_DESCENDANT_THRESHOLD_MS` in the worker's environment overrides it).
+It never ends the agent itself, anything while the agent is stopped too (an operator stopped
+the whole group), a running or merely idle process, or a process outside the agent's tree.
+Each one it ends is recorded as a `cli.invocation.stopped_descendant` event and printed under
+the `Agent:` line as `stopped descendant: ... ended by the supervisor`; nested commands
+supervised by `orbit-exec` (`proc.spawn`, host shell steps) append the same note to their
+stderr. The watch reads `/proc`, so it is Linux only: on macOS a stopped descendant still
+holds the agent until its wall clock ends, and `blocked=` is never shown there.
 
 Liveness is probed when you ask, against the local process table, so it is only meaningful on
 the host that ran the child; a historical run inspected elsewhere may report `exited` or
 `unknown` depending on what that host can observe. Use
-`orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`),
+`orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`,
+`stopped_descendants`, `blocked_on_stopped_descendant`),
 or `orbit run events <run_id> --type cli.invocation.process` for the raw audit events.
 
 ## A submitted run outlives its command
@@ -87,6 +115,12 @@ no run is left behind in a startable state — the persisted run is terminalized
 `interrupted` means the run was orphaned: its owner process died through a crash, SIGKILL,
 or reboot without finalizing the run. A job that genuinely failed is `failed`;
 `interrupted` means the worker died.
+
+Setup errors after a run starts, including a replay input naming a crew that no longer
+exists, finalize the run as `failed` with the setup diagnostic. Once execution succeeds,
+failures saving the final pipeline snapshot or step summary are logged as best-effort
+bookkeeping and the run still reaches `success`; its summary may be incomplete. The
+terminal-state write remains required.
 
 ## Understand orphan reconciliation
 
@@ -165,12 +199,14 @@ persists only the selectors; `orbit run show` resolves the holder from the live 
 when it renders (`--json`: `waiting_on_lock_holders`), so a holder that has since released drops
 off the line. `orbit run readiness` reports the same holders as `blocked-by=`.
 
-A run that failed, timed out, was cancelled or was interrupted leaves its task `blocked`, which
-automation skips. `orbit task show <task-id>` prints a `Next:` line for such a task: the exact
-`orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`, `interrupted`), and
-the `orbit task update <task-id> --status backlog` that re-queues it for a fresh run (the only
-option for a cancelled run). `--json` carries the same in `next_step`; it is absent for a task
-that is not blocked by a run.
+A failed, timed-out, or interrupted run leaves its task `blocked`, which automation skips.
+An operator cancellation returns its task to `backlog` with the cancellation reason, preserving
+the candidate for a later resume. Pass `--block` to `orbit run cancel` when the existing manual
+recovery flow is preferred; the dashboard cancel uses the backlog default. `orbit task show
+<task-id>` prints a `Next:` line for a blocked task: the exact `orbit job resume <run-id>` when
+that run is resumable (`failed`, `timeout`, `interrupted`), or the `orbit task update <task-id>
+--status backlog` command for other blocks. `--json` carries the same in `next_step`; it is
+absent for a task that is not blocked by a run.
 
 ## Cancel a conclusively stuck run
 
@@ -178,12 +214,22 @@ After verifying that the owner is gone or that the run should no longer continue
 
 ```sh
 orbit run cancel <run_id> --confirm --reason "operator stopped this delivery"
+orbit run cancel <run_id> --confirm --block --reason "hold for diagnosis"
 ```
+
+Use `--block` only when the task should wait for manual recovery instead of
+returning to the backlog with its candidate preserved. The choice reaches every task
+the cancel stops: leaves a `--force` pull-drain cancel stops and children a cancel
+cascades to follow it. A forced pull-drain leaf's claim is the exception: it is always
+released to the owner's backlog, with or without `--block`.
 
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.
 
-Cancellation signals the run's owner process group, then stops every agent process the
+Cancellation signals the run's owner process group only when the owner leads that
+group. A foreground owner that shares its caller's group is signalled by PID alone,
+and cancellation verifies only that owner's exit, leaving the caller and siblings
+alive. It then stops every agent process the
 run's audit trail still shows open (`provider processes stopped: N` counts the requested
 run's own agents; each cascaded child run stops its own). Agents run in their
 own process groups, so the owner signal alone never reaches them. A process is signalled
@@ -239,9 +285,10 @@ replaced by redaction markers.
 ## Resume from checkpoints
 
 The v2 executor checkpoints every completed top-level step into
-`job_runs.pipeline_state_json` in `~/.orbit/orbit.db`; there is no separate checkpoint
-file. Resume accepts runs in `interrupted`, `failed`, or `timeout`. Any other state errors
-with `resume requires an interrupted, failed, or timed-out run`.
+`job_run_states.pipeline_state_json` (one row per run, beside `job_runs`) in
+`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, and a `held` run whose push the
+forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)). Any
+other state errors with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh
 orbit job resume <run_id>
@@ -295,13 +342,22 @@ fails before Orbit commits, pushes, or updates the task.
 When a completion attempt was blocked after promotion, resume restores `review`
 only when its reused host promotion checkpoint names the task and its latest
 status history proves that this source run or an ancestor blocked it from
-`review`. The checkpoint must precede unfinished PR completion, the submitted
-run must carry `completion: done`, and the task must still belong to that retry
-lineage and the same PR. The restoration records `resume_review_restored`, the
+`review`. The checkpoint must be in the reused successful prefix; it remains
+valid when a later non-completion step fails or the scan reaches the end of the
+job. This includes re-review steps after PR completion. The submitted run must
+carry `completion: done`, and the task must still belong to that retry lineage
+and the same PR. The restoration records `resume_review_restored`, the
 source and resumed run IDs, and the blocking run in task history. Repeating the
 resume while the task is already in review adds no restoration event.
 
-Early implementation retries still restore `in-progress`. Missing stage evidence,
+Early implementation retries still restore `in-progress`. A block the same
+lineage wrote through its failure handoff (`pr_failure_handoff`,
+`pr_conflict_blocked`, `validation_environment_blocked`,
+`review_gate_escalation`) is readmitted the same way, including back to
+`review` when the checkpoint rules above hold. An implementer-declared
+blocker (`task_blocked_by_agent`) is not in that list: resume leaves the
+task blocked, and an operator moves it back once the blocker is gone.
+Missing stage evidence,
 an unrelated or superseding attempt, a manual block, and withdrawn or terminal
 states cannot gain review through this repair. A merged PR alone is not review
 authority: normal candidate, merge and task-completion guards still run after
@@ -321,9 +377,116 @@ resume the latest attempt instead of the original source. A lineage run stuck as
 `running` after its worker died (for example after a host reboot) is reconciled to
 `interrupted` before the check, so it does not block recovery.
 
-Resume needs the job present in the catalog (`orbit job list --all`). A run started from
-a raw YAML path can be resumed only after that YAML is registered under `resources/jobs/`.
+Resume first uses the run's pinned definition snapshot, when one was recorded. A run
+started from a raw YAML path does not need that job registered under `resources/jobs/`,
+and can resume after the original YAML file is gone. Only a run without a recorded
+definition snapshot needs its job in the catalog (`orbit job list --all`). Referenced
+activities still resolve through the current activity catalog.
 A run with no successful checkpoints degrades to a full replay.
+
+## A task held for a red base
+
+Sometimes a run fails `validate` with `[baseline_red]`. That means a required
+command also fails on the base, exactly as it fails on the candidate. Do not
+resume or replay that run, and do not unblock the task. No `[BLOCKED]` PR was
+opened. The task is in `backlog` under a `baseline_red_hold` history event, and
+its candidate is kept. `orbit run readiness --json` reports the task with
+`reason: "baseline_red_hold"`. Its `detail` names the red base commit.
+
+Fix the base instead: land a repair of the failing command on the integration
+branch. After the ref advances, the owner's clock tick dispatches one
+`baseline_hold_refresh_pipeline` run, which runs the held command on the new
+tip and records a `baseline_red_hold_verdict` history event; the hold lifts
+only when that check passes. The tick itself never runs the command, so a
+long check does not stall routines or auto-tasks. A failing or inconclusive
+check keeps the task in the backlog. Admission and readiness only read that
+verdict, so a task stays held until a refresh run has checked the new tip; a
+stopped clock (`orbit clock status`) leaves it held. Find the refresh runs
+with `orbit run history -j baseline_hold_refresh_pipeline`; only one runs per
+workspace at a time, and a tip whose check was inconclusive gets a new run
+after the last one ends. The next delivery then resumes the kept candidate. A
+claimed leaf on a follower releases its claim the same way, and the owner
+withholds the task from pulls until its own refresh run sees the base pass.
+Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
+`validation/<run>/<n>.baseline.json`. See
+[CONFIG.md](../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with).
+
+## A task held after a provider failure
+
+A local run that ends with `[provider_capacity]`, `[provider_unavailable]` or
+`[provider_refusal]` failed on its provider, not on the work. The task is not
+blocked. It is in `backlog` under a `provider_failure_hold` history event. The
+event's note names the excluded crews and the `not_before` time. The candidate
+is committed on the run's branch, and no `[BLOCKED]` PR was opened. Do not
+unblock or replay anything.
+
+Until `not_before`, the drain gives the task to a crew the hold does not
+exclude. A refusal excludes every crew of the refusing provider. When no crew
+is left, `orbit run readiness --json` reports the task with
+`reason: "provider_backoff"` and the release time.
+
+To run the task sooner, set its `crew` to one the hold does not exclude, or
+move it through another status: any later status change lifts the hold. If a
+provider keeps refusing the content, pin the task to a crew on another
+provider. See
+[CONFIG.md](../CONFIG.md#provider-failure-holds).
+
+## A task waiting on a provider usage limit
+
+`orbit run readiness` reports `provider_limit` when every crew the task may
+run as belongs to a provider this host reads at or above its usage threshold,
+or exhausted. The task's line carries the detail: the provider, window, used
+percent, threshold, reset and the crews skipped. A `Provider limits:` line
+above the tasks names each gated window, and `orbit doctor` warns on the
+provider's `provider-limits:<provider>` row. Nothing failed and nothing needs
+repair: the wait lifts by itself at the next admission pass after the reset.
+
+To run it sooner, give the pool an unlimited member, set the task's `crew` to
+a crew on another provider, or raise the threshold
+(`workflow.provider_limit_max_used_pct`, or `workflow.provider_limit_overrides`
+for that provider). An explicitly crewed task waits by default; with
+`workflow.provider_limit_explicit_crews = "pool"` it is drawn from its
+complexity pool instead. See
+[CONFIG.md](../CONFIG.md#provider-usage-limits).
+
+## A delivery held for the forge
+
+Sometimes GitHub refuses every push for a while: `! [remote rejected] <branch> ->
+<branch> (Internal Server Error)`, `Service Unavailable`, `Bad Gateway`, `Gateway
+Timeout`, or `remote: Internal Server Error`. Reads and API calls can keep working.
+The push step treats these as transient. It retries up to 6 times, waiting 10 s and
+doubling to a 160 s cap, with jitter: at most about 5 minutes in all. The step's output
+records `push_attempts` and `push_waited_ms`. A refusal that names a policy
+(protected branch, `GH013`, a hook, authentication) is permanent and fails at once.
+
+When the budget runs out, the run does not fail. It ends `held` at that step:
+`orbit run show <run_id>` names `[forge_unavailable]` and the pushed head. Step
+recovery, final recovery and the failure handoff do not run. The task stays
+`in-progress` with one comment explaining the hold. The candidate, its worktree and
+its review are kept. Do not unblock, replay or re-run the task.
+
+Each `orbit clock tick` resumes the held run from its checkpoints. The resumed run
+skips implementation and review, pushes the same head, and continues to the pull
+request. If the forge still refuses, the resumed run holds again, and the next tick
+resumes that one. The clock retries for 2 hours from the first hold. After that, it
+expires that hold once and blocks only in-progress tasks still coupled to that run,
+including a resumed attempt that retains its checkpoint's earlier batch binding.
+The `forge_unavailable_expired` history event names the held run. The run stays
+`held`, with its expiry recorded, so later ticks leave it alone. A task re-queued
+and admitted under an unrelated run is also left alone, even if its old hold has
+not yet expired. Once pushes work again, `orbit job resume <held_run_id>` re-admits
+tasks still owned by that lineage and pushes the kept candidate; the resumed run
+gets its own expiry acknowledgement if it holds again. A cancel (`orbit run cancel`)
+stops a push that is waiting between attempts.
+
+A claimed leaf on a follower does not wait for the clock: the clock never resumes a
+claimed run. Its pipeline sets `forge_retry.window_ms`, so the push keeps retrying
+the same head inside the run, holding the claim, for up to 2 hours from the first
+refusal. When the forge accepts, the leaf continues to the pull request. When the
+window closes first, the run holds and the leaf releases its claim to the owner as a
+`transient` failure naming the head it kept. That release does not stop the drain
+offering the crew or the host, and the task's next claim on that follower continues
+the kept candidate ([distributed drain](distributed-drain.md)).
 
 ## Replay from the beginning
 
@@ -332,6 +495,11 @@ When checkpoint outputs are invalid or the run must start from step zero:
 ```sh
 orbit job replay <run_id>
 ```
+
+Replay runs in the foreground and exits nonzero unless the new run succeeds.
+For `orbit run job` and `orbit job resume`, add `--wait` to wait for the terminal
+outcome and exit nonzero unless it succeeds. A run that ends `held` exits nonzero
+because delivery is still waiting on evidence or the forge.
 
 ## Verification
 

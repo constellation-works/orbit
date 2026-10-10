@@ -21,13 +21,15 @@ use crate::runner::ExecRequest;
 /// This is the plugin backend's boundary. Unlike the activity path there is
 /// no policy profile to compile: the operator granted concrete paths at
 /// `orbit plugin enable`, and those are what the ruleset carries beside the
-/// host runtime grants every confined child needs.
+/// host runtime grants every confined child needs. The read restrictions bind
+/// both: a host grant never reopens a denied or excluded path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LandlockBoundary {
     /// Directories (read as trees) or files the child may read and execute.
     pub read: Vec<PathBuf>,
-    /// Directories beneath [`Self::read`] the child must *not* reach: the
-    /// grant is compiled so each of them keeps no granted ancestor, which
+    /// Directories beneath [`Self::read`] or a host runtime grant (a tool
+    /// state directory such as `$GH_CONFIG_DIR`) the child must *not* reach:
+    /// the grant is compiled so each of them keeps no granted ancestor, which
     /// refuses listing them as well as reading what is inside. An absent
     /// entry is carved out the same way, so it stays unreachable when it is
     /// created after spawn. A rule binds an
@@ -38,8 +40,8 @@ pub struct LandlockBoundary {
     /// file and nothing else beside it.
     pub read_denies: Vec<PathBuf>,
     /// Absolute glob rules, in the profile grammar, naming paths beneath
-    /// [`Self::read`] the child must not read: the read exclusions of the
-    /// agent run a brokered backend serves (design
+    /// [`Self::read`] or a host runtime grant the child must not read: the
+    /// read exclusions of the agent run a brokered backend serves (design
     /// `docs/design/plugins/2_agent_call_broker.md` §5). Carved out the way
     /// the activity ruleset carves an agent's own exclusions: the directory
     /// holding an excluded path stays listable, the path itself keeps no
@@ -53,6 +55,12 @@ pub struct LandlockBoundary {
     /// Directories or files the child may also modify. A directory that does
     /// not exist yet is created before spawn: the grant names it, and a rule
     /// cannot bind to an inode that is not there.
+    ///
+    /// The grant includes read rights, so the child can read what it writes.
+    /// Where the root is at or above a [`Self::read_denies`] entry or a
+    /// [`Self::read_exclusions`] path, that subtree is carved out of the read
+    /// rights: it stays writable, and neither it nor a name created inside it
+    /// afterwards is readable. A root with no such overlap is granted whole.
     pub write: Vec<PathBuf>,
     /// Single files the child may modify, named one by one so the grant never
     /// reaches their parent directory. Unlike [`Self::write`], an entry that
@@ -61,6 +69,9 @@ pub struct LandlockBoundary {
     /// maintains (a SQLite WAL file set, a lock file), and a symlink standing
     /// where one is expected would otherwise hand the child a writable bind
     /// on whatever it points at.
+    ///
+    /// A file at or inside a read deny or caller read exclusion is still
+    /// writable and is not readable.
     pub write_files: Vec<PathBuf>,
     /// Refuse TCP bind and connect. Requires Landlock ABI 4; an older kernel
     /// fails closed rather than spawning a child with network access.
@@ -75,20 +86,13 @@ const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/tty", "/dev/zero", "/dev/
 /// Compile the grant list for
 /// [`spawn_under_linux_landlock_boundary`](super::spawn_under_linux_landlock_boundary): the
 /// host runtime grants for the child's own environment, the program itself,
-/// then the boundary's roots.
+/// then the boundary's roots. The read denies and read exclusions are carved
+/// out of the host grants as well as the roots.
 pub fn linux_landlock_boundary_grants(
     req: &ExecRequest,
     boundary: &LandlockBoundary,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     let environment = child_environment(req);
-    let mut grants = host::host_read_grants(&environment);
-    grants.extend(host::program_grants(&req.program, &environment));
-    for device in WRITABLE_DEVICES {
-        let path = Path::new(device);
-        if path.exists() {
-            grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
-        }
-    }
     // A denied tree that does not exist yet is still carved out: its
     // ancestors get no grant, so a directory created there after spawn — a
     // second plugin's first `state/plugins/<ns>` while a long-lived backend
@@ -98,7 +102,24 @@ pub fn linux_landlock_boundary_grants(
         .iter()
         .map(|path| crate::path_identity::physical_with_missing_tail(path))
         .collect();
-    let excluded = read_exclusion_paths(&boundary.read_exclusions, &boundary.read)?;
+    let excluded = read_exclusion_paths(
+        &boundary.read_exclusions,
+        &boundary.read,
+        &boundary.write,
+        &boundary.write_files,
+    )?;
+    // The host grants follow the child's environment, which can name a
+    // denied tree or one above it (`$GH_CONFIG_DIR`, `$ORBIT_ROOT`). Grants
+    // are a union, so they are carved here too or they would reopen it.
+    let mut grants =
+        workspace::carve_out_grants(host::host_read_grants(&environment), &denied, &excluded)?;
+    grants.extend(host::program_grants(&req.program, &environment));
+    for device in WRITABLE_DEVICES {
+        let path = Path::new(device);
+        if path.exists() {
+            grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
+        }
+    }
     for root in &boundary.read {
         let Some(path) = existing_canonical(root) else {
             continue;
@@ -114,11 +135,8 @@ pub fn linux_landlock_boundary_grants(
         // check decided on, so compiling the boundary cannot widen it
         // [ORB-12799].
         let path = crate::path_identity::create_write_root(root)?;
-        grants.push(if path.is_dir() {
-            LandlockPathGrant::write_tree(path)
-        } else {
-            LandlockPathGrant::write_file(path)
-        });
+        warn_if_write_overlaps_read_restriction(&path, &denied, &excluded);
+        grants.extend(workspace::carve_out_write(&path, &denied, &excluded)?);
     }
     for file in &boundary.write_files {
         let Some(path) = existing_canonical(file) else {
@@ -133,22 +151,44 @@ pub fn linux_landlock_boundary_grants(
         if !metadata.is_file() {
             continue;
         }
-        grants.push(LandlockPathGrant::write_file(path));
+        warn_if_write_overlaps_read_restriction(&path, &denied, &excluded);
+        grants.extend(workspace::carve_out_write(&path, &denied, &excluded)?);
     }
     Ok(dedupe(grants))
 }
 
+/// A write grant includes read. Say so when that read is carved back out
+/// because the path meets a read deny or a caller read exclusion.
+fn warn_if_write_overlaps_read_restriction(
+    path: &Path,
+    denied: &BTreeSet<PathBuf>,
+    excluded: &BTreeSet<PathBuf>,
+) {
+    if workspace::write_read_is_carved(path, denied, excluded) {
+        tracing::warn!(
+            target: "orbit.sandbox.landlock",
+            root = %path.display(),
+            "landlock write path overlaps a read deny or caller read exclusion; that subtree \
+             stays writable but is not granted read",
+        );
+    }
+}
+
 /// The paths [`LandlockBoundary::read_exclusions`] names now: an exact or
 /// subtree rule's own path, present or not, and every existing match of a
-/// wildcard rule that can reach a read root. A wildcard rule whose literal
-/// prefix shares no line of descent with any root carves nothing, so its tree
-/// is not walked.
+/// wildcard rule that can reach a read root, a write root, or a write file.
+/// A wildcard rule whose literal prefix shares no line of descent with any
+/// of those paths carves nothing, so its tree is not walked.
 fn read_exclusion_paths(
     rules: &[String],
     read: &[PathBuf],
+    write: &[PathBuf],
+    write_files: &[PathBuf],
 ) -> Result<BTreeSet<PathBuf>, OrbitError> {
     let roots: Vec<PathBuf> = read
         .iter()
+        .chain(write.iter())
+        .chain(write_files.iter())
         .map(|root| crate::path_identity::physical_with_missing_tail(root))
         .collect();
     let mut excluded = BTreeSet::new();

@@ -9,7 +9,37 @@ spec:
     the auto-pipeline. In automatic mode it filters to `status: backlog` with
     all task dependencies satisfied and drops any backlog parent/subtask group
     whose `context_files` overlap the active task-lock surface from
-    `in-progress` or `review` tasks. Parent/child relations order nothing here:
+    `in-progress` or `review` tasks. A task tagged `no-diff-expected` is not
+    part of that surface: it still waits on its own dependencies and on locks
+    other tasks hold, and it does not exclude overlapping backlog work.
+    `context_files` are optional for automatic and explicit admission. Tasks
+    with empty context are admitted without holding a context lock.
+    The latest applied task-pilot assessment's `duplicate_of` or
+    `already_landed` finding withholds automatic and explicit selection as
+    `pilot_duplicate` or `pilot_already_landed`, even when assessment did not
+    request lifecycle promotion. A newer clear assessment releases the hold,
+    as does a human task comment whose first line is
+    `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`.
+    A later assessment supersedes that operator decision; ordinary edits and
+    agent comments do not release the hold.
+    A current operator-reserved validation requirement withholds admission as
+    `operator_validation_handoff`, naming its criterion and tool. The pilot
+    persists an `operator_validation_held` history event and typed audit.
+    Re-scoping assessed material makes the assessment stale. An operator can
+    also record `task-pilot-admission: evaluated`, `clear`, or `approve-anyway`
+    on the first line of a comment, followed by evaluation evidence or an
+    override reason. This records `operator_validation_resolved`; agent
+    comments cannot resolve it. Transport and allowlist findings remain advisory.
+    A typed `required_os` finding in the latest applied assessment — a
+    criterion that needs native evidence from an OS the task's `os:` tags do
+    not name — withholds admission on a host of another OS as
+    `native_os_required`, with `detail` naming the criterion and the tag to
+    add. A host of that OS may still take it, and a task whose own `os:`
+    tags exclude this host keeps `host_os_mismatch`. Adding the tag,
+    re-scoping the acceptance criteria, a newer assessment without the
+    finding, or the same evidenced operator decision (recorded as
+    `native_os_requirement_resolved`) clears it.
+    Parent/child relations order nothing here:
     every task is a leaf admitted on its own declared footprint. The one
     exception is a root carrying the `epic` size tag that declares no
     `context_files` of its own while a descendant does: it inherits no
@@ -22,6 +52,27 @@ spec:
     plugin disabled or uninstalled, or the mode undeclared — is withheld as
     `delivery_job_unavailable`, with the refusal in `detail`, rather than
     dispatched to a gate that would refuse it on every pass.
+    In PR mode a task the PR pipeline would deliver is withheld as
+    `pr_forge_remote_missing` when no Git remote of the checkout names a
+    network host, since its pull request could never be opened; `detail`
+    names the remotes, `orbit workspace ship-mode local`, and the
+    `delivery:task_local_pipeline` tag. A task carrying that tag is
+    delivered locally even in a PR-mode drain.
+    When `mode` is `local` and effective `review.before_pr` is on, a task
+    that cleared the per-task gates is withheld as `local_route_before_pr`,
+    with the deciding config layer and the remedy in `detail`. A PR-mode
+    delivery does not take that hold, except a task its
+    `delivery:task_local_pipeline` tag routes locally. The local-route pipeline admission
+    still refuses the same combination if a delivery is submitted anyway.
+    A critical or high-priority task excluded only for a context-lock
+    conflict reserves its own surface: a task that the automatic order below
+    ranks behind it and whose surface overlaps it is withheld as
+    `surface_reserved`, with the reserving task as `locking_task_id`, so it
+    cannot take a lock the reserving task needs the moment that lock frees.
+    The reserving task's own `context_lock_conflict` exclusion carries a
+    `detail` saying so. At most two tasks reserve per pass, earliest in that
+    order first; a withheld task never reserves, and a reservation lapses as
+    soon as its task is admitted or leaves `backlog`.
     Automatic mode includes an `excluded` array that attributes pre-gate lock
     exclusions; it does not report status-based admission or `max_tasks`
     truncation. Explicit `task_ids` input is treated as an override and skips
@@ -96,12 +147,24 @@ spec:
             reason:
               type: string
               enum:
+                - active_pilot_preparation
+                - baseline_red_hold
                 - context_lock_conflict
                 - crew_not_allowed
                 - delivery_job_unavailable
                 - group_member_conflict
+                - host_os_mismatch
                 - inherited_only_epic_root
+                - local_route_before_pr
+                - provider_backoff
+                - provider_limit
+                - surface_reserved
                 - unassessed_complexity
+                - pilot_duplicate
+                - pilot_already_landed
+                - operator_validation_handoff
+                - native_os_required
+                - pr_forge_remote_missing
             detail:
               type: string
             conflicts:

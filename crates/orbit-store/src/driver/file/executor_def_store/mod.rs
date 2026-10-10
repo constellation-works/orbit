@@ -62,7 +62,7 @@ impl ExecutorDefFileStore {
     pub fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
         let path = self.executor_path(&def.name)?;
         let dir = self.executors_dir();
-        fs::create_dir_all(&dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        orbit_common::fs::io::create_private_dir_all(&dir)?;
         write_yaml_atomic_with(
             &path,
             &ExecutorResource {
@@ -77,6 +77,7 @@ impl ExecutorDefFileStore {
                     model_pair_override: def.model_pair_override.clone(),
                     model_flag: def.model_flag.clone(),
                     timeout_seconds: def.timeout_seconds,
+                    auth_probe: def.auth_probe.clone(),
                     env: def.env.clone(),
                     sandbox: def.sandbox,
                     allow_fallback: def.allow_fallback,

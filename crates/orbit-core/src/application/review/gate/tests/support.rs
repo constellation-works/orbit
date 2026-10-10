@@ -12,9 +12,10 @@ use chrono::Utc;
 use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
 use orbit_types::task::{Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
-    FindingDisposition, JobRun, PipelineState, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewFinding, ReviewLedger, ReviewReport,
-    ReviewValidation, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome, ValidationRole,
+    FindingDisposition, JobRun, NegativeControl, PipelineState, REVIEW_CONTRACT_VERSION,
+    REVIEW_GATE_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewFinding, ReviewLedger,
+    ReviewReport, ReviewValidation, ReviewVerdict, ReviewerInvocationEvent, ValidationOutcome,
+    ValidationRole,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -29,8 +30,8 @@ use crate::application::review::{
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 /// Workspace config with a before-PR reviewer crew distinct from the
-/// implementer; tests append further `[operation]` keys.
-pub(super) const BEFORE_PR: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\n";
+/// implementer; tests append further `[review]` keys.
+pub(super) const BEFORE_PR: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_crew = \"reviewers\"\n[review]\nbefore_pr = true\n";
 
 pub(super) struct Fixture {
     pub(super) _root: TempDir,
@@ -145,6 +146,7 @@ fn implement_candidate(repo: &Path, task_id: &str) -> String {
 
 pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -> ReviewReport {
     ReviewReport {
+        external_evidence: Vec::new(),
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.to_string(),
         verdict,
@@ -166,14 +168,40 @@ pub(super) fn report(attempt_id: &str, verdict: ReviewVerdict, repaired: bool) -
             Vec::new()
         },
         validation: vec![ReviewValidation {
+            id: Some("V1".to_string()),
             command: "make ci-fast".to_string(),
             outcome: ValidationOutcome::Passed,
             role: ValidationRole::Required,
             note: None,
             check: None,
+            control: None,
+            sources: Vec::new(),
+            mutation_target: Vec::new(),
+            deferred: Vec::new(),
+            baseline: None,
         }],
+        retired_validation: Vec::new(),
         escalation: (verdict == ReviewVerdict::Reject)
             .then(|| "decide whether the note is required".to_string()),
+    }
+}
+
+/// [ORB-14616] A counterfactual control the reviewer ran on the candidate:
+/// it mutated `targets`, and the checks in `sources` rejected the mutation.
+/// The fixture's scope is `src.txt`; `README.md` is outside it.
+pub(super) fn counterfactual(sources: &[&str], targets: &[&str]) -> ReviewValidation {
+    ReviewValidation {
+        id: None,
+        command: "make test-guard".to_string(),
+        outcome: ValidationOutcome::Failed,
+        role: ValidationRole::ExpectedFailure,
+        note: Some("deleted the guarded conjunct; the repaired test failed".to_string()),
+        check: None,
+        control: Some(NegativeControl::Counterfactual),
+        sources: sources.iter().map(|source| (*source).to_string()).collect(),
+        mutation_target: targets.iter().map(|target| (*target).to_string()).collect(),
+        deferred: Vec::new(),
+        baseline: None,
     }
 }
 
@@ -236,6 +264,17 @@ pub(super) fn gated_bundle_fixture(config: &str, tasks: usize) -> Gated {
 }
 
 impl Gated {
+    /// Rewrite the workspace config and reopen the runtime over it, as an
+    /// operator editing `config.toml` mid-run does: runs already submitted
+    /// keep the admission they captured.
+    pub(super) fn reconfigure(&mut self, config_toml: &str) {
+        let workspace = self.fixture.repo.join(".orbit");
+        fs::write(workspace.join("config.toml"), config_toml).expect("rewrite config");
+        self.fixture.runtime =
+            OrbitRuntime::from_roots(&self.fixture.runtime.global_root(), &workspace)
+                .expect("reopen runtime");
+    }
+
     /// A resume of `source`: a new run carrying the source's input, linked
     /// by `retry_source_run_id`, started now and owning the bundle.
     pub(super) fn resume(&self, source: &str) -> String {
@@ -413,9 +452,7 @@ impl Gated {
     /// that ran `runtime_seconds`, as the engine does around the dispatch.
     pub(super) fn reviewer_ran(&self, run_id: &str, admission: &Value, runtime_seconds: u64) {
         for event in [
-            ReviewerInvocationEvent::Started {
-                timeout_seconds: 3600,
-            },
+            ReviewerInvocationEvent::Started,
             ReviewerInvocationEvent::Finished { runtime_seconds },
         ] {
             record_reviewer_invocation(

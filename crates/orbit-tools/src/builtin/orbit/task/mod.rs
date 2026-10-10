@@ -7,6 +7,7 @@ pub(super) mod guarded;
 pub mod lint;
 pub mod list;
 pub mod locks;
+pub mod reconcile_review;
 pub mod reject;
 pub mod review_reset;
 pub mod show;

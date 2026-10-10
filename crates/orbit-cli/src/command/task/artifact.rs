@@ -13,6 +13,8 @@ use super::output::task_to_json_for_runtime;
 #[derive(Args)]
 #[command(about = "Manage task artifact files")]
 pub struct TaskArtifactCommand {
+    #[command(flatten)]
+    pub(crate) routing: super::command::TaskHostArgs,
     #[command(subcommand)]
     pub command: TaskArtifactSubcommand,
 }
@@ -52,9 +54,6 @@ pub struct TaskArtifactPutArgs {
     /// Explicit agent model to persist on the task artifact update
     #[arg(long)]
     pub model: Option<String>,
-    /// Output the updated task as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskArtifactPutArgs {
@@ -64,7 +63,6 @@ impl Execute for TaskArtifactPutArgs {
             source_path,
             artifact_path,
             model,
-            json: _,
         } = self;
         let (agent, model) = super::mutation_identity(model);
         let artifact = task_artifact_from_source_file(&source_path, artifact_path.as_deref())?;
@@ -92,24 +90,16 @@ pub struct TaskArtifactGetArgs {
     /// Task ID that owns the artifact
     pub id: String,
     /// Artifact path relative to the task artifacts directory, as listed by
-    /// `orbit task artifacts --task <ID>`
+    /// `orbit artifacts <ID> --task`
     pub path: String,
     /// Write the artifact's bytes to this file instead of printing them
     #[arg(long = "out")]
     pub out: Option<PathBuf>,
-    /// Output the artifact's metadata as JSON
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl Execute for TaskArtifactGetArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let TaskArtifactGetArgs {
-            id,
-            path,
-            out,
-            json: _,
-        } = self;
+        let TaskArtifactGetArgs { id, path, out } = self;
         // Resolve the owning task first so an unknown id fails as a task
         // not-found rather than as a missing artifact.
         let task = runtime.get_task(&id)?;
@@ -119,6 +109,10 @@ impl Execute for TaskArtifactGetArgs {
         let presentation = artifact_presentation(&artifact.media_type, &artifact.content);
 
         if let Some(out) = &out {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "artifact export targets are user-selected files, symlinks or devices; retain direct output semantics"
+            )]
             std::fs::write(out, &artifact.content).map_err(|error| {
                 OrbitError::Io(format!("write artifact to '{}': {error}", out.display()))
             })?;

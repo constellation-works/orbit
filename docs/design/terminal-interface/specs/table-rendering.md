@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Table Rendering"
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Spec: Table Rendering
@@ -18,7 +18,7 @@ Before [ORB-10567], `build_table` paired `UTF8_BORDERS_ONLY` with `ContentArrang
 - **Body.** One line per record. No leading indent, no outer border, no column separators.
 - **Gutter.** Exactly two spaces between columns. Padding is spaces only; never tabs in `table` mode.
 - **Plain field encoding.** The plain form separates fields with a tab and records with a line feed, so a value may contain neither. Each plain field is escaped: a backslash becomes `\\`, a tab `\t`, a line feed `\n`, and a carriage return `\r`. A title stored as `first line`⏎`second`⇥`field` is piped as the single field `first line\nsecond\tfield`. A value without those four characters renders unchanged, and the escape is reversible. Only the plain form is encoded: `json` and `ndjson` carry the stored value, and the `table` rendering keeps its one-line truncation (§4).
-- **No footer.** Counts, totals, and pagination hints go to stderr or a `--stats` flag, never into the table body where a consumer would parse them as a record.
+- **No table footer.** Counts, totals, and pagination hints go to stderr or a `--stats` flag, never into the table body where a consumer would parse them as a record. `orbit doctor` appends a separate findings section in terminal table mode: every check that is neither ok nor info, errors before warnings (then skipped checks), full messages wrapped to the sink width, and verbatim `Fix:` text on its own line. When cells are truncated or columns hidden, a full-output hint names `--format plain` and `--json`. All-ok output has neither section nor hint; plain and JSON retain their existing shape.
 
 ## 2. Column Widths
 
@@ -75,6 +75,6 @@ Step 3 uses the sink contract in [./output-modes.md](./output-modes.md) §1. Ste
 
 The piped form now follows §1: `auto` on a non-terminal sink selects plain output, which suppresses the header and carries full values separated by tabs without ANSI or truncation. `--format table` explicitly requests the header-bearing table; a non-terminal sink still has no width, so it does not truncate values.
 
-There was no output snapshot suite to update — see [../2_design.md §8](../2_design.md#8-test-coverage-of-output) — so the migration added fixtures rather than adjusting them: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/output/table_rendering.rs`.
+No table-mode list snapshot existed to update: the checked-in output goldens capture piped forms, and no golden covers the terminal table form because it needs a terminal (see [../2_design.md §8](../2_design.md#8-test-coverage-of-output)). The migration therefore added fixtures instead: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/output/table_rendering.rs`.
 
 Which truncatable column has a detail command, and which four views still lack one, is recorded in [../references/detail-commands.md](../references/detail-commands.md).

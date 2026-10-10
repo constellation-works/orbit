@@ -447,6 +447,29 @@ impl MemberAttempt {
             .collect()
     }
 
+    /// The failed record this attempt leaves for its member `key`
+    /// [ORB-14177]: the attempt's identity, budget and action with only that
+    /// member, exhausted. It is the single-member wire shape every release
+    /// reads as a batch of one, so failed state grows with the members it
+    /// retains rather than with their batches, and a client that predates it
+    /// still decodes and honours it. `None` when `key` is not in the batch.
+    pub fn failure_record(&self, key: &str) -> Option<MemberAttempt> {
+        Some(MemberAttempt {
+            consumer: self.consumer.clone(),
+            kind: self.kind,
+            id: self.id.clone(),
+            member: self.member_for(key)?.clone(),
+            members: Vec::new(),
+            attempt: self.attempt,
+            max_attempts: self.max_attempts,
+            deadline: self.deadline,
+            retry_after: self.retry_after,
+            action_key: self.action_key.clone(),
+            action_id: self.action_id.clone(),
+            exhausted: true,
+        })
+    }
+
     /// Whether `members` is a well-formed batch: non-empty, bounded, keys
     /// unique, and `member` is its first entry.
     pub fn batch_is_consistent(&self) -> bool {
@@ -468,10 +491,38 @@ impl MemberAttempt {
 pub struct MemberState {
     pub pending: BTreeMap<String, StateMember>,
     pub active: Option<MemberAttempt>,
+    /// The exhausted attempt each member last failed in, keyed by member.
+    /// New records are [`MemberAttempt::failure_record`]s; a record a
+    /// release before [ORB-14177] wrote carries its whole batch and is
+    /// compacted to that form on a later pass.
     pub failed: BTreeMap<String, MemberAttempt>,
     pub assessed: BTreeMap<String, MemberAssessment>,
     pub withheld: BTreeMap<String, String>,
     pub scan_after: Option<String>,
+}
+
+/// Most distinct members one consumer's working state retains, and most
+/// failed records it keeps; the store refuses a checkpoint above either.
+pub const MEMBER_CAPACITY: usize = 1000;
+
+impl MemberState {
+    /// Distinct keys the pending, assessed and withheld working state holds:
+    /// a member pending beside its withheld reason or superseded assessment
+    /// counts once, so recording why it waits never needs room.
+    pub fn retained(&self) -> usize {
+        let pending = &self.pending;
+        let assessed = &self.assessed;
+        pending.len()
+            + assessed
+                .keys()
+                .filter(|key| !pending.contains_key(*key))
+                .count()
+            + self
+                .withheld
+                .keys()
+                .filter(|key| !pending.contains_key(*key) && !assessed.contains_key(*key))
+                .count()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -497,7 +548,8 @@ pub struct MemberEvidence {
 
 /// How one run settled every member of an attempt [ORB-12746]: the receipt
 /// evidence for a batch. Members absent from `applied` are recorded failed at
-/// their fingerprint with the reason in `failed`.
+/// their fingerprint with the reason in `failed`, except the members in
+/// `superseded`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberBatchEvidence {
     pub action_id: String,
@@ -505,6 +557,12 @@ pub struct MemberBatchEvidence {
     pub applied: Vec<MemberEvidence>,
     #[serde(default)]
     pub failed: BTreeMap<String, String>,
+    /// Members whose material the branch changed after the attempt froze its
+    /// source, with the reason [ORB-14476]. That says nothing about the task,
+    /// so such a member is neither failed nor retried against the old
+    /// source: it stays pending at the current head for a fresh claim.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub superseded: BTreeMap<String, String>,
 }
 
 /// One member of a pending or active batch and why it is there, for

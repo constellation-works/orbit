@@ -29,7 +29,6 @@ pub enum NotFoundKind {
     Job,
     JobRun,
     Activity,
-    Adr,
     DesignFeature,
     AgentSession,
     Workspace,
@@ -46,7 +45,6 @@ impl std::fmt::Display for NotFoundKind {
             Self::Job => "job",
             Self::JobRun => "job run",
             Self::Activity => "activity",
-            Self::Adr => "ADR",
             Self::DesignFeature => "design feature",
             Self::AgentSession => "agent session",
             Self::Workspace => "workspace",
@@ -131,6 +129,151 @@ pub struct SqliteContention {
     pub detail: String,
 }
 
+/// The error family an [`OrbitError::StorageAccessDenied`] reports as.
+///
+/// A read-only or access-denied failure keeps the message prefix and the
+/// stable error code of the variant it would otherwise have been built as, so
+/// carrying the class changes no user-visible text and no wire code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageLayer {
+    /// Reported as [`OrbitError::Io`].
+    Io,
+    /// Reported as [`OrbitError::Store`].
+    Store,
+    /// Reported as [`OrbitError::Migration`].
+    Migration,
+}
+
+impl StorageLayer {
+    /// The stable error code the CLI and MCP surfaces report for this layer.
+    pub fn error_code(self) -> &'static str {
+        match self {
+            Self::Io => "io_error",
+            Self::Store => "store_error",
+            Self::Migration => "migration_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for StorageLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Io => "io error",
+            Self::Store => "store error",
+            Self::Migration => "schema migration failed",
+        })
+    }
+}
+
+/// Why the owner refused a distributed-execution claim or handoff mutation.
+///
+/// Every kind is reported as the invalid-input refusal it has always been;
+/// the kind lets callers decide how to answer it without reading its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimRefusalKind {
+    /// The claim acted under is not the owner's current claim, or no longer
+    /// is in the phase the action was prepared against.
+    StaleClaim,
+    /// No claim or accepted handoff with this id is current on the owner.
+    NotCurrent,
+    /// The candidate offered does not match the one the handoff recorded.
+    HandoffCandidateMismatch,
+    /// The handoff identity does not match the accepted record.
+    HandoffIdentityMismatch,
+    /// The repository's validation requirements changed since the handoff.
+    ValidationRequirementsChanged,
+    /// The landing authority recorded at approval was revoked.
+    LandingAuthorityRevoked,
+    /// The handoff has already landed.
+    HandoffAlreadyLanded,
+    /// A merge intent was recorded externally and has not been reconciled.
+    UnresolvedMergeIntent,
+    /// A merge-intent replay needs reconciliation before it can proceed.
+    MergeIntentReplayUnreconciled,
+}
+
+impl ClaimRefusalKind {
+    /// The refusal text the store has always reported for this kind.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::StaleClaim => "stale_claim",
+            Self::NotCurrent => "claim or handoff is not current on this owner",
+            Self::HandoffCandidateMismatch => "handoff candidate mismatch",
+            Self::HandoffIdentityMismatch => "handoff identity mismatch",
+            Self::ValidationRequirementsChanged => "validation requirements changed",
+            Self::LandingAuthorityRevoked => "landing authority revoked",
+            Self::HandoffAlreadyLanded => "handoff has already landed",
+            Self::UnresolvedMergeIntent => "unresolved external merge intent",
+            Self::MergeIntentReplayUnreconciled => "merge intent replay requires reconciliation",
+        }
+    }
+}
+
+/// Stable refusal codes of the operator host registry (`orbit host`, the
+/// host file and its consumers). The serialized name is the code callers
+/// match on, so each variant is protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostRegistryCode {
+    /// Both the host file and the legacy destinations file exist.
+    HostFileConflict,
+    /// The probed `machine_id` is already registered.
+    HostExists,
+    /// A host name is already used by an entry or the local host.
+    HostNameConflict,
+    /// A task prefix is already used by an entry or the local host.
+    TaskPrefixConflict,
+    /// The request names, or the probe answered as, the local host.
+    HostIsLocal,
+    /// The remote predates host identity in its discovery envelope.
+    HostTooOld,
+    /// A live probe answered with a different identity than the entry.
+    HostIdentityMismatch,
+    /// No host matches the given name or machine id.
+    UnknownHost,
+    /// A local replica checkout or running pull drain depends on the host.
+    HostInUse,
+    /// A legacy destination row did not answer during migration.
+    LegacyHostUnreachable,
+    /// A task id's prefix is neither this host's nor a registered host's
+    /// [ORB-14449].
+    UnknownTaskPrefix,
+    /// A server that does not relay was asked, by id only, for a task whose
+    /// prefix names a registered remote host.
+    TaskPrefixRemote,
+    /// The host a task id's prefix names did not answer before the call was
+    /// delivered.
+    OwnerUnreachable,
+}
+
+impl HostRegistryCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HostFileConflict => "host_file_conflict",
+            Self::HostExists => "host_exists",
+            Self::HostNameConflict => "host_name_conflict",
+            Self::TaskPrefixConflict => "task_prefix_conflict",
+            Self::HostIsLocal => "host_is_local",
+            Self::HostTooOld => "host_too_old",
+            Self::HostIdentityMismatch => "host_identity_mismatch",
+            Self::UnknownHost => "unknown_host",
+            Self::HostInUse => "host_in_use",
+            Self::LegacyHostUnreachable => "legacy_host_unreachable",
+            Self::UnknownTaskPrefix => "unknown_task_prefix",
+            Self::TaskPrefixRemote => "task_prefix_remote",
+            Self::OwnerUnreachable => "owner_unreachable",
+        }
+    }
+}
+
+impl std::fmt::Display for HostRegistryCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Error, Serialize)]
 #[non_exhaustive]
 /// Keep this widely propagated error below its 128-byte size budget. Box the
@@ -174,6 +317,17 @@ pub enum OrbitError {
     ToolNotOnThisHost(String),
     #[error("destination capability refused: {0}")]
     CapabilityRefused(String),
+    /// A host-registry refusal [ORB-14448]. The message names what to run
+    /// next; `code` is the stable spec name every surface reports.
+    #[error("{code}: {message}")]
+    HostRegistry {
+        code: HostRegistryCode,
+        message: String,
+    },
+    /// The owner's pull request contract differs from this executor's build.
+    /// Retrying cannot repair wire skew; deploy matching builds and restart.
+    #[error("protocol_skew: {0}")]
+    ProtocolSkew(String),
     /// A plugin tool or `orbit <ns>` verb was refused because the plugin is
     /// switched off in the workspace the call resolved to, although the host
     /// still has it enabled. The tool never ran; `workspace` names the
@@ -204,8 +358,6 @@ pub enum OrbitError {
     /// that does not run one (macOS). Refused before anything runs.
     #[error("{0}")]
     PluginBuildFetchUnsupported(String),
-    #[error("Invalid ADR status transition: {0}")]
-    AdrInvalidTransition(String),
     #[error("{kind} artifact unavailable for {id}")]
     RemoteArtifactUnavailable {
         kind: NotFoundKind,
@@ -229,6 +381,14 @@ pub enum OrbitError {
     FrictionNotLocal(Box<FrictionNotLocal>),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    /// A distributed-execution claim or handoff mutation the owner refused.
+    /// Displays and reports exactly as [`Self::InvalidInput`]; `kind` is what
+    /// callers branch on, never `message`.
+    #[error("invalid input: {message}")]
+    ClaimRefused {
+        kind: ClaimRefusalKind,
+        message: String,
+    },
     #[error("sensitive input rejected for `{field}`: {reason}")]
     SensitiveInput { field: String, reason: String },
     #[error("invalid input: {message}")]
@@ -261,6 +421,11 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// An execution step failed because an operation it supervised hit its
+    /// deadline. Reads and codes exactly as [`Self::Execution`]; the variant
+    /// carries the timeout class so callers never read it from the text.
+    #[error("execution failed: {message}")]
+    ExecutionTimeout { timeout_ms: u64, message: String },
     /// A child process exceeded its deadline. The supervisor signalled the
     /// owned process group and reaped the leader; descendants that remained in
     /// that group were signalled with it.
@@ -311,6 +476,8 @@ pub enum OrbitError {
     SqliteContention(Box<SqliteContention>),
     #[error("invalid task status transition: {0}")]
     TaskStatusTransition(String),
+    #[error("cannot drop system identity tag '{tag}'; pass --allow-drop-system-tags to override")]
+    SystemIdentityTagDropped { tag: String },
     /// A workflow run was refused because a dependency that reached `done` has
     /// not been delivered into the base the run would be cut from
     /// [ORB-10464]. Distinct from [`Self::TaskStatusTransition`]: the
@@ -329,6 +496,16 @@ pub enum OrbitError {
         "task {task_id} already has an in-flight run ({run_id}); wait for it to finish or cancel it"
     )]
     ShipRunInFlight { task_id: String, run_id: String },
+    /// PR delivery was refused at admission because no Git remote of the
+    /// checkout names a network host, so `pr_open` could never find a forge.
+    /// Raised before any run, worktree or crew exists; `remotes` describes
+    /// what the checkout does have.
+    #[error(
+        "PR delivery needs a Git remote on a forge host, but {remotes}; nothing was dispatched. \
+         Switch this workspace to local delivery with `orbit workspace ship-mode local`, or tag \
+         the task `delivery:task_local_pipeline` to deliver it locally"
+    )]
+    PrForgeRemoteMissing { remotes: String },
     /// Completion cannot overtake the linked implementation run while its
     /// recorded PID and start-time identity still name a running owner.
     #[error(
@@ -358,6 +535,10 @@ pub enum OrbitError {
         source_run_id: String,
         run_id: String,
     },
+    /// Scratch collection refuses every pending, running, or retrying workspace
+    /// job, including a stale owner that has not explicitly been reconciled.
+    #[error("cannot collect workspace scratch while job runs are pending, running, or retrying: {}", .run_ids.join(", "))]
+    TmpGcActiveRuns { run_ids: Vec<String> },
     /// A governed workflow operation was refused because another operator holds
     /// the exclusive workspace claim [ADR-0352, ORB-10709]. Raised by the shared
     /// run-submission path, so the refusal is identical on every surface, and
@@ -392,6 +573,16 @@ pub enum OrbitError {
     Io(String),
     #[error("schema migration failed: {0}")]
     Migration(String),
+    /// A filesystem or SQLite operation failed because its target is mounted
+    /// read-only or denies access. Classified from the native error (the
+    /// `io::ErrorKind` or errno, or SQLite's result code) where it is
+    /// translated, so passive callers that fail open never read message text.
+    /// Displays and reports exactly as the `layer` variant it stands in for.
+    #[error("{layer}: {message}")]
+    StorageAccessDenied {
+        layer: StorageLayer,
+        message: String,
+    },
 }
 
 const _: () = assert!(
@@ -400,6 +591,21 @@ const _: () = assert!(
 );
 
 impl OrbitError {
+    pub fn host_registry(code: HostRegistryCode, message: impl Into<String>) -> Self {
+        Self::HostRegistry {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// The host-registry code of this error, if it is one.
+    pub fn host_registry_code(&self) -> Option<HostRegistryCode> {
+        match self {
+            Self::HostRegistry { code, .. } => Some(*code),
+            _ => None,
+        }
+    }
+
     pub fn not_found(kind: NotFoundKind, id: impl Into<String>) -> Self {
         Self::NotFound {
             kind,
@@ -462,6 +668,13 @@ impl OrbitError {
     pub fn friction_not_local_details(&self) -> Option<&FrictionNotLocal> {
         match self {
             Self::FrictionNotLocal(details) => Some(details),
+            _ => None,
+        }
+    }
+
+    pub fn dropped_system_tag(&self) -> Option<&str> {
+        match self {
+            Self::SystemIdentityTagDropped { tag } => Some(tag),
             _ => None,
         }
     }
@@ -551,30 +764,117 @@ impl OrbitError {
     /// to `linux_bwrap_write_grant_diagnostic`. Other I/O stays a bare
     /// [`Self::Io`] so read and capacity failures keep their existing text.
     pub fn from_write_io(path: &Path, err: std::io::Error) -> Self {
-        Self::Io(
-            crate::fs::io::write_access_error_message(path, &err)
-                .unwrap_or_else(|| err.to_string()),
+        match crate::fs::io::write_access_error_message(path, &err) {
+            Some(message) => Self::StorageAccessDenied {
+                layer: StorageLayer::Io,
+                message,
+            },
+            None => Self::Io(err.to_string()),
+        }
+    }
+
+    /// An I/O failure described by `message`, keeping whether `err` was a
+    /// read-only or access denial. Use it wherever an `io::Error` is wrapped
+    /// with context instead of converted with `?`.
+    pub fn io_with_context(err: &std::io::Error, message: impl Into<String>) -> Self {
+        Self::storage_io(StorageLayer::Io, err, message)
+    }
+
+    /// A `layer` failure described by `message` and caused by `err`, keeping
+    /// whether `err` was a read-only or access denial.
+    pub fn storage_io(
+        layer: StorageLayer,
+        err: &std::io::Error,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::storage(
+            layer,
+            crate::fs::io::is_readonly_or_access_error(err),
+            message,
         )
+    }
+
+    /// A `layer` failure described by `message`, carried as
+    /// [`Self::StorageAccessDenied`] when the native error that caused it was
+    /// a read-only or access denial.
+    pub fn storage(layer: StorageLayer, access_denied: bool, message: impl Into<String>) -> Self {
+        let message = message.into();
+        if access_denied {
+            return Self::StorageAccessDenied { layer, message };
+        }
+        match layer {
+            StorageLayer::Io => Self::Io(message),
+            StorageLayer::Store => Self::Store(message),
+            StorageLayer::Migration => Self::Migration(message),
+        }
+    }
+
+    /// The storage family this error reports as — [`Self::Io`],
+    /// [`Self::Store`] or [`Self::Migration`], whether or not it carries a
+    /// read-only or access class — or `None` for any other error.
+    pub fn storage_layer(&self) -> Option<StorageLayer> {
+        match self {
+            Self::Io(_) => Some(StorageLayer::Io),
+            Self::Store(_) => Some(StorageLayer::Store),
+            Self::Migration(_) => Some(StorageLayer::Migration),
+            Self::StorageAccessDenied { layer, .. } => Some(*layer),
+            _ => None,
+        }
     }
 
     /// Whether an operation failed because its persistence target is mounted
     /// read-only or denies writes.
     ///
-    /// Filesystem and SQLite adapters currently translate their native errors
-    /// at different crate boundaries. Keep the recognition here so passive
-    /// bootstrap, cache, and telemetry callers do not each grow a partial list
-    /// of platform and SQLite spellings.
+    /// Answered from the variant alone: the class is decided where the native
+    /// I/O or SQLite error is translated, so an error that merely quotes such
+    /// text (a child's stderr, a remote message) never counts.
     pub fn is_readonly_or_access_failure(&self) -> bool {
-        let message = self.to_string().to_ascii_lowercase();
-        message.contains("read-only file system")
-            || message.contains("readonly filesystem")
-            || message.contains("permission denied")
-            || message.contains("attempt to write a readonly database")
-            || message.contains("database is read-only")
-            || message.contains("database is readonly")
-            || message.contains(" is not writable:")
+        matches!(self, Self::StorageAccessDenied { .. })
+    }
+
+    /// A claim refusal reported with the store's text for `kind`.
+    pub fn claim_refused(kind: ClaimRefusalKind) -> Self {
+        Self::ClaimRefused {
+            kind,
+            message: kind.message().to_string(),
+        }
+    }
+
+    /// The kind of an owner claim or handoff refusal, if this is one.
+    pub fn claim_refusal(&self) -> Option<ClaimRefusalKind> {
+        match self {
+            Self::ClaimRefused { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    /// Whether this failed only because a lock stayed held past its
+    /// acquisition deadline: an advisory file lock or a SQLite database here,
+    /// or either on a remote owner, which reports it as
+    /// [`LOCK_BUSY_ERROR_CODE`]. Nothing was decided under the lock, so the
+    /// same call can succeed once its holder lets go.
+    pub fn is_lock_busy(&self) -> bool {
+        match self {
+            Self::FileLockTimeout(_) | Self::SqliteContention(_) => true,
+            Self::RemoteTool { code, .. } => code == LOCK_BUSY_ERROR_CODE,
+            _ => false,
+        }
+    }
+
+    /// Whether a supervised operation exceeded its deadline: a process
+    /// timeout, or an execution failure raised for one.
+    pub fn is_timeout(&self) -> bool {
+        matches!(
+            self,
+            Self::ProcessTimeout { .. } | Self::ExecutionTimeout { .. }
+        )
     }
 }
+
+/// The stable tool error code for a call that lost only to a lock-wait
+/// deadline ([`OrbitError::is_lock_busy`]). Retryable: unlike
+/// `internal_error`, it says the call can succeed unchanged later.
+pub const LOCK_BUSY_ERROR_CODE: &str = "lock_busy";
 
 impl From<std::io::Error> for OrbitError {
     fn from(err: std::io::Error) -> Self {
@@ -584,17 +884,25 @@ impl From<std::io::Error> for OrbitError {
         {
             return OrbitError::FileLockTimeout(Box::new(timeout.clone()));
         }
-        OrbitError::Io(err.to_string())
+        OrbitError::io_with_context(&err, err.to_string())
     }
 }
 
-use orbit_types::identity::IdentityError;
+use orbit_types::identity::{IdentityError, ProviderModelError};
+use orbit_types::plugin::{ArchiveDigestError, PluginGrantError, PluginPinError};
 use orbit_types::policy::PolicyError;
 use orbit_types::record::RecordError;
 use orbit_types::resource::ResourceError;
 use orbit_types::task::TaskError;
-use orbit_types::tool::ToolError;
-use orbit_types::workflow::WorkflowError;
+use orbit_types::tool::{ToolError, WorkerBindingError};
+use orbit_types::workflow::{
+    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
+    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
+};
+
+// Translators for `orbit-types` errors. The orphan rule puts each `From` impl
+// in this crate, beside `OrbitError`; `scripts/check-error-translation.sh`
+// registers them, and callers convert with `?` or `OrbitError::from`.
 
 impl From<IdentityError> for OrbitError {
     fn from(error: IdentityError) -> Self {
@@ -613,6 +921,10 @@ impl From<TaskError> for OrbitError {
         match error {
             TaskError::Invalid(message) => Self::InvalidInput(message),
             TaskError::StatusTransition(message) => Self::TaskStatusTransition(message),
+            TaskError::SystemIdentityTagDropped { tag } => Self::SystemIdentityTagDropped { tag },
+            unassessed @ TaskError::UnassessedComplexity => {
+                Self::InvalidInput(unassessed.to_string())
+            }
         }
     }
 }
@@ -649,7 +961,96 @@ impl From<RecordError> for OrbitError {
     fn from(error: RecordError) -> Self {
         match error {
             RecordError::Invalid(message) => Self::InvalidInput(message),
-            RecordError::InvalidTransition(message) => Self::AdrInvalidTransition(message),
         }
+    }
+}
+
+impl From<ProviderModelError> for OrbitError {
+    fn from(error: ProviderModelError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<PluginGrantError> for OrbitError {
+    fn from(error: PluginGrantError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<ArchiveDigestError> for OrbitError {
+    fn from(error: ArchiveDigestError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<PluginPinError> for OrbitError {
+    fn from(error: PluginPinError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+/// Binding defects are invalid input; a new task that strays outside the
+/// claimed task is a policy refusal.
+impl From<WorkerBindingError> for OrbitError {
+    fn from(error: WorkerBindingError) -> Self {
+        match error {
+            WorkerBindingError::IncompleteBinding | WorkerBindingError::ArgumentConflict { .. } => {
+                Self::InvalidInput(error.to_string())
+            }
+            WorkerBindingError::NotSpawnedFromClaim
+            | WorkerBindingError::ForeignRelation
+            | WorkerBindingError::ForeignFindingRelation => Self::PolicyDenied(error.to_string()),
+        }
+    }
+}
+
+impl From<JobRunStateError> for OrbitError {
+    fn from(error: JobRunStateError) -> Self {
+        Self::JobRunStateTransition(error.to_string())
+    }
+}
+
+impl From<ProviderSandboxError> for OrbitError {
+    fn from(error: ProviderSandboxError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<RetiredBackendError> for OrbitError {
+    fn from(error: RetiredBackendError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<FinalRecoveryError> for OrbitError {
+    fn from(error: FinalRecoveryError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+impl From<ReviewReportError> for OrbitError {
+    fn from(error: ReviewReportError) -> Self {
+        Self::InvalidInput(error.to_string())
+    }
+}
+
+/// A stored history that cannot be read is a store fault; a report revision
+/// the history refuses is the submitter's to correct.
+impl From<ReviewHistoryError> for OrbitError {
+    fn from(error: ReviewHistoryError) -> Self {
+        match error {
+            ReviewHistoryError::Unreadable { .. }
+            | ReviewHistoryError::UnsupportedVersion { .. } => Self::Store(error.to_string()),
+            ReviewHistoryError::AttemptFull { .. }
+            | ReviewHistoryError::RecordIdsMissing { .. }
+            | ReviewHistoryError::RecordIdReused { .. }
+            | ReviewHistoryError::RecordDropped { .. } => Self::InvalidInput(error.to_string()),
+        }
+    }
+}
+
+impl From<ReviewAdmissionError> for OrbitError {
+    fn from(error: ReviewAdmissionError) -> Self {
+        Self::InvalidInput(error.to_string())
     }
 }

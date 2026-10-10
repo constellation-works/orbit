@@ -1,35 +1,48 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::job::{JobRunListParams, run_error_step};
+use orbit_core::application::job::{JobRunListParams, job_run_task_ids};
+use orbit_types::workflow::JobRunState;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
-use super::format::{
-    format_history_role, format_timestamp, format_waiting_line, summarize_error_message,
-};
+use super::format::{format_duration, format_history_role, format_timestamp, format_waiting_line};
 use super::job::cli_job_run_to_json;
 use super::steps::RunRead;
 
 const DEFAULT_HISTORY_LIMIT: usize = 50;
 
+// Use the wire-state parser rather than Clap's enum help, which includes
+// implementation notes from the persisted domain type.
+fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
+    raw.parse()
+}
+
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
+    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
     #[arg(short = 'j', long = "job")]
     pub job_id: Option<String>,
 
+    /// Filter to runs whose input.task_ids array contains the task or whose top-level input.task_id matches it
+    #[arg(long = "task")]
+    pub task_id: Option<String>,
+
+    /// Filter to any of these comma-separated run states
+    #[arg(long, value_delimiter = ',', value_parser = parse_run_state)]
+    pub state: Vec<JobRunState>,
+
+    /// Only runs created at or after this RFC 3339 time or relative duration (24h, 7d)
+    #[arg(long)]
+    pub since: Option<String>,
+
     /// Maximum number of runs to show
     #[arg(long, default_value_t = DEFAULT_HISTORY_LIMIT, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
-
-    /// Output as JSON
-    #[arg(long)]
-    pub json: bool,
 
     /// Report stored run records as-is: skip stale-run reconciliation, which
     /// finalizes an orphaned pending or running run as interrupted and
@@ -42,8 +55,18 @@ impl Execute for RunHistoryArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         run_history_payload(
             runtime,
-            self.job_id.as_deref(),
-            Some(self.limit),
+            JobRunListParams {
+                job_id: self.job_id,
+                task_id: self.task_id,
+                states: self.state,
+                since: self
+                    .since
+                    .as_deref()
+                    .map(crate::parse::parse_since)
+                    .transpose()?,
+                limit: Some(self.limit),
+                ..Default::default()
+            },
             RunRead::from_no_reconcile(self.no_reconcile),
         )
     }
@@ -51,33 +74,30 @@ impl Execute for RunHistoryArgs {
 
 pub(crate) fn run_history_payload(
     runtime: &OrbitRuntime,
-    job_id: Option<&str>,
-    limit: Option<usize>,
+    params: JobRunListParams,
     read: RunRead,
 ) -> CommandOut {
-    let runs = read.list(
-        runtime,
-        JobRunListParams {
-            job_id: job_id.map(str::to_string),
-            limit,
-            ..Default::default()
-        },
-    )?;
-
+    let include_job_id = params.job_id.is_none();
+    let state_filtered = params.state.is_some() || !params.states.is_empty();
+    let runs = read.list(runtime, params)?;
+    let run_ids = runs
+        .iter()
+        .map(|run| run.run_id.clone())
+        .collect::<Vec<_>>();
+    let states = runtime.read_run_states(&run_ids)?;
     let states = runs
         .iter()
-        .map(|run| runtime.read_run_state(&run.run_id))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|run| states.get(&run.run_id).and_then(Option::as_ref))
+        .collect::<Vec<_>>();
 
     let values = runs
         .iter()
         .zip(states.iter())
-        .map(|(run, state)| cli_job_run_to_json(run, state.as_ref()))
+        .map(|(run, state)| cli_job_run_to_json(run, *state))
         .collect::<Vec<_>>();
     let doc = json!({ "runs": values });
 
     use crate::output::table::{Column, Table};
-    let include_job_id = job_id.is_none();
     let mut columns = vec![
         Column::new("RUN_ID").fixed(),
         // Sibling top-level runs and one run's children share a minute stem, so
@@ -90,40 +110,38 @@ pub(crate) fn run_history_payload(
     }
     // `orbit run show <run_id>` prints a run's untruncated error message.
     columns.extend([
+        // Identity and timing stay visible even when a task filter makes them uniform.
+        Column::new("TASK").fixed().filtered(true),
         Column::new("ATTEMPT").number(),
-        Column::new("STATE").fixed(),
+        Column::new("STATE").fixed().filtered(state_filtered),
         Column::new("STARTED_AT").fixed(),
         Column::new("FINISHED_AT").fixed(),
-        Column::new("ERROR_CODE").fixed(),
-        Column::new("ERROR_MESSAGE"),
+        Column::new("DURATION").fixed().filtered(true),
     ]);
     let mut table = Table::new(columns).empty_message("no runs recorded");
     for (run, state) in runs.iter().zip(states.iter()) {
         use comfy_table::Cell;
-        let error_step = run_error_step(run);
         let mut row = vec![
             Cell::new(&run.run_id),
             Cell::new(format_history_role(
                 &run.run_id,
-                state.as_ref().and_then(|state| state.trigger.as_ref()),
+                state.and_then(|state| state.trigger.as_ref()),
             )),
         ];
         if include_job_id {
             row.push(Cell::new(&run.job_id));
         }
         row.extend([
+            Cell::new(job_run_task_ids(run).join(", ")),
             Cell::new(run.attempt.to_string()),
             crate::output::color::cell(&run.state.to_string(), Domain::JobState),
             Cell::new(format_timestamp(run.started_at)),
             Cell::new(format_timestamp(run.finished_at)),
             Cell::new(
-                error_step
-                    .and_then(|s| s.error_code.as_deref())
-                    .unwrap_or("-"),
+                run.duration_ms
+                    .map(|ms| format_duration(Some(ms)))
+                    .unwrap_or_default(),
             ),
-            Cell::new(summarize_error_message(
-                error_step.and_then(|s| s.error_message.as_deref()),
-            )),
         ]);
         table.add_row(row);
     }
@@ -131,7 +149,7 @@ pub(crate) fn run_history_payload(
     let waiting = runs
         .iter()
         .zip(states.iter())
-        .filter_map(|(run, state)| format_waiting_line(run.state, state.as_ref()))
+        .filter_map(|(run, state)| format_waiting_line(run.state, *state))
         .collect::<Vec<_>>();
     if !waiting.is_empty() {
         blocks.push(Block::text(waiting.join("\n")));

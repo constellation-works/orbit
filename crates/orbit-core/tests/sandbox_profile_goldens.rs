@@ -28,6 +28,8 @@
 #![allow(clippy::expect_used, clippy::print_stderr, clippy::unwrap_used)]
 #![cfg(target_os = "linux")]
 
+orbit_common::isolate_test_process!();
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -46,7 +48,7 @@ const OUTPUT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_OUTPUT";
 /// Set on the child only: the fixture root, which also holds its `HOME`.
 const ROOT_ENV: &str = "ORBIT_TEST_SANDBOX_GOLDEN_ROOT";
 const CHILD_TEST: &str = "render_resolved_sandboxes_in_a_pinned_environment";
-const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const CASES: &[&str] = &["leaf_worker", "reviewer", "redirected_global_runtime_store"];
 
 #[test]
@@ -288,6 +290,7 @@ fn seed_linux_executor(runtime: &OrbitRuntime, provider: &str) {
             model_pair_override: None,
             model_flag: None,
             timeout_seconds: None,
+            auth_probe: None,
             env: Default::default(),
             sandbox: Some(ExecutorSandboxKind::LinuxBwrap),
             allow_fallback: false,

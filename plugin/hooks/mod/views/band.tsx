@@ -38,7 +38,7 @@ export function band(kit: Kit, data: BandData, act: Actions) {
 
   const counts = tally(snapshot.tasks)
   const isFlying = ship !== null && (ship.phase === 'launching' || ship.phase === 'flying')
-  const isRecentLanding = ship !== null && (ship.phase === 'landed' || ship.phase === 'failed') && ship.finishedAt !== null && now - ship.finishedAt < RECENT_LANDING_MS
+  const isRecentLanding = ship !== null && (ship.phase === 'landed' || ship.phase === 'failed' || ship.phase === 'held' || ship.phase === 'skipped') && ship.finishedAt !== null && now - ship.finishedAt < RECENT_LANDING_MS
 
   if (data.isCompact || columns < 80) {
     return (
@@ -154,6 +154,20 @@ function shipLead(kit: Kit, ship: OrbitShip, now: number) {
           ✗ {ship.taskId} ship failed
         </Text>
         <Text dimColor> at {label} </Text>
+      </Text>
+    )
+  }
+  if (ship.phase === 'held' || ship.phase === 'skipped') {
+    return (
+      <Text>
+        <Text bold color={ship.phase === 'held' ? 'yellow' : undefined}>
+          ■ {ship.taskId} ship {ship.phase}
+        </Text>
+        <Text dimColor>
+          {' '}
+          {ship.runId ?? ''}
+          {elapsed}{' '}
+        </Text>
       </Text>
     )
   }

@@ -30,9 +30,10 @@ spec:
       min_severity:
         type: string
         enum: [low, moderate, high, critical]
-        default: high
         description: >
-          Minimum severity filed for Dependabot and Code scanning alerts.
+          Optional run override for the minimum severity filed for Dependabot
+          and Code scanning alerts. Otherwise use security_alert_sweep.min_severity
+          from workspace then global config, with a built-in default of moderate.
           Secret scanning alerts are always filed regardless of this floor.
       skip_when_dependabot_pr_open:
         type: boolean
@@ -43,7 +44,7 @@ spec:
         maximum: 50
   output_schema_json:
     type: object
-    required: [outcome, collection_outcome, family_outcomes, clusters, filed_count, filed, skipped_existing, skipped_dependabot_pr, skipped_over_cap, excluded_below_min_severity]
+    required: [outcome, collection_outcome, family_outcomes, clusters, filed_count, filed, skipped_existing, skipped_dependabot_pr, skipped_over_cap, excluded_below_min_severity, min_severity, min_severity_source]
     properties:
       outcome:
         type: string
@@ -80,6 +81,14 @@ spec:
         type: array
       excluded_below_min_severity:
         type: array
+      min_severity:
+        type: string
+        enum: [low, moderate, high, critical]
+        description: Effective severity floor used for this filing step.
+      min_severity_source:
+        type: string
+        enum: [input, workspace, global, built-in]
+        description: Layer that supplied the effective severity floor.
       code_scanning_group_bounds:
         type: object
         description: >

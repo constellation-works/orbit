@@ -10,7 +10,11 @@ repository. Every step is also below to do by hand.
 
 ## Prerequisites
 
-- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside WSL2.
+- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside a WSL2 Linux
+  distribution: the
+  [Windows WSL2 guide](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md)
+  covers the distribution, sandbox, MCP clients and the scheduler there. That
+  path has not been run on a Windows host yet.
 - Node 18 or newer, for the npm install.
 - At least one signed-in agent CLI, such as Claude Code or Codex. Orbit runs
   every agent step through one. The
@@ -29,6 +33,28 @@ The package downloads the matching native binary and puts `orbit` on your
 `PATH`. `orbit init` asks for a machine name and a task-ID prefix, detects
 your agent CLIs, links Orbit's skills into your agents, and on Linux prepares
 the sandbox.
+
+## Install as an agent plugin
+
+To give a single agent Orbit's MCP tools and skills without installing the CLI
+on `PATH`, add the plugin. It launches the pinned npm CLI. The dashboard and
+cross-agent workspace setup still need the CLI install above.
+
+```bash
+# Claude Code
+/plugin marketplace add constellation-works/orbit
+/plugin install orbit
+
+# Codex CLI
+codex plugin marketplace add constellation-works/orbit --ref agent-main
+codex plugin add orbit@orbit
+
+# Cursor (local plugin from a checkout)
+mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
+```
+
+Want to be walked through setup? Ask your agent to **set up Orbit for this
+repo**; the bundled `orbit-setup` skill takes it from there.
 
 ## Let your agent set it up
 
@@ -82,11 +108,14 @@ pull requests.
 
 Orbit runs each agent in an OS-level sandbox: `sandbox-exec` on macOS, which
 needs no setup, and Bubblewrap on Linux, which fails closed without a trusted
-`/usr/bin/bwrap`.
+Bubblewrap that supports `--bind-fd`.
 
 On Linux, `orbit init` prepares the sandbox. It probes Bubblewrap as your
 account and, only if that fails, installs it through the distribution's
-package manager, asking for your password. On Ubuntu 24.04 it also loads the
+package manager, asking for your password. Where the distribution's Bubblewrap
+is missing or too old for Orbit, as on Ubuntu 22.04, it installs the signed
+Bubblewrap published with each Orbit release to `/usr/local/libexec/orbit/bwrap`
+instead. On Ubuntu 24.04 it also loads the
 packaged AppArmor rule. Run `orbit init` as the account that will run Orbit,
 not through `sudo`.
 

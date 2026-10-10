@@ -3,7 +3,9 @@
 //! The `updates` module owns document and history mutations.
 //! The `artifacts` module owns task artifact reads, manifests, and upserts.
 //! The `sidecars` module owns comments and history row reads.
+//! The `creation_grant` module carries a task's context creation grant through envelope revisions.
 //! The `index` module owns generated index reads, rebuilds, bundle translation, and task locking helpers.
+//! The `repair_gate` module bounds repeated automatic index rebuilds that keep failing over unchanged bundles.
 //! The `envelope_cache` module owns freshness-stamped reuse of parsed envelopes.
 //! The `query` module owns in-memory, sidecar, and artifact query matching.
 //! The `relations` module owns relation construction and replacement helpers.
@@ -13,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -26,7 +28,6 @@ use orbit_types::task::{
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME, Task, TaskArtifact, TaskComment,
     TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskPriority, TaskRelation,
     TaskRelationType, TaskStatus, normalize_task_tags, validate_os_tags,
-    validate_relative_artifact_path,
 };
 
 use crate::contracts::{
@@ -41,6 +42,7 @@ use crate::repository::task::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDo
 mod acceptance;
 mod artifact_paths;
 mod artifacts;
+mod creation_grant;
 mod crud;
 mod desktop;
 mod envelope_cache;
@@ -48,6 +50,7 @@ mod index;
 mod listing;
 mod query;
 mod relations;
+mod repair_gate;
 pub(crate) mod sequencing;
 mod sidecars;
 mod updates;
@@ -56,10 +59,14 @@ mod updates;
 mod tests;
 
 use acceptance::{parse_acceptance, render_acceptance};
-use artifact_paths::{normalize_v2_artifact_path, resolve_v2_artifact_file_path};
+pub(crate) use artifact_paths::normalize_v2_artifact_path;
+use artifact_paths::resolve_v2_artifact_file_path;
+pub(crate) use artifacts::review_report_history;
+use creation_grant::{append_creation_grant, creation_state, reject_forged_grant};
 use envelope_cache::EnvelopeCache;
 use relations::{relations_from_create_params, replace_relations};
 use sequencing::{next_event_id, next_sequence};
+pub(crate) use sidecars::task_history_from_events;
 
 pub(crate) struct TaskV2Store {
     registry: TaskRegistryStore,
@@ -79,9 +86,13 @@ pub(crate) struct TaskV2Store {
 }
 
 impl TaskV2Store {
+    /// The claim journal, when this partition has activated coordination.
+    pub(crate) fn coordination_boundary(&self) -> Option<&TaskCommitBoundary> {
+        self.coordination.as_deref()
+    }
+
     pub(crate) fn claim_boundary(&self) -> Result<&TaskCommitBoundary, OrbitError> {
-        self.coordination
-            .as_deref()
+        self.coordination_boundary()
             .ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
     }
 
@@ -109,6 +120,7 @@ impl TaskV2Store {
 
     /// Run an ordinary mutation inside the boundary. Legacy stores acquire
     /// the same locks and refuse partitions requiring coordinated backends.
+    #[track_caller]
     pub(crate) fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
@@ -121,6 +133,7 @@ impl TaskV2Store {
 
     /// Settle an interrupted commit before a read exposes task state. One
     /// existence check when nothing is pending.
+    #[track_caller]
     pub(super) fn ensure_recovered(&self) -> Result<(), OrbitError> {
         match &self.coordination {
             Some(boundary) => boundary.recover_if_pending(),

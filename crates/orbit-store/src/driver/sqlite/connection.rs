@@ -1,9 +1,8 @@
-use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
+use orbit_common::storage::sqlite::{apply_default_pragmas, open_private, sqlite_store_error};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
@@ -12,14 +11,6 @@ use crate::contracts::ForwardCompatibleOpen;
 use crate::contracts::incident::classify_failure;
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
-
-thread_local! {
-    static FILE_OPEN_PATHS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
-}
-
-fn record_file_open(path: &Path) {
-    FILE_OPEN_PATHS.with(|paths| paths.borrow_mut().push(path.to_path_buf()));
-}
 
 /// SQL name of [`unicode_lower`]. The bundled SQLite `lower()` folds ASCII
 /// only, so a query needle lowered in Rust would never match stored
@@ -85,7 +76,7 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
 /// single writer) plus a read-only connection pool so reads never queue
-/// behind writes. See [`crate::driver::sqlite::read_pool`] for the pool shape.
+/// behind writes. See `crate::driver::sqlite::read_pool` for the pool shape.
 #[derive(Clone)]
 pub struct Store {
     /// The single writer connection. Every mutating statement and every
@@ -151,25 +142,10 @@ impl Store {
                 updated_at = excluded.updated_at"#,
             rusqlite::params![key, value, crate::now_string()],
         )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        .map_err(sqlite_store_error)?;
         Ok(())
     }
-    /// Writer-handle constructions of `path` on this thread via [`Store::open`].
-    ///
-    /// Read-pool checkouts use `Connection::open` and are not counted. In-memory
-    /// stores have no file path and are also excluded.
-    pub fn thread_file_open_count_for(path: &Path) -> u64 {
-        FILE_OPEN_PATHS.with(|paths| {
-            paths
-                .borrow()
-                .iter()
-                .filter(|opened| opened.as_path() == path)
-                .count() as u64
-        })
-    }
-
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
-        record_file_open(path);
         let opened = open_private(path)?;
         let conn = opened.connection;
         let read_only = opened.read_only;
@@ -322,14 +298,11 @@ impl Store {
 
         let tx = conn
             .transaction_with_behavior(behavior)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            .map_err(sqlite_store_error)?;
 
         let mut store_tx = StoreTx { tx };
         let result = op(&mut store_tx)?;
-        store_tx
-            .tx
-            .commit()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        store_tx.tx.commit().map_err(sqlite_store_error)?;
 
         Ok(result)
     }

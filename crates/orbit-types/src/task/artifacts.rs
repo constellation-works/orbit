@@ -99,6 +99,10 @@ pub struct TaskEnvelopeV2 {
     pub job_run_machine: Option<crate::task::ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
+    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
+    /// Absent on legacy records; assignment history can recover it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
@@ -149,6 +153,8 @@ pub enum TaskRelationType {
     RegressionFrom,
     Supersedes,
     RelatedTo,
+    /// An operator-named task or GitHub PR covering this task's failure.
+    CoveredBy,
     Produces,
     Resolves,
 }
@@ -177,7 +183,7 @@ pub struct TaskRelationEdge {
 /// [`validate_task_relations_for_source`] — rather than passing the whole
 /// graph — must filter on this list. Anything it omits is metadata the cycle
 /// check never walks, so dropping it cannot change the verdict. This list
-/// must agree with [`cyclic_relation_family`] to avoid admitting a cycle.
+/// must agree with `cyclic_relation_family` to avoid admitting a cycle.
 pub const CYCLIC_RELATION_TYPES: &[TaskRelationType] =
     &[TaskRelationType::BlockedBy, TaskRelationType::ChildOf];
 
@@ -240,6 +246,34 @@ pub fn validate_task_relations_for_source(
 
 fn validate_target_for(relation_type: TaskRelationType, target: &str) -> Result<(), TaskError> {
     match relation_type {
+        TaskRelationType::CoveredBy => {
+            if is_valid_orb_task_id(target) {
+                return Ok(());
+            }
+            let reference = ExternalRef::parse_key(target)?;
+            if reference.system == "github-pr"
+                && (reference.id.parse::<u64>().is_ok_and(|number| number > 0)
+                    || url::Url::parse(&reference.id).is_ok_and(|url| {
+                        let parts = url.path().trim_matches('/').split('/').collect::<Vec<_>>();
+                        url.scheme() == "https"
+                            && url.host_str() == Some("github.com")
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.query().is_none()
+                            && url.fragment().is_none()
+                            && parts.len() == 4
+                            && !parts[0].is_empty()
+                            && !parts[1].is_empty()
+                            && parts[2] == "pull"
+                            && parts[3].parse::<u64>().is_ok_and(|n| n > 0)
+                    }))
+            {
+                return Ok(());
+            }
+            Err(TaskError::Invalid(
+                "covered_by target must be a task id or github-pr:<number or GitHub PR URL>".into(),
+            ))
+        }
         TaskRelationType::Produces | TaskRelationType::Resolves => {
             if is_valid_orb_task_id(target)
                 || is_valid_friction_id(target)
@@ -344,12 +378,30 @@ impl ArtifactManifestV2 {
     }
 }
 
+/// The trusted class of an artifact's writer, stamped by Orbit from the write
+/// path that stored it. Unlike `created_by`, which records a caller-chosen
+/// label, no tool input or environment label can select it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactWriter {
+    /// Orbit's own deterministic machinery, such as owner evidence
+    /// fulfilment or the review gate.
+    System,
+    /// A human operator surface (the bare CLI or the dashboard) with no
+    /// agent identity and outside any managed run.
+    Operator,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactManifestFileV2 {
     /// Authenticated or trusted put-time origin, never an actor-label inference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::task::ExecutionLocation>,
+    /// Trusted writer class of the latest put. Absent for agent tool calls,
+    /// claimed-worker evidence, and artifacts stored before writer classes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<ArtifactWriter>,
     pub path: String,
     pub blob: String,
     /// Lowercase hex SHA-256 digest; writers should format bytes with `{:x}`.
@@ -469,6 +521,36 @@ pub fn serialize_task_artifacts<T: TaskArtifactMetadata>(artifacts: &[T]) -> ser
     )
 }
 
+/// The canonical form of an artifact path: the key the artifact store records.
+///
+/// [`validate_relative_artifact_path`] accepts surrounding whitespace,
+/// duplicate or trailing slashes and interior `.` components, because `Path`
+/// components drop them, but refuses a leading `./`. This function also strips
+/// leading `./` prefixes before validation; the store keys the artifact under
+/// this canonical form. A guard that decides on an artifact's name must
+/// decide on this form, and forward it, never the raw request string. The
+/// form is a fixpoint: trimming or normalizing it again changes nothing, so
+/// `./ review-gate.json` cannot surface a leading space a later trim drops.
+pub fn canonical_artifact_path(raw: &str) -> Result<String, TaskError> {
+    let mut trimmed = raw.trim();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest.trim_start();
+    }
+    validate_relative_artifact_path(trimmed)?;
+    let mut parts = Vec::new();
+    for component in Path::new(trimmed).components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy()),
+            _ => {
+                return Err(TaskError::Invalid(format!(
+                    "artifact path '{trimmed}' must be canonical"
+                )));
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 pub fn validate_relative_artifact_path(path: &str) -> Result<(), TaskError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -551,6 +633,7 @@ fn cyclic_relation_family(relation_type: TaskRelationType) -> Option<RelationCyc
         TaskRelationType::RegressionFrom
         | TaskRelationType::Supersedes
         | TaskRelationType::RelatedTo
+        | TaskRelationType::CoveredBy
         | TaskRelationType::Produces
         | TaskRelationType::Resolves => None,
     }

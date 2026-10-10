@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Overview"
 type: design
 title: "Policy & Sandboxing — Overview"
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
+last_updated: 2026-10-06
+last_validated: 2026-10-09
 status: Draft
 feature: policy-sandbox
 doc_role: overview
@@ -45,7 +45,7 @@ When an activity omits `fsProfile:`, the v2 host uses `UNRESTRICTED_FS_PROFILE`.
 
 `PolicyDef::check_path` evaluates normalized workspace-relative paths against positive and negated rules. The last matching rule wins. Empty positive sets deny with `[]`; unmatched positive sets deny with `<no matching rule>`.
 
-The shipped host policy keeps `.orbit/**` protected, then explicitly re-allows repository-versioned definitions and configuration plus the worker scratch directory: `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.toml`, `.orbit/resources/**`, and `.orbit/tmp/**`. Checkout-local `.orbit/config.yaml` is runtime identity, is ignored by the initializer, and remains protected from managed agents. Runtime state, Orbit-owned records, databases, locks, and unknown `.orbit` paths stay protected. These exceptions intersect the activity profile; they do not derive authority from task `context_files`. [ORB-11376]
+The shipped host policy keeps `.orbit/**` protected, then explicitly re-allows repository-versioned definitions and configuration plus the worker scratch directory: `.orbit/auto_tasks/**`, `.orbit/routines/**`, `.orbit/config.toml`, `.orbit/resources/**`, and `.orbit/tmp/**`. On Linux, the four definition and config exceptions follow the resolved profile's anchor: a managed-worktree anchor makes them refer to that worktree's own `.orbit`; a profile anchored at the registered checkout (or with no cwd) drops those grants and appends terminal denies for the live host-clock stores. On macOS, a writer profile whose cwd is inside the active managed worktree takes its `modify` rules from that worktree, as on Linux, so the exceptions refer to the worktree's own `.orbit` and every other policy deny, `**/.env` included, applies inside it; the four registered paths are denied after convenience grants from every cwd. `.orbit/tmp/**` remains the worker scratch exception. Checkout-local `.orbit/config.yaml` is runtime identity, is ignored by the initializer, and remains protected from managed agents. Runtime state, Orbit-owned records, databases, locks, and unknown `.orbit` paths stay protected. These exceptions intersect the activity profile; they do not derive authority from task `context_files`. [ORB-11376]
 
 Linux provider launch materializes a missing write-grant anchor before spawning, because Bubblewrap cannot bind-mount a nonexistent child beneath the read-only `.orbit` parent. The set of anchors is read off the effective profile that compiles the same argv — every narrow re-allow nested under an earlier deny — so it cannot drift from what the kernel enforces, and it is re-derived at each spawn rather than snapshotted once. Materialization runs only inside the disposable worktree, never opens an existing target for writing, and rejects symlinks and filesystem-type mismatches. Task `context_files` are not consulted: they are planning selectors, not policy authority. A grant the plan cannot mount is reported against its path and rule, never silently dropped. [ORB-10602]
 
@@ -71,12 +71,12 @@ When the default policy denies workspace `.orbit/**`, the v2 host re-allows only
 | Profile resolution + deny injection | `crates/orbit-types/src/policy/policy_def.rs` (`effective_profile`, `check_path`) | [T20260416-0728] |
 | Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
 | Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/resolve.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
-| Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/lib.rs` | [ORB-10833] |
+| Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/fs_audit.rs` | [ORB-10833] |
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/dispatcher.rs`, `crates/orbit-engine/src/activity_job/job_executor/{step,target}.rs` | [T20260419-0503] |
 | Exec spawn primitive | `crates/orbit-exec/src/{lib,runner,process,sandbox}.rs` | [T20260417-0550] |
 | Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox/` | [ORB-10552] |
 | Process supervision | `crates/orbit-exec/src/supervision/{wait,cleanup,signal,tee}.rs` | [T20260417-0558-4], [T20260417-0558-5] |
-| Filesystem denial audit channel | `crates/orbit-tools/src/lib.rs` (`FsAuditLogger`), `crates/orbit-engine/src/activity_job/dispatcher.rs` → `docs/design/auditability/2_design.md §3` | [T20260426-0605] |
+| Filesystem denial audit channel | `crates/orbit-tools/src/fs_audit.rs` (`FsAuditLogger`), `crates/orbit-engine/src/activity_job/dispatcher.rs` → `docs/design/auditability/2_design.md §3` | [T20260426-0605] |
 
 ---
 

@@ -5,6 +5,8 @@ pub mod config;
 pub mod doctor;
 pub mod friction;
 pub mod gc;
+pub mod host;
+pub(crate) mod host_route;
 pub mod init;
 pub mod job;
 pub mod locks;
@@ -12,7 +14,7 @@ pub mod log;
 pub mod mcp;
 pub mod migrate;
 pub mod operation;
-pub mod operation_args;
+pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
 pub mod run;
@@ -76,6 +78,7 @@ Environment:
   init        Initialize the global Orbit root (~/.orbit)
   workspace   Manage workspaces
   config      Show or update Orbit configuration
+  host        Register and inspect the remote Orbit hosts this machine reaches over SSH
   plugin      Install and manage Orbit plugins
   migrate     Apply or inspect pending .orbit layout/schema migrations
   update      Install a published Orbit release and converge to it
@@ -86,7 +89,7 @@ Knowledge:
   search      Search tasks and frictions
 
 Operate:
-  run         Run a workflow (ship, job)
+  run         Run workflows, drain the backlog, and inspect runs
   job         View job definitions
   tool        View tool registry
   gc          Inspect and explicitly reap Orbit-managed garbage
@@ -138,6 +141,7 @@ pub enum Commands {
     Init(init::InitCommand),
     Workspace(workspace::WorkspaceCommand),
     Config(config::ConfigCommand),
+    Host(host::HostCommand),
     Plugin(plugin::PluginCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),

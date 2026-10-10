@@ -22,6 +22,7 @@ impl TaskV2Store {
             ));
         }
 
+        reject_forged_grant(&fields.append_history)?;
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
             let receipt = format!("operation_id={}", fields.operation_id);
@@ -37,15 +38,29 @@ impl TaskV2Store {
             if bundle.envelope.context_files != fields.expected_context_files
                 || bundle.envelope.status != fields.expected_status
                 || bundle.envelope.complexity != fields.expected_complexity
+                || bundle.envelope.crew != fields.expected_crew
+                || bundle.envelope.crew_source != fields.expected_crew_source
+                || creation_state(&bundle).identity() != fields.expected_context_creation
             {
                 return Ok(AtomicTaskMutationOutcome::Stale);
             }
 
-            if let Some(boundary) = &self.coordination {
-                boundary.guard_ordinary_footprint(fields.status, &fields.context_files)?;
-            }
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
+            for entry in &fields.append_history {
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: next_event_id(&bundle.events),
+                    at: entry.at,
+                    by: fields.actor.clone(),
+                    event_type: entry.event.clone(),
+                    note: entry.note.clone(),
+                    from_status: None,
+                    to_status: None,
+                };
+                self.bundle_store.append_event(id, &event)?;
+                bundle.events.push(event);
+            }
             let status_changed = fields.status != bundle.envelope.status;
             let event = TaskEventRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -58,6 +73,7 @@ impl TaskV2Store {
                 to_status: status_changed.then_some(fields.status),
             };
             self.bundle_store.append_event(id, &event)?;
+            bundle.events.push(event);
             let comment = TaskCommentRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                 comment_id: format!("C-{:04}", next_sequence(&bundle.comments, "C-")),
@@ -66,9 +82,19 @@ impl TaskV2Store {
                 body: format!("{receipt}\n{}", fields.audit_note),
             };
             self.bundle_store.append_comment(id, &comment)?;
+            append_creation_grant(
+                &self.bundle_store,
+                &mut bundle,
+                &fields.context_files,
+                &[],
+                &fields.actor,
+                now,
+            )?;
             bundle.envelope.context_files = fields.context_files.clone();
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
+            bundle.envelope.crew = fields.crew.clone();
+            bundle.envelope.crew_source = fields.crew_source.clone();
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             pending.finish();
@@ -90,7 +116,13 @@ impl TaskV2Store {
         }
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
+            let original_envelope = bundle.envelope.clone();
+            let original_description = bundle.description.clone();
+            let original_acceptance = bundle.acceptance.clone();
+            let original_plan = bundle.plan.clone();
+            let original_execution_summary = bundle.execution_summary.clone();
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let updated_at = Utc::now();
             let mut envelope_changed = false;
             let mut title_changed = false;
             let mut previous_title: Option<String> = None;
@@ -118,8 +150,20 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.context_files {
+                append_creation_grant(
+                    &self.bundle_store,
+                    &mut bundle,
+                    value,
+                    &fields.context_creation,
+                    &fields.actor,
+                    updated_at,
+                )?;
                 bundle.envelope.context_files = value.clone();
                 envelope_changed = true;
+            } else if !fields.context_creation.is_empty() {
+                return Err(OrbitError::InvalidInput(
+                    "creation authorization requires the context_files it applies to".to_string(),
+                ));
             }
             if let Some(value) = &fields.created_by {
                 bundle.envelope.created_by = value.clone();
@@ -193,6 +237,12 @@ impl TaskV2Store {
             }
             if let Some(value) = &fields.crew {
                 bundle.envelope.crew = value.clone();
+                // A crew replacement without provenance is an explicit pin.
+                bundle.envelope.crew_source = value.as_ref().map(|_| "explicit".to_string());
+                envelope_changed = true;
+            }
+            if let Some(value) = &fields.crew_source {
+                bundle.envelope.crew_source = value.clone();
                 envelope_changed = true;
             }
             if let Some(value) = &fields.orchestrator {
@@ -204,12 +254,6 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
 
-            if let Some(boundary) = &self.coordination {
-                boundary.guard_ordinary_footprint(
-                    bundle.envelope.status,
-                    &bundle.envelope.context_files,
-                )?;
-            }
             if relations_changed {
                 self.registry.validate_task_relations(
                     &self.workspace_id,
@@ -259,13 +303,80 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
+            // Drain approval snapshots use task history to distinguish a real
+            // operator edit from the creation-grant row that merely re-seals
+            // unchanged intent. Record content and scope changes alongside
+            // the document write so the grant row cannot hide them.
+            let mut prior_unrecorded_envelope = original_envelope.clone();
+            prior_unrecorded_envelope.title = bundle.envelope.title.clone();
+            prior_unrecorded_envelope.crew = bundle.envelope.crew.clone();
+            prior_unrecorded_envelope.crew_source = bundle.envelope.crew_source.clone();
+            if fields.source_task_id.is_some() && fields.relations.is_none() {
+                prior_unrecorded_envelope
+                    .relations
+                    .retain(|relation| relation.relation_type != TaskRelationType::RegressionFrom);
+                prior_unrecorded_envelope.relations.extend(
+                    bundle
+                        .envelope
+                        .relations
+                        .iter()
+                        .filter(|relation| {
+                            relation.relation_type == TaskRelationType::RegressionFrom
+                        })
+                        .cloned(),
+                );
+            }
+            let envelope_fields_changed = prior_unrecorded_envelope != bundle.envelope;
+            let documents_changed = fields
+                .description
+                .as_ref()
+                .is_some_and(|value| value != &original_description)
+                || fields
+                    .acceptance_criteria
+                    .as_ref()
+                    .is_some_and(|value| render_acceptance(value) != original_acceptance)
+                || fields
+                    .plan
+                    .as_ref()
+                    .is_some_and(|value| value != &original_plan)
+                || fields
+                    .execution_summary
+                    .as_ref()
+                    .is_some_and(|value| value != &original_execution_summary);
+            let context_creation_changed = !fields.context_creation.is_empty();
+            if envelope_fields_changed || documents_changed || context_creation_changed {
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: next_event_id(&bundle.events),
+                    at: Utc::now(),
+                    by: fields.actor.clone(),
+                    event_type: "updated".to_string(),
+                    note: Some("task fields updated".to_string()),
+                    from_status: None,
+                    to_status: None,
+                };
+                self.bundle_store.append_event(id, &event)?;
+                bundle.events.push(event);
+            }
+
             if envelope_changed
                 || fields.description.is_some()
                 || fields.acceptance_criteria.is_some()
                 || fields.plan.is_some()
                 || fields.execution_summary.is_some()
             {
-                bundle.envelope.updated_at = Utc::now();
+                if fields.context_files.is_none() {
+                    let context_files = bundle.envelope.context_files.clone();
+                    append_creation_grant(
+                        &self.bundle_store,
+                        &mut bundle,
+                        &context_files,
+                        &[],
+                        &fields.actor,
+                        updated_at,
+                    )?;
+                }
+                bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
                 self.replace_index_best_effort(&bundle.envelope, "task document update");
@@ -288,6 +399,7 @@ impl TaskV2Store {
             ));
         }
 
+        reject_forged_grant(&fields.append_history)?;
         self.with_task_lock(id, || {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
@@ -312,7 +424,12 @@ impl TaskV2Store {
                 )));
             }
             let target_status = fields.status.unwrap_or(current_status);
-            if let Some(boundary) = &self.coordination {
+            let work_starting = target_status == TaskStatus::InProgress
+                && matches!(
+                    fields.status_event.as_deref(),
+                    Some("started" | "pulled_by" | "resume_readmitted")
+                );
+            if work_starting && let Some(boundary) = &self.coordination {
                 boundary.guard_ordinary_footprint(target_status, &bundle.envelope.context_files)?;
             }
             let status_transition =
@@ -374,6 +491,15 @@ impl TaskV2Store {
                 || fields.status_event.is_some()
                 || fields.status_note.is_some()
             {
+                let context_files = bundle.envelope.context_files.clone();
+                append_creation_grant(
+                    &self.bundle_store,
+                    &mut bundle,
+                    &context_files,
+                    &[],
+                    &fields.actor,
+                    now,
+                )?;
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;

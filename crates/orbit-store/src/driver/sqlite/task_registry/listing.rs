@@ -16,7 +16,7 @@ use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
 use super::util::TERMINAL_STATUSES;
-use crate::contracts::{IndexedTaskRow, TaskIndexFilter, TaskIndexSelection};
+use crate::contracts::{IndexedTaskRow, TaskIndexFilter, TaskIndexKey, TaskIndexSelection};
 
 /// Bound at most this many ids per `IN (...)` list; well under SQLite's
 /// default variable limit.
@@ -33,9 +33,10 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare(
-                "SELECT task_id, status, priority, job_run_id, created_at, updated_at
-                 FROM task_bundle_index
-                 WHERE workspace_id = ?1",
+                "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag
+                 FROM task_bundle_index i
+                 LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND t.workspace_id = i.workspace_id
+                 WHERE i.workspace_id = ?1",
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
@@ -50,25 +51,18 @@ impl TaskRegistryStore {
                         updated_at: row.get(5)?,
                         tags: BTreeSet::new(),
                     },
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let mut indexed = rows
-            .collect::<Result<BTreeMap<_, _>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        let mut tag_stmt = conn
-            .prepare("SELECT task_id, tag FROM task_bundle_tags WHERE workspace_id = ?1")
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let tag_rows = tag_stmt
-            .query_map([&partition_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        for tag_row in tag_rows {
-            let (task_id, tag) = tag_row.map_err(|e| OrbitError::Store(e.to_string()))?;
-            if let Some(row) = indexed.get_mut(&task_id) {
-                row.tags.insert(tag);
+        // One statement keeps scalar fields and tags in the same SQLite
+        // snapshot when a writer replaces both in a concurrent transaction.
+        let mut indexed = BTreeMap::new();
+        for row in rows {
+            let (task_id, row, tag) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            let entry = indexed.entry(task_id).or_insert(row);
+            if let Some(tag) = tag {
+                entry.tags.insert(tag);
             }
         }
         Ok(indexed)
@@ -103,7 +97,9 @@ impl TaskRegistryStore {
             None => None,
         };
 
-        let mut sql = format!("SELECT task_id FROM task_bundle_index WHERE {predicate} ORDER BY ");
+        let mut sql = format!(
+            "SELECT task_id, created_at FROM task_bundle_index WHERE {predicate} ORDER BY "
+        );
         if terminal_last {
             sql.push_str("(status IN (");
             push_placeholders(&mut sql, TERMINAL_STATUSES.len());
@@ -124,14 +120,17 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
             .query_map(params_from_iter(values.iter()), |row| {
-                row.get::<_, String>(0)
+                Ok(TaskIndexKey {
+                    task_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                })
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let ids = rows
+        let rows = rows
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let total = total.unwrap_or(ids.len());
-        Ok(TaskIndexSelection { ids, total })
+        let total = total.unwrap_or(rows.len());
+        Ok(TaskIndexSelection { rows, total })
     }
 
     /// Status projection for one listing: every indexed task in

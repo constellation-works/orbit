@@ -1,6 +1,6 @@
 // Execute the shipped Settings modules against a small DOM and fixture API:
-// the System sub-view's render, provenance, workspace-override marker, edit
-// round-trip and refused write.
+// review health and crew table rendering, sub-view chrome, plus the System
+// view's provenance, override marker, edit round-trip, and refused write.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -109,12 +109,18 @@ p = P(); p.feed(sys.stdin.read()); print(json.dumps(p.subtabs))
 `], { input: fs.readFileSync(new URL('../../assets/dashboard/index.html', import.meta.url), 'utf8'), encoding: 'utf8' });
 assert.equal(parsed.status, 0, parsed.stderr);
 const subtabs = JSON.parse(parsed.stdout);
-assert.deepEqual(subtabs.slice(-3), ['crews', 'keys', 'system'], 'System sits beside Crews and Keys');
+assert.deepEqual(subtabs.slice(subtabs.indexOf('crews'), subtabs.indexOf('crews') + 3), ['crews', 'keys', 'system'], 'System sits beside Crews and Keys');
 
 const body = Object.assign(new Node('div'), { id: 'config-body' });
 const controls = Object.assign(new Node('div'), { id: 'config-controls' });
+const explainer = Object.assign(new Node('p'), { id: 'config-explainer' });
 const count = Object.assign(new Node('span'), { id: 'config-count' });
-const byId = { 'config-body': body, 'config-controls': controls, 'config-count': count };
+const byId = {
+  'config-body': body,
+  'config-controls': controls,
+  'config-explainer': explainer,
+  'config-count': count,
+};
 const document = { activeElement: null, body: new Node('body'), createElement: tag => new Node(tag), getElementById: id => byId[id] || null };
 
 // ---- fixture API ----
@@ -123,23 +129,50 @@ const defaults = { enabled: true, cpu_high_percent: 90, cpu_resume_percent: 85, 
 const globalSet = { disk_resume_percent: 80 };
 const workspaceSet = { memory_high_percent: 75 };
 const GLOBAL_PATH = '/home/test/.orbit/config.toml';
+const configSet = { authorized: true, reason: null };
 const value = name => globalSet[name] ?? defaults[name];
 const row = (name, layerValue, set, layer) => ({
   key: KEY + name, label: name, value: layerValue, value_type: name === 'enabled' ? 'bool' : 'integer',
   state: set ? 'set' : 'default', source: { layer, path: set ? GLOBAL_PATH : null }, shadowed_by: [], description: `${name} description`,
 });
 const globalFile = () => ({
-  scope: 'global', layers: { global: { path: GLOBAL_PATH, exists: true }, workspace: { path: '/ws/.orbit/config.toml', exists: true } },
+  scope: 'global', config_set: configSet, layers: { global: { path: GLOBAL_PATH, exists: true }, workspace: { path: '/ws/.orbit/config.toml', exists: true } },
   sections: [{ token: 'delivery', title: 'Delivery', keys: [
     { key: 'workflow.base_branch', label: 'base_branch', value: 'main', value_type: 'string', state: 'default', source: { layer: 'built-in' }, shadowed_by: [] },
     ...Object.keys(defaults).map(name => row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')),
   ] }],
 });
 const effective = () => ({
-  scope: 'effective', layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
-  sections: [{ token: 'delivery', keys: Object.keys(defaults).map(name => name in workspaceSet
-    ? { ...row(name, workspaceSet[name], true, 'workspace'), source: { layer: 'workspace', path: '/ws/.orbit/config.toml' } }
-    : row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')) }],
+  scope: 'effective', config_set: configSet, layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
+  sections: [
+    { token: 'machine', title: 'Machine (machine.*)', blurb: 'machine identity', key_prefix: 'machine', kind: 'keys', counts: { set: 3, default: 0, unset: 0, total: 3 }, keys: [
+      { key: 'machine.id', label: 'id', value: 'hm_fixture', value_type: 'string', state: 'set', settable: false, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Generated machine identity' },
+      { key: 'machine.task_prefix', label: 'task_prefix', value: 'HF', value_type: 'string', state: 'set', settable: false, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Task ID namespace' },
+      { key: 'machine.name', label: 'name', value: 'http-fixture', value_type: 'string', state: 'set', settable: true, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Display name' },
+    ] },
+    { token: 'delivery', title: 'Delivery (workflow.*)', blurb: 'delivery settings', key_prefix: 'workflow', kind: 'keys', counts: { set: 1, unset: 0, total: 1 }, keys: [
+      ...Object.keys(defaults).map(name => name in workspaceSet
+        ? { ...row(name, workspaceSet[name], true, 'workspace'), source: { layer: 'workspace', path: '/ws/.orbit/config.toml' } }
+        : row(name, value(name), name in globalSet, name in globalSet ? 'global' : 'built-in')),
+      { ...row('low_complexity_crews', ['astra:2'], true, 'workspace'), key: 'workflow.low_complexity_crews', label: 'low_complexity_crews' },
+    ] },
+    { token: 'crews', title: 'Crews', blurb: 'named crews', key_prefix: 'crews', kind: 'crews', counts: { set: 0, unset: 0, total: 0 }, keys: [] },
+  ],
+  crews: [{ name: 'astra', provider: 'codex', model: 'gpt-6-astra', effort: 'high', tags: [], description: 'review and implementation crew', source: 'global', enabled: true, referenced_by: ['workflow.default_crew', 'workflow.low_complexity_crews'] }],
+  review: {
+    healthy: false,
+    before_pr: { enabled: false, line: 'off (built-in)', problems: [] },
+    after_landing: {
+      enabled: true,
+      line: "on (auto-task delivery-code-review); unhealthy: consumer state is 'definition_changed'",
+      health: {
+        healthy: false,
+        problems: ["consumer state is 'definition_changed' (not adopted automatically: active_execution)"],
+        line: "unhealthy: consumer state is 'definition_changed' (not adopted automatically: active_execution)",
+      },
+    },
+  },
+  paths: [],
 });
 let hostPayload = {
   cpu: { percent: 97.2, severity: 'critical' }, memory: { percent: 40, severity: 'ok' },
@@ -152,12 +185,18 @@ let hostPayload = {
   ],
 };
 const requests = [];
+let fileFailure = null;
 const response = (payload, status = 200) => ({ ok: status < 400, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 const fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   requests.push({ path: url.pathname + url.search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
-  if (url.pathname === '/api/config/file') return response(globalFile());
+  if (url.pathname === '/api/config/file') return fileFailure ? response(fileFailure.body, fileFailure.status) : response(globalFile());
   if (url.pathname === '/api/config/effective') return response(effective());
+  if (url.pathname === '/api/config/keys') return response({ keys: [
+    { key: 'machine.id', value_type: 'string', section: 'machine', description: 'Generated machine identity', settable: false, options: [] },
+    { key: 'machine.task_prefix', value_type: 'string', section: 'machine', description: 'Task ID namespace', settable: false, options: [] },
+    { key: 'machine.name', value_type: 'string', section: 'machine', description: 'Display name', settable: true, options: [] },
+  ] });
   if (url.pathname === '/api/host/resources') return hostPayload ? response(hostPayload) : response({ error: 'down' }, 503);
   if (options.method === 'PUT' && url.pathname.startsWith('/api/config/keys/')) {
     const name = decodeURIComponent(url.pathname.slice('/api/config/keys/'.length)).slice(KEY.length);
@@ -206,7 +245,7 @@ assert.deepEqual(named(body, 'config-sys-resource').map(node => node.dataset.res
 assert.match(textOf(body, 'config-note').join(' '), /Edits write the global file \(\/home\/test\/\.orbit\/config\.toml\)/);
 assert.match(textOf(body, 'config-warning').join(' '), /workspace file overrides/);
 assert.equal(textOf(body, 'config-verdict')[0], 'held');
-assert.match(textOf(body, 'config-sys-verdict-text')[0], /Holding new admissions: cpu 97% ≥ 90% since 2026-10-04 08:41Z; disk \/data 91% ≥ 90% since 2026-10-04 08:45Z/);
+assert.match(textOf(body, 'config-sys-verdict-text')[0], /Holding new admissions: cpu 97% ≥ 90% since 2026-10-04 01:41 PDT; disk \/data 91% ≥ 90% since 2026-10-04 01:45 PDT/);
 const cpu = resource('cpu');
 assert.equal(textOf(cpu, 'config-sys-reading')[0].startsWith('97.2%'), true);
 assert.match(textOf(cpu, 'config-sys-reading')[0], /critical.*held/);
@@ -224,6 +263,36 @@ assert.ok(classesOf(cell('memory_high_percent')).includes('overridden'));
 assert.match(named(cell('memory_high_percent'), 'config-source')[1].title, /that value wins for this workspace's runtimes/);
 assert.equal(classesOf(cell('cpu_high_percent')).includes('overridden'), false);
 assert.equal(named(body, 'config-filter').length, 0, 'there is no key filter on the throttle panel');
+
+// ---- immutable identity rows stay read-only and section headings show a prefix once ----
+setConfigSubtab('effective');
+await fetchAndRenderConfig();
+for (const key of ['machine.id', 'machine.task_prefix']) {
+  const row = named(body, 'config-row').find(node => node.dataset.key === key);
+  assert.ok(row, `${key} renders in Effective`);
+  assert.equal(named(row, 'config-pencil').length, 0, `${key} has no edit button`);
+  const main = named(row, 'config-row-main')[0];
+  assert.equal(classesOf(main).includes('clickable'), false, `${key} is not click-to-edit`);
+  main.dispatch('click');
+  assert.equal(named(body, 'config-editor').length, 0, `${key} click opens no editor`);
+}
+const sectionTitles = textOf(body, 'config-section-title');
+for (const [title, prefix] of [['Machine (machine.*)', 'machine.*'], ['Delivery (workflow.*)', 'workflow.*']]) {
+  const heading = sectionTitles.find(value => value === title);
+  assert.ok(heading, `${title} section heading renders`);
+  assert.equal(heading.split(prefix).length - 1, 1, `${title} shows its key prefix once`);
+}
+assert.equal(named(body, 'config-section-prefix').length, 0, 'section headers do not add a second prefix');
+
+setConfigSubtab('keys');
+await fetchAndRenderConfig();
+const listedKeys = named(body, 'config-key-row').map(node => node.textContent);
+assert.equal(listedKeys.length, 1, 'Keys lists only writable registry keys');
+assert.match(listedKeys[0], /machine\.name/);
+assert.doesNotMatch(listedKeys.join(' '), /machine\.(id|task_prefix)/);
+
+setConfigSubtab('system');
+await fetchAndRenderConfig();
 
 // ---- edit round-trip ----
 edit('cpu_high_percent');
@@ -284,4 +353,89 @@ respond(null);
 await assert.rejects(host.fetchAndRenderHostResources(), 'a failed poll is reported to its caller');
 assert.equal(textOf(body, 'config-verdict')[0], 'unknown');
 assert.match(textOf(body, 'config-sys-verdict-text')[0], /Verdict unknown/);
-console.log('settings system tab: render, provenance, workspace override, edit round-trip, refused write and live readings passed');
+
+// ---- a caller without the operator capability sees keys read-only ----
+setConfigSubtab('global-file');
+await fetchAndRenderConfig();
+let keyRows = named(body, 'config-row');
+assert.ok(keyRows.length > 0, 'the global file renders key rows');
+assert.ok(named(body, 'config-pencil').length > 0, 'an authorized payload renders key edit controls');
+named(body, 'config-pencil')[0].click();
+assert.equal(named(body, 'config-editor').length, 1, 'an authorized key row opens an editor');
+configSet.authorized = false;
+configSet.reason = 'config.set requires operator';
+await fetchAndRenderConfig();
+keyRows = named(body, 'config-row');
+assert.ok(keyRows.length > 0, 'an unauthorized payload still renders its key rows');
+assert.equal(named(body, 'config-pencil').length, 0, 'an unauthorized payload renders no key edit control');
+assert.equal(named(body, 'config-editor').length, 0, 'a refresh that withdraws authority closes the key editor');
+for (const row of keyRows) {
+  const main = named(row, 'config-row-main')[0];
+  assert.ok(main, 'a key row keeps its read-only cells');
+  assert.equal(classesOf(main).includes('clickable'), false, 'an unauthorized key row is not an edit affordance');
+  main.dispatch('click');
+}
+assert.equal(named(body, 'config-editor').length, 0, 'activating an unauthorized key row does not open an editor');
+setConfigSubtab('system');
+await fetchAndRenderConfig();
+assert.equal(named(body, 'config-pencil').length, 0, 'system key cells stay read-only without operator authority');
+assert.equal(named(body, 'config-editor').length, 0, 'the system view does not open an editor without operator authority');
+
+// ---- effective review status, crew headers and sub-view chrome ----
+setConfigSubtab('effective');
+await fetchAndRenderConfig();
+assert.equal(explainer.hidden, false, 'the shared explainer appears on Effective');
+const reviewCard = named(body, 'config-review')[0];
+assert.ok(reviewCard, 'Effective renders the review health card');
+assert.equal(reviewCard.children[0].getAttribute('role'), 'alert', 'the unhealthy enabled switch leads with an alert');
+assert.ok(classesOf(reviewCard.children[0]).includes('alert'), 'the unhealthy status has the alert treatment');
+assert.match(reviewCard.children[0].textContent, /After-landing review: on · unhealthy/);
+assert.match(reviewCard.children[0].textContent, /definition_changed/);
+assert.match(reviewCard.children[0].textContent, /orbit doctor/);
+const diagnosticDisclosure = named(reviewCard, 'config-review-details')[0];
+assert.ok(diagnosticDisclosure, 'raw diagnostics have a disclosure');
+assert.equal(diagnosticDisclosure.getAttribute('open'), null, 'raw diagnostics start collapsed');
+assert.match(textOf(diagnosticDisclosure, 'config-review-diagnostic')[0], /not adopted automatically/);
+
+setConfigSubtab('crews');
+await fetchAndRenderConfig();
+assert.equal(explainer.hidden, true, 'Crews does not repeat the generic explainer');
+assert.equal(controls.hidden, true, 'Crews hides the empty controls band');
+const crewHead = named(body, 'config-crew-head')[0];
+assert.ok(crewHead, 'Crews has a header row');
+assert.deepEqual(crewHead.children.map(cell => cell.textContent).slice(0, 8), [
+  'Name', 'Provider', 'Model', 'Limit', 'Effort', 'Tags / fallbacks', 'Layer', 'Used by',
+]);
+const crewCells = named(body, 'config-crew-cells').find(node => !classesOf(node).includes('config-crew-head'));
+assert.ok(crewCells, 'the crew row is present');
+assert.doesNotMatch(crewCells.textContent, /\[\]/, 'empty crew arrays use the em dash placeholder');
+assert.equal(crewCells.children[5].children[1].textContent, '—', 'an empty crew array uses an em dash');
+assert.equal(crewCells.children[3].children[1].textContent, '—', 'a crew no usage reading covers shows no limit');
+assert.deepEqual(crewCells.children.map(cell => cell.children[0].textContent), crewHead.children.map(cell => cell.textContent), 'every stacked value has its matching column label before it');
+assert.match(crewCells.textContent, /workflow\.default_crew/);
+assert.deepEqual(textOf(crewCells, 'config-crew-use'), effective().crews[0].referenced_by, 'usage renders each server reference once');
+assert.equal(named(body, 'config-referenced').length, 0, 'informational crew usage is not warning-colored');
+
+setConfigSubtab('keys');
+await fetchAndRenderConfig();
+assert.equal(explainer.hidden, true, 'Keys does not repeat the generic explainer');
+assert.equal(controls.hidden, false, 'Keys keeps its populated controls');
+assert.ok(named(controls, 'config-filter').length > 0, 'Keys has a filter instead of an empty controls band');
+
+// ---- file validation errors keep the path, key, and a corrective remedy ----
+setConfigSubtab('workspace-file');
+fileFailure = { status: 400, body: { error: "config file '/ws/.orbit/config.toml': workflow.low_complexity_crews: crew 'missing' is not defined in [crews.*]" } };
+await assert.rejects(fetchAndRenderConfig());
+const validationMessage = body.textContent;
+assert.ok(validationMessage.includes('/ws/.orbit/config.toml'), 'a cold error shows the file path');
+assert.ok(validationMessage.includes('workflow.low_complexity_crews'), 'a validation error names the failing key');
+assert.ok(validationMessage.includes('missing'), 'a validation error names the dangling crew');
+assert.doesNotMatch(validationMessage, /Use Refresh to retry/i, 'validation requires correcting the file');
+assert.match(validationMessage, /correct.*configuration/i, 'the remedy asks for a configuration correction');
+fileFailure = null;
+await fetchAndRenderConfig();
+fileFailure = { status: 503, body: { error: 'temporarily unavailable' } };
+await assert.rejects(fetchAndRenderConfig());
+assert.match(body.textContent, /Use Refresh to retry/i, 'a transient HTTP failure still offers a retry');
+fileFailure = null;
+console.log('settings views: review health alert, collapsed diagnostics, crew headers and pool usage, sub-view chrome, and system behavior passed');

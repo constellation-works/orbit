@@ -1,5 +1,5 @@
 // Persisted delivery observations and accepted coverage, shared by both consumers.
-import { detailsPanel, el, withWorkspace } from './common.js';
+import { captureWorkspaceVisit, detailsPanel, el, fetchJson, formatDateTime, onWorkspaceChange, withWorkspace } from './common.js';
 
 const field = (label, value) => el('div', { class: 'operation-field' }, [
   el('span', { class: 'operation-field-label', text: label }),
@@ -24,7 +24,7 @@ const ownershipBlocker = ownership => {
 
 // `key` identifies this diagnostic's disclosure across refreshes; the caller
 // owns it because the same consumer can be shown under different cards.
-export function renderAutomation(diagnostic, key) {
+export function renderAutomation(diagnostic, key, consumer) {
   if (!diagnostic) return null;
   const panel = detailsPanel(key, { class: 'automation-diagnostic' });
   panel.appendChild(el('summary', { text: `${diagnostic.state?.members ? 'State automation' : 'Delivery coverage'} · ${diagnostic.reason || 'unknown'}` }));
@@ -38,20 +38,19 @@ export function renderAutomation(diagnostic, key) {
   }
   const members = state.members;
   if (members) {
-    const assessed = Object.entries(members.assessed || {}).filter(([key, value]) => !members.pending?.[key] || members.pending[key].fingerprint === value.resulting_fingerprint).map(([, value]) => value);
+    const counts = members.counts;
     panel.appendChild(el('div', { class: 'operation-grid' }, [
       field('Owner / definition', state.consumer),
-      field('Pending members', Object.keys(members.pending || {}).length),
-      field('Fresh / ready', `${assessed.length} / ${assessed.filter(value => value.ready).length}`),
-      field('Withheld members', Object.keys(members.withheld || {}).length),
-      field('Exhausted inputs', Object.keys(members.failed || {}).length),
+      field('Pending members', counts.pending),
+      field('Fresh / ready', `${counts.fresh} / ${counts.ready}`),
+      field('Withheld members', counts.withheld),
+      field('Exhausted inputs', counts.failed),
       field('Scan continuation', members.scan_after || 'Inventory complete'),
-      field('Usage', 'Unknown'),
     ]));
     const active = members.active;
     if (active) {
       const batch = (active.members?.length ? active.members : [active.member]).map(member => member.key).join(', ');
-      panel.appendChild(el('p', { text: `Batch ${batch} · attempt ${active.attempt}/${active.max_attempts} · deadline ${active.deadline} · action ${active.action_id || 'awaiting acknowledgement'}` }));
+      panel.appendChild(el('p', { text: `Batch ${batch} · attempt ${active.attempt}/${active.max_attempts} · deadline ${formatDateTime(active.deadline)} · action ${active.action_id || 'awaiting acknowledgement'}` }));
     }
     const withheld = Object.entries(members.withheld || {}).slice(0, 20);
     if (withheld.length) panel.appendChild(el('pre', { text: withheld.map(([key, reason]) => `${key}: ${reason}`).join('\n') }));
@@ -62,11 +61,10 @@ export function renderAutomation(diagnostic, key) {
     field('Baseline exclusion', revision(state.baseline)),
     field('Observed through', revision(state.observed)),
     field('Examined through', revision(state.covered)),
-    field('Pending landings / commits', `${state.pending.length} / ${state.pending_commits.length}`),
-    field('Waived landings (uncovered)', state.waived?.length || 0),
-    field('Excluded landings (before-PR coverage)', state.excluded?.length || 0),
-    field('Unresolved evidence', Object.keys(state.unresolved).length),
-    field('Usage', 'Unknown'),
+    field('Pending landings / commits', `${state.counts.pending} / ${state.counts.pending_commits}`),
+    field('Waived landings (uncovered)', state.counts.waived),
+    field('Excluded landings (before-PR coverage)', state.counts.excluded),
+    field('Unresolved evidence', state.counts.unresolved),
   ]));
   }
   const attempt = state.active;
@@ -80,7 +78,7 @@ export function renderAutomation(diagnostic, key) {
   for (const excluded of state.excluded || []) panel.appendChild(el('p', { text: `Excluded ${excluded.delivery.key}: certificate ${excluded.exclusion.attempt_id} (${excluded.exclusion.assurance}); examined as context, not an obligation.` }));
   for (const waiver of diagnostic.waivers || []) panel.appendChild(el('p', { text: `Waived ${waiver.batch_id} by ${waiver.by}: ${waiver.reason}. Coverage did not advance.` }));
   for (const receipt of diagnostic.receipts || []) {
-    const row = el('p', { text: `Accepted ${receipt.accepted_at} · ${receipt.evidence_digest} · ${receipt.submitted_by} ` });
+    const row = el('p', { text: `Accepted ${formatDateTime(receipt.accepted_at)} · ${receipt.evidence_digest} · ${receipt.submitted_by} ` });
     const parts = state.consumer.split('/');
     const kind = parts[parts.length - 2];
     const name = parts[parts.length - 1];
@@ -89,5 +87,42 @@ export function renderAutomation(diagnostic, key) {
     row.appendChild(link);
     panel.appendChild(row);
   }
+  if (consumer?.workspace) panel.appendChild(fullStateDisclosure(key, consumer));
   return panel;
+}
+
+// Full state is loaded only on explicit disclosure, cached across polling,
+// and reloadable by the operator. A workspace switch drops retained data.
+const fullStates = new Map();
+onWorkspaceChange(() => fullStates.clear());
+
+function fullStateDisclosure(key, { kind, name, workspace }) {
+  const path = `/api/automation/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/state?workspace=${encodeURIComponent(workspace)}`;
+  const full = detailsPanel(`${key}:full:${workspace}`);
+  const output = el('pre');
+  full.appendChild(el('summary', { text: 'Full persisted state' }));
+  let loading = false;
+  const load = async (reload = false) => {
+    if (loading) return;
+    loading = true;
+    const visit = captureWorkspaceVisit();
+    output.textContent = 'Loading…';
+    if (reload) fullStates.delete(path);
+    if (!fullStates.has(path)) fullStates.set(path, fetchJson(path));
+    const request = fullStates.get(path);
+    try {
+      const payload = await request;
+      if (visit.isCurrent()) output.textContent = JSON.stringify(payload.state, null, 2);
+    } catch (error) {
+      if (fullStates.get(path) === request) fullStates.delete(path);
+      if (visit.isCurrent()) output.textContent = error.message;
+    } finally {
+      loading = false;
+    }
+  };
+  const reload = el('button', { type: 'button', text: 'Reload full state' });
+  reload.addEventListener('click', () => void load(true));
+  full.append(reload, output);
+  full.addEventListener('toggle', () => { if (full.open) void load(); });
+  return full;
 }

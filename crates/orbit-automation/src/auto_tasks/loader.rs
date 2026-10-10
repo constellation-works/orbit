@@ -2,7 +2,10 @@
 //! fail-closed per file. An invalid definition becomes a load error and is
 //! treated as absent; it never fires with defaults (mirrors the routine
 //! loader). The file stem must equal the definition's `name` so the on-disk
-//! identity and the provenance-tag suffix stay in lockstep.
+//! identity and the provenance-tag suffix stay in lockstep. Each body is
+//! loaded with its operator settings ([`super::settings`]) applied; an
+//! unreadable settings table fails every definition closed, since any of them
+//! may carry settings.
 
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
@@ -11,6 +14,7 @@ use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_types::workflow::AutoTaskDefinition;
 
 use super::schedule::validate_schedule;
+use super::settings::{AutoTaskSettingsTable, load_settings_table};
 
 /// Directory under a workspace's `.orbit/` holding auto-task YAML files.
 pub const AUTO_TASKS_DIR: &str = "auto_tasks";
@@ -174,8 +178,13 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
     }
     paths.sort();
 
+    let settings = load_settings_table(&dir);
     for path in paths {
-        match load_definition_file(&path) {
+        let loaded = settings
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|settings| load_definition_with_settings(&path, settings));
+        match loaded {
             Ok(loaded) => collection.definitions.push(loaded),
             Err(message) => collection.errors.push(AutoTaskLoadError {
                 path: Some(path),
@@ -186,10 +195,25 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
     collection
 }
 
-/// Load and validate one definition file, as discovery does for each entry.
+/// Load and validate one definition file with its settings applied, as
+/// discovery does for each entry.
 pub(crate) fn load_definition_file(path: &Path) -> Result<LoadedAutoTask, String> {
+    let settings = load_settings_table(path.parent().unwrap_or(Path::new(".")))?;
+    load_definition_with_settings(path, &settings)
+}
+
+fn load_definition_with_settings(
+    path: &Path,
+    settings: &AutoTaskSettingsTable,
+) -> Result<LoadedAutoTask, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
-    let definition = parse_auto_task_yaml(&raw).map_err(|error| error.to_string())?;
+    let mut definition = parse_auto_task_yaml(&raw).map_err(|error| error.to_string())?;
+    if let Some(entry) = settings.get(&definition.name) {
+        entry.apply(&mut definition);
+        definition
+            .validate()
+            .map_err(|error| format!("auto-task settings for '{}': {error}", definition.name))?;
+    }
     validate_schedule(&definition.schedule).map_err(|error| error.to_string())?;
 
     // The file stem is the definition identity: reject a mismatch so CRUD (which

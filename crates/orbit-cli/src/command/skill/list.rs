@@ -6,10 +6,7 @@ use serde_json::{Value, json};
 use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
-pub struct SkillListArgs {
-    #[arg(long)]
-    pub json: bool,
-}
+pub struct SkillListArgs {}
 
 impl Execute for SkillListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {

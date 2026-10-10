@@ -16,6 +16,156 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::TcpStream;
 
+/// A worker binding must agree with the SSH session machine, and a refused
+/// replacement must preserve the original binding and authority reduction.
+#[tokio::test]
+async fn ssh_worker_initialize_fences_the_execution_machine_and_keeps_its_binding() {
+    use orbit_types::task::ExecutionLocation;
+    use orbit_types::tool::{McpCapability, McpTransport, WorkerInvocation};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let binding = WorkerInvocation {
+        owner_machine_id: "hm_owner".into(),
+        owner_workspace_id: "ws_owner".into(),
+        owner_destination: "hm_owner/ws_owner".into(),
+        task_id: "fixture-task".into(),
+        claim_id: "fixture-claim".into(),
+        execution: ExecutionLocation {
+            machine_id: "hm_follower".into(),
+            machine_name: None,
+        },
+        bound_run_id: "fixture-run".into(),
+    };
+    for (transport, machine, accepted) in [
+        (McpTransport::SshMcp, Some("hm_follower"), true),
+        (McpTransport::SshMcp, Some("hm_other"), false),
+        (McpTransport::SshMcp, None, false),
+        (McpTransport::Local, Some("hm_follower"), false),
+    ] {
+        let host = Arc::new(EchoHost {
+            contexts: Mutex::new(Vec::new()),
+            list_calls: Mutex::new(0),
+        });
+        let session = ToolSessionContext {
+            caller_machine_id: machine.map(str::to_owned),
+            process_machine_id: Some("hm_owner".into()),
+            transport: Some(transport),
+            effective_capabilities: [McpCapability::Agent, McpCapability::Operator].into(),
+            ..Default::default()
+        };
+        let server = OrbitToolServer::new_with_context(host.clone(), session);
+        let (client_io, server_io) = duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            if let Ok(service) = server.serve(server_io).await {
+                service.waiting().await.expect("worker session closes");
+            }
+        });
+        let (client_read, mut client_write) = tokio::io::split(client_io);
+        let mut client_read = BufReader::new(client_read);
+        let initialize = |id, binding: &WorkerInvocation| {
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "worker-fixture", "version": "0"},
+                    "_meta": {"orbit": {"worker_invocation": binding}}
+                }
+            })
+        };
+        let request = |binding: &WorkerInvocation| format!("{}\n", initialize(1, binding));
+        client_write
+            .write_all(request(&binding).as_bytes())
+            .await
+            .unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client_read.read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        if !accepted {
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+            assert_eq!(
+                response["error"]["message"],
+                "worker session binding refused"
+            );
+            assert!(host.contexts.lock().unwrap().is_empty());
+        } else {
+            assert!(response.get("result").is_some(), "{response}");
+            client_write
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
+                .await
+                .unwrap();
+            // Identical initialization can be replayed, but neither machine
+            // nor attempt may be replaced once the session is bound.
+            let mut other_machine = binding.clone();
+            other_machine.execution.machine_id = "hm_other".into();
+            let mut other_attempt = binding.clone();
+            other_attempt.bound_run_id = "other-run".into();
+            for (id, proposed, refused) in [
+                (2, &binding, false),
+                (3, &other_machine, true),
+                (4, &other_attempt, true),
+            ] {
+                client_write
+                    .write_all(format!("{}\n", initialize(id, proposed)).as_bytes())
+                    .await
+                    .unwrap();
+                line.clear();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    client_read.read_line(&mut line),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let response: Value = serde_json::from_str(&line).unwrap();
+                if refused {
+                    assert_eq!(response["error"]["code"], -32602, "{response}");
+                    assert_eq!(
+                        response["error"]["message"],
+                        "worker session binding refused"
+                    );
+                } else {
+                    assert!(response.get("result").is_some(), "{response}");
+                }
+            }
+            let call = json!({"jsonrpc":"2.0", "id":5, "method":"tools/call", "params":{"name":"demo_echo", "arguments":{"value":"inspect binding"}}});
+            client_write
+                .write_all(format!("{call}\n").as_bytes())
+                .await
+                .unwrap();
+            line.clear();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                client_read.read_line(&mut line),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let response: Value = serde_json::from_str(&line).unwrap();
+            assert!(response.get("result").is_some(), "{response}");
+            let contexts = host.contexts.lock().unwrap();
+            assert_eq!(contexts.len(), 1);
+            assert_eq!(contexts[0].worker_invocation.as_ref(), Some(&binding));
+            assert_eq!(contexts[0].caller_machine_id.as_deref(), machine);
+            assert_eq!(
+                contexts[0].effective_capabilities,
+                [McpCapability::Agent].into()
+            );
+        }
+        drop(client_write);
+        drop(client_read);
+        tokio::time::timeout(std::time::Duration::from_secs(10), server_task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
 struct EchoHost {
     contexts: Mutex<Vec<ToolSessionContext>>,
     list_calls: Mutex<usize>,
@@ -877,4 +1027,70 @@ async fn client_handshake_does_not_advertise_retired_desktop_tools() {
         client.cancel().await.unwrap();
         server_task.await.unwrap();
     }
+}
+
+/// An owner whose task read timed out waiting on a store lock.
+struct LockBusyHost;
+impl McpHost for LockBusyHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(vec![definition("demo.echo")])
+    }
+    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        Err(OrbitError::FileLockTimeout(Box::new(
+            orbit_common::fs::io::FileLockTimeout {
+                lock_path: "/state/tasks/workspaces/ws/.task-commit.lock".into(),
+                label: "task commit boundary: recovery at src/task.rs:1".into(),
+                timeout_ms: 30_000,
+                holder: None,
+                shared_holders: Vec::new(),
+            },
+        )))
+    }
+}
+
+/// [ORB-15088] A call that lost only to a lock-wait deadline reaches its
+/// caller as the retryable `lock_busy`, not `internal_error`: a pull follower
+/// reads that code off the wire to retry its owner read and to keep the
+/// failure from settling as a fault of its candidate.
+#[tokio::test]
+async fn a_lock_wait_timeout_is_a_retryable_lock_busy_on_the_wire() {
+    let server = OrbitToolServer::new_with_context(
+        Arc::new(LockBusyHost),
+        ToolSessionContext::trusted_local(None, None, None),
+    );
+    let (client_io, server_io) = duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        let service = server.serve(server_io).await.expect("serve");
+        service.waiting().await.expect("wait");
+    });
+    let mut info = ClientInfo::default();
+    info.meta = Some(Meta(
+        json!({ "orbit": { "workspace": "/tmp/owner" } })
+            .as_object()
+            .expect("initialize metadata")
+            .clone(),
+    ));
+    let client = info.serve(client_io).await.expect("client");
+
+    let busy = client
+        .peer()
+        .call_tool(call("demo_echo", json!({ "value": "ORB-1" })))
+        .await
+        .expect("a structured tool error");
+    assert_eq!(busy.is_error, Some(true));
+    let payload = busy.structured_content.expect("structured error");
+    assert_eq!(
+        payload["code"],
+        orbit_common::LOCK_BUSY_ERROR_CODE,
+        "{payload}"
+    );
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("timed out after 30000ms")),
+        "{payload}"
+    );
+
+    client.cancel().await.expect("cancel");
+    server_task.await.expect("server");
 }

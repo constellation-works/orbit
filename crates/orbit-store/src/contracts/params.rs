@@ -39,8 +39,16 @@ pub struct TaskCreateParams {
     pub external_refs: Vec<ExternalRef>,
     pub source_task_id: Option<String>,
     pub crew: Option<String>,
+    /// Trusted assignment provenance, absent on legacy creation contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     pub orchestrator: Option<String>,
     pub comments: Vec<TaskComment>,
+    /// Exact canonical `context_files` selectors an operator surface accepted
+    /// for creation under `allow_missing_context`. Recorded as the task's
+    /// initial creation grant in the same bundle commit as the task.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_creation: Vec<String>,
 }
 
 /// Parameters for a partial update to an existing task.
@@ -75,7 +83,15 @@ pub struct TaskDocumentUpdateParams {
     /// Trusted link location supplied with the run binding, never tool input.
     pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
+    /// Assignment provenance updated with the selected crew.
+    pub crew_source: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
+    /// Exact canonical selectors of the replacement `context_files` an
+    /// operator surface newly authorized for creation. The task's creation
+    /// grant is recomputed and recorded in the same bundle commit whenever
+    /// `context_files` changes: grants for kept selectors survive, these are
+    /// added, and grants for removed selectors are revoked.
+    pub context_creation: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -105,6 +121,16 @@ pub struct AtomicTaskMutationParams {
     pub expected_context_files: Vec<String>,
     pub expected_status: TaskStatus,
     pub expected_complexity: Option<TaskComplexity>,
+    /// Crew observed under the application task lock, guarded at publication.
+    pub expected_crew: Option<String>,
+    pub expected_crew_source: Option<String>,
+    /// Replacement selection, committed with the complexity and history.
+    pub crew: Option<String>,
+    pub crew_source: Option<String>,
+    /// Identity of the creation grant the caller validated against
+    /// (`ContextCreationState::identity`); a different grant at the write
+    /// boundary makes the mutation stale.
+    pub expected_context_creation: Option<String>,
     pub context_files: Vec<String>,
     pub status: TaskStatus,
     pub complexity: TaskComplexity,
@@ -114,6 +140,8 @@ pub struct AtomicTaskMutationParams {
     pub history_summary: String,
     /// Full decision evidence stored as a task comment in the same bundle commit.
     pub audit_note: String,
+    /// Additional decision records committed before the operation receipt.
+    pub append_history: Vec<TaskHistoryEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +158,9 @@ pub struct TaskArtifactUpdateParams {
     pub actor: String,
     /// Trusted executor context supplied by Core, never parsed from tool input.
     pub owner_run_id: Option<String>,
+    /// Trusted writer class Core derives from the write path, never parsed
+    /// from tool input. `None` records an agent or unclassified writer.
+    pub writer: Option<orbit_types::task::ArtifactWriter>,
     /// Artifact files to write under the task bundle `artifacts/` directory.
     /// Existing files at the same relative path are overwritten.
     pub upsert_artifacts: Vec<TaskArtifact>,
@@ -195,7 +226,10 @@ pub struct TaskReservationReserveParams {
     pub workspace_orbit_dir: String,
     pub workspace_id: Option<String>,
     pub task_ids: Vec<String>,
+    /// Original footprint checked against existing holders at the grant boundary.
     pub requested_files: Vec<String>,
+    /// Files held by the grant. Empty for work exempt from holding context locks.
+    pub stored_files: Vec<String>,
     pub actor: String,
     pub ttl_seconds: u32,
     pub owner_run_id: Option<String>,
@@ -414,7 +448,21 @@ pub struct WorkspaceClaimCheckResult {
 #[derive(Debug, Clone)]
 pub struct JobRunQuery {
     pub job_id: Option<String>,
+    /// Exact string membership in the run's submitted `input.task_ids` array,
+    /// or equality with a text top-level `input.task_id`. Applied before
+    /// ordering, limiting and row/step hydration. Missing or non-array
+    /// `task_ids`, non-text `task_id`, and nested fields do not match; other
+    /// input fields confer no ownership.
+    pub task_id: Option<String>,
+    /// Exact name of the routine recorded as the run's trigger
+    /// (`pipeline state.trigger.routine`), whichever trigger kind fired it.
+    /// Applied before ordering and limiting; pair it with `job_id` so the
+    /// scan stays inside one job's history.
+    pub trigger_routine: Option<String>,
     pub state: Option<JobRunState>,
+    /// Match any listed state before ordering and limiting. Empty means
+    /// unrestricted; other state predicates are intersected with this set.
+    pub states: Vec<JobRunState>,
     /// Whether to include only states for which `JobRunState::is_terminal()`
     /// returns true. Applied before ordering and limiting.
     pub terminal_only: bool,
@@ -438,7 +486,10 @@ impl Default for JobRunQuery {
     fn default() -> Self {
         Self {
             job_id: None,
+            task_id: None,
+            trigger_routine: None,
             state: None,
+            states: Vec::new(),
             terminal_only: false,
             active_only: false,
             created_since: None,
@@ -508,6 +559,9 @@ pub struct DrainLeafOccupancy {
     /// operator can see which definitions hold the slots. Includes pending
     /// admissions no live run represents yet.
     pub per_pipeline: std::collections::BTreeMap<String, usize>,
+    /// Occupied slots outside the requested coordinator's dispatch lineage or
+    /// pull requests. Absent when no coordinator was requested.
+    pub inherited: Option<usize>,
 }
 
 /// Immutable request and binding with a monotone local execution checkpoint.
@@ -593,6 +647,8 @@ pub struct DesktopTaskMutationParams {
     pub payload_digest: String,
     pub expected_revision: String,
     pub fields: orbit_types::desktop::DesktopTaskFields,
+    /// Trusted assignment provenance from application validation.
+    pub crew_source: Option<Option<String>>,
     pub comment: Option<String>,
     pub status: Option<TaskStatus>,
 }

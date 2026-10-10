@@ -43,27 +43,222 @@ pub(super) fn run_target(
         .as_ref()
         .map(|spec| ActivityV2Spec::AgentLoop(spec.clone()));
     let dispatched_spec = dispatched_spec_storage.as_ref().unwrap_or(&t.spec);
-    let reviewer = ReviewerInvocation::start(ctx, t, dispatched_spec, &rendered_input);
-    let dispatch = dispatch_v2_activity(V2DispatchInput {
-        activity_name: &step.id,
-        spec: dispatched_spec,
-        fs_profile: t.fs_profile.as_deref(),
-        input: rendered_input.clone(),
-        audit: ctx.audit.clone(),
-        run_id: &ctx.run_id,
-        host: Some(ctx.host),
-    });
-    if let Some(reviewer) = reviewer {
-        reviewer.finish(ctx);
+    let Some(mut dispatched) = dispatch_once(step, t, ctx, dispatched_spec, &rendered_input)?
+    else {
+        return Err(DispatchError::DeterministicActionRefused {
+            action: step.id.clone(),
+            message: "review_minutes_exhausted: the candidate's review already spent its \
+                      review.minutes; no reviewer is started"
+                .to_string(),
+        });
+    };
+    let mut dispatched_input = rendered_input;
+    // [ORB-14616] A reviewer whose report settlement would refuse only for
+    // its shape is asked once, in the same attempt, to correct the report
+    // before the verdict settles. With no minutes left for that, settlement
+    // judges the report as it stands.
+    if dispatched.reviewer
+        && !dispatched.timed_out
+        && dispatched.outcome.success
+        && let Some(correction) = report_correction(ctx, &dispatched_input)
+    {
+        let mut corrected_input = dispatched_input.clone();
+        if let Some(object) = corrected_input.as_object_mut() {
+            object.insert("report_correction".to_string(), Value::String(correction));
+        }
+        let corrected = dispatch_once(step, t, ctx, dispatched_spec, &corrected_input);
+        if !matches!(corrected, Ok(None)) {
+            persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatched.outcome);
+        }
+        if let Some(corrected) = corrected? {
+            dispatched = corrected;
+            dispatched_input = corrected_input;
+        }
     }
-    let dispatch = dispatch?;
-    persist_dispatch_invocation(ctx, &step.id, &rendered_input, &dispatch);
+    let Dispatched {
+        outcome: dispatch,
+        timed_out,
+        ..
+    } = dispatched;
+    persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatch);
     record_pipeline(ctx, &step.id, dispatch.output.clone());
+    if timed_out {
+        return Err(DispatchError::DeterministicActionRefused {
+            action: step.id.clone(),
+            message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
+        });
+    }
+    let (success, message) = apply_implementer_blocker(
+        step,
+        t,
+        dispatch.success,
+        dispatch.message,
+        &dispatch.output,
+    );
+    let (success, message) =
+        reject_malformed_implementer_findings(step, t, success, message, &dispatch.output);
     Ok(StepOutcome {
-        success: dispatch.success,
+        success,
         output: dispatch.output,
-        message: dispatch.message,
+        message,
     })
+}
+
+/// One dispatch of the step's activity.
+struct Dispatched {
+    outcome: super::super::dispatcher::DispatchOutcome,
+    timed_out: bool,
+    /// The dispatch was the reviewer of an admitted attempt.
+    reviewer: bool,
+}
+
+/// Dispatch the step's activity once. A reviewer's start and end are
+/// reported around it, and its wall clock is the deadline the review's
+/// remaining minutes allow; `None` when those minutes are already spent, so no
+/// reviewer is started.
+fn dispatch_once(
+    step: &JobV2Step,
+    t: &TargetStep,
+    ctx: &ExecCtx<'_>,
+    spec: &ActivityV2Spec,
+    input: &Value,
+) -> Result<Option<Dispatched>, DispatchError> {
+    let mut reviewer = ReviewerInvocation::start(ctx, t, input);
+    if let Some(reviewer) = reviewer.take_if(|reviewer| reviewer.exhausted()) {
+        reviewer.finish(ctx, false);
+        return Ok(None);
+    }
+    let bounded_spec = reviewer
+        .as_ref()
+        .and_then(|reviewer| reviewer.bounded_spec(spec));
+    let spec = bounded_spec.as_ref().unwrap_or(spec);
+    // Events keep the step id; policy and broker identity use the catalog
+    // activity the step targets (a step `review` runs `agent_review_repair`).
+    let dispatch = dispatch_v2_target_activity(
+        V2DispatchInput {
+            activity_name: &step.id,
+            spec,
+            fs_profile: t.fs_profile.as_deref(),
+            input: input.clone(),
+            audit: ctx.audit.clone(),
+            run_id: &ctx.run_id,
+            host: Some(ctx.host),
+        },
+        t.activity_name.as_deref(),
+    );
+    let is_reviewer = reviewer.is_some();
+    let timed_out = is_reviewer
+        && dispatch.as_ref().is_ok_and(|outcome| {
+            outcome.output.get("timed_out").and_then(Value::as_bool) == Some(true)
+        });
+    if let Some(reviewer) = reviewer {
+        reviewer.finish(ctx, timed_out);
+    }
+    Ok(Some(Dispatched {
+        outcome: dispatch?,
+        timed_out,
+        reviewer: is_reviewer,
+    }))
+}
+
+/// The defect the host finds in the report of the reviewer that just
+/// returned, when the reviewer can still correct it [ORB-14616]. A failed
+/// check is logged and leaves the report to settlement.
+fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
+    let field = |key: &str| {
+        input
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let request = crate::context::ReviewReportCorrectionRequest {
+        run_id: ctx.run_id.clone(),
+        lineage_key: field("lineage_key")?,
+        attempt_id: field("attempt_id")?,
+        task_ids: input
+            .get("task_ids")
+            .and_then(Value::as_array)?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+        workspace_path: field("workspace_path")?.into(),
+    };
+    ctx.host
+        .review_report_correction(&request)
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %request.run_id,
+                attempt_id = %request.attempt_id,
+                error = %error,
+                "could not check the reviewer's report before settlement"
+            );
+            None
+        })
+}
+
+/// Fail an implementer step whose `unfiled_findings` breaks the shape
+/// `agent_implement` declares [ORB-14927].
+///
+/// The engine does not enforce `output_schema_json`, and the claim handoff
+/// would otherwise be the first to reject the field, after the candidate is
+/// committed, pushed and opened. Failing here keeps those side effects from
+/// running; the step's retry and recovery are the repair attempt.
+fn reject_malformed_implementer_findings(
+    step: &JobV2Step,
+    target: &TargetStep,
+    success: bool,
+    message: Option<String>,
+    output: &Value,
+) -> (bool, Option<String>) {
+    if !success || !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    match orbit_types::workflow::unfiled_findings_shape_error(output) {
+        Some(defect) => (
+            false,
+            Some(format!(
+                "implementer output rejected before delivery: {defect}. Return `unfiled_findings` \
+                 as `[{{\"title\": ..., \"description\": ...}}]`."
+            )),
+        ),
+        None => (success, message),
+    }
+}
+
+/// Turn a well-formed `blocker` on an implementer step into
+/// [`TASK_BLOCKED_BY_AGENT_ERROR_CODE`](orbit_types::workflow::TASK_BLOCKED_BY_AGENT_ERROR_CODE).
+///
+/// Detection is here, before retry and recovery see the outcome. A malformed
+/// blocker stays the dispatch's own outcome. The step id is `implement_one`
+/// in the shipped pipelines; `activity_name` covers a resolved
+/// `agent_implement` target whose id differs.
+fn apply_implementer_blocker(
+    step: &JobV2Step,
+    target: &TargetStep,
+    success: bool,
+    message: Option<String>,
+    output: &Value,
+) -> (bool, Option<String>) {
+    if !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    let Some(blocker) = orbit_types::workflow::agent_blocker_from_output(output) else {
+        return (success, message);
+    };
+    (
+        false,
+        Some(orbit_types::workflow::task_blocked_by_agent_message(
+            &blocker,
+        )),
+    )
+}
+
+fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {
+    step.id == "implement_one" || target.activity_name.as_deref() == Some("agent_implement")
 }
 
 /// Persist the invocation trace for a dispatched step.
