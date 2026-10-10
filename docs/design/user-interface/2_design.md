@@ -145,7 +145,7 @@ The Jobs pane combines routine targets with recent job runs. An operator session
 
 Run detail's Events tab opens on the newest page, in chronological order, and labels the displayed range and total count. **Load earlier** pages backward; **Newest events** returns to the end. Refresh preserves the selected page's distance from the tail. Event times include seconds and the local time zone, with a date on the first row and each day change. Steps show a loading skeleton until the detail read settles, a read error on failure, and an empty state only for a successfully loaded run with no steps.
 
-`GET /api/runs/:id/events?tail=true&limit=N&offset=M` opts into `{events, total, offset}`. Offset counts rows backward from the end; each returned page is chronological. The count and page are scoped to the selected workspace and `v2_envelope` source. Tail pages do not support `kind`; requests without `tail=true` retain the existing oldest-first array response and kind filtering.
+`GET /api/runs/:id/events?tail=true&limit=N&offset=M` opts into `{events, total, offset}`. Offset counts rows backward from the end; each returned page is chronological. The count and page are scoped to the selected workspace and `v2_envelope` source, and both come from one SQLite read snapshot so a row that commits after the count cannot change which events the page contains. Tail pages do not support `kind`; requests without `tail=true` retain the existing oldest-first array response and kind filtering.
 
 The two-column desktop layout stacks below 900px, and routine/clock metadata collapses to one column below 600px so schedules, state labels, and controls remain scannable at 480–720px widths.
 

@@ -29,6 +29,15 @@ pub struct V2AuditEventFilter {
     pub oldest_first: bool,
 }
 
+/// Filtered total and one chronological tail page from a single read snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V2AuditEventTailPage {
+    /// Matching rows visible to the snapshot. Limit and offset do not apply.
+    pub total: i64,
+    /// The tail page, oldest first.
+    pub events: Vec<V2AuditEventRow>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V2AuditEventRow {
     pub id: i64,

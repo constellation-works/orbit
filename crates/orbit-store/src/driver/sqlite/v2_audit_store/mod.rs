@@ -5,7 +5,9 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 
 use crate::{Store, parse_timestamp};
 
-use crate::contracts::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow};
+use crate::contracts::{
+    V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
+};
 
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.
 const AUDIT_RUN_ID_CHUNK: usize = 500;
@@ -77,12 +79,44 @@ impl Store {
 
     pub fn count_v2_audit_events(&self, filter: &V2AuditEventFilter) -> Result<i64, OrbitError> {
         let (where_clause, params) = v2_filter_sql(filter);
-        let sql = format!("SELECT COUNT(*) FROM v2_audit_events {where_clause}");
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|b| b.as_ref()).collect();
         let conn = self.read()?;
-        conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))
+        count_matching(&conn, &where_clause, &params)
+    }
+
+    /// Filtered total and chronological tail page from one deferred read
+    /// transaction on a single pooled reader.
+    ///
+    /// The snapshot starts when the count runs. A writer that then commits a
+    /// row, including one whose timestamp sorts before rows already stored,
+    /// stays outside this snapshot: the page ranks match `total`.
+    ///
+    /// `limit` and `offset` are the tail window (`offset` counts back from the
+    /// newest row). The page is read newest-first and reversed, which is the
+    /// same window as an oldest-first offset computed from this total.
+    /// `oldest_first` is ignored.
+    ///
+    /// Under `cfg(test)`, the tail-snapshot rendezvous runs after the count
+    /// and before the page select. The hook inserts through the writer
+    /// connection. A file-backed WAL store lets that commit proceed; the open
+    /// reader keeps its snapshot. An in-memory store has no separate reader,
+    /// so a hook that re-enters the writer deadlocks — tests must not install
+    /// one there.
+    pub fn list_v2_audit_event_tail(
+        &self,
+        filter: &V2AuditEventFilter,
+    ) -> Result<V2AuditEventTailPage, OrbitError> {
+        let (where_clause, params) = v2_filter_sql(filter);
+        let limit = filter.limit.unwrap_or(1000);
+        let offset = filter.offset.unwrap_or(0);
+        let conn = self.read()?;
+        let snapshot = ReadSnapshot::begin(&conn)?;
+        let total = count_matching(&conn, &where_clause, &params)?;
+        #[cfg(test)]
+        fire_tail_snapshot_rendezvous();
+        let mut events = select_tail_page(&conn, &where_clause, params, limit, offset)?;
+        snapshot.commit()?;
+        events.reverse();
+        Ok(V2AuditEventTailPage { total, events })
     }
 
     /// Newest matching rows for each run, independently capped.
@@ -178,6 +212,13 @@ impl crate::contracts::V2AuditStoreBackend for Store {
 
     fn count_v2_audit_events(&self, filter: &V2AuditEventFilter) -> Result<i64, OrbitError> {
         Self::count_v2_audit_events(self, filter)
+    }
+
+    fn list_v2_audit_event_tail(
+        &self,
+        filter: &V2AuditEventFilter,
+    ) -> Result<V2AuditEventTailPage, OrbitError> {
+        Self::list_v2_audit_event_tail(self, filter)
     }
 
     fn list_v2_audit_events_for_runs_partitioned(
@@ -300,3 +341,103 @@ fn collect_rows<T>(
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| OrbitError::Store(e.to_string()))
 }
+
+fn count_matching(
+    conn: &rusqlite::Connection,
+    where_clause: &str,
+    params: &[Box<dyn rusqlite::types::ToSql>],
+) -> Result<i64, OrbitError> {
+    let sql = format!("SELECT COUNT(*) FROM v2_audit_events {where_clause}");
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
+        .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+fn select_tail_page(
+    conn: &rusqlite::Connection,
+    where_clause: &str,
+    mut params: Vec<Box<dyn rusqlite::types::ToSql>>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<V2AuditEventRow>, OrbitError> {
+    let sql = format!(
+        "SELECT id, workspace_id, event_id, source, schema_version, event_type, ts, \
+         run_id, agent_identity, parent_event_id, workspace_path, payload_json \
+         FROM v2_audit_events {where_clause} ORDER BY ts DESC, id DESC \
+         LIMIT ?{} OFFSET ?{}",
+        params.len() + 1,
+        params.len() + 2
+    );
+    // Saturate: a wrapped negative LIMIT/OFFSET means "no bound" to SQLite.
+    params.push(Box::new(i64::try_from(limit).unwrap_or(i64::MAX)));
+    params.push(Box::new(i64::try_from(offset).unwrap_or(i64::MAX)));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let rows = stmt
+        .query_map(param_refs.as_slice(), row_to_v2_audit_event)
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    collect_rows(rows)
+}
+
+/// Deferred read transaction on a connection borrowed from [`crate::Store::read`].
+///
+/// Drop rolls the transaction back unless [`ReadSnapshot::commit`] ran. The
+/// pooled reader must not return to the pool with a transaction still open.
+struct ReadSnapshot<'a> {
+    conn: &'a rusqlite::Connection,
+    open: bool,
+}
+
+impl<'a> ReadSnapshot<'a> {
+    fn begin(conn: &'a rusqlite::Connection) -> Result<Self, OrbitError> {
+        conn.execute_batch("BEGIN DEFERRED")
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        Ok(Self { conn, open: true })
+    }
+
+    fn commit(mut self) -> Result<(), OrbitError> {
+        self.conn
+            .execute_batch("COMMIT")
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        self.open = false;
+        Ok(())
+    }
+}
+
+impl Drop for ReadSnapshot<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TAIL_SNAPSHOT_RENDEZVOUS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Install a hook that runs once, after the tail count and before the page
+/// select, while the read snapshot is open.
+#[cfg(test)]
+fn set_tail_snapshot_rendezvous(hook: impl FnOnce() + 'static) {
+    TAIL_SNAPSHOT_RENDEZVOUS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn clear_tail_snapshot_rendezvous() {
+    TAIL_SNAPSHOT_RENDEZVOUS.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[cfg(test)]
+fn fire_tail_snapshot_rendezvous() {
+    if let Some(hook) = TAIL_SNAPSHOT_RENDEZVOUS.with(|slot| slot.borrow_mut().take()) {
+        hook();
+    }
+}
+
+#[cfg(test)]
+mod tests;

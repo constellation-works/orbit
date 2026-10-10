@@ -807,26 +807,21 @@ pub(super) async fn list_run_events(
     match blocking("run events", move || {
         runtime.show_job_run(&run_id)?;
         if q.tail {
-            let mut filter = V2AuditEventFilter {
+            let filter = V2AuditEventFilter {
                 workspace_id: runtime.workspace_id()?,
                 run_id: Some(run_id),
                 source: Some("v2_envelope".to_string()),
                 limit: Some(limit),
                 offset: Some(offset),
-                oldest_first: false,
                 ..Default::default()
             };
             let store = runtime.v2_audit_store()?;
-            let total = usize::try_from(store.count_v2_audit_events(&filter)?).unwrap_or(0);
-            // Count first: concurrent appends must not shift this page's window.
-            // Convert the distance from the tail to a chronological SQL offset.
-            let end = total.saturating_sub(offset);
-            let start = end.saturating_sub(limit);
-            filter.offset = Some(start);
-            filter.limit = Some(end - start);
-            filter.oldest_first = true;
-            let events: Vec<Value> = store
-                .list_v2_audit_events(&filter)?
+            // One read snapshot: a row committed after the count cannot move
+            // this page relative to the total that describes it.
+            let page = store.list_v2_audit_event_tail(&filter)?;
+            let total = usize::try_from(page.total).unwrap_or(0);
+            let events: Vec<Value> = page
+                .events
                 .into_iter()
                 .filter_map(|row| serde_json::from_str(&row.payload_json).ok())
                 .collect();
