@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use crate::doctor::WorkspaceDoctorStatus;
 use crate::doctor::worker_token::{
-    ClockCredentials, WorkerTokenFacts, classify_clock_credentials, worker_token_row,
+    ClockCredentials, PassHome, WorkerTokenFacts, classify_clock_credentials, worker_token_row,
 };
 
 const OAUTH_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -16,6 +18,7 @@ fn facts(pass: &[&str], clock: ClockCredentials) -> WorkerTokenFacts {
         claude_routed: true,
         pass: names(pass),
         clock,
+        pass_home: PassHome::Global(PathBuf::from("/home/u/.orbit/config.toml")),
     }
 }
 
