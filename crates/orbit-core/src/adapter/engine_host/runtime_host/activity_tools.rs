@@ -8,6 +8,7 @@ use orbit_types::workflow::{ActivityToolDenyPolicy, tools_allowed_by_disallow_li
 
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::build_orbit_tool_host;
+use crate::application::job::drops_disallowed_requirements;
 
 pub(super) fn resolve_activity_tools(
     runtime: &OrbitRuntime,
@@ -69,28 +70,6 @@ pub(super) fn resolve_activity_tool_denials(
         ),
         omitted_requirement_notes,
     })
-}
-
-/// Shipped agent activities that are not the task's implementer.
-///
-/// `agent_implement` is the only shipped consumer of `required_tools` as a
-/// hard admission against its disallow list. These activities still validate
-/// every requirement, but a tool their disallow list covers is omitted.
-/// A name absent from this list, including a custom implementer, keeps
-/// fail-closed admission. Add a new shipped recovery or review activity here
-/// when it should start even though the task requires a tool it disallows.
-const NON_IMPLEMENTER_ACTIVITIES: &[&str] = &[
-    "agent_invoke",
-    "agent_review_repair",
-    "final_recovery",
-    "pr_conflict_recovery",
-    "review_reconciliation_review",
-    "step_failure_recovery",
-    "task_pilot",
-];
-
-fn drops_disallowed_requirements(activity: &str) -> bool {
-    NON_IMPLEMENTER_ACTIVITIES.contains(&activity)
 }
 
 /// Admit every selected task's `required_tools`: exact canonical names of

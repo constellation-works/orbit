@@ -1634,7 +1634,7 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 
 **Recorded:** 2026-10-10 · [ORB-15162]
 **Amends:** point 5 of [Shipped activities move from tool allowlists to disallow lists](#shipped-activities-move-from-tool-allowlists-to-disallow-lists-allowlists-stay-for-custom-jobs)
-**Paths:** `crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs`, `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`
+**Paths:** `crates/orbit-core/src/application/job/activity_tool_requirements.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs`, `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`
 
 ### Context
 
@@ -1645,7 +1645,7 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 1. A requirement never overrides an activity's disallow list. The callable set stays the registered agent-facing tools minus the list.
 2. `agent_implement` keeps fail-closed admission. Unknown, inactive, malformed, non-agent-facing and denied requirements still refuse the invocation and name the task, the tool and the activity. Any activity name outside the non-implementer set below, including a custom implementer and the `implement_one` step id, does too.
 3. The shipped non-implementers are `final_recovery`, `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`, `review_reconciliation_review`, `task_pilot` and `agent_invoke`. For those, a required tool the disallow list covers is dropped from `requested_tools`. Each drop is a note on the resolution and on `ToolAllowlistHarnessDelegated.omitted_requirement_notes`, and a warning in the run log. Requirements the list does not cover are still admitted. Unknown, inactive, malformed and non-agent-facing requirements still fail closed.
-4. A new shipped recovery or review activity joins that set in `activity_tools.rs`. Leaving it out keeps today's refusal, which is the safe default for an implementer.
+4. A new shipped recovery or review activity joins that set in `crates/orbit-core/src/application/job/activity_tool_requirements.rs`. The application owns this classification policy; the runtime-host adapter delegates it. Leaving it out keeps today's refusal, which is the safe default for an implementer.
 
 ### Rejected alternatives
 

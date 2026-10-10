@@ -1,3 +1,4 @@
+mod activity_tool_requirements;
 pub(crate) mod agent_invoke;
 pub(crate) mod catalog;
 pub(crate) mod catalog_layers;
@@ -35,6 +36,7 @@ pub(crate) fn log_best_effort<T>(
     }
 }
 
+pub(crate) use activity_tool_requirements::drops_disallowed_requirements;
 pub use agent_invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
