@@ -21,8 +21,9 @@
 //!    skipped, so nothing re-claims the task. Downstream delivery steps keep
 //!    consuming the checkpointed `steps.<worktree>.output.job_run_id` as their
 //!    batch id, while the task record may have been re-stamped by an
-//!    intervening failed attempt. `load_handoff_context` then fails closed with
-//!    "task ... no longer belongs to job run ...".
+//!    intervening failed attempt in the same lineage. A task bound to a run
+//!    outside that lineage — including another machine's claim — is refused
+//!    here, before those checkpoints or a validation input are reused.
 //!
 //! 3. **Delivery stage.** A final-recovery escalation, or a failure-handoff
 //!    block attributed to this lineage, can block a task after promotion to
@@ -32,15 +33,22 @@
 //! These are repaired by reconciling against the run's **explicit retry
 //! lineage** — the source run, its `retry_source_run_id` ancestors, and the
 //! runs descended from them — and never against an unrelated run. A task
-//! stamped by a run outside that lineage is left exactly as it is, so the
-//! ownership check in `load_handoff_context` keeps its full strength.
+//! whose binding (`job_run_id` and `job_run_machine`) is outside that lineage
+//! is not resumed and not re-stamped. Planning refuses before any step runs
+//! and names the current binding; the next action is to continue that binding
+//! on its machine, or to admit a new attempt after an authorized rebind.
+//! Resume does not rebind a foreign claim. A legitimate resume re-keys only
+//! the pipeline document's run id. Ownership ids inside checkpoints and the
+//! copied input stay the batch that created the worktree; rewriting them
+//! would make validation name a run that does not own the task. The attach
+//! guard in `runtime_host` stays fail-closed for a non-owning run.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{ExecutionLocation, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
 use orbit_types::workflow::{
     ActivityV2Spec, JobRun, JobRunState, JobV2, JobV2StepBody, PipelineState,
@@ -271,6 +279,9 @@ impl OrbitRuntime {
         let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
         let checkpoint_batch_id = resume_state.as_ref().and_then(checkpoint_ownership_id);
         let attempt = source.attempt.saturating_add(1);
+        // Before the plan exists, so neither submission path can seed
+        // checkpoints or start a step for a binding this lineage does not own.
+        self.refuse_foreign_resume_binding(&source, &input, resume_state.as_ref(), &lineage)?;
 
         Ok(ResumePlan {
             source,
@@ -336,6 +347,70 @@ impl OrbitRuntime {
         }
 
         Ok((ancestors, lineage))
+    }
+
+    /// Refuse a resume whose targeted task is bound outside this lineage.
+    ///
+    /// Checkpoint reuse skips `worktree_setup`, which is the step that would
+    /// notice another machine's claim and continue its candidate on a new
+    /// attempt. Reusing the old checkpoints instead renders validation for the
+    /// old run, and the attach guard then rejects evidence the run does not
+    /// own. That rejection is unchanged and still final. This check stops the
+    /// resume before a run is inserted, so no checkpoint, worktree, or
+    /// validation input is copied. A lineage binding is restamped only by
+    /// [`Self::reclaim_task_for_resumed_run`].
+    fn refuse_foreign_resume_binding(
+        &self,
+        source: &JobRun,
+        input: &Value,
+        resume_state: Option<&PipelineState>,
+        lineage: &BTreeSet<String>,
+    ) -> Result<(), OrbitError> {
+        let mut refused = Vec::new();
+        for task_id in resume_binding_task_ids(input, resume_state) {
+            let task = match self.get_task(&task_id) {
+                Ok(task) => task,
+                Err(OrbitError::NotFound { .. }) => continue,
+                Err(error) => return Err(error),
+            };
+            if self.resume_binding_is_lineage(&task, lineage)? {
+                continue;
+            }
+            refused.push(foreign_binding_message(
+                &task.id,
+                &source.run_id,
+                task.job_run_id.as_deref(),
+                task.job_run_machine.as_ref(),
+            ));
+        }
+        if refused.is_empty() {
+            return Ok(());
+        }
+        Err(OrbitError::JobValidation(refused.join("; ")))
+    }
+
+    /// A lineage resume may keep this binding. An absent machine is a local
+    /// binding recorded before locations existed. A recorded machine must be
+    /// the machine that lineage run executed on: run ids are unique only
+    /// per machine, so the same id on another host is a different run.
+    fn resume_binding_is_lineage(
+        &self,
+        task: &Task,
+        lineage: &BTreeSet<String>,
+    ) -> Result<bool, OrbitError> {
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(task.job_run_machine.is_none());
+        };
+        if !lineage.contains(run_id) {
+            return Ok(false);
+        }
+        let Some(bound) = &task.job_run_machine else {
+            return Ok(true);
+        };
+        let executed_on = self
+            .get_job_run_backend(run_id)?
+            .and_then(|run| run.executed_on);
+        Ok(executed_on.is_some_and(|origin| origin.machine_id == bound.machine_id))
     }
 
     /// Re-admit and re-claim the tasks this resume owns, so the resumed run
@@ -604,6 +679,110 @@ pub(super) fn checkpoint_ownership_id(state: &PipelineState) -> Option<String> {
                     .map(ToOwned::to_owned)
             })
         })
+}
+
+/// Fields that name the tasks a reused delivery checkpoint will act on.
+const RESUME_TARGET_ID_FIELDS: &[&str] = &[
+    "task_id",
+    "task_ids",
+    "performed_task_ids",
+    "reused_task_ids",
+];
+
+/// Tasks this resume must compare with the lineage binding.
+///
+/// The run input always counts. Checkpoint outputs count only when they carry
+/// a batch id, which is the delivery tail that skips `worktree_setup`. A drain
+/// checkpoint without that id is left to its own admission.
+fn resume_binding_task_ids(
+    input: &Value,
+    resume_state: Option<&PipelineState>,
+) -> BTreeSet<String> {
+    let mut ids = task_ids_from_input(input).unwrap_or_default();
+    let Some(state) = resume_state else {
+        return ids;
+    };
+    if checkpoint_ownership_id(state).is_none() {
+        return ids;
+    }
+    collect_resume_task_ids(&state.initial_input, &mut ids);
+    collect_resume_task_ids(&state.pipeline, &mut ids);
+    for output in state.step_outputs.values() {
+        collect_resume_task_ids(output, &mut ids);
+    }
+    ids
+}
+
+fn collect_resume_task_ids(value: &Value, ids: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if RESUME_TARGET_ID_FIELDS.contains(&key.as_str()) {
+                    push_resume_task_ids(child, ids);
+                } else {
+                    collect_resume_task_ids(child, ids);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_resume_task_ids(item, ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_resume_task_ids(value: &Value, ids: &mut BTreeSet<String>) {
+    match value {
+        Value::String(id) => insert_resume_task_id(id, ids),
+        Value::Array(items) => {
+            for item in items {
+                if let Some(id) = item.as_str() {
+                    insert_resume_task_id(id, ids);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn insert_resume_task_id(id: &str, ids: &mut BTreeSet<String>) {
+    let id = id.trim();
+    if !id.is_empty() {
+        ids.insert(id.to_string());
+    }
+}
+
+/// Why resume will not adopt `task_id`'s current binding.
+fn foreign_binding_message(
+    task_id: &str,
+    source_run_id: &str,
+    bound_run: Option<&str>,
+    machine: Option<&ExecutionLocation>,
+) -> String {
+    let binding = match (bound_run, machine) {
+        (Some(run_id), Some(location)) => {
+            let name = location.machine_name.as_deref().unwrap_or("unnamed");
+            format!("job run '{run_id}' on {name} ({})", location.machine_id)
+        }
+        (Some(run_id), None) => format!("job run '{run_id}'"),
+        (None, Some(location)) => {
+            let name = location.machine_name.as_deref().unwrap_or("unnamed");
+            format!("machine {name} ({})", location.machine_id)
+        }
+        (None, None) => "no run".to_string(),
+    };
+    let next = if machine.is_some() {
+        "Continue that binding on its machine, or admit a new attempt after an authorized rebind"
+    } else {
+        "Admit a new attempt after an authorized rebind"
+    };
+    format!(
+        "task '{task_id}' is bound to {binding}, not resume source '{source_run_id}'. \
+         Resume refuses before reusing this lineage's checkpoints or rendering its validation input. \
+         {next}; resume does not overwrite a foreign claim"
+    )
 }
 
 /// Task ids the run input explicitly targets, if any. An auto-discovery run

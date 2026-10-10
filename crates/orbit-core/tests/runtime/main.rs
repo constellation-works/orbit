@@ -28,6 +28,7 @@ mod git_protection;
 mod held_child_guard;
 mod rebase_recovery_attempts;
 mod relation_auto_close;
+mod resume_ownership;
 mod retired_stubs;
 mod review_baseline_hold;
 mod review_before_landing;
