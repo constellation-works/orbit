@@ -152,7 +152,9 @@ impl OrbitRuntime {
         task_id: &str,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         let run_id = run.run_id.as_str();
-        let shape = match self.load_v2_job_asset_by_name(&run.job_id) {
+        // The definition the run executed: its pinned direct-path snapshot
+        // when it has one, otherwise the catalog asset.
+        let shape = match self.resolve_run_definition(run) {
             Ok((_, mut job)) => {
                 if !job.holds_task_delivery() {
                     return Err(OrbitError::InvalidInput(format!(
@@ -223,10 +225,16 @@ impl OrbitRuntime {
             if !run_task_ids(&run).contains(&task_id) {
                 continue;
             }
-            let holds_delivery = *delivers.entry(run.job_id.clone()).or_insert_with(|| {
-                self.load_v2_job_asset_by_name(&run.job_id)
-                    .is_ok_and(|(_, job)| job.holds_task_delivery())
-            });
+            // A direct-path run judges its own pinned snapshot, so the verdict
+            // is per run; catalog-backed runs of one job share it.
+            let holds_delivery = match self.read_run_definition_snapshot(&run.run_id) {
+                Ok(Some((job, _))) => job.holds_task_delivery(),
+                Ok(None) => *delivers.entry(run.job_id.clone()).or_insert_with(|| {
+                    self.load_v2_job_asset_by_name(&run.job_id)
+                        .is_ok_and(|(_, job)| job.holds_task_delivery())
+                }),
+                Err(_) => false,
+            };
             if holds_delivery {
                 return Ok(run.run_id);
             }

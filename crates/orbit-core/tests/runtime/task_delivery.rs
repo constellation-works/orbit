@@ -1,11 +1,13 @@
 //! Task delivery selection through the composed runtime, with a bounded,
 //! opt-in Linux measurement of the same public operation.
 
+use std::path::Path;
+
 use chrono::{Duration, TimeZone, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
 use orbit_engine::RuntimeHost;
-use orbit_types::workflow::JobRun;
+use orbit_types::workflow::{CommitObservationStatus, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -217,6 +219,100 @@ fn newest_delivery_uses_submitted_task_bindings() {
         })
         .unwrap();
     assert_eq!(fixture.selected(), "newest");
+}
+
+/// A direct-path submission pins its YAML next to the run, and that pinned
+/// definition is what the run executes. The observation reads the same one:
+/// the catalog asset of the same name lists the steps in another order, so its
+/// indexes would name other steps.
+#[test]
+fn direct_path_run_is_observed_through_its_pinned_definition() {
+    if !super::dispatch_admission::isolated(
+        "task_delivery::direct_path_run_is_observed_through_its_pinned_definition",
+    ) {
+        return;
+    }
+    // The detached worker is substituted, so nothing beyond admission runs.
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let fixture = Fixture::new();
+    let steps = |order: [&str; 2]| {
+        order
+            .iter()
+            .map(|id| {
+                let activity = if *id == "commit" {
+                    "git_commit"
+                } else {
+                    "release_locks"
+                };
+                format!("    - id: {id}\n      target: activity:{activity}\n")
+            })
+            .collect::<String>()
+    };
+    let job = |order: [&str; 2]| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: shifted_delivery\nspec:\n  \
+             state: enabled\n  task_delivery: {{}}\n  steps:\n{}",
+            steps(order)
+        )
+    };
+    let resources = fixture._root.path().join("home/.orbit/resources");
+    let activities = resources.join("activities");
+    std::fs::create_dir_all(&activities).unwrap();
+    for name in ["git_commit", "release_locks"] {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/activities/{name}.yaml")),
+            activities.join(format!("{name}.yaml")),
+        )
+        .unwrap();
+    }
+    let jobs = resources.join("jobs");
+    std::fs::write(jobs.join("shifted_delivery.yaml"), job(["commit", "locks"])).unwrap();
+    let direct = fixture._root.path().join("shifted_delivery.yaml");
+    std::fs::write(&direct, job(["locks", "commit"])).unwrap();
+
+    let submitted = fixture
+        .runtime
+        .submit_job_run(
+            direct.to_str().unwrap(),
+            json!({"task_ids": [fixture.task]}),
+            Some("test"),
+        )
+        .unwrap();
+    let run_id = submitted.run_id;
+
+    // The commit step is the second step of the pinned definition and the
+    // first of the catalog asset.
+    let mut state = fixture.runtime.read_run_state(&run_id).unwrap().unwrap();
+    let output = json!({
+        "phase": "commit",
+        "task_id": fixture.task,
+        "job_run_id": run_id,
+        "decision": "performed",
+        "committed": true,
+        "base_sha": "a".repeat(40),
+        "commit_sha": "b".repeat(40),
+    });
+    state.step_states.insert(1, JobRunState::Success);
+    state.step_outputs.insert(1, output.clone());
+    state.pipeline = json!({"commit": output});
+    fixture.runtime.write_run_state(&run_id, &state).unwrap();
+
+    for run in [Some(run_id.as_str()), None] {
+        let observed = fixture
+            .runtime
+            .observe_task_delivery(&fixture.task, run)
+            .unwrap();
+        assert_eq!(observed.run_id, run_id);
+        assert_eq!(
+            observed.commit.status,
+            CommitObservationStatus::Committed,
+            "{:?}",
+            observed.commit
+        );
+        let provenance = observed.commit.provenance.expect("commit provenance");
+        assert_eq!(provenance.step_id, "commit");
+        assert_eq!(provenance.step_index, 1);
+    }
 }
 
 #[cfg(target_os = "linux")]
