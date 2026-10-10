@@ -143,7 +143,9 @@ impl OrbitRuntime {
 
 /// Paths `git status` reports in a worktree — staged, unstaged or untracked —
 /// without writing to it: optional locks are off, so Git neither takes the
-/// index lock nor refreshes the index, and no fsmonitor program runs.
+/// index lock nor refreshes the index, and no fsmonitor program runs. Status
+/// never recurses into a gitlink's checkout, whose own config could run a
+/// filter command on the host.
 fn changed_paths(worktree: &Path) -> Result<Vec<String>, String> {
     let mut command = Command::new("git");
     command
@@ -151,6 +153,8 @@ fn changed_paths(worktree: &Path) -> Result<Vec<String>, String> {
         .args([
             "-c",
             "core.fsmonitor=false",
+            "-c",
+            "diff.ignoreSubmodules=all",
             "--no-optional-locks",
             "status",
             "--porcelain=v1",
