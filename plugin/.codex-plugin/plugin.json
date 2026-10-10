@@ -1,6 +1,6 @@
 {
   "name": "orbit",
-  "version": "0.28.0",
+  "version": "0.28.1",
   "description": "Durable tasks, sandboxed parallel runs, and PR-gated delivery for AI coding agents. Adds Orbit's MCP tools and workflow skills to Codex.",
   "author": {
     "name": "constellation-works",
@@ -20,7 +20,7 @@
   "mcpServers": {
     "orbit": {
       "command": "npx",
-      "args": ["-y", "@orbit-tools/cli@0.28.0", "mcp", "serve"]
+      "args": ["-y", "@orbit-tools/cli@0.28.1", "mcp", "serve"]
     }
   },
   "interface": {

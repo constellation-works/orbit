@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.1 — 2026-10-10
+
+### Highlights
+
+- **Provider-limit-aware routing**: drains and crew-pool draws skip crews whose provider is near or at its usage limit and resume them after the reset. `orbit run readiness` shows the limits and gated crews, and operators can declare rolling budgets for providers that report no usage. ([ORB-14697])
+- **Before-landing review**: `review.before_landing` reviews a task's open PR while hosted CI runs, and the PR lands only on an accepted review. It is an alternative to before-PR review. ([ORB-14849])
+- **Dashboard host switcher**: pick a registered host above the workspace picker, and every panel, action, log tail and resource chip follows it. The selection is URL-addressable as `?host=`. ([ORB-14680])
+- **Run history by task**: `orbit run history` shows each run's task and duration and filters by `--task`, `--state` and `--since`, so you can find the run that delivered a task and how long it took. ([ORB-14597])
+- **Declared reclaim paths**: `worktree.reclaim` globs declare which build outputs in kept run worktrees may be swept, replacing the hard-coded `target/`. ([ORB-14850])
+- **macOS `.env` deny hardening**: renaming a containing directory out of the workspace no longer bypasses a `**/.env` sandbox deny on macOS. ([ORB-14929])
+
 ## 0.28.0 — 2026-10-08
 
 ### Breaking Changes
