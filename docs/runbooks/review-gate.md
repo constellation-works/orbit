@@ -194,7 +194,23 @@ commands cannot be filed as a `diagnostic` instead: the review settles
 with the same exit status, every claimed failure appears in the base output,
 and the candidate adds no failing test or lint location. A candidate that
 fails beyond the base keeps its verdict (`reject`, escalated
-`baseline_exceeded`). A claim the host contradicts or cannot check settles
+`baseline_exceeded`). When the host's run refutes the claim, its run on the
+final candidate decides the check:
+
+- The candidate passes, and the review has no open finding and no pending
+  external evidence. The reviewer's failure was its own environment's. The
+  record counts as passed, with a note naming the host's run, and the
+  certificate's `host_overrides` records the command, the reviewer's outcome
+  and the run. A review whose claims all resolve this way settles `accept`
+  (`accept_with_fixes` over a reviewer repair) on the host's evidence. A
+  pass whose validation summary shows no counted test ran is not evidence
+  and is refused.
+- The candidate fails and the base passes a comparable run. The failure is
+  the candidate's own, so the review settles `reject` with a
+  `baseline_refuted` escalation naming the command.
+
+A host pass never overrides an open finding. Any other claim the host
+contradicts or cannot check, including a pass under an open finding, settles
 `incomplete` with a `baseline_claim_refused` escalation. A command that
 selects its own tests, such as `make ci-test-affected`, reports its selection
 and executed-test count, and the base rerun is handed the candidate's

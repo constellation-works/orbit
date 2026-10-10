@@ -11,8 +11,9 @@ use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, execute_deterministic_action};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, PipelineState, REVIEW_GATE_ARTIFACT,
-    ReviewCertificate, ReviewVerdict, is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HostCandidateOverride, PipelineState,
+    REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewVerdict,
+    ValidationOutcome, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 
@@ -32,6 +33,10 @@ const GREEN_ON_BASE: &str = "#!/bin/sh\n\
                              if grep -q after candidate.txt; then echo 'test suite::broken ... FAILED'; exit 1; fi\n\
                              exit 0\n";
 const GREEN: &str = "#!/bin/sh\nexit 0\n";
+/// Passes everywhere, reporting that it executed no test [ORB-15122].
+const NO_TESTS: &str = "#!/bin/sh\n\
+                        printf '{\"schema_version\":1,\"selection\":{\"packages\":[]},\"tests_run\":0}' \
+                        > \"$ORBIT_VALIDATION_SUMMARY\"\nexit 0\n";
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> String {
     let mut command = std::process::Command::new("git");
@@ -355,18 +360,22 @@ fn a_failure_the_base_does_not_explain_is_never_held() {
         settled.escalation
     );
 
-    // The base passes: host verification contradicts the claim.
+    // [ORB-15122] The candidate fails on the host and the base passes: the
+    // failure is the candidate's own, so the review settles reject naming
+    // the command.
     let mut contradicted = fixture(GREEN_ON_BASE, "after\n");
     let failure = settle_claim(&mut contradicted, CHECK, &["check.sh"]);
     assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
     let settled = certificate(&contradicted);
-    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject);
     assert!(settled.baseline_red.is_empty());
+    assert!(settled.host_overrides.is_empty());
     assert!(
-        settled
-            .escalation
-            .as_deref()
-            .is_some_and(|reason| reason.contains("baseline_claim_refused")),
+        settled.escalation.as_deref().is_some_and(|reason| {
+            reason.contains("baseline_refuted")
+                && reason.contains(&format!("`{CHECK}`"))
+                && !reason.contains("baseline_claim_refused")
+        }),
         "{:?}",
         settled.escalation
     );
@@ -668,15 +677,16 @@ fn a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim() {
         "the diagnostic names the non-comparable base run: {escalation}"
     );
 
-    // The base tests the candidate's selection and passes it: refuted.
+    // The base tests the candidate's selection and passes it: refuted, and
+    // the candidate's failure is its own [ORB-15122].
     let mut refuted = fixture(&affected_check(true, "after"), "after\n");
     let failure = settle_claim(&mut refuted, CHECK, &["check.sh"]);
     assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
     let settled = certificate(&refuted);
-    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject);
     let escalation = settled.escalation.unwrap_or_default();
     assert!(
-        escalation.contains("baseline_claim_refused")
+        escalation.contains("baseline_refuted")
             && escalation.contains("passes")
             && !escalation.contains("baseline_not_comparable"),
         "{escalation}"
@@ -721,5 +731,113 @@ fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() {
             orbit_engine::BaselineHoldStatus::Lifted(_)
         ),
         "a tip that passes the held selection lifts the hold"
+    );
+}
+
+/// [ORB-15122] The before-landing trial's incident shape: the reviewer found
+/// no defect, the trusted check failed only in its own environment, and it
+/// claimed the base fails it too. The host passes the check on the final
+/// candidate, so the review settles accept on the host's run, and the
+/// certificate records that the reviewer's outcome was overridden.
+#[test]
+fn a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(&affected_check(true, "never"), "after\n");
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    fixture.admit();
+    fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
+    let passed = fixture
+        .settle()
+        .expect("the host's pass settles the review");
+    assert_eq!(passed["gate"], "passed", "{passed}");
+
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Accept);
+    assert!(settled.validation_complete);
+    assert!(settled.baseline_red.is_empty());
+    assert_eq!(
+        settled.host_overrides,
+        vec![HostCandidateOverride {
+            command: CHECK.into(),
+            record_id: Some("V1".into()),
+            reviewer_outcome: ValidationOutcome::Failed,
+            run_id,
+            tests_run: Some(1),
+            evidence_artifact: REVIEW_BASELINE_ARTIFACT.into(),
+        }]
+    );
+    let record = &settled.validation[0];
+    assert_eq!(record.outcome, ValidationOutcome::Passed);
+    assert!(
+        record
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("Host override")),
+        "the record says the host's run replaced the reviewer's: {record:?}"
+    );
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the host's run is attached")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "candidate_passed", "{evidence}");
+    assert_eq!(check["candidate"]["passed"], true, "{evidence}");
+}
+
+/// [ORB-15122] A host pass that executed no counted test shows nothing about
+/// the disputed check (F2026-10-211), and a host pass never overrides an open
+/// finding: both keep the review `incomplete`, with no override recorded.
+#[test]
+fn a_host_pass_without_tests_or_under_an_open_finding_never_accepts() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_host_pass_without_tests_or_under_an_open_finding_never_accepts",
+    ) {
+        return;
+    }
+    // The candidate run selects nothing and passes without a test.
+    let mut empty = fixture(NO_TESTS, "after\n");
+    let failure = settle_claim(&mut empty, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&empty);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(settled.host_overrides.is_empty());
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused")
+            && escalation.contains("without executing a test"),
+        "{escalation}"
+    );
+
+    // The check passes on the host, but the reviewer left a finding open.
+    let mut open = fixture(GREEN, "after\n");
+    open.admit();
+    let mut report = claim_report(&open, CHECK, &["check.sh"]);
+    report["findings"] = json!([{
+        "id": "F1", "summary": "Wrong approach", "severity": "high", "disposition": "open",
+    }]);
+    open.put_report(&report);
+    open.settle()
+        .expect_err("an open finding is never accepted by a host run");
+    let settled = certificate(&open);
+    assert_ne!(settled.verdict, ReviewVerdict::Accept);
+    assert!(!settled.verdict.passed());
+    assert!(settled.host_overrides.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    assert!(
+        settled
+            .escalation
+            .as_deref()
+            .is_some_and(|reason| reason.contains("a finding is still open")),
+        "{:?}",
+        settled.escalation
     );
 }

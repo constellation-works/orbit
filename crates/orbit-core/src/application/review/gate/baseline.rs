@@ -29,8 +29,19 @@
 //!   keeps the candidate and moves the task to the backlog.
 //! - A candidate that fails beyond the base keeps that failure: the verdict
 //!   stands and the review blocks as before.
-//! - A claim the host contradicts or cannot check is refused, and the review
-//!   settles `incomplete`.
+//! - A check the host passes on the final candidate [ORB-15122] was the
+//!   reviewer's environment failing, not the candidate: with no open finding
+//!   and no pending external evidence, the record counts as passed on the
+//!   host's run, the certificate records the override in `host_overrides`,
+//!   and a review whose claims all resolve that way settles `accept` (or
+//!   `accept_with_fixes` over a repair). A passing run whose summary shows it
+//!   executed no counted test is inconclusive instead. An open finding or
+//!   pending evidence keeps the refusal below.
+//! - A check that fails on the candidate when the host runs it, while the
+//!   base passes a comparable run, is the candidate's own failure: the review
+//!   settles `reject` under `baseline_refuted`, naming the command.
+//! - A claim the host otherwise contradicts or cannot check is refused, and
+//!   the review settles `incomplete`.
 //! - A claim whose base run is not comparable with the candidate's — it
 //!   tested another selection, or passed without executing a counted test
 //!   [ORB-15131] — is neither refuted nor confirmed: the review settles
@@ -43,8 +54,9 @@ use orbit_common::OrbitError;
 use orbit_engine::review_gate::{BaseFailureVerdict, verify_base_failure};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    BaselineRedHold, FindingDisposition, REVIEW_BASELINE_ARTIFACT, ReviewBaselineClaim,
-    ReviewValidation, ValidationOutcome, ValidationRole,
+    BaselineRedHold, CommitIdentity, FindingDisposition, HostCandidateOverride,
+    REVIEW_BASELINE_ARTIFACT, ReviewBaselineClaim, ReviewValidation, ReviewVerdict,
+    ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
@@ -55,7 +67,8 @@ use super::judgement::{Judgement, write_artifact};
 
 impl Judgement {
     /// Check every baseline claim in the report and return the holds the
-    /// review settles under, or none when it settles as before.
+    /// review settles under, or none when it settles as before. `repair` is
+    /// the reviewer's repair commit, which an accept override must name.
     pub(super) fn verify_baseline_claims(
         &mut self,
         runtime: &OrbitRuntime,
@@ -63,6 +76,7 @@ impl Judgement {
         base: &SourceRevision,
         base_ref: &str,
         scope: &[String],
+        repair: Option<&CommitIdentity>,
     ) -> Result<Vec<BaselineRedHold>, OrbitError> {
         let claimed = self
             .validation
@@ -88,6 +102,7 @@ impl Judgement {
             .collect::<Vec<_>>();
         let mut holds = Vec::new();
         let mut confirmed = Vec::new();
+        let mut overrides = Vec::new();
         let mut checks = Vec::new();
         let mut held = true;
         for record in &claimed {
@@ -136,6 +151,47 @@ impl Judgement {
                     held = false;
                     ("exceeded", json!({ "failures": failures }))
                 }
+                BaseFailureVerdict::CandidatePasses { tests_run } => {
+                    match self.override_blocker() {
+                        Some(blocker) => {
+                            let reason = format!(
+                                "`{command}` passes on the final candidate when the host runs \
+                                 it, but {blocker}"
+                            );
+                            self.refuse(record, &reason);
+                            held = false;
+                            (
+                                "refused",
+                                json!({ "reason": reason, "tests_run": tests_run }),
+                            )
+                        }
+                        None => {
+                            overrides.push((
+                                record.clone(),
+                                HostCandidateOverride {
+                                    command: command.clone(),
+                                    record_id: record.record_id().map(str::to_string),
+                                    reviewer_outcome: record.outcome,
+                                    run_id: context.run_id.clone(),
+                                    tests_run: *tests_run,
+                                    evidence_artifact: REVIEW_BASELINE_ARTIFACT.to_string(),
+                                },
+                            ));
+                            ("candidate_passed", json!({ "tests_run": tests_run }))
+                        }
+                    }
+                }
+                BaseFailureVerdict::BasePasses(reason) => {
+                    // A downgraded review stays incomplete; the reason still
+                    // names the candidate's own failure.
+                    if !self.host_refused {
+                        self.verdict = ReviewVerdict::Reject;
+                    }
+                    self.validation_complete = false;
+                    self.escalate(&format!("baseline_refuted: {reason}"));
+                    held = false;
+                    ("rejected", json!({ "reason": reason }))
+                }
                 BaseFailureVerdict::NotComparable(reason) => {
                     self.downgrade(&format!(
                         "baseline_not_comparable: `{}`: {reason}",
@@ -172,7 +228,25 @@ impl Judgement {
                 OrbitError::Execution(format!("serialize baseline evidence: {error}"))
             })?,
         )?;
-        if !held || !self.holdable(scope, &confirmed) {
+        let counted = confirmed
+            .iter()
+            .chain(overrides.iter().map(|(record, _)| record))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !held || !self.holdable(scope, &counted) {
+            return Ok(Vec::new());
+        }
+        for (overridden, record) in overrides {
+            self.override_record(&overridden, &record);
+            self.host_overrides.push(record);
+        }
+        if holds.is_empty() {
+            self.verdict = if repair.is_some() {
+                ReviewVerdict::AcceptWithFixes
+            } else {
+                ReviewVerdict::Accept
+            };
+            self.escalation = None;
             return Ok(Vec::new());
         }
         self.escalate(&format!(
@@ -188,10 +262,10 @@ impl Judgement {
         Ok(holds)
     }
 
-    /// Whether the confirmed red-base checks are all that keep the review
-    /// from passing: nothing the host refused, no open finding, no pending
-    /// external evidence, and every record consistent once they count as
-    /// passed.
+    /// Whether the confirmed red-base checks, and the checks the host passed
+    /// on the candidate, are all that keep the review from passing: nothing
+    /// the host refused, no open finding, no pending external evidence, and
+    /// every record consistent once they count as passed.
     fn holdable(&mut self, scope: &[String], confirmed: &[ReviewValidation]) -> bool {
         if self.host_refused
             || self.verdict.passed()
@@ -227,11 +301,56 @@ impl Judgement {
             Ok(()) => true,
             Err(defect) => {
                 self.escalate(&format!(
-                    "baseline_red not held: {} even with the red-base checks counted",
+                    "baseline_red not held: {} even with the host-verified checks counted",
                     defect.reason()
                 ));
                 false
             }
+        }
+    }
+
+    /// Why a check the host passed on the candidate may not stand in for the
+    /// reviewer's failed record, if anything: a host run never overrides an
+    /// open finding, and evidence still owed elsewhere keeps the verdict open.
+    fn override_blocker(&self) -> Option<&'static str> {
+        if self
+            .findings
+            .iter()
+            .any(|finding| finding.disposition == FindingDisposition::Open)
+        {
+            Some("a finding is still open, so the host's run never accepts the review")
+        } else if !self.external_evidence.is_empty() {
+            Some("external evidence is still owed, so the host's run cannot settle the review")
+        } else {
+            None
+        }
+    }
+
+    /// Count `overridden` as passed on the host's run, noting what replaced
+    /// the reviewer's outcome.
+    fn override_record(&mut self, overridden: &ReviewValidation, by: &HostCandidateOverride) {
+        let tests = by
+            .tests_run
+            .map(|count| format!(", {count} counted test(s)"))
+            .unwrap_or_default();
+        let note = format!(
+            "Host override: the reviewer recorded `{}` {}; the host passed it on the final \
+             candidate in run {}{tests}; log {}",
+            by.command,
+            by.reviewer_outcome.as_str(),
+            by.run_id,
+            by.evidence_artifact,
+        );
+        for record in self
+            .validation
+            .iter_mut()
+            .filter(|record| *record == overridden)
+        {
+            record.outcome = ValidationOutcome::Passed;
+            record.note = Some(match record.note.take() {
+                Some(previous) => format!("{previous}; {note}"),
+                None => note.clone(),
+            });
         }
     }
 

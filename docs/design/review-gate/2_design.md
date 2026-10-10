@@ -570,13 +570,21 @@ records the holds in `baseline_red`. The step then fails typed
 `[baseline_red]`, so the failure handoff keeps the candidate and holds the
 task under `baseline_red_hold` until the base passes. The certificate's
 verdict stays what the reviewer reported and is never coverage. A candidate
-that adds failures keeps its verdict (`baseline_exceeded`), and a claim the
-host contradicts or cannot check settles `incomplete`
-(`baseline_claim_refused`). A base run that is not comparable with the
-candidate's (it tested another selection, or passed without executing a
-counted test) neither refutes nor confirms the claim and settles
-`incomplete` (`baseline_not_comparable`) [ORB-15131]. All three block as
-before.
+that adds failures keeps its verdict (`baseline_exceeded`). Once the host
+refutes the claim, its run on the final candidate decides the check
+[ORB-15122]. A pass there, with no open finding and no pending external
+evidence, counts the record as passed on the host's run, recorded in the
+certificate's `host_overrides`, and a review whose claims all resolve that
+way settles `accept` (`accept_with_fixes` over a repair). A pass whose
+validation summary shows no counted test ran is not evidence. A failure
+there while the base passes a comparable run is the candidate's own and
+settles `reject` (`baseline_refuted`). Any other claim the host contradicts
+or cannot check, including a pass under an open finding, settles
+`incomplete` (`baseline_claim_refused`). A base run that is not comparable
+with the candidate's (it tested another selection, or passed without
+executing a counted test) neither refutes nor confirms the claim and
+settles `incomplete` (`baseline_not_comparable`) [ORB-15131]. Every outcome
+but the host pass blocks as before.
 
 Listing a command in `review.baseline_commands` also makes it binding
 [ORB-14684]. A failed record of a trusted command (a captured

@@ -26,8 +26,8 @@ pub use admission::{
     is_reserved_review_artifact,
 };
 pub use certificate::{
-    LandingTransformation, ReviewCertificate, ReviewConsumption, ReviewInvalidation, ReviewLanding,
-    ReviewManifest, ReviewerIdentity,
+    HostCandidateOverride, LandingTransformation, ReviewCertificate, ReviewConsumption,
+    ReviewInvalidation, ReviewLanding, ReviewManifest, ReviewerIdentity,
 };
 pub use history::{
     REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::super::automation::SourceRevision;
 use super::{
     CommitIdentity, RetainedObligation, RetiredValidation, ReviewAssurance, ReviewBudget,
-    ReviewFinding, ReviewReport, ReviewValidation, ReviewVerdict,
+    ReviewFinding, ReviewReport, ReviewValidation, ReviewVerdict, ValidationOutcome,
 };
 
 /// The pinned, immutable input handed to the reviewer.
@@ -161,6 +161,12 @@ pub struct ReviewCertificate {
     /// the backlog until the base passes, instead of blocking it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub baseline_red: Vec<super::super::BaselineRedHold>,
+    /// [ORB-15122] Failed required checks whose red-base claim the host
+    /// refuted by passing them on the final candidate. Each record's outcome
+    /// is the host's, not the reviewer's; set only when the review had no
+    /// open finding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_overrides: Vec<HostCandidateOverride>,
     /// [ORB-14478] `host_sandbox_test` requirements the executing host ran,
     /// or refused, outside the agent sandbox. A passed record names the
     /// result and log a claimed leaf's handoff pins for the owner.
@@ -177,6 +183,27 @@ pub struct ReviewCertificate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_hold_attempt: Option<String>,
     pub issued_at: DateTime<Utc>,
+}
+
+/// A reviewer's failed required check that the host passed on the final
+/// candidate [ORB-15122]: the reviewer claimed the base fails it too, and the
+/// host's own run of the trusted command settled it instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostCandidateOverride {
+    /// The trusted command the host ran.
+    pub command: String,
+    /// The overridden record's id, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    /// The outcome the reviewer recorded, which the host's pass replaced.
+    pub reviewer_outcome: ValidationOutcome,
+    /// The run whose settlement executed the command.
+    pub run_id: String,
+    /// Counted tests the host run executed, when the command reports them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_run: Option<u64>,
+    /// The task artifact holding the host run's captured log.
+    pub evidence_artifact: String,
 }
 
 /// How the reviewed candidate became the landed commit.

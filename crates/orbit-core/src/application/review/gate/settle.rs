@@ -378,13 +378,15 @@ fn settle(
     )?;
     // [ORB-14434] Check the reviewer's red-base claims on the final
     // candidate before the verdict is reconciled: a refused claim settles
-    // the review incomplete.
+    // the review incomplete. [ORB-15122] A check the host passes on the
+    // candidate counts as passed; one it fails while the base passes rejects.
     let baseline_red = judgement.verify_baseline_claims(
         runtime,
         context,
         &reviewed.base,
         &context.base_ref(),
         &validation_scope,
+        repair.as_ref(),
     )?;
     // [ORB-14616] Every file a control mutated must come back byte-identical
     // in the final candidate.
@@ -461,6 +463,7 @@ fn settle(
         selectors_widened: judgement.selectors_widened.clone(),
         evidence_carried: judgement.evidence_carried.clone(),
         baseline_red,
+        host_overrides: judgement.host_overrides.clone(),
         host_evidence: judgement.host_evidence.clone(),
         owed_evidence: owed,
         resumed_hold_attempt: held.map(|(hold, _)| hold.attempt_id),

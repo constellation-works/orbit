@@ -83,17 +83,17 @@ pub use reconciliation::{
     strip_review_reconciliation_admission,
 };
 pub use review::{
-    CommitIdentity, DEFAULT_REVIEW_MINUTES, FindingDisposition, LandingTransformation,
-    NegativeControl, REVIEW_ADMISSION_KEY, REVIEW_BASELINE_ARTIFACT, REVIEW_CONTRACT_VERSION,
-    REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
-    REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
-    RecordGap, RetainedObligation, RetiredValidation, ReviewAdmission, ReviewAssurance,
-    ReviewAttempt, ReviewAttemptState, ReviewBaselineClaim, ReviewBudget, ReviewCertificate,
-    ReviewConsumption, ReviewFinding, ReviewInvalidation, ReviewLanding, ReviewLedger,
-    ReviewManifest, ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewReservation,
-    ReviewResetDecision, ReviewTiming, ReviewValidation, ReviewVerdict, ReviewerIdentity,
-    ReviewerInvocation, ReviewerInvocationEvent, ValidationOutcome, ValidationRole,
-    is_reserved_review_artifact, record_gap, seconds_between,
+    CommitIdentity, DEFAULT_REVIEW_MINUTES, FindingDisposition, HostCandidateOverride,
+    LandingTransformation, NegativeControl, REVIEW_ADMISSION_KEY, REVIEW_BASELINE_ARTIFACT,
+    REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
+    REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT,
+    REVIEW_REPORT_HISTORY_VERSION, RecordGap, RetainedObligation, RetiredValidation,
+    ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState, ReviewBaselineClaim,
+    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewFinding, ReviewInvalidation,
+    ReviewLanding, ReviewLedger, ReviewManifest, ReviewReport, ReviewReportHistory,
+    ReviewReportRevision, ReviewReservation, ReviewResetDecision, ReviewTiming, ReviewValidation,
+    ReviewVerdict, ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent,
+    ValidationOutcome, ValidationRole, is_reserved_review_artifact, record_gap, seconds_between,
 };
 pub use review_evidence::{
     HostEvidenceRule, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
