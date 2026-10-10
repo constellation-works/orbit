@@ -606,6 +606,7 @@ pub(super) async fn create_task_action(
         external_refs: body.external_refs,
         source_task_id: body.source_task_id,
         crew: body.crew,
+        crew_source: None,
         orchestrator: body.orchestrator,
         context_creation: Default::default(),
     };

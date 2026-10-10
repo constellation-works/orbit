@@ -97,7 +97,10 @@ Confirm:
   caller's key from `~/.ssh/authorized_keys`);
 - when before-PR or before-landing review is on at the owner
   (`review.before_pr = true` or `review.before_landing = true`), the owner sets `operation.review_crew`, the workspace ships through the PR route,
-  and every follower can run that crew.
+  and every follower can run that crew. When `operation.review_crew` is a pool
+  (`["sol", "grok"]`), the owner resolves it to one member each time it offers
+  a claim, and that crew is what the claim captures, so every follower must
+  be able to run each member it may be offered.
 
 ```bash
 orbit config get review.before_pr
@@ -921,7 +924,8 @@ reconciliation then adopts the owner's `workflow.required_validation_commands`
 at submission as its own contract (`commands_source:
 owner_configuration_at_submission`, with `accepted_commands: []`) rather than
 claiming the delivery was held to it. `review_crew` is `operation.review_crew`
-at submission.
+at submission; a pool contributes one member, preferring one that did not
+implement the task, with `review_crew_source` naming the pool's layer.
 
 `submit` freezes that contract into the record and admits one run of
 `task_review_reconciliation_pipeline`: it runs every contract command at the

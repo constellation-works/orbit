@@ -218,11 +218,11 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 75,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw.unwrap_or(0)),
     },
-    operation_review_crew: Option<String> => String {
-        key: "operation.review_crew", value_type: "string",
-        description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). Before-PR and before-landing review refuse to start without it.",
+    operation_review_crew: Option<Vec<String>> => operation::ReviewCrewSetting {
+        key: "operation.review_crew", value_type: "array<string>",
+        description: "Crew for automatic review: the before-PR or before-landing reviewer, and the crew of every review task the delivery-code-review auto-task mints (unset, that definition's template crew). One crew name, or a pool written like the complexity pools (`name` or `name:weight`, all bare or all weighted) from which each review draws one crew by weight, preferring a crew other than the one that implemented the reviewed work and skipping disabled or provider-limited crews. [] unsets it. Before-PR and before-landing review refuse to start without it.",
         section: ConfigSection::Review, order: 30,
-        resolve: |raw: Option<String>| operation::review_crew(raw),
+        resolve: operation::review_crew,
     },
     security_alert_sweep_min_severity: String => String {
         key: "security_alert_sweep.min_severity", value_type: "string",

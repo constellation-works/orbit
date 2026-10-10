@@ -2,6 +2,8 @@
 //! contract it resolves, the session identity it trusts, and the declared
 //! contract it checks against the shared admission ladder.
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionReviewContract,
@@ -10,6 +12,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
+
+use crate::application::job::crew_pools::random_crew_ticket;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -152,7 +156,7 @@ impl crate::OrbitRuntime {
             authorization_reference: self.owner_completion_authority(),
             review: (before_pr || before_landing).then(|| AdmissionReviewContract {
                 contract_version: REVIEW_CONTRACT_VERSION,
-                crew: policy.review_crew.value.clone(),
+                crew: self.claim_review_crew(),
                 budget: policy.review_budget(),
                 required_validation_commands: Some(
                     self.workflow_required_validation_commands().to_vec(),
@@ -160,6 +164,61 @@ impl crate::OrbitRuntime {
                 baseline_commands: self.review_baseline_commands().to_vec(),
                 host_evidence: policy.review_host_evidence.value.clone(),
             }),
+        }
+    }
+
+    /// The one reviewer crew a claim's review contract carries
+    /// [ORB-15195]: the configured crew, or a member drawn from the
+    /// configured pool, so the wire contract still names one crew. The
+    /// follower implements the claim, so the draw has no implementer to
+    /// avoid. Each probe draws afresh; [`Self::adopt_requested_review_crew`]
+    /// lets the pull that echoes it be admitted.
+    fn claim_review_crew(&self) -> Option<String> {
+        let pool = self.review_crew_pool_members().ok()?;
+        let first = pool.first().map(|member| member.name.clone());
+        if pool.len() < 2 {
+            return first;
+        }
+        // A pool no member of which runs here still names a crew, so the
+        // follower's refusal says which one it cannot run.
+        self.review_crew_candidates(&pool)
+            .and_then(|candidates| {
+                self.draw_review_crew(candidates, &BTreeSet::new(), &mut random_crew_ticket)
+            })
+            .map(|crew| crew.name)
+            .ok()
+            .or(first)
+    }
+
+    /// Take the reviewer `requested` names into `owner` when it is a member
+    /// of this owner's current review pool that could have been drawn for
+    /// it [ORB-15195]. A pull echoes the crew its probe drew, and a pool
+    /// draws per probe, so only the crew may differ from the owner's own
+    /// draw; everything else is still compared exactly.
+    pub(super) fn adopt_requested_review_crew(
+        &self,
+        owner: &mut AdmissionShipContract,
+        requested: &AdmissionShipContract,
+    ) {
+        let (Some(review), Some(Some(crew))) = (
+            owner.review.as_mut(),
+            requested
+                .review
+                .as_ref()
+                .map(|review| review.crew.as_deref()),
+        ) else {
+            return;
+        };
+        let drawable = self
+            .review_crew_pool_members()
+            .and_then(|pool| self.review_crew_candidates(&pool))
+            .is_ok_and(|candidates| {
+                candidates
+                    .iter()
+                    .any(|candidate| candidate.crew.name == crew)
+            });
+        if drawable {
+            review.crew = Some(crew.to_string());
         }
     }
 

@@ -22,6 +22,8 @@ use super::super::evidence::{
     satisfied_external_evidence as satisfied_external_evidence_on,
 };
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::seeded_crew_ticket;
+use crate::application::review::crew::pool_source;
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 use super::context::{GateContext, admitted_run_id, not_applicable};
@@ -295,8 +297,9 @@ fn admit(
     let reviewer = match &received {
         Some((_, certificate)) => held_reviewer_json(&certificate.reviewer),
         None => {
-            let crew = resolve_reviewer_crew(runtime, admission, context)?;
-            reviewer_json(&crew, &admission.crew_source)
+            let (crew, source) =
+                resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?;
+            reviewer_json(&crew, &source)
         }
     };
     let owed_external_evidence = owed_evidence(runtime, context, &candidate.commits)?;
@@ -446,11 +449,70 @@ fn admit(
 /// The reviewer crew must be explicitly configured, resolvable on this host,
 /// and inside the run's crew allowlist. It is never inferred from the
 /// implementer; refusal escalates rather than substituting.
+///
+/// A captured pool chooses one member per candidate [ORB-15195], preferring
+/// one that did not implement the run's tasks; the draw is seeded by the run
+/// and candidate head, so a resumed admission chooses the same reviewer.
+/// Returns the crew with the provenance its reviewer record carries.
 fn resolve_reviewer_crew(
     runtime: &OrbitRuntime,
     admission: &ReviewAdmission,
     context: &GateContext,
-) -> Result<Crew, OrbitError> {
+    head: &str,
+) -> Result<(Crew, String), OrbitError> {
+    let run = runtime.get_job_run_backend(&context.run_id)?;
+    let run_input = run.and_then(|run| run.input).unwrap_or(Value::Null);
+    let allowlist = runtime.crew_allowlist_from_input(&run_input)?;
+    if !admission.crew_pool.is_empty() {
+        let names = admission
+            .crew_pool
+            .iter()
+            .map(|member| member.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let candidates = runtime
+            .review_crew_candidates(&admission.crew_pool)
+            .map_err(|error| {
+                OrbitError::CapabilityDenied(format!(
+                    "review_crew_unavailable: no crew of the configured review pool [{names}] \
+                     can be resolved on this host: {error}"
+                ))
+            })?;
+        let mut excluded = None;
+        let permitted = candidates
+            .into_iter()
+            .filter(|candidate| {
+                enforce_crew_allowlist(allowlist.as_ref(), &candidate.crew, "the review pool")
+                    .map_err(|error| excluded.get_or_insert(error))
+                    .is_ok()
+            })
+            .collect::<Vec<_>>();
+        if permitted.is_empty() {
+            let error = excluded.map_or_else(String::new, |error| error.to_string());
+            return Err(OrbitError::CapabilityDenied(format!(
+                "review_crew_excluded: {error}; the run's window excludes every crew of the \
+                 configured review pool [{names}], and the gate escalates rather than \
+                 substituting another crew"
+            )));
+        }
+        let implementers = context
+            .tasks
+            .iter()
+            .filter_map(|task| task.crew.clone())
+            .chain(
+                run_input
+                    .get("crew")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            )
+            .collect();
+        let crew = runtime.draw_review_crew(
+            permitted,
+            &implementers,
+            &mut seeded_crew_ticket(format!("review:{}:{head}", context.run_id)),
+        )?;
+        return Ok((crew, pool_source(&admission.crew_source)));
+    }
     let name = admission.crew.as_deref().ok_or_else(|| {
         OrbitError::CapabilityDenied(
             "review_crew_unconfigured: before-PR review needs an explicitly configured \
@@ -466,9 +528,6 @@ fn resolve_reviewer_crew(
                  this host: {error}"
             ))
         })?;
-    let run = runtime.get_job_run_backend(&context.run_id)?;
-    let run_input = run.and_then(|run| run.input).unwrap_or(Value::Null);
-    let allowlist = runtime.crew_allowlist_from_input(&run_input)?;
     enforce_crew_allowlist(allowlist.as_ref(), &crew, "the configured review crew").map_err(
         |error| {
             OrbitError::CapabilityDenied(format!(
@@ -477,7 +536,7 @@ fn resolve_reviewer_crew(
             ))
         },
     )?;
-    Ok(crew)
+    Ok((crew, admission.crew_source.clone()))
 }
 
 fn reviewer_json(crew: &Crew, source: &str) -> Value {

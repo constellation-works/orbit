@@ -183,7 +183,7 @@ review_minutes = 120
         review.review_minutes.source,
         OperationLayerSource::Workspace
     );
-    assert_eq!(review.review_crew.value.as_deref(), Some("grok"));
+    assert_eq!(review.review_crew.value, vec!["grok".to_string()]);
     assert_eq!(review.legacy_after_landing, None);
     assert_eq!(config.snapshot.review_minutes, 120);
     for key in ["operation.review_policy", "operation.review_minutes"] {

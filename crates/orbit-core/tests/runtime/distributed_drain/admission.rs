@@ -1834,15 +1834,17 @@ fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
     assert_eq!(follower_before_pr["admits"], true, "{follower_before_pr}");
     assert_eq!(follower_before_pr["ship"]["before_pr"], false);
 
+    // The review crew is one the owner defines: a load refuses one it does
+    // not [ORB-15195].
     for config in [
-        "[review]\nbefore_pr = true\n[operation]\nreview_crew = \"reviewer\"\n",
-        "[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewer\"\n",
+        "[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n",
+        "[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"sol\"\n",
     ] {
         let owner = owner_with(&root.path().join(config.len().to_string()), config, false);
         let probe = probe_owner(&owner, false);
         assert_eq!(probe["review"]["before_pr"]["enabled"], true, "{config}");
         assert_eq!(probe["ship"]["before_pr"], true, "{config}");
-        assert_eq!(probe["ship"]["review"]["crew"], "reviewer", "{config}");
+        assert_eq!(probe["ship"]["review"]["crew"], "sol", "{config}");
         assert_eq!(probe["admits"], true, "{config}: {probe}");
     }
 }

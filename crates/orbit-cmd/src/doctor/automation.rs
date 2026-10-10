@@ -600,8 +600,8 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
             ("Before-PR", "review.before_pr")
         };
         remediation.push(format!(
-            "{layer} review needs `operation.review_crew` set to a crew that resolves on this \
-             host; set it, or turn `{key}` off."
+            "{layer} review needs `operation.review_crew` set to a crew, or a pool with a crew, \
+             that resolves on this host; set it, or turn `{key}` off."
         ));
     }
     if let Some(health) = switches

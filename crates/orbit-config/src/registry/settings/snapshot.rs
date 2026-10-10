@@ -42,6 +42,9 @@ impl ConfigSnapshot {
             crews,
             "workflow.xhard_complexity_crews",
         )?;
+        if let Some(pool) = self.operation_review_crew.as_mut() {
+            admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY)?;
+        }
         self.workflow_final_recovery_crews = Some(admit_final_recovery_crews(
             self.workflow_final_recovery_crews.take(),
             crews,
@@ -149,8 +152,8 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
     crate::resolved::default_crews()
 }
 
-/// Admit one `workflow.*_complexity_crews` value in place, replacing it with
-/// its canonical `name[:weight]` rendering.
+/// Admit one `workflow.*_complexity_crews` or `operation.review_crew` value
+/// in place, replacing it with its canonical `name[:weight]` rendering.
 fn admit_crew_pool(
     pool: &mut Vec<String>,
     crews: &BTreeMap<String, Crew>,

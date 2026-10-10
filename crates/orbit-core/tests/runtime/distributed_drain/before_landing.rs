@@ -250,6 +250,60 @@ fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
     assert_eq!(admission.timing, ReviewTiming::None, "{input}");
 }
 
+/// [ORB-15195] An owner whose `operation.review_crew` is a pool resolves it
+/// to one member when it offers a claim, so the probe, the pull and the
+/// claimed leaf's admission each carry exactly one reviewer crew in the
+/// unchanged wire contract, and the pull is admitted under this build's
+/// protocol fingerprint.
+#[test]
+fn a_review_pool_owner_captures_one_reviewer_crew_per_claim() {
+    if !isolated(
+        module_path!(),
+        "a_review_pool_owner_captures_one_reviewer_crew_per_claim",
+    ) {
+        return;
+    }
+    const POOL: [&str; 2] = ["grok", "sol"];
+    let leaf = ReviewedLeaf::admit_from(
+        "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = [\"sol\", \"grok\"]\n",
+        "",
+    );
+    let owner = &leaf.pair.wire.owner;
+
+    for _ in 0..4 {
+        let probe = probe_as(owner, FOLLOWER);
+        assert_eq!(probe["admits"], true, "{probe}");
+        assert_eq!(
+            probe["protocol_fingerprint"],
+            orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+            "{probe}"
+        );
+        let crew = probe["ship"]["review"]["crew"].as_str().unwrap_or_default();
+        assert!(POOL.contains(&crew), "one pool member is offered: {probe}");
+    }
+
+    let pulls = leaf.pair.wire.calls("orbit.task.pull");
+    let pulled = pulls[0]["ship"]["review"]["crew"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(POOL.contains(&pulled.as_str()), "{}", pulls[0]);
+    let input = leaf
+        .pair
+        .follower_jobs
+        .get_job_run(&leaf.leaf)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    let admission = ReviewAdmission::from_run_input(&input)
+        .unwrap()
+        .expect("the leaf carries the claim's review admission");
+    assert!(admission.gates_landing(), "{input}");
+    assert_eq!(admission.crew.as_deref(), Some(pulled.as_str()), "{input}");
+    assert!(admission.crew_pool.is_empty(), "{input}");
+}
+
 /// The owner's probe as `machine`'s trusted SSH session asks it.
 fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
     owner

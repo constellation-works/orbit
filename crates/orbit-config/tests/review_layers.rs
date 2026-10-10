@@ -313,3 +313,85 @@ fn global_validation_with_one_pinned_root_has_no_workspace_layer_to_check() {
         .validate_global_with_workspace(root.path())
         .expect("one pinned root has no second layer");
 }
+
+/// [ORB-15195] `operation.review_crew` is one crew or a pool in the
+/// complexity-pool grammar. A string loads as a one-member pool, a pool loads
+/// canonical (trimmed, sorted), an empty array unsets the key even over a global value, and a
+/// crew the registry does not define fails the load naming the entry.
+#[test]
+fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let load = || ResolvedConfig::load(&roots);
+
+    write_config(workspace.path(), "[operation]\nreview_crew = \"grok\"\n");
+    let single = load().expect("a single crew still loads");
+    assert_eq!(single.operation.review_crew.value, vec!["grok".to_string()]);
+    assert_eq!(
+        single.operation.review_crew.source,
+        OperationLayerSource::Workspace
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\" sol \", \"grok\"]\n",
+    );
+    let pool = load().expect("a bare pool loads");
+    assert_eq!(
+        pool.operation.review_crew.value,
+        vec!["grok".to_string(), "sol".to_string()]
+    );
+    assert_eq!(
+        pool.snapshot.operation_review_crew.as_ref(),
+        Some(&pool.operation.review_crew.value)
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\"sol:3\", \"grok:1\"]\n",
+    );
+    assert_eq!(
+        load()
+            .expect("a weighted pool loads")
+            .operation
+            .review_crew
+            .value,
+        vec!["grok:1".to_string(), "sol:3".to_string()]
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\"sol:3\", \"grok\"]\n",
+    );
+    load().expect_err("bare and weighted entries do not mix");
+
+    write_config(global.path(), "[operation]\nreview_crew = \"sol\"\n");
+    write_config(workspace.path(), "[operation]\nreview_crew = []\n");
+    let unset = load().expect("an empty pool loads");
+    assert!(unset.operation.review_crew.value.is_empty());
+    assert_eq!(
+        unset.operation.review_crew.source,
+        OperationLayerSource::Workspace
+    );
+
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = [\"sol\", \"no-such-crew\"]\n",
+    );
+    let error = load()
+        .expect_err("an unknown pool member fails the load")
+        .to_string();
+    assert!(
+        error.contains("operation.review_crew") && error.contains("no-such-crew"),
+        "{error}"
+    );
+    write_config(
+        workspace.path(),
+        "[operation]\nreview_crew = \"no-such-crew\"\n",
+    );
+    let error = load()
+        .expect_err("an unknown single crew fails the load")
+        .to_string();
+    assert!(error.contains("no-such-crew"), "{error}");
+}

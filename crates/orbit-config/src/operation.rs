@@ -4,7 +4,9 @@
 //! `review.before_pr` (default off); before-landing review, which reviews the
 //! open pull request while hosted CI runs on it, is `review.before_landing`
 //! (default off) [ORB-14849]. Both are bounded by `review.minutes` per
-//! candidate, and `operation.review_crew` names the crew of automatic review.
+//! candidate, and `operation.review_crew` names the crew of automatic review:
+//! one crew, or a pool written like the complexity pools that each review
+//! draws one crew from [ORB-15195].
 //! There is one review layer before landing, so a resolution with both
 //! switches on fails to load and names both keys.
 //! `review.before_landing_hosts` lets an owner whose own deliveries do not
@@ -54,7 +56,10 @@ use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
 /// version 4 added `review.host_evidence`; version 5 added
 /// `review.before_landing` [ORB-14849]. `review.before_landing_hosts`
 /// [ORB-15192] did not bump it: a captured admission never carries the list,
-/// only the timing it resolved for the claim's executor.
+/// only the timing it resolved for the claim's executor. Nor did the
+/// `operation.review_crew` pool [ORB-15195]: a single crew is captured
+/// exactly as before, and a pool is captured in a field of its own that an
+/// older snapshot never carries.
 pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
@@ -91,8 +96,22 @@ const REVIEW_KEYS: &[&str] = &[
     REVIEW_HOST_EVIDENCE_KEY,
 ];
 
+/// The crew, or crew pool, of automatic review.
+pub const REVIEW_CREW_KEY: &str = "operation.review_crew";
+
 /// Every live `[operation]` key, as the unknown-key guard sees it.
-const OPERATION_KEYS: &[&str] = &["operation.review_crew"];
+const OPERATION_KEYS: &[&str] = &[REVIEW_CREW_KEY];
+
+/// `operation.review_crew` as written: one crew name, or a pool of
+/// `name[:weight]` entries [ORB-15195]. A single name is a one-member pool.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum ReviewCrewSetting {
+    /// `review_crew = "sol"`.
+    One(String),
+    /// `review_crew = ["sol", "grok"]`.
+    Pool(Vec<String>),
+}
 
 /// A retired `operation.review_policy` value, read only to translate it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,8 +240,9 @@ pub struct OperationLayer {
     pub review_before_landing_hosts: Option<Vec<String>>,
     /// Explicit `review.minutes`, or the legacy `operation.review_minutes`.
     pub review_minutes: Option<u32>,
-    /// Explicit review crew.
-    pub review_crew: Option<String>,
+    /// Explicit review crew pool; a single name is a one-entry pool and an
+    /// empty pool unsets a crew an earlier layer named.
+    pub review_crew: Option<Vec<String>>,
     /// Explicit `[[review.host_evidence]]` rules; an empty list clears the
     /// rules an earlier layer stated.
     pub review_host_evidence: Option<Vec<HostEvidenceRule>>,
@@ -256,11 +276,7 @@ impl OperationLayer {
                 REVIEW_MINUTES_KEY,
                 config_path,
             )?)?,
-            review_crew: review_crew(read_optional(
-                document,
-                "operation.review_crew",
-                config_path,
-            )?)?,
+            review_crew: review_crew(read_optional(document, REVIEW_CREW_KEY, config_path)?)?,
             review_host_evidence: read_optional::<Vec<HostEvidenceRule>>(
                 document,
                 REVIEW_HOST_EVIDENCE_KEY,
@@ -331,9 +347,11 @@ pub struct OperationPolicy {
     /// Reviewer runtime minutes for one candidate's before-PR or
     /// before-landing review.
     pub review_minutes: OperationField<u32>,
-    /// Crew selected for automatic review: the before-PR reviewer and the
-    /// crew of minted after-landing review tasks.
-    pub review_crew: OperationField<Option<String>>,
+    /// Crews automatic review draws from, as `name[:weight]` entries: the
+    /// before-PR or before-landing reviewer and the crew of minted
+    /// after-landing review tasks. Empty when unset; one entry for a single
+    /// crew. Crew names are admitted against the registry at load.
+    pub review_crew: OperationField<Vec<String>>,
     /// Checks a claimed leaf's host owes for the paths it changed.
     #[serde(default = "no_host_evidence")]
     pub review_host_evidence: OperationField<Vec<HostEvidenceRule>>,
@@ -360,7 +378,7 @@ impl OperationPolicy {
             review_before_landing: before_landing_off(),
             review_before_landing_hosts: no_before_landing_hosts(),
             review_minutes: OperationField::built_in(DEFAULT_REVIEW_MINUTES),
-            review_crew: OperationField::built_in(None),
+            review_crew: OperationField::built_in(Vec::new()),
             review_host_evidence: no_host_evidence(),
             legacy_after_landing: None,
         }
@@ -424,12 +442,7 @@ impl OperationPolicy {
             .set(layer.review_before_landing_hosts.as_ref(), source);
         self.review_minutes
             .set(layer.review_minutes.as_ref(), source);
-        if let Some(crew) = &layer.review_crew {
-            self.review_crew = OperationField {
-                value: Some(crew.clone()),
-                source,
-            };
-        }
+        self.review_crew.set(layer.review_crew.as_ref(), source);
         self.review_host_evidence
             .set(layer.review_host_evidence.as_ref(), source);
         if let Some(after_landing) = layer.legacy_after_landing {
@@ -546,12 +559,18 @@ fn host_evidence_rules(rules: Vec<HostEvidenceRule>) -> Result<Vec<HostEvidenceR
         .collect()
 }
 
-pub(crate) fn review_crew(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+/// The pool one layer's `operation.review_crew` states. An empty name is
+/// refused as before; an empty array states no crew. Entry grammar and crew
+/// names are admitted against the registry with the rest of the snapshot.
+pub(crate) fn review_crew(
+    raw: Option<ReviewCrewSetting>,
+) -> Result<Option<Vec<String>>, OrbitError> {
     match raw {
-        Some(value) if value.trim().is_empty() => Err(OrbitError::InvalidInput(
-            "operation.review_crew must not be empty".to_string(),
-        )),
-        Some(value) => Ok(Some(value.trim().to_string())),
+        Some(ReviewCrewSetting::One(value)) if value.trim().is_empty() => Err(
+            OrbitError::InvalidInput(format!("{REVIEW_CREW_KEY} must not be empty")),
+        ),
+        Some(ReviewCrewSetting::One(value)) => Ok(Some(vec![value.trim().to_string()])),
+        Some(ReviewCrewSetting::Pool(entries)) => Ok(Some(entries)),
         None => Ok(None),
     }
 }

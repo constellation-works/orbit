@@ -280,17 +280,8 @@ impl ProviderLimitsView {
             .filter_map(|crew| tightest(&readings, crew))
             .collect();
 
-        let review_crew = runtime.operation_policy().review_crew.value.clone();
-        let ungated_lanes = [
-            (
-                "workflow.system_crew",
-                Some(settings.system_crew().to_string()),
-            ),
-            ("operation.review_crew", review_crew),
-        ]
-        .into_iter()
-        .filter_map(|(setting, name)| {
-            let crew = settings.crews().get(name?.trim())?;
+        let lane_limit = |setting: &'static str, name: &str| {
+            let crew = settings.crews().get(name.trim())?;
             let until = readings
                 .iter()
                 .filter(|reading| {
@@ -305,8 +296,26 @@ impl ProviderLimitsView {
                 provider: canonical_provider(&crew.assignment.provider),
                 until,
             })
-        })
-        .collect();
+        };
+        let mut ungated_lanes: Vec<UngatedLaneLimit> =
+            lane_limit("workflow.system_crew", settings.system_crew())
+                .into_iter()
+                .collect();
+        // A review pool skips its limited members, so it is held only when
+        // every member is [ORB-15195].
+        let review_pool = &runtime.operation_policy().review_crew.value;
+        let review_limits: Vec<UngatedLaneLimit> = review_pool
+            .iter()
+            .filter_map(|entry| {
+                let name = entry
+                    .split_once(':')
+                    .map_or(entry.as_str(), |(name, _)| name);
+                lane_limit("operation.review_crew", name)
+            })
+            .collect();
+        if !review_pool.is_empty() && review_limits.len() == review_pool.len() {
+            ungated_lanes.extend(review_limits);
+        }
 
         Self {
             as_of: now,

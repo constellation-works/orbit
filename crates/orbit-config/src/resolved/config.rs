@@ -276,7 +276,8 @@ impl ResolvedConfig {
         // the exact global/workspace resolution; a store passes the scope of
         // its file so pre-write validation reports accurate provenance.
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
-        let operation = OperationPolicy::resolve(&[(operation_layer_source, &operation_layer)]);
+        let mut operation = OperationPolicy::resolve(&[(operation_layer_source, &operation_layer)]);
+        operation.review_crew.value = snapshot.operation_review_crew.clone().unwrap_or_default();
         let system_crew_alias = alias_system_crew(
             &mut crews,
             &snapshot.workflow_system_crew,

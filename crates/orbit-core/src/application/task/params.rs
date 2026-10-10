@@ -115,6 +115,9 @@ pub struct TaskAddParams {
     pub external_refs: Vec<ExternalRef>,
     pub source_task_id: Option<String>,
     pub crew: Option<String>,
+    /// Provenance recorded for `crew` when the system chose it from a
+    /// setting rather than the caller naming it; `None` records `explicit`.
+    pub crew_source: Option<String>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
     /// Creation intent an operator surface's selector screening established
@@ -146,6 +149,7 @@ impl Default for TaskAddParams {
             external_refs: Vec::new(),
             source_task_id: None,
             crew: None,
+            crew_source: None,
             orchestrator: None,
             context_creation: ContextCreationAuthorization::default(),
         }

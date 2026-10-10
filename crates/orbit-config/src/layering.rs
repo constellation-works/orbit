@@ -439,6 +439,13 @@ fn load_layered_resolved_with_staged(
         warn_compatibility_keys(&document.value, &document.path);
     }
     resolved.operation = resolve_operation_layers(global.as_ref(), workspace.as_ref())?;
+    // The winning layer's pool is the merged one, which the snapshot has
+    // admitted against the crew registry; keep its canonical entries.
+    resolved.operation.review_crew.value = resolved
+        .snapshot
+        .operation_review_crew
+        .clone()
+        .unwrap_or_default();
     resolved.plugin_enablement = plugin_enablement;
     Ok(LoadedResolvedConfig {
         resolved,

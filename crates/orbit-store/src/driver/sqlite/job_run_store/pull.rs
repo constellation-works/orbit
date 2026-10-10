@@ -525,6 +525,8 @@ fn claim_review_admission(
         timing_source: CLAIM_SOURCE.into(),
         crew: review.crew.clone(),
         crew_source: CLAIM_SOURCE.into(),
+        // The owner resolved its pool to the one crew the contract carries.
+        crew_pool: Vec::new(),
         budget: review.budget,
         required_validation_commands: review.required_validation_commands.clone(),
         baseline_commands: review.baseline_commands.clone(),

@@ -124,6 +124,7 @@ impl Execute for TaskAddArgs {
                     .collect::<Result<Vec<_>, _>>()?,
                 source_task_id: self.source_task.clone(),
                 crew: self.crew,
+                crew_source: None,
                 orchestrator: self.orchestrator,
                 context_creation,
             },
