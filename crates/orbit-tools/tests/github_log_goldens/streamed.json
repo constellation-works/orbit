@@ -538,6 +538,42 @@
     "max_evidence_lines": 40
   },
   {
+    "name": "oversized_command_keeps_a_multiline_panic_payload_through_the_failure_block",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [   6.150s] ( 603/2364) suite store_gc::audit_retention_plans_then_prunes_rows_and_unreferenced_blobs\n  stdout ───\n\n    running 1 test\n    test store_gc::audit_retention_plans_then_prunes_rows_and_unreferenced_blobs ... FAILED\n\n    failures:\n\n    failures:\n        store_gc::audit_retention_plans_then_prunes_rows_and_unreferenced_blobs\n\n    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 106 filtered out; finished in 6.14s\n\n  stderr ───\n\n    thread 'store_gc::audit_retention_plans_then_prunes_rows_and_unreferenced_blobs' panicked at crates/orbit-common/src/test_env.rs:241:5:\n    child test failed:\n    {\n      \"job_id\": \"store_gc_pipeline\",\n      \"run_id\": \"jrun-fixture\",\n      \"state\": \"failed\",\n      \"queued\": false,\n",
+      {
+        "text": "      \"detail\": \"pad\",\n",
+        "repeat": 16
+      },
+      "      \"error\": \"pipeline failed: retention plan was not pruned\",\n      \"pipeline\": \"store_gc_pipeline\"\n    }\n        PASS [   0.010s] ( 604/2364) suite next_test\n     Summary [ 645.139s] 2364 tests run: 2363 passed, 1 failed, 29 skipped\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "failure_block_over_the_region_budget_is_marked_cut",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite huge_block\nthread 'huge_block' panicked at tests/huge.rs:1:1:\n{\n      \"kept\": \"head\",\n      \"token\": \"ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\",\n",
+      {
+        "text": "      \"pad\": \"xxxxxxxx\",\n",
+        "repeat": 5000
+      },
+      "      \"error\": \"cut away from the block\",\n      \"secret_after_cut\": \"ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\"\n}\nPASS [ 0.2s] suite after_huge\nSummary [ 1.0s] 1 tests run: 1 failed\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
     "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/head/4",
     "parts": [
       "HEAD-MARKER\n",
