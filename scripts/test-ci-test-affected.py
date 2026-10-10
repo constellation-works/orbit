@@ -367,7 +367,9 @@ class NextestOutputTransportTests(unittest.TestCase):
         environment = {name: value for name, value in os.environ.items()
                        if not name.startswith(("GIT_", "ORBIT_", "CI_TEST_"))}
         environment.update(CARGO_TARGET_DIR=str(Path(temporary.name) / "target"), CARGO_NET_OFFLINE="true",
-                           BUILD_BUDGET="env", CI_TEST_BASE="HEAD")
+                           BUILD_BUDGET="env", CI_TEST_BASE="HEAD",
+                           # CI exports CARGO_TERM_COLOR=always; the assertions read plain text.
+                           CARGO_TERM_COLOR="never", NO_COLOR="1")
         for arguments in (("init", "--initial-branch=main"), ("add", "."), ("commit", "-m", "base")):
             subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
                             "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *arguments],
