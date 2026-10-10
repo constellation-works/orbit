@@ -278,15 +278,23 @@ spec:
 
        When a `required` check fails on the final candidate and the failures
        lie outside the task's selectors and the paths the candidate changes,
-       rerun the same command on the manifest's `base.commit` (in a separate
-       detached worktree under `.orbit/tmp/`, never by rewriting this one) and
-       record what you saw as `baseline` on that failed `required` record:
+       replay only the failing tests on the manifest's `base.commit` (in a
+       separate detached worktree under `.orbit/tmp/`, never by rewriting this
+       one), using the test runner's own name filter rather than the whole
+       command; rerun the whole command there only when its failures name no
+       test. Budget for that replay: start a long check with at least a
+       quarter of `remaining.seconds` left for it, and stop the check rather
+       than spend that reserve. A check you stopped keeps the failures it
+       printed; record it `failed`, say in `note` that it was stopped, and
+       replay those. Record what you saw as `baseline` on that failed
+       `required` record:
        `base_commit` (the manifest's `base.commit`), the `outcome` there, and
        the `failures` both runs share (test names, or lint locations such as
        `path:line:column`). List in `sources` the files those failures lie in.
        Keep the record `required` and `failed`; never relabel it `diagnostic`
-       to clear it. Settlement reruns the check on the candidate and the base
-       itself, and only a check the host already runs (a manifest
+       to clear it. Settlement reruns the check on the candidate and, for the
+       tests that failed there, on the base itself, and only a check the host
+       already runs (a manifest
        `required_validation_commands` or `baseline_commands` entry, matched
        like `check`) can be confirmed. When the base fails exactly as the
        candidate does and

@@ -321,6 +321,49 @@ os.execvp(sys.argv[2], sys.argv[2:])
                 self.assertIsNone(summary)
                 self.assertTrue(all(call[0] == "metadata" for call in self.calls()))
 
+    def test_a_failing_tests_selection_replays_only_those_tests(self):
+        # [ORB-15328] A base replay of a failed candidate's tests builds only
+        # the packages their binary ids name, filters to those tests, skips
+        # doctests, and still reports the selection it was handed.
+        self.touch_core()
+        _, candidate = self.summarized()
+        tests = ["orbit-core::runtime suite::broken", "orbit-cli suite::other"]
+        handed = dict(candidate["selection"], failing_tests=tests)
+        self.log.write_text("")
+        result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(handed), GUARD_TEST_EXIT="100")
+        self.assertEqual(result.returncode, 100, result.stderr)
+        self.assertEqual(replay, dict(schema_version=1, selection=handed, tests_run=2))
+        [run] = [call for call in self.calls() if call[:2] == ["nextest", "run"]]
+        self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
+                         ["orbit-cli", "orbit-core"])
+        self.assertEqual(run[run.index("-E") + 1],
+                         "(binary_id(=orbit-core::runtime) & test(=suite::broken))"
+                         " | (binary_id(=orbit-cli) & test(=suite::other))")
+        self.assertFalse(any("--doc" in call for call in self.calls()))
+        # A bare test name could be in any package, so the whole selection builds;
+        # cargo test filters by exact name.
+        self.log.write_text("")
+        bare = dict(candidate["selection"], failing_tests=["suite::broken"])
+        result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(bare), GUARD_TEST_NO_NEXTEST="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(replay["selection"], bare)
+        [run] = [call for call in self.calls() if call[:2] == ["test", "--no-fail-fast"]]
+        self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
+                         self.core_dependents)
+        self.assertEqual(run[run.index("--"):], ["--", "--exact", "suite::broken"])
+
+    def test_failing_tests_that_cannot_be_replayed_fail_without_a_summary(self):
+        self.touch_core()
+        _, candidate = self.summarized()
+        for tests in ([], "suite::broken", ["suite::broken)|all()"], ["orbit-tools suite::other"]):
+            with self.subTest(tests=tests):
+                self.log.write_text("")
+                handed = dict(candidate["selection"], failing_tests=tests)
+                result, summary = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(handed))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNone(summary)
+                self.assertTrue(all(call[0] == "metadata" for call in self.calls()))
+
     def test_missing_base_fails_closed(self):
         result = self.gate("--base", "missing-delivery-base")
         self.assertNotEqual(result.returncode, 0)
@@ -350,7 +393,7 @@ class NextestOutputTransportTests(unittest.TestCase):
 
     NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace"
 
-    def run_gate(self, test_body):
+    def run_gate(self, test_body, returncode=0, selection=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / "repo"
@@ -375,9 +418,14 @@ class NextestOutputTransportTests(unittest.TestCase):
                             "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *arguments],
                            cwd=root, env=environment, capture_output=True, check=True)
         (root / "crates/suite/src/lib.rs").write_text("// changed\n")
+        summary = Path(temporary.name) / "summary.json"
+        environment["ORBIT_VALIDATION_SUMMARY"] = str(summary)
+        if selection is not None:
+            environment["ORBIT_VALIDATION_SELECTION"] = json.dumps(selection)
         result = subprocess.run(["python3", str(root / "scripts/ci-test-affected.py")], cwd=root,
                                 env=environment, text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, returncode, result.stderr)
+        self.summary = json.loads(summary.read_text())
         return result.stdout + result.stderr
 
     def notices(self, output):
@@ -388,6 +436,20 @@ class NextestOutputTransportTests(unittest.TestCase):
             with self.subTest(stream=stream):
                 output = self.run_gate(f'#[test]\nfn deferred() {{ {stream}!("{self.NOTICE}"); }}\n')
                 self.assertEqual(self.notices(output), [self.NOTICE], output)
+
+    def test_a_failing_tests_selection_runs_only_the_named_tests(self):
+        # [ORB-15328] The identities a failed run printed select exactly those
+        # tests under real nextest's filterset grammar.
+        body = ("#[test]\nfn broken() { panic!(\"red\"); }\n#[test]\nfn fine() {}\n"
+                "mod inner {\n#[test]\nfn also_broken() { panic!(\"red\"); }\n}\n")
+        output = self.run_gate(body, returncode=100)
+        self.assertIn("FAIL", output)
+        self.assertEqual(self.summary["tests_run"], 3, output)
+        handed = dict(self.summary["selection"], failing_tests=["suite::fixture inner::also_broken"])
+        output = self.run_gate(body, returncode=100, selection=handed)
+        self.assertEqual(self.summary, dict(schema_version=1, selection=handed, tests_run=1), output)
+        self.assertIn("suite::fixture inner::also_broken", output)
+        self.assertNotIn("suite::fixture broken", output)
 
     def test_a_fully_executed_passing_gate_reports_no_deferral(self):
         output = self.run_gate("#[test]\nfn executed() { assert_eq!(1 + 1, 2); }\n")

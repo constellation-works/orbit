@@ -574,10 +574,27 @@ manifest's `base.commit`, the `outcome` there and the shared `failures`), with
 `sources` outside the scope. Settlement never runs the reviewer's command
 text on the host. It reruns a matching `workflow.required_validation_commands`
 or `review.baseline_commands` entry on the final candidate and, through the
-same per-base cache delivery validation uses, on the base. It believes the
-claim only when the exit status and timeout outcome match, every claimed
-failure appears in the base output, and the candidate's failed tests and
-located errors are a subset of the base's. When every failed required check
+same per-base cache delivery validation uses, on the base. A full result
+already cached for that exact base is read without a run. Otherwise, when the
+candidate run reported a selection and every failure it printed is a test, the
+base replays only those tests and the ones the claim names, by handing the
+selection back with `failing_tests` [ORB-15328]; that replay must execute a
+counted test. Other failures replay the whole selection. The evidence records
+the path as `base_replay` (`cached_failure_set`, `failing_tests`,
+`full_selection`). It believes the claim only when a full replay matches the
+exit status and timeout outcome (a failing-tests replay must fail without
+timing out), every claimed failure appears in the base output, and the
+candidate's failed tests and located errors are a subset of the base's.
+
+Each claim's host runs get `review.minutes` of wall clock, the last quarter
+reserved for the base replay [ORB-15328]. The candidate rerun is stopped
+before the reserve (and still at the 45-minute validation timeout), and the
+base gets at least the reserve. A rerun stopped at the reserve is a cut: the
+failures it printed are still replayed on the base, and when the base shares
+all of them the review settles `incomplete` (`baseline_cut`) naming the cut
+and those failures. A cut run that printed no replayable failure attributes
+none and settles the same way; one the base does not share is the candidate's
+as below. When every failed required check
 is confirmed, no finding is open, no external evidence is pending, and the
 records are consistent once those checks count as passed, the certificate
 records the holds in `baseline_red`. The step then fails typed
@@ -1194,5 +1211,6 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
 - [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
+- [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

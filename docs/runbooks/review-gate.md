@@ -233,8 +233,15 @@ selection. A base run that tests another selection, or passes without
 executing a counted test, is not comparable: the claim is neither refuted nor
 confirmed, and the review settles `incomplete` with a
 `baseline_not_comparable` escalation (see the
-[validation summary](../DEVELOPMENT.md#validation-summary-and-base-reruns)). The certificate's
-`baseline_red` names the holds. When the base ref moves to a commit where the
+[validation summary](../DEVELOPMENT.md#validation-summary-and-base-reruns)).
+When the candidate's failures are all tests, the base replays only those
+(`base_replay: "failing_tests"` in `review-baseline.json`), or a full result
+already cached for that base is read (`cached_failure_set`). Each claim's
+host runs get `review.minutes` of wall clock with the last quarter reserved
+for the base; a candidate rerun stopped at the reserve settles `incomplete`
+with a `baseline_cut` escalation naming the cut and the failures the base
+shares. Raise `review.minutes` when the host's affected run needs longer.
+The certificate's `baseline_red` names the holds. When the base ref moves to a commit where the
 command passes, admission lifts the hold. The next delivery resumes the
 preserved candidate (`resumed_validated`) without the implementer and admits
 a fresh review. A claimed leaf's resume runs the implementer again.

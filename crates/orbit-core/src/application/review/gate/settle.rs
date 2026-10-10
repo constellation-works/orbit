@@ -1,11 +1,14 @@
 //! Settle the reviewer's report into an honest verdict and certificate.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_engine::review_gate::{candidate_identity_at, committed_paths, uncommitted_paths};
+use orbit_engine::review_gate::{
+    ReplayBudget, candidate_identity_at, committed_paths, uncommitted_paths,
+};
 use orbit_engine::{DispatchError, ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{ClaimEvidence, ClaimWorkerUpdate, ReviewSettlement};
 use orbit_types::telemetry::AuditEventStatus;
@@ -435,6 +438,8 @@ fn settle(
     // candidate before the verdict is reconciled: a refused claim settles
     // the review incomplete. [ORB-15122] A check the host passes on the
     // candidate counts as passed; one it fails while the base passes rejects.
+    // [ORB-15328] Each claim's host runs get one review budget of wall clock,
+    // with the base replay's share reserved.
     let baseline_red = judgement.verify_baseline_claims(
         runtime,
         context,
@@ -442,6 +447,9 @@ fn settle(
         &context.base_ref(),
         &validation_scope,
         repair.as_ref(),
+        ReplayBudget::new(Duration::from_secs(
+            u64::from(ledger.budget.minutes).saturating_mul(60),
+        )),
     )?;
     // [ORB-14616] Every file a control mutated must come back byte-identical
     // in the final candidate.

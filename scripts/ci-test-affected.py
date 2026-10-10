@@ -6,13 +6,18 @@ ORBIT_VALIDATION_SUMMARY names a file, the run writes a JSON summary there:
 the selection it ran and how many tests nextest executed. When
 ORBIT_VALIDATION_SELECTION holds such a selection (from a candidate run), the
 run executes exactly those packages instead of selecting from a diff, so a
-rerun on the base commit tests what the candidate tested.
+rerun on the base commit tests what the candidate tested. A selection that
+also names `failing_tests` (each a nextest `<binary-id> <test>` or a bare test
+name, as a failed candidate run printed them) runs only those tests, building
+only the packages their binary ids name and skipping doctests [ORB-15328]; the
+summary still reports the selection it was handed.
 """
 
 import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -23,6 +28,10 @@ import xml.etree.ElementTree
 ROOT = Path(__file__).resolve().parent.parent
 SUMMARY_ENV = "ORBIT_VALIDATION_SUMMARY"
 SELECTION_ENV = "ORBIT_VALIDATION_SELECTION"
+FAILING_TESTS = "failing_tests"
+# An optional nextest binary id (`crate`, `crate::target`, `crate::bin/name`),
+# then a Rust test path: nothing a filterset or libtest filter must escape.
+TEST_ID = re.compile(r"(?:([A-Za-z0-9_-]+)(?:::[A-Za-z0-9_./-]+)? )?[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*")
 
 
 def git(*arguments):
@@ -113,8 +122,9 @@ def affected_packages(metadata, paths):
     return sorted(selected)
 
 
-def given_packages(metadata, text):
-    """The packages a candidate's summary selection names, all of them current members."""
+def given_selection(metadata, text):
+    """The packages a candidate's summary selection names, all of them current
+    members, and the failing tests it names, if any."""
     selection = json.loads(text)
     packages = selection.get("packages") if isinstance(selection, dict) else None
     if not isinstance(packages, list) or not all(isinstance(name, str) for name in packages):
@@ -124,7 +134,31 @@ def given_packages(metadata, text):
     missing = sorted(set(packages) - known)
     if missing:
         raise ValueError(f"{SELECTION_ENV} names packages this checkout lacks: {', '.join(missing)}")
-    return sorted(set(packages))
+    tests = selection.get(FAILING_TESTS)
+    if tests is not None:
+        if (not isinstance(tests, list) or not tests
+                or not all(isinstance(test, str) and TEST_ID.fullmatch(test) for test in tests)):
+            raise ValueError(f"{SELECTION_ENV} {FAILING_TESTS} must be a non-empty list of test names")
+        outside = sorted({match.group(1) for match in map(TEST_ID.fullmatch, tests)
+                          if match.group(1)} - set(packages))
+        if outside:
+            raise ValueError(f"{SELECTION_ENV} {FAILING_TESTS} name packages outside the selection: "
+                             f"{', '.join(outside)}")
+    return sorted(set(packages)), tests
+
+
+def failing_test_runs(packages, tests):
+    """The packages to build and the filters to run only `tests`: a nextest
+    filterset, and libtest names for the cargo test fallback."""
+    matches = [TEST_ID.fullmatch(test) for test in tests]
+    # A bare name could be in any selected package; only binary ids narrow the build.
+    owners = {match.group(1) for match in matches}
+    run_packages = packages if None in owners else sorted(owners)
+    filterset = " | ".join(
+        f"(binary_id(={test.split(' ', 1)[0]}) & test(={test.split(' ', 1)[1]}))" if " " in test
+        else f"test(={test})" for test in tests)
+    names = sorted({test.split(" ", 1)[-1] for test in tests})
+    return run_packages, filterset, names
 
 
 def executed_tests(junit):
@@ -158,24 +192,38 @@ def main():
         [*cargo, "metadata", "--format-version", "1", "--no-deps", "--manifest-path", str(ROOT / "Cargo.toml")],
         cwd=ROOT,
     ))
+    failing_tests = None
     if given:
-        packages = given_packages(metadata, given)
+        packages, failing_tests = given_selection(metadata, given)
         print(f"ci-test-affected: running the selection {SELECTION_ENV} names", file=sys.stderr, flush=True)
     else:
         packages = affected_packages(metadata, changed_paths(base))
         print(f"ci-test-affected: base={base}", file=sys.stderr, flush=True)
     # Cargo rejects --lib for a bin-only selection, even with --bins/--tests.
     library_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
-    has_library = any(library_kinds.intersection(target["kind"])
-                      for package in metadata["packages"] if package["name"] in packages
-                      for target in package["targets"])
-    target_flags = (["--lib"] if has_library else []) + ["--bins", "--tests"] if packages else []
+
+    def target_flags_for(names):
+        has_library = any(library_kinds.intersection(target["kind"])
+                          for package in metadata["packages"] if package["name"] in names
+                          for target in package["targets"])
+        return (["--lib"] if has_library else []) + ["--bins", "--tests"] if names else []
+
+    target_flags = target_flags_for(packages)
     # nextest does not execute doctests; they run through Cargo for the same set.
     # A bin-only selection has no doctest targets and Cargo rejects --doc for it.
     doc_packages = sorted(package["name"] for package in metadata["packages"]
                           if package["name"] in packages
                           and any(target["doctest"] for target in package["targets"]))
     selection = dict(packages=packages, target_flags=target_flags, doctest_packages=doc_packages)
+    filters, libtest_filters = [], []
+    run_packages, run_target_flags = packages, target_flags
+    if failing_tests is not None:
+        # Reported as handed, so the base run is shown to have replayed them.
+        selection[FAILING_TESTS] = failing_tests
+        run_packages, filterset, names = failing_test_runs(packages, failing_tests)
+        run_target_flags = target_flags_for(run_packages)
+        filters, libtest_filters = ["-E", filterset], ["--", "--exact", *names]
+        doc_packages = []
     if not packages:
         print("ci-test-affected: no affected workspace crates; no Rust tests to run", file=sys.stderr)
         write_summary(summary, selection, 0)
@@ -184,8 +232,12 @@ def main():
         print("\n".join(packages))
         return 0
 
-    print(f"ci-test-affected: running full test targets for {', '.join(packages)}", file=sys.stderr, flush=True)
-    package_flags = [argument for name in packages for argument in ("-p", name)]
+    if failing_tests is None:
+        print(f"ci-test-affected: running full test targets for {', '.join(packages)}", file=sys.stderr, flush=True)
+    else:
+        print(f"ci-test-affected: replaying {len(failing_tests)} failing test(s) in {', '.join(run_packages)}",
+              file=sys.stderr, flush=True)
+    package_flags = [argument for name in run_packages for argument in ("-p", name)]
     test_environment = dict(os.environ)
     # A test that runs this script must not report into the outer run's summary.
     test_environment.pop(SUMMARY_ENV, None)
@@ -219,11 +271,14 @@ def main():
             # sandboxed path [ORB-15161]. The host judge classifies the gate's
             # complete output, so passing tests' output must reach it.
             command = [*cargo, "nextest", "run", "--no-fail-fast", "--success-output", "immediate",
-                       *report_flags, *package_flags, *target_flags]
+                       *report_flags, *package_flags, *run_target_flags, *filters]
         else:
             # cargo test reports no executed-test count, so the summary records none.
             print("ci-test-affected: cargo-nextest unavailable; falling back to cargo test", file=sys.stderr)
-            command = [*cargo, "test", "--no-fail-fast", *package_flags, *target_flags]
+            command = [*cargo, "test", "--no-fail-fast", *package_flags, *run_target_flags, *libtest_filters]
+        # A run stopped before nextest finishes still reports what it selected,
+        # so its failures so far can be replayed alone [ORB-15328].
+        write_summary(summary, selection, None)
         result = subprocess.run([*budget, "--", *command], cwd=ROOT, env=test_environment)
         write_summary(summary, selection, executed_tests(junit))
     if result.returncode:
