@@ -141,15 +141,14 @@ library directory with the directory shown by `find "$LIB_ROOT" -type d -name '*
 
 ## Build, preview, and collect evidence
 
-Build before previewing, then bind the preview to loopback on a known port. Keep the preview
-PID so it can be stopped before handoff:
+Build before previewing, then start an Astro-managed preview bound to loopback on a known
+port. Stop it with the command under "Stop the server after validation":
 
 ```bash
 npm --prefix "$REPO/website" run build
 export PREVIEW_PORT=4321
-npm --prefix "$REPO/website" run preview -- --host 127.0.0.1 --port "$PREVIEW_PORT" \
-  >"$SANDBOX_ROOT/astro-preview.log" 2>&1 &
-PREVIEW_PID=$!
+npm --prefix "$REPO/website" run preview -- --background --host 127.0.0.1 --port "$PREVIEW_PORT" \
+  >"$SANDBOX_ROOT/astro-preview.log" 2>&1
 export PREVIEW_URL="http://127.0.0.1:$PREVIEW_PORT"
 curl --fail --silent --show-error "$PREVIEW_URL/" >/dev/null
 ```
@@ -228,9 +227,22 @@ worktree.
 Stop the server after validation:
 
 ```bash
-kill "$PREVIEW_PID" 2>/dev/null || true
-wait "$PREVIEW_PID" 2>/dev/null || true
+(cd "$REPO/website" && node node_modules/astro/bin/astro.mjs preview stop)
 ```
+
+### Project overview card navigation
+
+After `npm run build`, start `npm run preview -- --background` as shown above and run
+the browser check against the local preview using the staged Playwright module and Chromium:
+
+```bash
+node website/scripts/check-project.mjs \
+  "$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs" "$PREVIEW_URL" .orbit/tmp/project-links-browser
+```
+
+The check opens `/project/`, activates the Contributing and Privacy cards, and verifies
+that each navigation reaches the expected root route and renders its destination heading.
+It saves the visited URLs, response statuses, and headings under the evidence directory.
 
 ### Inline code layout checks
 
