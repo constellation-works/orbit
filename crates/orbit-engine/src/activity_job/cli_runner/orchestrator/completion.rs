@@ -71,6 +71,18 @@ pub(super) struct ProviderExit<'a> {
     pub(super) build_budget_waits: BuildBudgetWaits,
 }
 
+/// Whether a clean exit without a completion envelope ran for the whole
+/// provider print-timeout. The budget is the value injected into argv, so a
+/// run that stopped any earlier is a yield or a crash, not a spent budget, and
+/// keeps the ordinary completion-envelope message. [ORB-14683]
+pub(super) fn print_timeout_spent(
+    envelope_missing: bool,
+    print_timeout: Option<Duration>,
+    elapsed: Duration,
+) -> bool {
+    envelope_missing && print_timeout.is_some_and(|budget| elapsed >= budget)
+}
+
 /// Decide the step outcome from the provider's exit and its stdout envelope,
 /// run the post-provider worktree check, and project the step output.
 pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutcome, DispatchError> {
@@ -186,8 +198,8 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // progress text. Orbit's spawn clock starts no later than the provider's, so
     // an earlier exit cannot match. It fails whatever the activity's envelope
     // flags say, because the run was cut off rather than finished.
-    let print_timeout_reached = completion_envelope_error.is_some()
-        && print_timeout.is_some_and(|budget| duration >= budget);
+    let print_timeout_reached =
+        print_timeout_spent(completion_envelope_error.is_some(), print_timeout, duration);
     // [ORB-10733] Protocol termination and control-plane outcome are distinct:
     // all recognized status tokens finish the frame, but a required completion
     // contract cannot checkpoint an explicit failed/timeout outcome. Only the

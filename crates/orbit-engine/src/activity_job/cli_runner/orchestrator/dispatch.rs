@@ -271,13 +271,28 @@ pub(crate) fn run_cli_backend_for_step(
         })?);
     }
     // Combined executor + transport argv is the only place that can honor a
-    // custom `--print-timeout` without duplicating it, and the remaining
-    // spawn deadline is known here. [ORB-11337]
+    // custom `--print-timeout` without duplicating it, and the maximum spawn
+    // deadline (runtime plus build-admission credit, capped at the runtime) is
+    // known here. [ORB-11337]
     let print_timeout = apply_provider_runtime_arg_fixups(
         &provider,
         &mut subprocess_args,
         wall_clock_timeout.saturating_mul(2),
     );
+    if let Some(budget) = print_timeout {
+        // The value in argv is the budget the classifier compares the run's
+        // elapsed time against; record it so a run that ends near, but not at,
+        // that budget can be read against it. [ORB-15206]
+        tracing::info!(
+            run_id,
+            activity_name,
+            step_id,
+            provider = %provider,
+            activity_timeout_secs = timeout_seconds,
+            print_timeout_secs = budget.as_secs(),
+            "provider print-timeout derived for invocation"
+        );
+    }
     if let Some(tools) = inspection_tools {
         subprocess_args.extend(tools.args);
     }

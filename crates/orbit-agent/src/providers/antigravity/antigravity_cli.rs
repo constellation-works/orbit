@@ -16,7 +16,7 @@ const MIN_PRINT_TIMEOUT: Duration = Duration::from_secs(1);
 ///
 /// Static headless flags live on the shipped executor. This transport adds
 /// only the model, effort, and generated envelope schema for one turn.
-/// `--print-timeout` is merged later from the remaining spawn deadline so a
+/// `--print-timeout` is merged later from the maximum spawn deadline so a
 /// custom executor can keep a shorter explicit value without duplicating the
 /// flag. [ORB-11299] [ORB-11337]
 pub(crate) struct AntigravityCliTransport {
@@ -69,12 +69,13 @@ impl AntigravityCliTransport {
     }
 }
 
-/// Derive documented `agy --print-timeout` from the remaining Orbit spawn
-/// deadline. A 30s shutdown margin keeps outer supervision authoritative.
+/// Derive documented `agy --print-timeout` from the maximum Orbit spawn
+/// deadline (the activity runtime plus capped build-admission credit). A 30s
+/// shutdown margin keeps outer supervision authoritative.
 /// Budgets that do not fit the margin still get an explicit value so the
 /// documented 5m default cannot apply.
-pub(crate) fn derived_antigravity_print_timeout(remaining_deadline: Duration) -> Duration {
-    let remaining = remaining_deadline.max(MIN_PRINT_TIMEOUT);
+pub(crate) fn derived_antigravity_print_timeout(max_deadline: Duration) -> Duration {
+    let remaining = max_deadline.max(MIN_PRINT_TIMEOUT);
     if remaining > PRINT_TIMEOUT_SHUTDOWN_MARGIN {
         remaining - PRINT_TIMEOUT_SHUTDOWN_MARGIN
     } else {
@@ -113,12 +114,12 @@ pub(crate) fn format_antigravity_print_timeout(duration: Duration) -> String {
 pub fn apply_antigravity_print_timeout(
     provider: &str,
     args: &mut Vec<String>,
-    remaining_deadline: Duration,
+    max_deadline: Duration,
 ) -> Option<Duration> {
     if provider != "antigravity" && provider != "agy" {
         return None;
     }
-    let derived = derived_antigravity_print_timeout(remaining_deadline);
+    let derived = derived_antigravity_print_timeout(max_deadline);
     let chosen = existing_print_timeout(args)
         .map(|existing| existing.min(derived))
         .unwrap_or(derived);

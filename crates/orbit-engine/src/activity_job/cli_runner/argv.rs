@@ -147,7 +147,7 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
     }
 }
 
-/// Per-invocation argv fixups that depend on the remaining spawn deadline.
+/// Per-invocation argv fixups that depend on the maximum spawn deadline.
 ///
 /// Today this only merges Antigravity `--print-timeout` so `agy`'s documented
 /// 5m default cannot cut off a longer Orbit activity budget. [ORB-11337]
@@ -156,9 +156,9 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
 pub(super) fn apply_provider_runtime_arg_fixups(
     provider: &str,
     args: &mut Vec<String>,
-    remaining_deadline: Duration,
+    max_deadline: Duration,
 ) -> Option<Duration> {
-    orbit_agent::apply_antigravity_print_timeout(provider, args, remaining_deadline)
+    orbit_agent::apply_antigravity_print_timeout(provider, args, max_deadline)
 }
 
 /// Replace the value following any `--debug-file` token in `static_args`
