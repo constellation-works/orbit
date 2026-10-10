@@ -1,9 +1,12 @@
-//! Security sweeps use config layering and report what the floor excluded.
+//! Security sweeps use config layering, report what the floor excluded, and
+//! consolidate historical per-alert tasks without losing duplicate owners.
 //! Regression for the moderate alerts silently omitted on 2026-10-06/07.
 
-use orbit_core::OrbitRuntime;
+use orbit_core::application::task::TaskAddParams;
+use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
+use orbit_types::task::TaskRelationType;
 use serde_json::{Value, json};
 
 use super::dispatch_admission::isolated;
@@ -50,6 +53,131 @@ fn file(runtime: &OrbitRuntime, snapshot: Value, severity: Option<&str>) -> Valu
             ToolContext::default(),
         )
         .unwrap()
+}
+
+#[test]
+fn consolidation_retires_every_duplicate_alert_owner_once() {
+    if !isolated("security_alert_sweep::consolidation_retires_every_duplicate_alert_owner_once") {
+        return;
+    }
+    // Duplicate owners alone also need consolidation even though the group
+    // contains only one unique alert.
+    for numbers in [vec![81, 81], vec![81, 81, 82]] {
+        let (root, runtime) = fixture(None, None);
+        let prerequisite = runtime
+            .add_task(TaskAddParams {
+                title: "Shared prerequisite".to_string(),
+                complexity: TaskComplexity::Medium,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut source_ids = Vec::new();
+        let mut selectors = Vec::new();
+        for (index, number) in numbers.iter().enumerate() {
+            let path = format!("source-{index}.rs");
+            std::fs::write(root.path().join("repo").join(&path), "").unwrap();
+            let selector = format!("file:{path}");
+            let source = runtime
+                .add_task(TaskAddParams {
+                    title: format!("Historical alert {number}, owner {index}"),
+                    description: format!(
+                        "## Alert evidence\n\n\
+                         - Repository: `acme/orbit`\n\
+                         - Alert: `#{number}`\n\
+                         - Rule: `rust/example` (Unsafe input)\n\
+                         - Security severity: `high`\n\
+                         - Tool: `CodeQL` (version `1`, guid `rust`)\n\
+                         - Message: Unsafe input\n\
+                         - Ref: `refs/heads/main`\n\
+                         - Commit: `fixture`\n\
+                         - Location: `src/lib.rs` line {number}\n"
+                    ),
+                    tags: vec![
+                        "code-scanning-sweep".to_string(),
+                        format!("code-scanning:fixture-{number}"),
+                    ],
+                    // Only the earlier duplicate carries this external
+                    // dependency; dependencies on replaced owners disappear.
+                    dependencies: vec![
+                        source_ids
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| prerequisite.id.clone()),
+                    ],
+                    context_files: vec![selector.clone()],
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            source_ids.push(source.id);
+            selectors.push(selector);
+        }
+        source_ids.sort();
+        let mut unique_numbers = numbers.clone();
+        unique_numbers.sort_unstable();
+        unique_numbers.dedup();
+        let consolidate = |apply| {
+            runtime
+                .run_deterministic(
+                    "consolidate_code_scanning_tasks",
+                    &json!({}),
+                    &json!({"apply": apply}),
+                    ToolContext::default(),
+                )
+                .unwrap()
+        };
+
+        let preview = consolidate(false);
+        assert_eq!(preview["outcome"], "dry_run");
+        assert_eq!(preview["scanned_source_tasks"], numbers.len());
+        assert_eq!(preview["group_count"], 1);
+        assert_eq!(preview["unchanged_single_source"], json!([]));
+        assert_eq!(preview["skipped"], json!([]));
+        assert_eq!(preview["groups"][0]["source_task_ids"], json!(source_ids));
+        assert_eq!(preview["groups"][0]["alert_numbers"], json!(unique_numbers));
+        for id in &source_ids {
+            assert_eq!(runtime.get_task(id).unwrap().status, TaskStatus::Backlog);
+        }
+
+        let applied = consolidate(true);
+        assert_eq!(applied["outcome"], "applied");
+        assert_eq!(applied["group_count"], 1);
+        let group = &applied["groups"][0];
+        assert_eq!(group["source_task_ids"], json!(source_ids));
+        assert_eq!(group["alert_numbers"], json!(unique_numbers));
+        assert_eq!(group["applied"], true);
+        assert_eq!(group["sources_not_retired"], json!([]));
+        let replacement = runtime
+            .get_task(group["replacement_task_id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(replacement.status, TaskStatus::Backlog);
+        assert_eq!(replacement.dependencies(), vec![prerequisite.id]);
+        assert_eq!(replacement.context_files, selectors);
+        let superseded: Vec<_> = replacement
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_type == TaskRelationType::Supersedes)
+            .map(|relation| relation.target.clone())
+            .collect();
+        assert_eq!(superseded, source_ids);
+        assert_eq!(
+            replacement
+                .tags
+                .iter()
+                .filter(|tag| tag.starts_with("code-scanning:"))
+                .count(),
+            unique_numbers.len(),
+            "replacement coverage must contain one key per unique alert"
+        );
+        for id in &source_ids {
+            assert_eq!(runtime.get_task(id).unwrap().status, TaskStatus::Rejected);
+        }
+        let repeated = consolidate(true);
+        assert_eq!(repeated["outcome"], "nothing_to_consolidate");
+        assert_eq!(repeated["groups"], json!([]));
+    }
 }
 
 #[test]
