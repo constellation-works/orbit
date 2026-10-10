@@ -25,6 +25,7 @@ let frictionTitle = 'stable friction title';
 let frictionBody = 'stable friction body';
 let frictionDuring = 'ORB-100';
 const runQueries = [];
+const runRequests = [];
 const runDetailRequests = [];
 const terminalRuns = ['success', 'failed', 'timeout', 'cancelled', 'interrupted'].map(state => ({
   run_id: `terminal-${state}`, job_id: 'fixture', state,
@@ -76,6 +77,7 @@ function fixture(url) {
     };
     case '/api/job-runs': {
       runQueries.push(url.searchParams.get('state'));
+      runRequests.push(url.search);
       if (!terminalRunFixture) return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
       const runs = url.searchParams.get('state') === 'failed'
         ? terminalRuns.filter(run => ['failed', 'timeout', 'interrupted'].includes(run.state))
@@ -389,6 +391,33 @@ for (const state of ['failed', 'timeout', 'interrupted']) {
   check(failureRows.some(row => row.textContent.includes(`terminal-${state}`)), `${state} run remains visible under the Failed filter`);
 }
 check(!text('runs-body').includes('terminal-success') && !text('runs-body').includes('terminal-cancelled'), 'Failed filter excludes successful and cancelled runs');
+// The rail badge counts every failed run in its window, so opening it from a
+// task or job search must drop that search; otherwise the list can narrow below
+// the number clicked. The Failed-selected case covers a toolbar that is not rebuilt.
+const runsSearch = () => node('runs-body').querySelector('.runs-query');
+for (const [kind, value, param, startFilter] of [['task', 'ORB-15159', 'task_id', 'All'], ['job', 'ci_failure_sweep_pipeline', 'job_id', 'Failed']]) {
+  setActiveTab('diagnostics/runs'); await settle();
+  click(Array.from(node('runs-body').querySelectorAll('.runs-filter-button')).find(button => button.textContent === startFilter)); await settle();
+  runsSearch().value = value;
+  runsSearch().dispatchEvent(new Event('input')); await settle();
+  check(new URL(window.location.href).searchParams.get(param) === value, `${kind} search is kept in the address before the badge click`);
+  const badgeWindow = node('rail-count-diag-runs').dataset.window;
+  click(node('rail-count-diag-runs')); await settle();
+  const address = new URL(window.location.href).searchParams;
+  const request = new URLSearchParams(runRequests.at(-1));
+  check(address.get('run_state') === 'failed' && !address.has('task_id') && !address.has('job_id'), `${kind} badge click opens the failure scope without the ${kind} search in the address`);
+  check(request.get('state') === 'failed' && !request.has('task_id') && !request.has('job_id'), `${kind} badge click requests every failed run without the ${kind} search`);
+  check(request.get('since') === badgeWindow, `${kind} badge click requests the badge's counted window`);
+  check(runsSearch().value === '', `${kind} badge click clears the search field`);
+}
+// Ordinary Runs-label navigation keeps the search on screen.
+setActiveTab('diagnostics/runs'); await settle();
+runsSearch().value = 'ORB-15159';
+runsSearch().dispatchEvent(new Event('input')); await settle();
+click(document.querySelector('.tab[data-tab="runs"]')); await settle();
+check(new URL(window.location.href).searchParams.get('task_id') === 'ORB-15159' && runsSearch().value === 'ORB-15159', 'the Runs label keeps the task search');
+runsSearch().value = '';
+runsSearch().dispatchEvent(new Event('input')); await settle();
 terminalRunFixture = false;
 
 // Both entrypoints share a pending-request guard, but an accepted run must not

@@ -19,7 +19,7 @@
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
-import { renderRuns, setRunFilter } from './runs.js';
+import { renderRuns, showAllFailedRuns } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -526,7 +526,7 @@ function initTabsImpl(ctx) {
         const counted = parseDashboardWindow(count.dataset.window);
         const windowChanged = Boolean(counted) && setWindow(counted);
         if (windowChanged) persistScopeToUrl();
-        setRunFilter("failed");
+        showAllFailedRuns();
         setActiveTabImpl(ctx, "diagnostics/runs", { refresh: false });
         if (windowChanged) notifyScopeChange();
         return;
