@@ -864,6 +864,11 @@ globalThis.setDrainFixturePhase = async (phase) => {
   drainRunId = phase === 'draining' ? 'jrun-20260923-0400-a1' : null;
   await fetchAndRenderAutoDrainPane();
 };
+globalThis.setDrainFixturePull = async ({ runId = null, admissionsStopped = false } = {}) => {
+  pullDrainRunId = runId;
+  pullDrainStopped = admissionsStopped;
+  await fetchAndRenderAutoDrainPane();
+};
 globalThis.setDrainFixtureApprovals = async (approvals) => {
   approvalsFixture = approvals;
   await fetchAndRenderAutoDrainPane();

@@ -1584,7 +1584,13 @@ function renderAutoDrainHead(payload) {
   const running = Number(capacity.running_admitted_workers) || 0;
   const label = phase === "draining" ? "Draining"
     : phase === "winding_down" ? "Winding down" : "idle";
-  updateDrainIndicators(phase, label);
+  // A replica's pull drain has its own indicator; the owner's phase stays
+  // "idle" here, so the header and the announcement below keep their wording.
+  const pulling = phase === "idle" && Boolean(live.pullRunId) && !workspaceReadOnlyReason();
+  updateDrainIndicators(
+    pulling ? "pulling" : phase,
+    pulling ? (live.pullAdmissionsStopped ? "Pull drain · admissions stopped" : "Pull drain") : label,
+  );
   const card = $("auto-drain-panel");
   if (card) card.dataset.drainState = phase;
   const dot = $("auto-drain-dot");
