@@ -122,13 +122,20 @@ definition of the same name.
   it. Incomplete coverage reports `review_incomplete` with uncovered partitions
   in the artifact and task comment. Findings are `bug`s tagged `code-review` +
   `full-code-review`, with source-file and matching test context selectors.
-- `doc-duties` — disabled-by-default daily validation of the oldest tracked
-  documentation. Existing `last_validated` dates take precedence; documents
-  without the key use git last-touched dates and completed task summaries for
-  rotation, without gaining frontmatter solely for this task. Its template
-  reserves `dir:.` for root and workspace-specific documentation and does not
-  carry `no-diff-expected`, since verified drift corrections produce diffs.
-  Clean batches use validated no-diff evidence.
+- `doc-duties` — disabled-by-default daily validation of the
+  least-recently-attempted tracked documentation. Each run attaches a
+  `doc-duties-ledger.json` artifact with an outcome (`clean`, `fixed`,
+  `partial`, `skipped`) and attempt date per selected document. Rotation orders
+  by the latest ledger attempt (read from prior completed runs through the
+  artifact tools, never from summary prose), then an existing `last_validated`
+  date, then the git last-touched date, so a skipped document moves to the back
+  instead of heading every batch. A document whose two latest attempts were
+  `skipped` or `partial` is held back and reported as needing its own task.
+  `last_validated` advances only on `clean`/`fixed`, and no frontmatter is added
+  solely for this task. Its template reserves `dir:.` for root and
+  workspace-specific documentation and does not carry `no-diff-expected`, since
+  verified drift corrections produce diffs. Clean batches use validated no-diff
+  evidence.
 - `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
   own run evidence (failed and interrupted runs, step failures, worker logs)
   since the previous scan's `run-failure-cursor.json` artifact. On an owner it
