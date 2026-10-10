@@ -9,7 +9,7 @@ use std::process::Stdio;
 use orbit_common::OrbitError;
 use orbit_exec::{
     BUNDLED_BWRAP_PATH, HOST_BWRAP_PATH, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
-    LinuxBwrapMountAuthority, LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval,
+    LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval,
     LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
     compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
@@ -203,6 +203,98 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         std::fs::read_to_string(workspace.join("out.txt")).expect("worktree write"),
         "written\n",
         "the writable worktree must survive the credential masks"
+    );
+}
+
+/// A masked file (the clock credentials file) reads as empty from a confined
+/// child while its siblings in the same directory stay readable, and a masked
+/// file that does not exist yet is skipped rather than refusing the plan. The
+/// fixture lives under the crate directory because the sandbox replaces
+/// `/tmp` with its own tmpfs, which would hide the file and prove nothing.
+#[test]
+fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
+    let probe = probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "bwrap_child_cannot_read_a_masked_file_beside_readable_siblings",
+            &probe.detail,
+        );
+        return;
+    }
+
+    let global_dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("global root");
+    let global = global_dir.path().canonicalize().expect("canonical global");
+    let sentinel = global.join("state/plugin-broker/masked");
+    std::fs::create_dir_all(&sentinel).expect("sentinel dir");
+    let clock_env = global.join("clock.env");
+    let absent = global.join("absent.env");
+    std::fs::write(&clock_env, b"GITHUB_TOKEN=CLOCK-SECRET\n").expect("clock env");
+    std::fs::write(global.join("clock.toml"), b"READABLE-SIBLING\n").expect("sibling");
+    let workspace_dir = tempfile::tempdir().expect("workspace tempdir");
+    let workspace = workspace_dir
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let mask = LinuxBwrapMask {
+        sentinel,
+        targets: Vec::new(),
+        files: vec![clock_env.clone(), absent.clone()],
+    };
+    let script = format!(
+        "cat '{global}/clock.env' '{global}/clock.toml'",
+        global = global.display()
+    );
+    let plan = compile_linux_bwrap_argv_with_authority(
+        &profile(vec![format!("{}/**", workspace.display())]),
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Some(&workspace),
+        false,
+        Vec::new(),
+        Some(&mask),
+    )
+    .expect("an absent masked file must not refuse the plan");
+    assert!(
+        !plan
+            .args
+            .iter()
+            .any(|arg| arg == &absent.display().to_string()),
+        "an absent masked file has nothing to mount over: {:?}",
+        plan.args
+    );
+    let clock_env = clock_env.display().to_string();
+    assert!(
+        plan.args
+            .windows(3)
+            .any(|triple| triple == ["--ro-bind", "/dev/null", clock_env.as_str()]),
+        "the present masked file must be covered by /dev/null: {:?}",
+        plan.args
+    );
+
+    let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &env,
+        cwd: Some(&workspace),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn");
+    let output = child.wait_with_output().expect("wait");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "the masked file must still open, as an empty file: {output:?}"
+    );
+    assert!(
+        !stdout.contains("CLOCK-SECRET"),
+        "the masked file's contents must not reach a confined child: {stdout}"
+    );
+    assert!(
+        stdout.contains("READABLE-SIBLING"),
+        "a sibling of the masked file must stay readable: {stdout}"
     );
 }
 

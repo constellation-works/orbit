@@ -747,6 +747,23 @@ pub fn append_macos_subpath_mask(profile: &mut String, subpaths: &[PathBuf]) {
     }
 }
 
+/// Deny every read and write of exactly the files in `files` in a compiled
+/// profile.
+///
+/// The single-file counterpart of [`append_macos_subpath_mask`], appended
+/// last for the same reason. A file that does not exist yet is denied all the
+/// same, so one created during the run stays hidden. Each path is resolved
+/// physically first, as for the subpath mask.
+pub fn append_macos_file_mask(profile: &mut String, files: &[PathBuf]) {
+    for path in files {
+        let physical = crate::physical_with_missing_tail(path);
+        profile.push_str(&format!(
+            "(deny file-read* file-write* (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&physical.display().to_string())
+        ));
+    }
+}
+
 /// Append a plugin's read carve-outs to a compiled profile.
 ///
 /// [`compile_macos_sandbox_profile`] allows reads broadly, which is right for

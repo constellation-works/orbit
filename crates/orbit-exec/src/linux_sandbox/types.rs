@@ -70,20 +70,24 @@ pub struct LinuxBwrapMountEvidence {
     pub inode: u64,
 }
 
-/// Directories a sandboxed child must not read or write, each replaced by one
-/// read-only stand-in directory.
+/// Paths a sandboxed child must not read or write: directories, each replaced
+/// by one read-only stand-in directory, and single files, each replaced by
+/// `/dev/null`.
 ///
-/// Both paths must exist before the plan is compiled: Bubblewrap cannot mount
-/// over a path the read-only bind of `/` does not already hold. The stand-in is
-/// bound over every target after all other mounts, and a Bubblewrap mount
-/// cannot be undone by a process without capabilities; a nested user
-/// namespace receives it locked.
+/// The sentinel and every target directory must exist before the plan is
+/// compiled: Bubblewrap cannot mount over a path the read-only bind of `/` does
+/// not already hold. A masked file that does not exist yet is skipped for the
+/// same reason. The stand-ins are bound after all other mounts, and a
+/// Bubblewrap mount cannot be undone by a process without capabilities; a
+/// nested user namespace receives it locked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxBwrapMask {
     /// The directory the child sees in place of each target.
     pub sentinel: PathBuf,
     /// The directories hidden from the child.
     pub targets: Vec<PathBuf>,
+    /// The single files hidden from the child.
+    pub files: Vec<PathBuf>,
 }
 
 /// A host object already validated and opened by the runtime owner. Sharing

@@ -72,3 +72,4 @@
 (deny file-read* (regex "^<ROOT>/[Ii][Nn][Ss][Pp][Ee][Cc][Tt][Ii][Oo][Nn]/([^/]+/)*[^/]*\\.[Ee][Nn][Vv]\\.[^/]*$"))
 (deny file-read* file-write* (subpath "<HOME>/.orbit/state/plugins"))
 (deny file-read* file-write* (subpath "<HOME>/.orbit/state/plugin-secrets"))
+(deny file-read* file-write* (literal "<HOME>/.orbit/clock.env"))

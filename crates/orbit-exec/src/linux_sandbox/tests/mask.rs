@@ -43,6 +43,7 @@ fn mask_refuses_a_tree_the_plan_aliases_elsewhere() {
     let mask = LinuxBwrapMask {
         sentinel: fixture.sentinel.clone(),
         targets: vec![inside],
+        files: Vec::new(),
     };
 
     let error = compile_linux_bwrap_argv_with_authority(

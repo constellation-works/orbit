@@ -4,7 +4,8 @@
 //! `RuntimeHost::resolve_executor_sandbox` against the default policy, then
 //! compiles the Bubblewrap plan through `orbit-exec` as the spawn path does:
 //! write anchors prepared for a managed worktree, runtime grants passed as
-//! descriptor authority, the plugin mask mounted last. The golden pins both
+//! descriptor authority, the agent mask (plugin trees and `clock.env`) mounted
+//! last. The golden pins both
 //! layers: the resolved `read`/`modify` rules and the argv Bubblewrap gets.
 //!
 //! The cases: a leaf worker in its managed worktree, a reviewer from an
@@ -213,6 +214,8 @@ impl Fixture {
         for dir in [&global, &worktree.join("src"), &inspection.join("src")] {
             std::fs::create_dir_all(dir).expect("fixture dir");
         }
+        // Present, so the Linux mask binds `/dev/null` over it.
+        std::fs::write(global.join("clock.env"), "").expect("clock credentials");
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).expect("runtime");
         for provider in ["claude", "codex"] {
             seed_linux_executor(&runtime, provider);
@@ -316,6 +319,7 @@ fn bwrap_lines(sandbox: &ResolvedSandbox, cwd: &Path) -> Vec<String> {
     let mask = sandbox.mask.as_ref().map(|mask| LinuxBwrapMask {
         sentinel: mask.sentinel.clone(),
         targets: mask.targets.clone(),
+        files: mask.files.clone(),
     });
     let plan = compile_linux_bwrap_argv_with_authority(
         &sandbox.fs_profile,

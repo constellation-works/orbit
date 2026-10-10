@@ -1,8 +1,8 @@
 //! The composed runtime through its public surface: dispatch admission, the
 //! distributed drain, `os:` tag routing, retired deterministic stubs, final
 //! recovery, repeated rebase recovery, relation auto-close, PR closure on
-//! terminal decisions, plugin inspection, the sandbox opt-out and cold lexical
-//! search hydration.
+//! terminal decisions, plugin inspection, the sandbox opt-out, the agent
+//! sandbox mask and cold lexical search hydration.
 //!
 //! One integration-test binary per area keeps link cost down; add a module
 //! here rather than a new top-level `tests/*.rs` file
@@ -14,6 +14,8 @@
 orbit_common::isolate_test_process!();
 
 mod actor_identity;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod agent_sandbox_mask;
 mod artifact_tools;
 mod auto_task_update;
 mod baseline_hold_tick;
