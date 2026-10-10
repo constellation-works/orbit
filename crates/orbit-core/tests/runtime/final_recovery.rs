@@ -23,6 +23,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 mod repair_commit;
+mod revision;
 mod terminalization;
 
 struct Fixture {
@@ -43,7 +44,8 @@ fn fixture(pool: &str) -> Fixture {
         repo.join(".orbit/config.toml"),
         format!(
             "[workflow]\ndefault_crew = \"sol\"\nfinal_recovery_crews = {pool}\n\n\
-             [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n"
+             [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n\
+             [crews.luna]\nprovider = \"codex\"\nmodel = \"luna-model\"\n"
         ),
     )
     .unwrap();

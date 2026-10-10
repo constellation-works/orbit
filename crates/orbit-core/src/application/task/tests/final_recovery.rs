@@ -15,7 +15,7 @@ use super::{enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
-    FinalRecoveryTaskRevision, TaskAddParams, TaskUpdateParams,
+    TaskAddParams, TaskUpdateParams,
 };
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
@@ -159,11 +159,16 @@ fn failed_task(runtime: &OrbitRuntime, title: &str) -> Task {
         .expect("start task")
 }
 
-fn request(task: &Task, repo: &Path, completion: FinalRecoveryCompletion) -> FinalRecoveryRequest {
+fn request(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    repo: &Path,
+    completion: FinalRecoveryCompletion,
+) -> FinalRecoveryRequest {
     FinalRecoveryRequest {
         task_id: task.id.clone(),
         run_id: RUN_ID.to_string(),
-        observed: FinalRecoveryTaskRevision::of(task),
+        observed: runtime.final_recovery_revision(task).expect("observe task"),
         repo_root: repo.to_path_buf(),
         base_ref: "main".to_string(),
         completion,
@@ -212,7 +217,7 @@ fn complete_no_diff_completes_only_on_a_commit_reachable_from_base() {
     let done = failed_task(&runtime, "Already landed, done authority");
     let outcome = apply(
         &runtime,
-        &request(&done, &repo, FinalRecoveryCompletion::Done),
+        &request(&runtime, &done, &repo, FinalRecoveryCompletion::Done),
         json!({"decision": "complete_no_diff", "evidence_commit": &on_main[..12], "rationale": "landed in main"}),
     );
     assert_eq!(
@@ -233,7 +238,7 @@ fn complete_no_diff_completes_only_on_a_commit_reachable_from_base() {
     let review = failed_task(&runtime, "Already landed, review authority");
     let outcome = apply(
         &runtime,
-        &request(&review, &repo, FinalRecoveryCompletion::Review),
+        &request(&runtime, &review, &repo, FinalRecoveryCompletion::Review),
         json!({"decision": "complete_no_diff", "evidence_commit": on_main, "rationale": "landed"}),
     );
     assert!(matches!(
@@ -252,7 +257,7 @@ fn complete_no_diff_completes_only_on_a_commit_reachable_from_base() {
         let task = failed_task(&runtime, title);
         let outcome = apply(
             &runtime,
-            &request(&task, &repo, FinalRecoveryCompletion::Done),
+            &request(&runtime, &task, &repo, FinalRecoveryCompletion::Done),
             json!({"decision": "complete_no_diff", "evidence_commit": commit, "rationale": "trust me"}),
         );
         let FinalRecoveryOutcome::Escalated {
@@ -287,7 +292,7 @@ fn complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing()
     );
 
     let task = failed_task(&runtime, "Refresh the stale remote tracking ref");
-    let mut decision_request = request(&task, &repo, FinalRecoveryCompletion::Done);
+    let mut decision_request = request(&runtime, &task, &repo, FinalRecoveryCompletion::Done);
     decision_request.base_ref = "origin/agent-main".to_string();
     let outcome = apply(
         &runtime,
@@ -323,7 +328,7 @@ fn complete_no_diff_refreshes_a_stale_remote_tracking_ref_once_before_refusing()
     );
     let off_remote = fixture_git(&repo, &["rev-parse", "HEAD"]);
     let task = failed_task(&runtime, "Refuse a commit absent from the remote");
-    let mut decision_request = request(&task, &repo, FinalRecoveryCompletion::Done);
+    let mut decision_request = request(&runtime, &task, &repo, FinalRecoveryCompletion::Done);
     decision_request.base_ref = "origin/agent-main".to_string();
     let outcome = apply(
         &runtime,
@@ -371,7 +376,7 @@ fn reject_archive_and_escalate_record_the_decision_with_the_run_id() {
         let task = failed_task(&runtime, &kind);
         let outcome = apply(
             &runtime,
-            &request(&task, repo, FinalRecoveryCompletion::Done),
+            &request(&runtime, &task, repo, FinalRecoveryCompletion::Done),
             output,
         );
         assert_eq!(outcome, expected_outcome, "{kind}");
@@ -398,7 +403,12 @@ fn requeue_returns_to_backlog_until_the_window_bound_then_escalates() {
     // Each failure is its own run; the applier applies a run's decision once.
     let run = |attempt: usize, current: &Task| FinalRecoveryRequest {
         run_id: format!("{RUN_ID}-{attempt}"),
-        ..request(current, root.path(), FinalRecoveryCompletion::Done)
+        ..request(
+            &runtime,
+            current,
+            root.path(),
+            FinalRecoveryCompletion::Done,
+        )
     };
     let bound = FinalRecoveryRequeueBound::default().max_requeues;
     for attempt in 1..=bound {
@@ -440,7 +450,7 @@ fn a_task_changed_after_the_failure_or_already_settled_is_refused() {
     }
     let (root, runtime) = test_runtime();
     let task = failed_task(&runtime, "Operator stepped in");
-    let observed = request(&task, root.path(), FinalRecoveryCompletion::Done);
+    let observed = request(&runtime, &task, root.path(), FinalRecoveryCompletion::Done);
     runtime
         .update_task_with_identity(
             &task.id,
@@ -478,7 +488,12 @@ fn a_task_changed_after_the_failure_or_already_settled_is_refused() {
     let archived = runtime.get_task(&settled.id).expect("read task");
     let outcome = apply(
         &runtime,
-        &request(&archived, root.path(), FinalRecoveryCompletion::Done),
+        &request(
+            &runtime,
+            &archived,
+            root.path(),
+            FinalRecoveryCompletion::Done,
+        ),
         json!({"decision": "requeue", "reason": "retry"}),
     );
     assert!(
@@ -522,7 +537,7 @@ fn malformed_output_escalates_and_resume_writes_nothing() {
         let task = failed_task(&runtime, label);
         let outcome = runtime
             .apply_final_recovery(
-                &request(&task, root.path(), FinalRecoveryCompletion::Done),
+                &request(&runtime, &task, root.path(), FinalRecoveryCompletion::Done),
                 output.as_ref(),
             )
             .expect("apply malformed output");
@@ -541,7 +556,7 @@ fn malformed_output_escalates_and_resume_writes_nothing() {
     let task = failed_task(&runtime, "Repaired worktree");
     let outcome = apply(
         &runtime,
-        &request(&task, root.path(), FinalRecoveryCompletion::Done),
+        &request(&runtime, &task, root.path(), FinalRecoveryCompletion::Done),
         json!({"decision": "resume", "step_id": "commit", "rationale": "conflict resolved"}),
     );
     assert_eq!(
@@ -551,8 +566,12 @@ fn malformed_output_escalates_and_resume_writes_nothing() {
         }
     );
     assert_eq!(
-        FinalRecoveryTaskRevision::of(&runtime.get_task(&task.id).expect("read task")),
-        FinalRecoveryTaskRevision::of(&task),
+        runtime
+            .final_recovery_revision(&runtime.get_task(&task.id).expect("read task"))
+            .expect("read revision"),
+        runtime
+            .final_recovery_revision(&task)
+            .expect("read revision"),
         "resume is the engine's to apply; the applier writes nothing"
     );
 }

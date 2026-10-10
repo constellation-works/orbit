@@ -7,7 +7,8 @@ spec:
   description: >
     Re-checks one blocked task before the final-recovery backstop spends an
     agent on it. The task must still be blocked in the same block episode, at
-    the exact status and update time the trigger observed, with no final
+    the status the trigger observed with no lifecycle change since (the
+    writes the final_recovery activity names do not count), and with no final
     recovery decision for that episode. Otherwise it returns proceed=false and
     the run ends without a decision. When the episode is current it gathers
     the failed run's step and error, identifies the failed run's retained
@@ -33,6 +34,10 @@ spec:
       observed_status:
         type: string
       observed_updated_at:
+        type: string
+      # Digest of the task's lifecycle content at dispatch; empty on a run
+      # submitted before it was recorded, which compares by update time.
+      observed_lifecycle_digest:
         type: string
   output_schema_json:
     type: object

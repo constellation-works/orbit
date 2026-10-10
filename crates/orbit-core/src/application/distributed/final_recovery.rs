@@ -17,7 +17,6 @@ use orbit_types::workflow::FinalRecoveryDecision;
 use crate::OrbitRuntime;
 use crate::application::task::{
     FinalRecoveryCompletion, FinalRecoveryRequest, FinalRecoveryRequeueBound,
-    FinalRecoveryTaskRevision,
 };
 
 impl OrbitRuntime {
@@ -75,7 +74,7 @@ impl OrbitRuntime {
         let request = FinalRecoveryRequest {
             task_id: claim.task_id.clone(),
             run_id: final_recovery.run_id.clone(),
-            observed: FinalRecoveryTaskRevision::of(&task),
+            observed: self.final_recovery_revision(&task)?,
             repo_root: self.context.paths().repo_root.clone(),
             base_ref: self.owner_ship_contract().base_branch,
             completion: FinalRecoveryCompletion::Review,
