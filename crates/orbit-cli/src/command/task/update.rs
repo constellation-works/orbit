@@ -1,7 +1,7 @@
 use clap::{ArgAction, Args};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
-use orbit_types::task::TaskArtifact;
+use orbit_types::task::{TaskArtifact, backlog_footprint_warning};
 use serde_json::{Map, Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -183,7 +183,7 @@ impl Execute for TaskUpdateArgs {
             let (agent, model) = super::mutation_identity(model);
             let task = runtime.approve_task_with_identity(&id, note, comment, agent, model)?;
             return Ok(Payload::detail(
-                task_to_json_for_runtime(runtime, &task)?,
+                written_task_json(runtime, &task)?,
                 format!("Approved task '{}' -> {}", task.id, task.status),
             )
             .into());
@@ -310,11 +310,24 @@ impl Execute for TaskUpdateArgs {
         };
 
         Ok(Payload::detail(
-            task_to_json_for_runtime(runtime, &task)?,
+            written_task_json(runtime, &task)?,
             format!("Updated task '{}'", task.id),
         )
         .into())
     }
+}
+
+/// The written task, with the warning a write that leaves it in the backlog
+/// with no footprint carries [ORB-15191], also printed to stderr.
+fn written_task_json(runtime: &OrbitRuntime, task: &orbit_core::Task) -> Result<Value, OrbitError> {
+    let mut document = task_to_json_for_runtime(runtime, task)?;
+    if let Some(warning) = backlog_footprint_warning(task) {
+        eprintln!("warning: {warning}");
+        if let Some(object) = document.as_object_mut() {
+            object.insert("warnings".to_string(), json!([warning]));
+        }
+    }
+    Ok(document)
 }
 
 impl TaskUpdateArgs {

@@ -28,6 +28,7 @@ use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
+use super::unknown_footprint::{FootprintGuard, FootprintWave};
 use crate::runtime::task::locks::lock_context_files_for_task;
 
 /// Where a blocking footprint came from, so a deferral says whether the lock is
@@ -44,6 +45,12 @@ pub(in crate::adapter::engine_host::v2_host) enum ConflictProvenance {
     /// The blocker was selected earlier in this same wave. No lock exists yet;
     /// this is the conflict the drain would otherwise create for itself.
     SameWave,
+    /// A live leaf carries a task that declares no footprint, which holds the
+    /// whole tree while it runs [ORB-15191].
+    UnknownFootprint,
+    /// A higher-ranked task that declares no footprint waits to run alone and
+    /// reserves the tree until it starts [ORB-15191].
+    ExclusiveReservation,
 }
 
 impl ConflictProvenance {
@@ -52,6 +59,8 @@ impl ConflictProvenance {
             ConflictProvenance::HeldLock => "held_lock",
             ConflictProvenance::LiveClaim => "live_claim",
             ConflictProvenance::SameWave => "same_wave",
+            ConflictProvenance::UnknownFootprint => "unknown_footprint",
+            ConflictProvenance::ExclusiveReservation => "exclusive_reservation",
         }
     }
 }
@@ -68,12 +77,39 @@ pub(in crate::adapter::engine_host::v2_host) struct AdmissionConflict {
     pub(in crate::adapter::engine_host::v2_host) provenance: ConflictProvenance,
 }
 
-/// A candidate that was examined, had a free slot available, and still could
-/// not take it.
+/// Why an examined candidate did not take a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::adapter::engine_host::v2_host) enum DeferralReason {
+    /// Its footprint overlaps one already spoken for; `conflicts` names it.
+    Conflict,
+    /// It declares no footprint and a task pilot will prepare one
+    /// [ORB-15191]. Reported whether or not a slot was free.
+    AwaitingFootprint,
+    /// It declares no footprint, no pilot will prepare one, and other work is
+    /// in flight, so it waits to run alone [ORB-15191].
+    AwaitingExclusiveSlot,
+}
+
+impl DeferralReason {
+    /// The readiness reason and drain hold reason for this deferral.
+    pub(in crate::adapter::engine_host::v2_host) fn as_str(self) -> &'static str {
+        match self {
+            DeferralReason::Conflict => "conflict_deferred",
+            DeferralReason::AwaitingFootprint => "awaiting_footprint",
+            DeferralReason::AwaitingExclusiveSlot => "awaiting_exclusive_slot",
+        }
+    }
+}
+
+/// A candidate that was examined and could not take a slot: a free slot was
+/// available, or it waits for a footprint regardless.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::adapter::engine_host::v2_host) struct DeferredAdmission {
     pub(in crate::adapter::engine_host::v2_host) task_id: String,
+    pub(in crate::adapter::engine_host::v2_host) reason: DeferralReason,
     pub(in crate::adapter::engine_host::v2_host) conflicts: Vec<AdmissionConflict>,
+    /// What clears a footprint wait; `None` for a conflict.
+    pub(in crate::adapter::engine_host::v2_host) detail: Option<String>,
 }
 
 impl DeferredAdmission {
@@ -90,6 +126,8 @@ impl DeferredAdmission {
     pub(in crate::adapter::engine_host::v2_host) fn to_json(&self) -> Value {
         json!({
             "task_id": self.task_id,
+            "reason": self.reason.as_str(),
+            "detail": self.detail,
             "blocking_task_ids": self.blocking_task_ids(),
             "conflicts": self
                 .conflicts
@@ -222,36 +260,49 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 ///
 /// `ordered_candidates` is the caller's priority/age order, already filtered for
 /// dependencies, crew, live claims, and grant scope. This
-/// function adds exactly one rule: a candidate joins the wave only if nothing
-/// it would touch is already spoken for.
+/// function adds two rules: a candidate joins the wave only if nothing it
+/// would touch is already spoken for, and a candidate that declares no
+/// footprint is held to `footprint`'s rules [ORB-15191].
 pub(in crate::adapter::engine_host::v2_host) fn select_admissions(
     ordered_candidates: &[String],
     task_lookup: &BTreeMap<String, Task>,
     workspace_root: &Path,
     holders: &AdmissionHolders,
     free_slots: usize,
+    footprint: FootprintGuard<'_>,
 ) -> AdmissionSelection {
     let mut selection = AdmissionSelection::default();
     // Selectors this wave has already promised, and the task each was promised
     // to. Grown as tasks are selected, which is what makes the wave internally
     // consistent rather than merely consistent with the stores.
     let mut wave: OverlapIndex<String> = OverlapIndex::new();
+    let mut footprint = FootprintWave::new(footprint);
 
     for candidate_id in ordered_candidates {
+        let task = task_lookup.get(candidate_id);
+        if let Some(deferred) = task.and_then(|task| footprint.awaiting(task)) {
+            selection.deferred.push(deferred);
+            continue;
+        }
         if selection.selected.len() >= free_slots {
             selection.queued_behind_capacity.push(candidate_id.clone());
             continue;
         }
-        let Some(task) = task_lookup.get(candidate_id) else {
+        let Some(task) = task else {
             // A candidate the snapshot no longer knows cannot have its
             // footprint expanded, so it cannot be shown to be compatible.
             selection.queued_behind_capacity.push(candidate_id.clone());
             continue;
         };
 
-        let footprint = lock_context_files_for_task(task, workspace_root);
+        let selectors = lock_context_files_for_task(task, workspace_root);
+        let edits = !selectors.is_empty();
+        if let Some(deferred) = footprint.check(task, edits) {
+            selection.deferred.push(deferred);
+            continue;
+        }
         let mut conflicts = Vec::new();
-        for requested_selector in &footprint {
+        for requested_selector in &selectors {
             conflicts.extend(holders.conflicts_for(requested_selector));
             conflicts.extend(wave_conflicts(requested_selector, &wave));
         }
@@ -259,14 +310,17 @@ pub(in crate::adapter::engine_host::v2_host) fn select_admissions(
         conflicts.dedup();
 
         if conflicts.is_empty() {
-            for selector in footprint {
+            for selector in selectors {
                 wave.insert(&selector, candidate_id.clone());
             }
+            footprint.selected(task, edits);
             selection.selected.push(candidate_id.clone());
         } else {
             selection.deferred.push(DeferredAdmission {
                 task_id: candidate_id.clone(),
+                reason: DeferralReason::Conflict,
                 conflicts,
+                detail: None,
             });
         }
     }

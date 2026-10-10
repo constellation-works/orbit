@@ -558,10 +558,14 @@ repair's certainty, behavioral change, coupling, validation difficulty,
 rationale, confidence, evidence gaps, validation approach, and reassessment
 triggers. Its apply step commits concrete selectors, complexity, audit evidence,
 and the idempotency receipt at one task-bundle boundary. `context_files` are
-optional for admission: local auto, ship (including explicit selection), and
-owner pull admit selector-free backlog tasks on the next pass without holding
-a context lock. Task-pilot can supply selectors, but empty context alone does
-not exclude work or produce a readiness reason. A live pilot's preparation
+optional for admission, but empty context holds no context lock. A
+single-slot local drain, an explicit ship and owner pull admit selector-free
+backlog tasks on the next pass. A local drain or discovery ship with more than
+one slot waits for an enabled task-pilot routine this host owns to prepare
+such a task (`awaiting_footprint`, bounded by the trigger's
+`max_wait_minutes + deadline_minutes` from the task's last change), then runs
+it only alone (`awaiting_exclusive_slot`) [ORB-15191]. A pilot assessment that
+leaves the task without selectors ends the wait. A live pilot's preparation
 reservation or successful checkpoint still holds its tasks until that run
 settles.
 Local automatic admission rejects any
@@ -709,5 +713,6 @@ to change; implementation scope and defaults still require approval.
 
 - [ORB-11315] — specifies shared triggers, batch/coverage and pilot/triage semantics.
 - [ORB-11333] — implements review timing and content-specific coverage exclusions.
+- [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

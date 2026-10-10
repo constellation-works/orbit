@@ -688,3 +688,22 @@ impl OrbitRuntime {
         }))
     }
 }
+
+impl OrbitRuntime {
+    /// Whether a task-pilot assessment has been applied to the task: it
+    /// carries a task-pilot receipt comment [ORB-15191]. A backlog task the
+    /// pilot assessed and still left without selectors is one it declined to
+    /// prepare, so admission stops waiting for it.
+    pub(crate) fn task_pilot_assessed(&self, task_id: &str) -> Result<bool, OrbitError> {
+        Ok(self.get_task_comments(task_id)?.iter().any(|comment| {
+            comment.by == "task-pilot"
+                && comment
+                    .message
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .starts_with("operation_id=")
+        }))
+    }
+}

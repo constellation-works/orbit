@@ -73,6 +73,15 @@ spec:
     `detail` saying so. At most two tasks reserve per pass, earliest in that
     order first; a withheld task never reserves, and a reservation lapses as
     soon as its task is admitted or leaves `backlog`.
+    When `max_tasks` is above 1, a task with no `context_files` and no
+    `no-diff-expected` tag holds no file lock, so automatic mode treats its
+    footprint as the whole tree. It is withheld as `awaiting_footprint` while
+    a task pilot on this host would still prepare it; otherwise it ships
+    only alone (no other live leaf carrying a task, nothing ranked ahead in
+    this selection) and is withheld as `awaiting_exclusive_slot` until then,
+    holding back lower-ranked editing work. Editing work ranked behind a task
+    shipped alone, or behind a live leaf carrying one, is withheld as
+    `context_lock_conflict` with `requested_file` `*`. `detail` names the fix.
     Automatic mode includes an `excluded` array that attributes pre-gate lock
     exclusions; it does not report status-based admission or `max_tasks`
     truncation. Explicit `task_ids` input is treated as an override and skips
@@ -165,6 +174,8 @@ spec:
                 - operator_validation_handoff
                 - native_os_required
                 - pr_forge_remote_missing
+                - awaiting_footprint
+                - awaiting_exclusive_slot
             detail:
               type: string
             conflicts:

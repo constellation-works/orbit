@@ -205,9 +205,9 @@ fn json_u32(value: &Value) -> Option<u32> {
 }
 
 /// A live `task_auto_pipeline` run and the tasks it is carrying.
-pub(super) struct LiveLeafRun {
-    pub(super) run_id: String,
-    pub(super) task_ids: Vec<String>,
+pub(in crate::adapter::engine_host::v2_host) struct LiveLeafRun {
+    pub(in crate::adapter::engine_host::v2_host) run_id: String,
+    pub(in crate::adapter::engine_host::v2_host) task_ids: Vec<String>,
 }
 
 pub(super) fn live_leaf_runs(
@@ -240,7 +240,9 @@ pub(super) fn shared_leaf_occupancy(
     runtime.stores().jobs().drain_leaf_occupancy()
 }
 
-pub(super) fn read_live_leaf_runs(runtime: &OrbitRuntime) -> Result<Vec<LiveLeafRun>, OrbitError> {
+pub(in crate::adapter::engine_host::v2_host) fn read_live_leaf_runs(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<LiveLeafRun>, OrbitError> {
     let runs = runtime
         .stores()
         .jobs()

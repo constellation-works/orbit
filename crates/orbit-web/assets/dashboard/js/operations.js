@@ -1454,8 +1454,9 @@ function autoDrainCounts(payload) {
 }
 
 // Readiness reasons that mean "waiting on another task or run": a context lock, a
-// grouped member, a same-wave deferral, or a live child's claim.
-const AUTO_DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child"]);
+// grouped member, a same-wave deferral, a live child's claim, or a task with no
+// footprint waiting for the other leaves to finish so it can run alone.
+const AUTO_DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
 const AUTO_DRAIN_BLOCKED_ROWS = 3;
 
 function autoDrainTaskId(task) {

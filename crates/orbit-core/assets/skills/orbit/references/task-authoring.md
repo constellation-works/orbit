@@ -137,17 +137,28 @@ linked worktree gets the existence relaxation automatically for that task,
 without recording creation intent, and the response lists the
 stored-but-unresolved selectors as `context_files_unverified`.
 Missing-file selectors remain valid declarations; do not prune them because a
-checkout cannot yet resolve them. `context_files` are optional for local auto,
-ship and owner pull admission; empty context holds no context lock. Do not
-invent paths to satisfy admission. Task-pilot can prepare unknown targets,
-and a live pilot's preparation (its reservation from prepare, then its
-checkpoint) still holds its tasks until that run settles.
+checkout cannot yet resolve them. Empty context holds no context lock, so a
+drain or ship with more than one slot holds such a task: it waits for an
+enabled task pilot to prepare it (`awaiting_footprint`), and otherwise runs
+only alone (`awaiting_exclusive_slot`). A single-slot run, an explicit `orbit
+run ship <id>` and owner pull admission still admit it. Do not invent paths to
+satisfy admission. Task-pilot can prepare unknown targets, and a live
+pilot's preparation (its reservation from prepare, then its checkpoint)
+still holds its tasks until that run settles.
+
+**Never file with `--status backlog`, or promote to `backlog`, a task with
+empty `context_files` while a drain is live.** File it `proposed`, run the
+pilot or set selectors, then promote. On 2026-10-10 three tasks filed into a
+live four-slot drain's backlog with no selectors all edited
+`website/src/styles/custom.css` concurrently, and two of their runs were
+cancelled. Add and update warn when they leave such a task in the backlog.
 
 A `proposed` or `backlog` task reports its `readiness`: `{ready, gaps}`,
 each gap with `code`, `severity`, `message` and `fix`. The `orbit.task.add`
 and `orbit.task.update` responses carry it, `orbit task show` prints a
 `Readiness:` line and the dashboard shows a chip. `missing_context_files`
-blocks drain approval of a proposed task and is advisory in the backlog;
+blocks drain approval of a proposed task and is advisory in the backlog,
+where it names the missing file lock;
 `unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
 Read the gaps after filing and fix what blocks, or leave it to task-pilot.
 

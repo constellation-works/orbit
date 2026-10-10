@@ -8,6 +8,11 @@
 //! write tools, the dashboard) projects the same gaps, so what a reader is told
 //! a task lacks is exactly what automation checks.
 //!
+//! A backlog task with no footprint ([`declares_no_footprint`]) is not
+//! refused, but it holds no file lock: a multi-slot drain holds it for the
+//! task pilot and then runs it alone [ORB-15191]. Its advisory gap and the
+//! task write warning ([`backlog_footprint_warning`]) say so.
+//!
 //! Readiness covers what an edit to the task fixes. Waits that clear on their
 //! own — dependencies, context locks, host OS or crew, provider backoff, a red
 //! base — are reported by the drain, not here. A `no-auto-approve` tag is an
@@ -107,6 +112,17 @@ impl ReadinessGap {
 
 const CONTEXT_FILES_FIX: &str =
     "add context files, run the task pilot, or tag no-diff-expected if no diff is expected";
+/// The backlog form names the order that avoids the gap: a backlog task is
+/// admitted within one drain pass, before a pilot can prepare it.
+const BACKLOG_CONTEXT_FILES_FIX: &str = "file it as proposed and let the task pilot prepare it \
+     before promoting, set context_files, or tag no-diff-expected if no diff is expected";
+
+/// Whether a task declares no footprint: no `context_files`, and no
+/// [`NO_DIFF_EXPECTED_TAG`] saying it edits nothing. Such a task holds no
+/// file lock, so it can conflict with any concurrent work.
+pub fn declares_no_footprint(tags: &[String], context_files: &[String]) -> bool {
+    context_files.is_empty() && !tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+}
 const COMPLEXITY_FIX: &str = "set --complexity, or let the task pilot assess it";
 
 /// The gaps of a task at `stage`, in the order drain approval reports them:
@@ -114,8 +130,9 @@ const COMPLEXITY_FIX: &str = "set --complexity, or let the task pilot assess it"
 ///
 /// A [`NO_DIFF_EXPECTED_TAG`] task has none: it has no modification targets to
 /// declare or size. Otherwise a task needs context selectors (blocking when
-/// proposed, advisory in the backlog, which admission does not check) and an
-/// assessed complexity (blocking at both stages).
+/// proposed; advisory in the backlog, where a multi-slot drain holds the task
+/// for a footprint rather than refusing it) and an assessed complexity
+/// (blocking at both stages).
 pub fn readiness_gaps(
     stage: ReadinessStage,
     tags: &[String],
@@ -126,7 +143,7 @@ pub fn readiness_gaps(
     if tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
         return gaps;
     }
-    if context_files.is_empty() {
+    if declares_no_footprint(tags, context_files) {
         gaps.push(match stage {
             ReadinessStage::Proposed => ReadinessGap {
                 code: ReadinessGapCode::MissingContextFiles,
@@ -137,8 +154,10 @@ pub fn readiness_gaps(
             ReadinessStage::Backlog => ReadinessGap {
                 code: ReadinessGapCode::MissingContextFiles,
                 severity: ReadinessSeverity::Advisory,
-                message: "No context files are declared; it can still run, but starts cold.",
-                fix: CONTEXT_FILES_FIX,
+                message: "No context files are declared, so it holds no file lock and can \
+                          conflict with concurrent work; a multi-slot drain waits for the task \
+                          pilot to prepare it, then runs it only alone.",
+                fix: BACKLOG_CONTEXT_FILES_FIX,
             },
         });
     }
@@ -193,4 +212,22 @@ pub fn task_readiness(task: &Task) -> Option<TaskReadiness> {
 /// a status readiness does not describe.
 pub fn task_readiness_json(task: &Task) -> Option<Value> {
     task_readiness(task).map(|readiness| readiness.to_json())
+}
+
+/// The warning a task write returns when it leaves the task in `backlog` with
+/// no footprint: the backlog gap's message and fix, so the writer reads the
+/// same words as readiness. `None` for every other task.
+pub fn backlog_footprint_warning(task: &Task) -> Option<String> {
+    if task.status != TaskStatus::Backlog {
+        return None;
+    }
+    readiness_gaps(
+        ReadinessStage::Backlog,
+        &task.tags,
+        &task.context_files,
+        task.complexity,
+    )
+    .into_iter()
+    .find(|gap| gap.code == ReadinessGapCode::MissingContextFiles)
+    .map(|gap| format!("{} Fix: {}.", gap.message, gap.fix))
 }
