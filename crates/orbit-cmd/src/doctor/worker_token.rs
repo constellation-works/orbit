@@ -7,7 +7,7 @@
 //! and the clock's environment, which launchd starts with no login shell and
 //! which only gets it from `clock.env`. Values are never read into the row.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::security::operator_env::{CLOCK_ENV_FILE_NAME, clock_env_file_names};
 use orbit_config::{ConfigRoots, ResolvedConfig};
@@ -38,12 +38,37 @@ pub(super) enum ClockCredentials {
     Refused(String),
 }
 
+/// The config file that admits a credential name for this workspace.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PassHome {
+    /// No workspace policy file: the workspace inherits the global pass list.
+    Global(PathBuf),
+    /// The workspace's own policy file: its pass replaces the global list, so
+    /// a global entry never reaches this workspace.
+    Workspace(PathBuf),
+}
+
+impl PassHome {
+    /// Names the key and file a fix edits to admit a name in this workspace.
+    fn describe(&self) -> String {
+        match self {
+            Self::Global(path) => format!("`[execution.env] pass` in {}", path.display()),
+            Self::Workspace(path) => format!(
+                "`[execution.env] pass` in this workspace's {} (its pass replaces the global \
+                 list, so restate every name the workspace needs there)",
+                path.display()
+            ),
+        }
+    }
+}
+
 pub(super) struct WorkerTokenFacts {
     pub macos: bool,
     pub claude_routed: bool,
     /// The workspace's effective `execution.env.pass`.
     pub pass: Vec<String>,
     pub clock: ClockCredentials,
+    pub pass_home: PassHome,
 }
 
 pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResult {
@@ -80,7 +105,8 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
              activity receives it"
         ));
         fixes.push(format!(
-            "Add {OAUTH_TOKEN} to `[execution.env] pass` in the global or workspace config.toml."
+            "Add {OAUTH_TOKEN} to {}.",
+            facts.pass_home.describe()
         ));
     }
     match &facts.clock {
@@ -102,9 +128,9 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
                  it, so clock-started runs never receive it"
             ));
             fixes.push(format!(
-                "Add {held} to `[execution.env] pass` in the global or workspace config.toml, or \
-                 put {OAUTH_TOKEN} or {API_KEY} in ~/.orbit/{CLOCK_ENV_FILE_NAME} under a name the \
-                 pass admits."
+                "Add {held} to {}, or put {OAUTH_TOKEN} or {API_KEY} in \
+                 ~/.orbit/{CLOCK_ENV_FILE_NAME} under a name the pass admits.",
+                facts.pass_home.describe()
             ));
         }
         ClockCredentials::Refused(reason) => {
@@ -155,6 +181,20 @@ pub(super) fn classify_clock_credentials(
     }
 }
 
+/// The file that admits names for this workspace: its own policy config when
+/// one sets policy, otherwise the global config (the same test `orbit config
+/// show` applies to the security-key exception).
+fn pass_home(runtime: &OrbitRuntime) -> PassHome {
+    let shared_root = runtime.shared_root();
+    let global_root = runtime.global_root();
+    let workspace_config = shared_root.join("config.toml");
+    if shared_root != global_root && orbit_config::workspace_config_sets_policy(&workspace_config) {
+        PassHome::Workspace(workspace_config)
+    } else {
+        PassHome::Global(global_root.join("config.toml"))
+    }
+}
+
 fn clock_credentials(global_root: &Path, pass: &[String]) -> ClockCredentials {
     let installed = inspect_clock_unit()
         .is_ok_and(|inspection| inspection.verdict != ClockUnitVerdict::NoUnitInstalled);
@@ -196,5 +236,6 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
         claude_routed,
         pass,
         clock,
+        pass_home: pass_home(runtime),
     })
 }

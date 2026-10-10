@@ -21,11 +21,17 @@ starts, with an error naming the variable.
    `export CLAUDE_CODE_OAUTH_TOKEN=<token>`. Start drains from a login shell
    (`zsh -l -c 'orbit run auto …'`); the non-login shell an agent tool opens
    does not read `~/.zprofile`.
-3. Admit it to agents. Every workspace uses the global
-   `[execution.env] pass` unless its own `config.toml` sets `pass`, which
-   *replaces* the global list. Add `CLAUDE_CODE_OAUTH_TOKEN` to the list each
-   workspace actually resolves (`orbit config show`); a name missing there is
-   stripped even when the process holds it.
+3. Admit it to agents. A workspace with no `config.toml` of its own uses the
+   global `[execution.env] pass`. A workspace whose own `config.toml` sets
+   policy (a file holding only `[plugin_enablement]` does not count) does not
+   inherit that list: if its file omits `pass`, it gets the built-in default,
+   and a `pass` it sets *replaces* the global list. Add
+   `CLAUDE_CODE_OAUTH_TOKEN` to the list each workspace actually resolves
+   (`orbit config show` lists it and the layer it came from). For a workspace
+   without its own policy file, add it to the global `config.toml`. For any
+   other workspace, add it to that workspace's `config.toml`, restating the
+   full list it resolves now plus the token. A name missing from the resolved
+   list is stripped even when the process holds it.
 4. Give the clock the same token, below.
 
 ## The clock env file
