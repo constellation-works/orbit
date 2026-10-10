@@ -18,24 +18,29 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     Ok(sha256_hex(&bytes))
 }
 /// Why an active claim refuses desktop writes, and the supported way out: a
-/// claim-scoped mutation, never a status change.
-fn active_claim_reason(phase: crate::contracts::ExecutionClaimPhase) -> &'static str {
-    match phase {
-        crate::contracts::ExecutionClaimPhase::HandedOff => {
-            "active execution claim requires a claim-scoped mutation: its handoff awaits the \
-             owner's completion authority; land it through that authority, or revoke the \
-             handoff and recover the claim from the owner's operator console"
-        }
-        crate::contracts::ExecutionClaimPhase::RepairPending => {
-            "active execution claim requires a claim-scoped mutation: its landing stopped on \
-             its base and an automatic repair is pending; let the repair re-hand it off, or \
-             recover the claim from the owner's operator console"
-        }
-        _ => {
-            "active execution claim requires a claim-scoped mutation: its run is still \
+/// claim-scoped mutation, never a status change. The task and claiming run are
+/// named so a refusal can be traced without a second lookup.
+fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> String {
+    let identity = format!(
+        " (task {}, run {})",
+        claim.task_id, claim.run_context.run_id
+    );
+    match claim.phase {
+        crate::contracts::ExecutionClaimPhase::HandedOff => format!(
+            "active execution claim requires a claim-scoped mutation{identity}: its handoff \
+             awaits the owner's completion authority; land it through that authority, or revoke \
+             the handoff and recover the claim from the owner's operator console"
+        ),
+        crate::contracts::ExecutionClaimPhase::RepairPending => format!(
+            "active execution claim requires a claim-scoped mutation{identity}: its landing \
+             stopped on its base and an automatic repair is pending; let the repair re-hand it \
+             off, or recover the claim from the owner's operator console"
+        ),
+        _ => format!(
+            "active execution claim requires a claim-scoped mutation{identity}: its run is still \
              executing; wait for it to settle, or recover the claim from the owner's operator \
              console"
-        }
+        ),
     }
 }
 
@@ -77,7 +82,7 @@ impl TaskV2Store {
                     .find(|claim| {
                         claim.claim.task_id == id && claim.claim.phase.protects_footprint()
                     })
-                    .map(|claim| active_claim_reason(claim.claim.phase).into()),
+                    .map(|claim| active_claim_reason(&claim.claim)),
                 Err(error) => Some(error.to_string()),
             }
         } else {

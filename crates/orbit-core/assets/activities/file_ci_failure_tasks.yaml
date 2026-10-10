@@ -11,6 +11,11 @@ spec:
     orbit task branches never mint landing repairs: their complete evidence
     is retained as idempotent artifacts on the branch's owning task and reported
     in attributed, without changing its status or producing pilot candidates.
+    An owner under an active execution claim is not written: the receipt is
+    queued and listed in deferred_attribution with reason claimed, and the
+    artifact is written when that claim settles. One observation that cannot
+    be retained is recorded on the audit and does not stop filing of the
+    snapshot's other failures.
     A missing owner stays retryable; other non-landing failures are reported in
     excluded_branch_failures. The guard also applies to older snapshots that
     included task PR failures in current_failures.
@@ -239,6 +244,22 @@ spec:
       attributed:
         type: array
         description: Task-branch failures retained as artifacts on their owning tasks.
+      deferred_attribution:
+        type: array
+        description: >
+          Task-branch failures whose owner had an active execution claim, so
+          the sweep did not write the task. Each entry carries task_id, the
+          CI run_id, and reason claimed. The artifact is written when that
+          claim settles.
+        items:
+          type: object
+          required: [task_id, run_id, reason]
+          properties:
+            task_id:
+              type: string
+            run_id: {}
+            reason:
+              type: string
       excluded_branch_failures:
         type: array
         description: Non-landing failures without an owning task branch; no repair is filed.
