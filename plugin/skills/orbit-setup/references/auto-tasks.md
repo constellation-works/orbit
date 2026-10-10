@@ -257,9 +257,12 @@ plugin being removed.
   least-recently-attempted workspace documentation against current behavior,
   and corrects factual drift and broken links. Each run attaches a
   `doc-duties-ledger.json` artifact recording an outcome (`clean`, `fixed`,
-  `partial` or `skipped`) and attempt date per selected document; selection
-  orders by the latest ledger attempt, then `last_validated` frontmatter, then
-  the git last-touched date, so a skipped document rotates to the back. A
+  `partial` or `skipped`) and attempt date per selected document, plus a
+  cumulative `state` map of every path's two latest attempts. A run reads only
+  the newest readable ledger's `state` (older ledgers without it are read
+  through the 60-run window), so attempts survive task-history truncation.
+  Selection orders by the latest attempt, then `last_validated` frontmatter,
+  then the git last-touched date, so a skipped document rotates to the back. A
   document whose two latest attempts were `skipped` or `partial` is held back
   and reported as needing its own task. A batch whose claims
   are already accurate is a successful no-diff run with validated no-diff
