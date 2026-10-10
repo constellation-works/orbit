@@ -161,7 +161,7 @@ export default defineConfig({
       pagefind: true,
       sidebar: [
         {
-          label: 'Start here',
+          label: 'Get started',
           items: [
             { slug: 'index', label: 'What Orbit is' },
             { slug: 'getting-started', label: 'Quickstart' },
@@ -191,11 +191,6 @@ export default defineConfig({
             { slug: 'how-to/recurring-work', label: 'Schedule recurring work' },
             { slug: 'how-to/write-activity', label: 'Write an activity' },
             { slug: 'how-to/scoping-rules', label: 'Choose scopes' },
-          ],
-        },
-        {
-          label: 'Operate',
-          items: [
             { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
             { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
             { slug: 'how-to/distributed-drain', label: 'Set up a distributed drain' },
@@ -215,6 +210,7 @@ export default defineConfig({
         {
           label: 'Project',
           items: [
+            { slug: 'project', label: 'Overview' },
             { label: 'Changelog', link: '/changelog/' },
             {
               label: 'Contributing',

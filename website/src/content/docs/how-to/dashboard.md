@@ -144,11 +144,11 @@ prove that a particular task or run succeeded.
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the [auto-drain](#auto-drain) card and a live log. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
-| **Health** | Incidents, errors, reliability, step metrics, and the scoreboard. |
+| **Health** | Incidents, Doctor, Errors, Reliability, Metrics, and Scoreboard. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **Plugins** | Installed plugins and the panels they add. |
-| **Settings** | The workspace's `config.toml`. |
+| **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
 
 The top bar shows live load, memory, and disk readings for the serving host,
 the drain state when a delivery window is active, and **Refresh**. Counts in
@@ -394,6 +394,7 @@ layering and descriptions as `orbit config show`.
 | **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
 | **Crews** | The crew table. |
 | **Keys** | Every settable key with its type, section, description, and accepted values. |
+| **System** | Live resource readings, throttle marks, resume thresholds, and the host's current admission verdict. |
 | **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
 
 **Effective** opens with a strip naming both files, then one panel per section
