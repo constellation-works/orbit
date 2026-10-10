@@ -478,13 +478,14 @@ function buildStillWaiting(pass, run = {}) {
   const deferred = Array.isArray(pass.deferred) ? pass.deferred : [];
   const excluded = Array.isArray(pass.excluded) ? pass.excluded : [];
   const deferredTotal = Math.max(pass.deferred_total || 0, deferred.length);
-  const queued = Math.max(pass.queued || 0, deferredTotal);
+  const queued = pass.queued || 0;
   const excludedTotal = Math.max(pass.excluded_total || 0, excluded.length);
-  if (queued === 0 && excludedTotal === 0) return null;
+  if (queued === 0 && deferredTotal === 0 && excludedTotal === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel still-waiting" });
   const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
   const reasonTaskTotal = deferredTotal + excludedTotal;
-  const additionalAdmissible = Math.max(0, queued - deferredTotal);
+  const pullDrain = run.job_id === "workspace_pull_pipeline";
+  const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
   const additionalSummary = additionalAdmissible === 1
     ? "1 additional admissible task was not started and is not listed below"
     : `${additionalAdmissible} additional admissible tasks were not started and are not listed below`;

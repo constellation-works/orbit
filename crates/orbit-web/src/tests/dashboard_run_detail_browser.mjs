@@ -259,6 +259,7 @@ export async function assertRunDetailPresentation(page, evidence) {
   if (JSON.stringify(renderedReasons) !== JSON.stringify(expectedReasons)) {
     throw new Error(`Run-detail waits must use the Drain card's human reason labels: ${JSON.stringify(renderedReasons)}`);
   }
+
   const waitingLinks = await page.locator('#run-detail-meta .still-waiting .waiting-task-link').evaluateAll(nodes => nodes.map(node => ({
     id: node.textContent.trim(), href: node.href,
   })));
@@ -272,6 +273,19 @@ export async function assertRunDetailPresentation(page, evidence) {
   });
   if (JSON.stringify(waitingLinks.map(link => link.id)) !== JSON.stringify(expectedTaskIds) || !linksMatchTasks) {
     throw new Error(`Every waiting task and blocker ID must link to its task: ${JSON.stringify(waitingLinks)}`);
+  }
+
+  const localDeferred = ['ORB-15208', 'ORB-15209', 'ORB-15210'].map(task_id => ({
+    task_id, reason: 'context_lock_conflict', blocked_by: ['ORB-15183'],
+  }));
+  await render({
+    state: 'running', job_id: 'workspace_auto_pipeline',
+    drain_last_pass: { queued: 3, deferred: localDeferred, deferred_total: 3 },
+  }, []);
+  const localWaitingText = await page.locator('#run-detail-meta .still-waiting .child-dispatch-notice').textContent();
+  if (!localWaitingText.includes('3 backlog tasks have recorded wait reasons (3 deferred, 0 excluded)')
+    || localWaitingText.includes('6 additional admissible tasks')) {
+    throw new Error(`Local deferred tasks must be counted once in the run-detail banner: ${localWaitingText}`);
   }
 
   const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
