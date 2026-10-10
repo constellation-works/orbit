@@ -256,7 +256,7 @@
    every fr column differently from a row whose actions cell is empty. */
 .host-list {
   display: grid;
-  grid-template-columns: minmax(200px, 2.2fr) minmax(110px, 1fr) minmax(70px, 0.8fr) minmax(90px, 0.8fr) minmax(80px, 0.9fr) minmax(140px, 1.6fr) auto;
+  grid-template-columns: minmax(180px, 2fr) minmax(100px, 0.9fr) minmax(64px, 0.7fr) minmax(80px, 0.7fr) minmax(70px, 0.8fr) minmax(120px, 1.3fr) minmax(150px, 1.6fr) auto;
   column-gap: 12px;
   border: 1px solid var(--border); border-radius: 2px; background: var(--bg-elev);
 }
@@ -272,6 +272,21 @@
 .host-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-weight: 600; }
 .host-facts, .host-workspace { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; }
 .host-version, .host-protocol { font-size: 11px; overflow-wrap: anywhere; }
+.host-health { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+.host-health-readings { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.host-health .host-resource {
+  height: 22px; padding: 0 6px; gap: 4px; font-size: 11px; border-radius: 4px;
+}
+.host-health .host-resource[data-resource="cpu"],
+.host-health .host-resource[data-resource="memory"],
+.host-health .host-resource[data-resource="disk"] { min-width: 0; }
+.host-health-error, .host-health-pending, .host-drain {
+  font: 11px/1.4 var(--font-sans); color: var(--fg-dim); overflow-wrap: anywhere;
+}
+.host-drain.active { color: var(--state-pending); }
+.host-drain.throttled { color: var(--state-failed); }
+.host-switch { color: var(--accent); font: 11px/1.4 var(--font-sans); }
+.host-showing { color: var(--fg-mute); font: 11px/1.4 var(--font-sans); }
 .host-reach, .host-skew { font: 11px/1.5 var(--font-mono); }
 .host-reach.ok { color: var(--state-success); }
 .host-reach.down, .host-reach.warn, .host-skew.warn { color: var(--state-failed); }
@@ -289,6 +304,6 @@
   .host-head { display: none; }
   .host-list, .host-row { display: block; }
   .host-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; }
-  .host-identity, .host-actions { grid-column: 1 / -1; }
+  .host-identity, .host-actions, .host-health { grid-column: 1 / -1; }
   .host-actions { justify-content: flex-start; }
 }

@@ -201,8 +201,11 @@ the machine is not registered, when you need `--no-operator` or a non-default
   browser's remembered last choice, which only fills a URL with no `?host=`.
   The serving host's own name selects the serving host.
 - Every panel, action, log tail and resource chip follows the selected host,
-  and the workspace picker lists that host's workspaces. Settings › Hosts does
-  not: it keeps editing the serving host's `hosts.toml`.
+  and the workspace picker lists that host's workspaces. Settings › Hosts
+  keeps editing the serving host's `hosts.toml`. It also shows each reachable
+  registered host's load, memory, disk, admission throttle, and drain or
+  pull-drain state, and **Show** on a row switches the dashboard to that host.
+  An unreachable host shows its error instead of readings.
 - Version or protocol skew shows a persistent banner and is never refused.
   An unreachable host replaces the panels with one state carrying a code:
   `unknown_host`, `unreachable_destination`, `process_timeout`,

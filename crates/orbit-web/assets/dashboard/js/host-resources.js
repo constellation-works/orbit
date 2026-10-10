@@ -1,6 +1,6 @@
 // These live chips observe the selected host (the serving host unless the host
 // picker names another), independently of workspace scope.
-import { el, isHostUnavailable, withHost } from './common.js';
+import { el, getHost, isHostUnavailable } from './common.js';
 
 /// The throttle verdict as the topbar chips and the Settings System tab both
 /// state it: `held`, `open`, `disabled`, or `unknown` (stale or no payload).
@@ -38,7 +38,9 @@ export function cpuLoadMultiple(percent, threshold = false) {
 
 /// How one resource reads in its chip and in the title. CPU is load relative to
 /// cores, so it can pass 100%; it is never labelled as a plain CPU percentage.
-function describeResource(payload, resource) {
+/// Settings › Hosts uses the same reading, so a row and the top bar cannot
+/// disagree about severity or the load unit.
+export function describeResource(payload, resource) {
   const { reading, known, severity, held, note } = hostReading(payload, resource);
   const path = resource === 'disk' && reading?.path ? ` ${reading.path}` : '';
   const label = resource === 'cpu' ? 'load' : resource === 'memory' ? 'mem' : 'disk';
@@ -77,15 +79,27 @@ export function onHostResources(listener) {
   return () => listeners.delete(listener);
 }
 
-/// The selected host, with no workspace or window query. Bounded like
-/// `fetchJson`: a stalled snapshot (hung mount, half-open connection) rejects
-/// instead of pending for the rest of the page's life.
-export async function fetchHostResourcePayload() {
+/// One host's resource snapshot, with no workspace or window query. Bounded
+/// like `fetchJson`: a stalled snapshot (hung mount, half-open connection)
+/// rejects instead of pending for the rest of the page's life. A null name is
+/// the serving host; any other name goes through `/api/on/<host>/`, which
+/// answers the serving host's own name locally.
+export async function fetchHostResourcePayloadFor(hostName) {
+  const path = hostName
+    ? `/api/on/${encodeURIComponent(hostName)}/host/resources`
+    : '/api/host/resources';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const response = await fetch(withHost('/api/host/resources'), { signal: controller.signal });
-    if (!response.ok) throw new Error(`Host resource API: HTTP ${response.status}`);
+    const response = await fetch(path, { signal: controller.signal });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const body = await response.json();
+        if (body && typeof body.error === 'string' && body.error) detail = body.error;
+      } catch (_) { /* a non-JSON failure keeps the status */ }
+      throw new Error(`Host resource API: ${detail}`);
+    }
     return await response.json();
   } catch (error) {
     if (controller.signal.aborted) throw new Error('Request timed out after 30 seconds');
@@ -93,6 +107,11 @@ export async function fetchHostResourcePayload() {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/// The selected host. Same path `withHost` would build.
+export async function fetchHostResourcePayload() {
+  return fetchHostResourcePayloadFor(getHost());
 }
 
 let sequence = 0;
