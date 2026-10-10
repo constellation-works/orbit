@@ -2,8 +2,9 @@
 //!
 //! The current claim check and queue-or-retain decision run in one exclusive
 //! section. A protecting claim queues the receipt for settlement. Otherwise
-//! the artifact and applied row commit together, even if settlement finished
-//! after the sweep observed the claim but before it submitted the receipt.
+//! the artifact commits through the claim boundary (and marks any row queued
+//! earlier applied), even if settlement finished after the sweep observed the
+//! claim but before it submitted the receipt.
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
@@ -18,9 +19,22 @@ use crate::repository::task::v2::normalize_v2_artifact_path;
 
 use super::TaskCommitBoundary;
 
+// Owner writes that skip `update_task` (ORB-15295). The claim commit path keeps
+// the manifest entry and blob, the envelope rewrite and `updated_at`, and the
+// task index replacement. Not carried over, because an artifact-only
+// observation does not need them:
+// - lexical search refresh: indexed task fields exclude artifacts;
+// - history entries and status-transition effects: `update_task` adds none
+//   without a status or field change;
+// - `resume_evidence_hold`: only System or Operator writers satisfy review
+//   evidence, and an observation carries neither;
+// - the in-memory `TaskUpdated` event: read only by session event listings.
+// Differences that remain are the blob layout and the recorded creator/origin.
+
 impl TaskCommitBoundary {
     /// Queue or retain one observation under the same exclusive boundary as
-    /// claim settlement. Retries retain one artifact and one coordination row.
+    /// claim settlement. Retries retain one artifact. Only a deferred receipt
+    /// owns a coordination row.
     pub(crate) fn record_deferred_branch_observation(
         &self,
         observation: &DeferredBranchObservation,
@@ -61,26 +75,30 @@ impl TaskCommitBoundary {
                 self.store
                     .task_coordination_row(&self.workspace_id, &row.kind, &row.row_id)?;
             let recorded = self.artifact_recorded(&stored.task_id, &stored.artifact_path)?;
-            if recorded
-                && let Some(existing) = &existing
-                && serde_json::from_str::<DeferredBranchObservation>(&existing.payload_json)
-                    .map_err(|error| OrbitError::Store(error.to_string()))?
-                    .applied
-            {
+            let queued_unapplied = match &existing {
+                Some(row) => {
+                    !serde_json::from_str::<DeferredBranchObservation>(&row.payload_json)
+                        .map_err(|error| OrbitError::Store(error.to_string()))?
+                        .applied
+                }
+                None => false,
+            };
+            if recorded && !queued_unapplied {
                 return Ok(BranchObservationOutcome::Retained);
             }
-            stored.applied = true;
-            row.payload_json = encode_observation(&stored)?;
-            let mut params = TaskCoordinationCommitParams {
+            // The content-addressed artifact path is the idempotence key for a
+            // direct retention, so only a previously queued row is marked
+            // applied; a fresh receipt leaves no row to grow with history.
+            let params = TaskCoordinationCommitParams {
                 task_id: stored.task_id.clone(),
                 actor: "system:ci_failure_sweep".into(),
                 ..Default::default()
             };
             let mut effects = ClaimCommitEffects::default();
             if let Some(existing) = existing {
+                stored.applied = true;
+                row.payload_json = encode_observation(&stored)?;
                 effects.replacements.push((existing, row));
-            } else {
-                params.rows.push(row);
             }
             let evidence = ClaimEvidence {
                 artifacts: if recorded {
@@ -119,13 +137,12 @@ impl TaskCommitBoundary {
         evidence: &mut ClaimEvidence,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
-        let rows = self
-            .store
-            .task_coordination_rows(&self.workspace_id, DEFERRED_BRANCH_OBSERVATION_KIND)?;
+        let rows = self.store.task_coordination_rows_with_prefix(
+            &self.workspace_id,
+            DEFERRED_BRANCH_OBSERVATION_KIND,
+            &format!("{task_id}:"),
+        )?;
         for row in rows {
-            if !row_is_for_task(&row.row_id, task_id) {
-                continue;
-            }
             let observation: DeferredBranchObservation = serde_json::from_str(&row.payload_json)
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
             if observation.applied || observation.task_id != task_id {
@@ -217,12 +234,6 @@ impl TaskCommitBoundary {
             normalize_v2_artifact_path(&file.path).ok().as_deref() == Some(path.as_str())
         }))
     }
-}
-
-fn row_is_for_task(row_id: &str, task_id: &str) -> bool {
-    row_id
-        .strip_prefix(task_id)
-        .is_some_and(|rest| rest.starts_with(':'))
 }
 
 fn encode_observation(observation: &DeferredBranchObservation) -> Result<String, OrbitError> {

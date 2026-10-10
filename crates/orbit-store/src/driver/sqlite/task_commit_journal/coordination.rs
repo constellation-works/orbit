@@ -67,6 +67,45 @@ impl Store {
         })
     }
 
+    /// Coordination rows of one kind whose id starts with `prefix`, by an
+    /// index-bounded range over the `(workspace_id, kind, row_id)` key.
+    /// `prefix` must end in `:` so the exclusive upper bound is its `;`.
+    pub(crate) fn task_coordination_rows_with_prefix(
+        &self,
+        workspace_id: &str,
+        kind: &str,
+        prefix: &str,
+    ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
+        let Some(stem) = prefix.strip_suffix(':') else {
+            return Err(OrbitError::InvalidInput(format!(
+                "coordination row prefix `{prefix}` must end with ':'"
+            )));
+        };
+        let upper = format!("{stem};");
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT kind, row_id, payload_json
+                     FROM task_coordination_rows
+                     WHERE workspace_id = ?1 AND kind = ?2
+                       AND row_id >= ?3 AND row_id < ?4
+                     ORDER BY row_id ASC",
+                )
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let rows = stmt
+                .query_map(params![workspace_id, kind, prefix, upper], |row| {
+                    Ok(TaskCoordinationRow {
+                        kind: row.get(0)?,
+                        row_id: row.get(1)?,
+                        payload_json: row.get(2)?,
+                    })
+                })
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+    }
+
     /// One published coordination row, looked up by identity.
     pub(crate) fn task_coordination_row(
         &self,
