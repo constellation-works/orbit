@@ -14,12 +14,8 @@ use super::provider_state::append_linux_provider_state_roots;
 use super::runtime_grants::{
     append_linux_codex_side_write_roots, append_linux_runtime_write_roots,
 };
-#[cfg(target_os = "linux")]
-use super::worktree::active_worktree_subpath;
-#[cfg(target_os = "macos")]
-use super::worktree::append_active_worktree_root;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use super::worktree::recovery_checkout_root;
+use super::worktree::{active_worktree_root, recovery_checkout_root};
 
 pub(crate) fn resolve_executor_sandbox(
     runtime: &OrbitRuntime,
@@ -93,28 +89,42 @@ pub(super) fn resolve_executor_sandbox_on(
                 // Read-only reviewer activities may run from an invocation-owned
                 // inspection checkout, so their read grants must follow that
                 // checkout. Recovery also needs its own checkout-relative
-                // grants and denies. Other implementer profiles stay anchored
-                // at the registered workspace, with the active worktree
-                // re-allowed separately below.
+                // grants and denies. Other profiles stay anchored at the
+                // registered workspace, whose read denies also cover the
+                // managed worktrees beneath it.
                 let profile_root = if fs_profile == Some("reviewer") || recovery_checkout.is_some()
                 {
                     subprocess_cwd
                 } else {
                     None
                 };
-                let mut resolved = resolve_fs_profile_absolute(runtime, fs_profile, profile_root)
-                    .map_err(|err| {
-                    DispatchError::CliInvocationFailed(format!(
-                        "resolve fsProfile for sandbox: {err}"
-                    ))
-                })?;
+                let resolve_profile = |root: Option<&Path>| {
+                    resolve_fs_profile_absolute(runtime, fs_profile, root).map_err(|err| {
+                        DispatchError::CliInvocationFailed(format!(
+                            "resolve fsProfile for sandbox: {err}"
+                        ))
+                    })
+                };
+                let mut resolved = resolve_profile(profile_root)?;
+                // A writer from the active managed worktree takes its `modify`
+                // rules from that worktree, as on Linux: the profile's grants
+                // and every policy deny, `**/.env` included, then apply inside
+                // the worktree rather than the registered checkout. Re-allowing
+                // the bare worktree after the policy denies would instead
+                // override them all under SBPL last-match-wins.
+                if profile_root.is_none()
+                    && let Some(worktree) =
+                        subprocess_cwd.and_then(|cwd| active_worktree_root(runtime, cwd))
+                {
+                    resolved.modify = resolve_profile(Some(&worktree))?.modify;
+                }
                 // Same boundary as linux-bwrap: an activity profile with an
                 // empty modify surface stays a non-writer of the source tree
                 // and the primary workspace. Every positive entry below compiles
-                // to an SBPL write allow, so Codex side roots, workspace
-                // `.orbit` stores, and the active managed worktree are gated on
-                // the profile itself. Provider state directories come from the
-                // SBPL compiler and global Orbit runtime stores stay available.
+                // to an SBPL write allow, so Codex side roots and workspace
+                // `.orbit` stores are gated on the profile itself. Provider
+                // state directories come from the SBPL compiler and global
+                // Orbit runtime stores stay available.
                 let grants_workspace_modify =
                     resolved.modify.iter().any(|rule| !rule.starts_with('!'));
                 if grants_workspace_modify {
@@ -125,13 +135,10 @@ pub(super) fn resolve_executor_sandbox_on(
                     grants_workspace_modify,
                     &mut resolved,
                 );
-                if grants_workspace_modify {
-                    append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
-                }
-                // Implementer profiles are anchored at the registered checkout
-                // even when the cwd is a worktree, so the policy carve-outs
-                // name the live host-clock stores. Deny them after the Codex
-                // side roots and the worktree re-allow.
+                // A profile anchored at the registered checkout names its live
+                // host-clock stores in the policy carve-outs. Deny them after
+                // the Codex side roots and runtime grants from every cwd; a
+                // worktree anchor keeps the carve-outs on its own `.orbit`.
                 deny_registered_checkout_host_stores(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 // Host Git state is never a provider convenience grant. Append
@@ -225,7 +232,7 @@ pub(super) fn resolve_executor_sandbox_on(
                 // worktree, even after the .orbit mount anchor exists.
                 let managed_worktree = recovery_checkout.is_some()
                     || subprocess_cwd
-                        .and_then(|cwd| active_worktree_subpath(runtime, cwd))
+                        .and_then(|cwd| active_worktree_root(runtime, cwd))
                         .is_some();
                 Ok(Some(ResolvedSandbox {
                     kind,
@@ -564,10 +571,10 @@ fn contained_runtime_store(root: &Path, relative: &str) -> Option<PathBuf> {
 /// refer to that worktree's `.orbit`; a registered-checkout anchor would grant
 /// the live auto-task definitions, routines, crew and sandbox config, and
 /// resources. Drop those grants and append a terminal deny so later
-/// convenience roots cannot reopen the registered stores. On macOS,
-/// implementer profiles stay anchored at the registered checkout, while the
-/// active-worktree re-allow separately keeps the worktree's own `.orbit`
-/// writable. `.orbit/tmp/**` stays the worker scratch exception.
+/// convenience roots cannot reopen the registered stores. macOS appends the
+/// denies from every cwd: a writer from a managed worktree takes its `modify`
+/// rules from that worktree, so its own `.orbit` exceptions stay writable.
+/// `.orbit/tmp/**` stays the worker scratch exception.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn deny_registered_checkout_host_stores(
     runtime: &OrbitRuntime,
