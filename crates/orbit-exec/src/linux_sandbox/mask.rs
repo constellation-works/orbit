@@ -2,7 +2,7 @@
 //! stand-in.
 //!
 //! A mask is a `--ro-bind <sentinel> <target>` for a directory, or a
-//! `--ro-bind /dev/null <file>` for a single file, emitted after every other
+//! `--dev-bind /dev/null <file>` for a single file, emitted after every other
 //! mount of the plan, so no earlier policy grant or alias bind can expose the
 //! target again. A mount works on one path, so a target the child could also
 //! reach through a second path would stay readable there. The plan is refused
@@ -82,8 +82,11 @@ pub(super) fn append_mask_mounts(
                 alias.display()
             )));
         }
+        // `--dev-bind`, not `--ro-bind`: Bubblewrap mounts a plain bind
+        // `nodev`, and opening a device node on a `nodev` mount fails with
+        // `EACCES`, so the file would refuse to open instead of reading empty.
         out.extend([
-            "--ro-bind".to_string(),
+            "--dev-bind".to_string(),
             "/dev/null".to_string(),
             file.display().to_string(),
         ]);
