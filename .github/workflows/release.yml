@@ -425,13 +425,33 @@ jobs:
           orbit search --help
 
   smoke-install-ubuntu-2204-bundled-bwrap:
-    # Ubuntu 22.04 packages a Bubblewrap without --bind-fd (or none at all on
-    # the runner image), so the installer must fall back to the signed
-    # bundled binary and the unprivileged capability probe must then pass.
+    # The installer installs the signed bundled Bubblewrap only when no capable
+    # host wrapper exists and no package manager can supply one. The runner is
+    # not that host: Ubuntu 22.04's apt Bubblewrap (0.6.1) supports --bind-fd,
+    # so a plain install uses the host wrapper and never reaches the bundled
+    # path. Pinning the package away does not work either: a failed
+    # `apt-get install` aborts the installer before the fallback. So this job
+    # removes Bubblewrap and hides apt-get to reach the no-package-manager
+    # branch, then checks the bundled binary is installed and passes the
+    # unprivileged capability probe. The host-package path is covered by the
+    # Ubuntu 24.04 installer smoke.
     name: Smoke test bundled Bubblewrap on Ubuntu 22.04
     needs: publish-release
     runs-on: ubuntu-22.04
     steps:
+      - name: Remove host Bubblewrap and package manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get remove --purge --yes bubblewrap
+          sudo mv /usr/bin/apt-get /usr/bin/apt-get.disabled
+          for path in /usr/bin/bwrap /usr/bin/apt-get /usr/bin/dnf /usr/bin/dnf5 /usr/bin/pacman /usr/bin/zypper; do
+            if [ -e "$path" ]; then
+              echo "::error::$path still exists; the installer would not take the bundled Bubblewrap path"
+              exit 1
+            fi
+          done
+
       - name: Run installer
         shell: bash
         env:
@@ -440,6 +460,11 @@ jobs:
           set -euo pipefail
           INSTALL_DIR="$RUNNER_TEMP/orbit/bin"
           curl -sSfL "$INSTALL_URL" | ORBIT_INSTALL_DIR="$INSTALL_DIR" ORBIT_VERSION="${GITHUB_REF_NAME}" sh 2>&1 | tee "$RUNNER_TEMP/install.log"
-          grep -F "bundled Bubblewrap" "$RUNNER_TEMP/install.log"
+          # `ready` is reported only after the unprivileged capability probe
+          # passes on the wrapper named here.
+          grep -E "Linux sandbox: ready .* with the bundled Bubblewrap .* at /usr/local/libexec/orbit/bwrap; installed from this Orbit release" "$RUNNER_TEMP/install.log"
           test "$(stat -c '%U:%G %a' /usr/local/libexec/orbit/bwrap)" = "root:root 755"
           /usr/local/libexec/orbit/bwrap --version
+          # A fresh probe finds the installed bundled binary and needs no changes.
+          "$INSTALL_DIR/orbit" init --host-prerequisites-only --non-interactive 2>&1 | tee "$RUNNER_TEMP/reprobe.log"
+          grep -E "Linux sandbox: ready .* with the bundled Bubblewrap .* at /usr/local/libexec/orbit/bwrap; no host changes needed" "$RUNNER_TEMP/reprobe.log"
