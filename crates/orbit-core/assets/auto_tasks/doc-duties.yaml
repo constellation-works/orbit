@@ -20,24 +20,32 @@ template:
        repository identifies as generated or historical records. Use repository
        guidance for any additional documentation scope; do not edit unrelated
        files. Keep the paths relative to the repository root.
-    2. Read the prior ledgers. List the newest completed instances with
+    2. Build the carried attempt state. List the newest completed instances with
        `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["doc-duties"],"limit":60,"fields":["id"],"model":"<agent-family>"}'`
-       and read each one's ledger with
+       and read each one's ledger, newest first, with
        `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
        Skip a task with no ledger (a run from before ledgers existed) and ignore
-       its prose summary; never order by execution-summary text. For each path
-       keep every row, newest `attempted_on` first (ties: the newer task).
+       its prose summary; never order by execution-summary text. A
+       `schema_version` 2 ledger carries `state`, a cumulative map from each
+       path to its two most recent attempt rows, newest first. It already
+       covers every older ledger, so stop at the first one you can read and
+       start from its `state`. Layer the `documents` rows of each
+       `schema_version` 1 ledger read before it on top (all of them when no
+       version 2 ledger exists). For each path keep only the two rows with the
+       newest `attempted_on` (ties: the newer task). Drop paths that step 1 no
+       longer lists. The history window is a read bound, not a retention rule:
+       an attempt survives in `state` after its task leaves the window.
     3. Give each candidate an ordering date, oldest first. Precedence: the
-       latest ledger `attempted_on` for that path (source `ledger`); else a
+       latest carried `attempted_on` for that path (source `ledger`); else a
        valid `last_validated: YYYY-MM-DD` in existing YAML frontmatter (source
        `frontmatter`); else the date part of `git log -1 --format=%cI -- <path>`
        (source `git`). A candidate falls back to frontmatter or git only when
-       no ledger row names it. Report invalid frontmatter values and missing git
+       no carried row names it. Report invalid frontmatter values and missing git
        history rather than treating them as real dates. If no ledger could be
        read at all (no completed instance, or the artifact tools failed), say so
        explicitly in the execution summary and the ledger `notes`; do not fall
        back silently.
-    4. Escalate repeat skips. A candidate whose two most recent ledger rows
+    4. Escalate repeat skips. A candidate whose two most recent carried rows
        both have outcome `skipped` or `partial` is not selected. List it in the
        execution summary as needing its own task (for example section-by-section
        validation of an oversized document) with both reasons. Optionally file
@@ -72,12 +80,17 @@ template:
 
     Write `.orbit/tmp/doc-duties-ledger.json` and attach it with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/doc-duties-ledger.json","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
-    Its shape is `{"schema_version":1,"run_date":"YYYY-MM-DD","head":"<full HEAD commit SHA>","notes":"<optional, for example that no prior ledger was readable>","documents":[{"path":"<repo-relative path>","attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<required unless clean or fixed>","ordering_date":"YYYY-MM-DD","ordering_source":"ledger|frontmatter|git"}]}`.
-    Include one row per selected document, in selection order, and attach the
-    ledger even when every document was skipped. `attempted_on` is today's date
-    for every selected document regardless of outcome: it is what moves a
-    skipped document to the back of the queue. Documents held back by the
-    repeat-skip rule are not selected and get no row.
+    Its shape is `{"schema_version":2,"run_date":"YYYY-MM-DD","head":"<full HEAD commit SHA>","notes":"<optional, for example that no prior ledger was readable>","documents":[{"path":"<repo-relative path>","attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<required unless clean or fixed>","ordering_date":"YYYY-MM-DD","ordering_source":"ledger|frontmatter|git"}],"state":{"<repo-relative path>":[{"attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<as above>"}]}}`.
+    Include one `documents` row per selected document, in selection order, and
+    attach the ledger even when every document was skipped. `attempted_on` is
+    today's date for every selected document regardless of outcome: it is what
+    moves a skipped document to the back of the queue. Documents held back by
+    the repeat-skip rule are not selected and get no `documents` row.
+    `state` is the step 2 carried state after this run: for each selected
+    document, put its new row first and keep only the two newest rows for that
+    path; carry every other path's rows unchanged. Write it in full every run,
+    so the newest ledger alone preserves each document's latest attempt and
+    repeat-skip history however many runs have passed.
 
     The execution summary describes the batch for humans: the selected paths in
     order, each path's ordering date and source, outcome, changes and
@@ -92,7 +105,7 @@ template:
   - Every selected document has an outcome of `clean`, `fixed`, `partial` or `skipped`, and a `skipped` or `partial` document gives a reason.
   - A document whose two most recent ledger outcomes are skipped or partial was not selected and is reported as needing a dedicated task.
   - No frontmatter or last_validated key was added to a document that lacked it; existing last_validated keys were updated only for `clean` or `fixed` documents.
-  - A versioned `doc-duties-ledger.json` artifact records one row per selected document, and the execution summary records the batch, checks, changes, and unverified claims, including clean no-diff batches with validated no-diff evidence.
+  - A versioned `doc-duties-ledger.json` artifact records one row per selected document and carries each path's two latest attempts forward in `state`, and the execution summary records the batch, checks, changes, and unverified claims, including clean no-diff batches with validated no-diff evidence.
   task_type: chore
   tags:
   - doc-duties

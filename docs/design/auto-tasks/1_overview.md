@@ -125,12 +125,18 @@ definition of the same name.
 - `doc-duties` — disabled-by-default daily validation of the
   least-recently-attempted tracked documentation. Each run attaches a
   `doc-duties-ledger.json` artifact with an outcome (`clean`, `fixed`,
-  `partial`, `skipped`) and attempt date per selected document. Rotation orders
-  by the latest ledger attempt (read from prior completed runs through the
-  artifact tools, never from summary prose), then an existing `last_validated`
-  date, then the git last-touched date, so a skipped document moves to the back
-  instead of heading every batch. A document whose two latest attempts were
-  `skipped` or `partial` is held back and reported as needing its own task.
+  `partial`, `skipped`) and attempt date per selected document. Each ledger
+  also carries a cumulative `state` map holding every path's two latest
+  attempts, rewritten in full every run. The next run starts from the newest
+  readable ledger's `state` (read through the artifact tools, never from
+  summary prose); ledgers from before `state` existed are layered in from the
+  60-run history window. Retention therefore does not depend on how many
+  completed tasks the window covers: a bounded window alone would forget old
+  attempts and starve later documents. Rotation orders by the latest attempt,
+  then an existing `last_validated` date, then the git last-touched date, so a
+  skipped document moves to the back instead of heading every batch. A document
+  whose two latest attempts were `skipped` or `partial` is held back, even after
+  those attempts leave the window, and reported as needing its own task.
   `last_validated` advances only on `clean`/`fixed`, and no frontmatter is added
   solely for this task. Its template reserves `dir:.` for root and
   workspace-specific documentation and does not carry `no-diff-expected`, since

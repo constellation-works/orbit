@@ -95,6 +95,7 @@ fi
 "$repo_root/scripts/check-desktop-ui.sh"
 "$repo_root/scripts/check-dashboard-vendor.py"
 "$repo_root/scripts/test-qa-full-sweep.py" --check
+"$repo_root/scripts/test-doc-duty-rotation.py"
 "$repo_root/scripts/sync-plugin-skills.sh" --check
 "$repo_root/scripts/test-validate-codex-plugin.sh"
 "$repo_root/scripts/test-validate-agent-plugin.sh"

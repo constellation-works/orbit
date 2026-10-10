@@ -698,6 +698,31 @@
       "comments": [
         "# A batch may edit docs/ and root or workspace-specific documentation.",
         "# Reserve the workspace until the batch's concrete paths are known.",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "80b86fa77b115bc24a48669951d3ae856527f7afa307316672837575d45f7236",
+      "revision": "89e66f6ff7e568dc1ddfb2921e38460fe167e2b8",
+      "settings": {
+        "complexity": "low",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# A batch may edit docs/ and root or workspace-specific documentation.",
+        "# Reserve the workspace until the batch's concrete paths are known.",
         "## Select a batch",
         "## Validate and record"
       ],
