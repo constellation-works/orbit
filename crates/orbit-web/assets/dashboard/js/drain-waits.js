@@ -1,7 +1,8 @@
 // Why a backlog task is not starting: the drain readiness snapshot, shared by
 // the Drain card (operations.js) and the Tasks list (tasks.js).
 // The Drain card owns the fetch and hands each payload to `setDrainReadiness`;
-// the Tasks list reads the waits back per task and repaints on a change.
+// the Tasks list reads each task's pool and wait back for its readiness dot and
+// the Backlog card's readiness strip, and repaints on a change.
 
 import { onWorkspaceChange } from './common.js';
 
@@ -140,36 +141,46 @@ export function onDrainReadinessChange(listener) {
   return () => listeners.delete(listener);
 }
 
-// The wait badge for a backlog task, or null when the snapshot has no wait for it.
-export function drainWaitFor(taskId) {
-  return waits.get(taskId)?.badge || null;
-}
-
 export function drainWaitSignature(taskId) {
-  const badge = waits.get(taskId)?.badge;
-  return badge ? `${badge.text}|${badge.title}` : "";
+  const item = waits.get(taskId);
+  if (!item) return "";
+  return item.badge ? `${item.pool}|${item.badge.text}|${item.badge.title}` : item.pool;
 }
 
-const POOL_PHRASES = [
-  ["locks", (n) => `${n} waiting on locks`],
-  ["capacity", (n) => `${n} waiting on capacity`],
-  ["other", (n) => `${n} waiting, other`],
+// The readiness pools in the order the Backlog card lists them, each with the
+// words its dot stands for.
+export const DRAIN_POOLS = [
+  { key: "eligible", label: "Eligible now" },
+  { key: "locks", label: "Waiting on locks" },
+  { key: "capacity", label: "Waiting on capacity" },
+  { key: "other", label: "Waiting, other" },
 ];
 
-// The Backlog group hint: how many of these rows a drain window could take now
-// versus how many wait, and on what. Without a snapshot it only says what the
-// group is; it must not claim eligibility it does not know.
-export function backlogGroupHint(tasks) {
-  if (!haveSnapshot) return "Approved; Ship or a drain window picks them up once nothing holds them";
+const POOL_LABELS = Object.fromEntries(DRAIN_POOLS.map(({ key, label }) => [key, label]));
+
+// The readiness dot for a backlog task: its pool, the words for it, and the
+// full wait in the tooltip. Null when there is no snapshot or it does not
+// mention the task, so a row never claims a readiness it does not know.
+export function drainReadinessFor(taskId) {
+  const item = waits.get(taskId);
+  if (!item) return null;
+  const label = POOL_LABELS[item.pool];
+  return {
+    pool: item.pool,
+    label: item.badge ? `${label}: ${item.badge.text}` : label,
+    title: item.badge ? item.badge.title : "Nothing holds it: Ship it now, or the next drain window picks it up",
+  };
+}
+
+// How the Backlog group's rows split across the pools. `known` is false until
+// a snapshot arrives; a row the snapshot does not mention counts as `unknown`.
+export function backlogReadiness(tasks) {
   const counts = { eligible: 0, locks: 0, capacity: 0, other: 0, unknown: 0 };
   for (const task of tasks) {
     const item = waits.get(task.id);
     counts[item ? item.pool : "unknown"] += 1;
   }
-  const parts = [`${counts.eligible} eligible now`];
-  for (const [key, phrase] of POOL_PHRASES) if (counts[key] > 0) parts.push(phrase(counts[key]));
-  if (counts.unknown > 0) parts.push(`${counts.unknown} not in the drain snapshot`);
-  return `${tasks.length} approved · ${parts.join(", ")}`;
+  return { known: haveSnapshot, counts };
 }
 
 // A snapshot belongs to one workspace; drop it when the scope moves so another

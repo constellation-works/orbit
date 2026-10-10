@@ -1,10 +1,11 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
-import { backlogGroupHint, drainWaitFor, drainWaitSignature, onDrainReadinessChange } from './drain-waits.js';
+import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
+import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -100,6 +101,33 @@ const GROUP_HINTS = {
   review: "Review the pull request, then approve to close",
   blocked: "Waiting on something the run cannot resolve",
   "in-progress": "Running now",
+  backlog: "Approved; Ship or a drain window picks them up once nothing holds them",
+};
+
+// Groups whose rows carry where their run is and how long it has been going.
+const RUN_GROUPS = new Set(["in-progress", "blocked"]);
+
+// Chip words for each status. The five open statuses are the filter's
+// primary chips; the closed ones read as quieter text until they are on.
+const STATUS_LABELS = {
+  "in-progress": "In progress",
+  review: "Review",
+  blocked: "Blocked",
+  proposed: "Proposed",
+  backlog: "Backlog",
+  someday: "Someday",
+  done: "Done",
+  rejected: "Rejected",
+  archived: "Archived",
+};
+
+// How an empty open group reads in the "Nothing …" line above the cards.
+const EMPTY_GROUP_PHRASES = {
+  blocked: "blocked",
+  "in-progress": "in progress",
+  review: "in review",
+  proposed: "proposed",
+  backlog: "in the backlog",
 };
 
 function taskList(context) {
@@ -275,12 +303,12 @@ function feedbackSignature(map, taskId) {
   return `${entry.kind}:${entry.text}:${entry.undo ? entry.undo.expiresAt : ""}`;
 }
 
-// The detail's own controls — the complexity select and each field editor —
+// The detail's own controls — the status and complexity selects and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
 function detailFeedbackSignature(taskId) {
-  const parts = [feedbackSignature(complexityFeedback, taskId)];
+  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId)];
   for (const field of Object.keys(TASK_FIELD_EDITORS)) {
     parts.push(feedbackSignature(fieldFeedback, fieldFeedbackKey(taskId, field)));
   }
@@ -513,12 +541,27 @@ export function clearPinnedExternalTask(context) {
   if (context) renderTasks(taskList(context), context);
 }
 
+// Per-status counts for the chips, from the rows this page holds. They are
+// only stated when the page holds every matching task: a paginated list would
+// count one page, and a status that is off was never fetched.
+function statusCounts(context) {
+  if (!panelCanRender("tasks-body")) return null;
+  const meta = tasksMeta(context);
+  if (meta && (meta.next_cursor || (Number.isFinite(meta.offset) && meta.offset > 0))) return null;
+  const counts = new Map();
+  for (const task of taskList(context)) counts.set(task.status, (counts.get(task.status) || 0) + 1);
+  return counts;
+}
+
 function refreshChips(context) {
-  for (const chip of document.querySelectorAll("#task-filter .chip")) {
+  const container = $("task-filter");
+  if (!container) return;
+  const activeStatuses = activeStatusSet(context);
+  const allOn = activeStatuses.size === statusOrder(context).length;
+  const counts = statusCounts(context);
+  for (const chip of container.querySelectorAll(".chip")) {
     const status = chip.dataset.status;
     const isAll = chip.dataset.role === "all";
-    const activeStatuses = activeStatusSet(context);
-    const allOn = activeStatuses.size === statusOrder(context).length;
     const on = chip.dataset.role === "not-ready"
       ? notReadyOnly
       : isAll ? allOn : activeStatuses.has(status);
@@ -526,6 +569,8 @@ function refreshChips(context) {
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
     chip.setAttribute("aria-pressed", on ? "true" : "false");
+    const count = chip.querySelector(".chip-count");
+    if (count) count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
   }
 }
 
@@ -625,19 +670,22 @@ export function renderTaskPagination(context) {
 export function buildChips(context) {
   const container = $("task-filter");
   container.innerHTML = "";
-  const allChip = el("button", { class: "chip", text: "all" });
-  allChip.type = "button";
-  allChip.dataset.role = "all";
-  allChip.addEventListener("click", () => {
-    setActiveStatuses(context, new Set(statusOrder(context)));
-    navigateTasksHash(context);
-  });
-  container.appendChild(allChip);
+  const chip = (text, attrs, quiet, title) => {
+    const node = el("button", { class: `chip${quiet ? " chip-quiet" : ""}`, type: "button", title }, [
+      el("span", { class: "chip-label", text }),
+      ...(attrs.status ? [el("span", { class: "chip-count" })] : []),
+    ]);
+    Object.assign(node.dataset, attrs);
+    return node;
+  };
+  // The open statuses lead as chips with a dot and a count; the closed ones,
+  // all and not ready follow a divider as quieter toggles of the same kind.
+  const defaults = new Set(defaultActiveStatuses(context));
+  const primary = el("div", { class: "chip-group" });
+  const secondary = el("div", { class: "chip-group chip-group-quiet" });
   for (const status of statusOrder(context)) {
-    const chip = el("button", { class: "chip", text: status });
-    chip.type = "button";
-    chip.dataset.status = status;
-    chip.addEventListener("click", () => {
+    const node = chip(STATUS_LABELS[status] || status, { status }, !defaults.has(status));
+    node.addEventListener("click", () => {
       const activeStatuses = activeStatusSet(context);
       if (activeStatuses.has(status)) {
         activeStatuses.delete(status);
@@ -646,20 +694,21 @@ export function buildChips(context) {
       }
       navigateTasksHash(context);
     });
-    container.appendChild(chip);
+    (defaults.has(status) ? primary : secondary).appendChild(node);
   }
-  const notReady = el("button", {
-    class: "chip readiness-filter",
-    text: "not ready",
-    title: "Only proposed and backlog tasks with a gap that blocks automation",
+  const allChip = chip("All", { role: "all" }, true);
+  allChip.addEventListener("click", () => {
+    setActiveStatuses(context, new Set(statusOrder(context)));
+    navigateTasksHash(context);
   });
-  notReady.type = "button";
-  notReady.dataset.role = "not-ready";
+  const notReady = chip("Not ready", { role: "not-ready" }, true, "Only proposed and backlog tasks with a gap that blocks automation");
+  notReady.classList.add("readiness-filter");
   notReady.addEventListener("click", () => {
     notReadyOnly = !notReadyOnly;
     navigateTasksHash(context);
   });
-  container.appendChild(notReady);
+  secondary.append(allChip, notReady);
+  container.append(primary, el("span", { class: "chip-divider", "aria-hidden": "true" }), secondary);
   refreshChips(context);
 }
 
@@ -784,14 +833,57 @@ function buildReadinessBadge(task) {
   })];
 }
 
-// The row chip for a backlog task the drain readiness snapshot reports as
-// waiting: who or what holds it, with every detail the snapshot carries in the
-// tooltip. Absent when the snapshot has no wait for the task.
-function buildDrainWaitBadge(task) {
-  if (task.status !== "backlog") return [];
-  const wait = drainWaitFor(task.id);
-  if (!wait) return [];
-  return [el("span", { class: "readiness-badge drain-wait-badge mono", text: wait.text, title: wait.title })];
+// The readiness dot beside a backlog task's ID: the pool colour, its words as
+// the dot's label and the full wait in the tooltip. A row the snapshot does
+// not mention keeps an empty slot so the IDs stay aligned.
+function buildReadinessDot(task) {
+  const readiness = drainReadinessFor(task.id);
+  if (!readiness) return el("span", { class: "ready-dot none", "aria-hidden": "true" });
+  const dot = el("span", { class: "ready-dot", role: "img", "aria-label": readiness.label, title: readiness.title });
+  dot.dataset.pool = readiness.pool;
+  return dot;
+}
+
+// `[source] Rest of the title`: the bracketed source prefix reads quieter than
+// the problem it introduces. Both stay one line of the same title text.
+function splitTitlePrefix(title) {
+  const match = /^((?:\[[^\]]+\]\s*)+)(.*)$/.exec(String(title || ""));
+  return match && match[2] ? [match[1], match[2]] : ["", String(title || "")];
+}
+
+// Where a running or blocked task's run is and what it holds: the host, the
+// time since the run started (known for runs this host records), and the files
+// the task has locked, each file in the tooltip.
+function runCellParts(task) {
+  const machine = task.job_run_machine && task.job_run_machine.machine_name;
+  const host = machine || (task.job_run_id ? getHost() || getServingHost()?.name || "this host" : "");
+  const started = task.status === "in-progress" ? runStartedAt(task.job_run_id) : null;
+  const files = taskLockFiles(task.id);
+  return {
+    host,
+    remote: Boolean(machine) && machine !== (getHost() || getServingHost()?.name),
+    elapsed: started != null ? elapsedLabel(Date.now() - started) : "",
+    files,
+  };
+}
+
+function buildRunCell(task) {
+  const { host, elapsed, files } = runCellParts(task);
+  const sub = [elapsed, files.length ? plural(files.length, "file") : ""].filter(Boolean);
+  const title = [
+    host ? `Run on ${host}` : "No run recorded",
+    elapsed ? `running for ${elapsed}` : "",
+    ...files,
+  ].filter(Boolean).join("\n");
+  return el("span", { class: "run-cell", title }, [
+    el("span", { class: `run-host${host ? "" : " none"}`, text: host || "no run" }),
+    sub.length ? el("span", { class: "run-sub", text: sub.join(" · ") }) : null,
+  ]);
+}
+
+function runCellSignature(task) {
+  const { host, elapsed, files } = runCellParts(task);
+  return `${host}|${elapsed}|${files.length}`;
 }
 
 // The detail's Readiness block: each gap with its severity and its fix.
@@ -2092,12 +2184,14 @@ function buildTaskDetail(task, context) {
     addField(rightCol, "Location", loc);
   }
 
-  // Complexity and tags are one card of properties: each is a label beside its
-  // control, and the tags edit button sits in the card header.
+  // Status, complexity and tags are one card of properties: each is a label
+  // beside its control, and the tags edit button sits in the card header. The
+  // list rows group by status, so the status editor lives here.
   {
     const properties = el("div", { class: "property-list" });
     const property = (label, control) =>
       el("div", { class: "property-row" }, [el("span", { class: "label", text: label }), control]);
+    properties.appendChild(property("status", buildStatusUpdateControl(task, context)));
     properties.appendChild(property("complexity", buildComplexityUpdateControl(task, context)));
     const actions = actionSlot();
     if (showsEditor("tags")) {
@@ -2499,7 +2593,6 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
     statusFeedback.set(task.id, feedback);
-    expandedTaskIds.delete(task.id);
   } catch (error) {
     if (!visit.isCurrent()) return;
     statusFeedback.set(task.id, {
@@ -2863,10 +2956,9 @@ function buildPinnedTask(ptask, context) {
   }, [
     makeCopyButton(ptask.id, { class: "id mono", title: "Copy task ID" }),
     el("span", { class: "title", text: ptask.title }),
-    buildStatusUpdateControl(ptask, context),
     buildCrewUpdateControl(ptask, context),
   ]);
-  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
+  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
   const detail = buildTaskDetail(ptask, context);
   const dismiss = el("button", { class: "action", text: "Close" });
@@ -2983,8 +3075,11 @@ function buildQuickAction(task, context) {
   }
   if (!spec) return cell;
   const pending = (state && state.kind === "pending") || (spec.kind === "ship" && shipInFlightTaskIds.has(taskDispatchIdentity(task)));
+  // Ship reads in the accent while nothing holds the task, and quietly while
+  // the drain snapshot says it waits; it ships either way.
+  const ready = spec.kind === "ship" && drainReadinessFor(task.id)?.pool === "eligible";
   const btn = el("button", {
-    class: `task-quick ${spec.kind}`,
+    class: `task-quick ${spec.kind}${ready ? " ready" : ""}`,
     text: pending ? (spec.kind === "ship" ? "Shipping…" : "Approving…") : spec.text,
     title: canMutateTask(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind),
   });
@@ -3094,6 +3189,133 @@ function showOnOwnerButton(name) {
   return button;
 }
 
+// The Backlog card can narrow its rows to one readiness pool. In-memory only:
+// it is a glance filter, cleared when the workspace changes.
+let readyPoolFilter = null;
+onWorkspaceChange(() => { readyPoolFilter = null; });
+
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+// The In progress card's head: where the runs are and how many files they
+// hold, from the rows themselves. Falls back to the plain hint when no row
+// names a host.
+function runningHint(group) {
+  const hosts = new Map();
+  const files = new Set();
+  for (const task of group) {
+    const { host } = runCellParts(task);
+    if (host) hosts.set(host, (hosts.get(host) || 0) + 1);
+    for (const file of taskLockFiles(task.id)) files.add(file);
+  }
+  const parts = [...hosts].map(([host, count]) => `${count} on ${host}`);
+  if (files.size > 0) parts.push(`${plural(files.size, "file")} locked`);
+  return parts.length > 0 ? parts.join(" · ") : GROUP_HINTS["in-progress"];
+}
+
+function buildGroupHeader(status, group) {
+  const hint = status === "in-progress" ? runningHint(group) : GROUP_HINTS[status];
+  const header = el("div", { class: "group-header" }, [
+    el("h3", { class: "group-title" }, [
+      el("span", { class: "group-dot", "aria-hidden": "true" }),
+      el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
+      el("span", { class: "group-count", text: `${group.length}` }),
+    ]),
+    hint ? el("span", { class: "group-hint", text: hint }) : null,
+  ]);
+  header.dataset.status = status;
+  header.dataset.key = `header-${status}`;
+  header.dataset.hash = `${status}-${group.length}-${hint || ""}`;
+  return header;
+}
+
+// The column labels under a card's head. Run groups add the host column.
+function buildGroupColumns(status) {
+  const run = RUN_GROUPS.has(status);
+  const head = el("div", { class: `row header col-head${run ? " run-layout" : ""}` }, [
+    el("span", { class: "id-cell", text: "ID" }),
+    el("span", { class: "title", text: "Task" }),
+    el("span", { class: "crew-cell", text: "Crew" }),
+    run ? el("span", { class: "run-cell", text: status === "blocked" ? "Host · locks" : "Host · running" }) : null,
+    el("span", { class: "task-quick-cell" }),
+  ]);
+  head.dataset.key = `columns-${status}`;
+  head.dataset.hash = `columns-${status}`;
+  return head;
+}
+
+// The Backlog card's readiness strip: one bar split by pool, then a legend
+// whose entries filter the card to that pool. Absent until the drain snapshot
+// arrives, so the card never claims a readiness it does not know.
+function buildBacklogReadiness(group, context) {
+  const { known, counts } = backlogReadiness(group);
+  if (!known) return null;
+  const pools = DRAIN_POOLS.filter(({ key }) => counts[key] > 0);
+  const described = DRAIN_POOLS.map(({ key, label }) => `${counts[key]} ${label.toLowerCase()}`);
+  if (counts.unknown > 0) described.push(`${counts.unknown} not in the drain snapshot`);
+  const bar = el("div", { class: "ready-bar", role: "img", "aria-label": `Backlog readiness: ${described.join(", ")}` }, [
+    ...pools.map(({ key }) => {
+      const segment = el("span", { class: "ready-bar-segment", style: { flexGrow: String(counts[key]) } });
+      segment.dataset.pool = key;
+      return segment;
+    }),
+    counts.unknown > 0 ? el("span", { class: "ready-bar-segment unknown", style: { flexGrow: String(counts.unknown) } }) : null,
+  ]);
+  if (readyPoolFilter && counts[readyPoolFilter] === 0) readyPoolFilter = null;
+  const legend = el("div", { class: "ready-legend", role: "group", "aria-label": "Filter the backlog by readiness" }, [
+    ...DRAIN_POOLS.map(({ key, label }) => {
+      const on = readyPoolFilter === key;
+      const button = el("button", {
+        class: `ready-filter${on ? " active" : ""}`,
+        type: "button",
+        "aria-pressed": on ? "true" : "false",
+        title: on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
+      }, [
+        el("span", { class: "ready-filter-dot", "aria-hidden": "true" }),
+        el("span", { text: label }),
+        el("strong", { class: "ready-filter-count", text: String(counts[key]) }),
+      ]);
+      button.dataset.pool = key;
+      button.disabled = counts[key] === 0 && !on;
+      button.addEventListener("click", () => {
+        readyPoolFilter = on ? null : key;
+        renderTasks(taskList(context), context);
+      });
+      return button;
+    }),
+    counts.unknown > 0 ? el("span", { class: "ready-unknown", text: `${counts.unknown} not in the drain snapshot` }) : null,
+  ]);
+  const strip = el("div", { class: "group-readiness" }, [bar, legend]);
+  strip.dataset.key = "readiness-backlog";
+  strip.dataset.hash = `${DRAIN_POOLS.map(({ key }) => counts[key]).join(",")},${counts.unknown}-${readyPoolFilter || ""}`;
+  return strip;
+}
+
+// A card whose rows the readiness filter hid entirely still says so.
+function buildFilteredEmpty(status) {
+  const note = el("div", { class: "group-empty", text: `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
+  note.dataset.key = `empty-${status}`;
+  note.dataset.hash = `empty-${status}`;
+  return note;
+}
+
+// "Nothing in review or proposed." for open statuses that are on but hold no
+// task. Only when the page holds every matching task and nothing else narrows
+// it, so an empty card is never inferred from a partial list.
+function buildEmptyGroupsNote(groups, context) {
+  if (searchQueryValue(context) || notReadyOnly || !statusCounts(context)) return null;
+  const active = activeStatusSet(context);
+  const empty = GROUP_ORDER.filter((status) => EMPTY_GROUP_PHRASES[status] && active.has(status) && !groups.has(status));
+  if (empty.length === 0 || groups.size === 0) return null;
+  const phrases = empty.map((status) => EMPTY_GROUP_PHRASES[status]);
+  const text = `Nothing ${phrases.length > 1 ? `${phrases.slice(0, -1).join(", ")} or ${phrases.at(-1)}` : phrases[0]}.`;
+  const note = el("p", { class: "groups-empty-note", text });
+  note.dataset.key = "groups-empty-note";
+  note.dataset.hash = text;
+  return note;
+}
+
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -3155,6 +3377,7 @@ export function renderTasks(tasks, context) {
     railCount.title = "Tasks matching the current status filter";
   }
   renderFilterSummary(context);
+  refreshChips(context);
   if (filtered.length === 0 && nodes.length === 0) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
@@ -3169,18 +3392,6 @@ export function renderTasks(tasks, context) {
   const groups = new Map();
   if (notice) nodes.push(notice);
 
-  // Column header strip (once, before first group-header). Uses .row.header so grid
-  // (and all @media overrides) are identical to data rows; labels sit over ID/Title/Status/Crew.
-  const colHeader = el("div", { class: "row header col-head" }, [
-    el("span", { class: "id", text: "ID" }),
-    el("span", { class: "title", text: "Title" }),
-    el("span", { class: "status-cell", text: "Status" }),
-    el("span", { class: "crew-cell", text: "Crew" }),
-    el("span", { class: "task-quick-cell", text: "Action" }),
-  ]);
-  colHeader.dataset.key = "task-col-header";
-  nodes.push(colHeader);
-
   for (const t of filtered) {
     if (!groups.has(t.status)) groups.set(t.status, []);
     groups.get(t.status).push(t);
@@ -3188,45 +3399,52 @@ export function renderTasks(tasks, context) {
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
   );
+  const emptyNote = buildEmptyGroupsNote(groups, context);
+  if (emptyNote) nodes.push(emptyNote);
   for (const status of ordered) {
     const group = groups.get(status);
-    const hint = status === "backlog" ? backlogGroupHint(group) : GROUP_HINTS[status];
-    const header = el("div", { class: "group-header" }, [
-      el("span", { class: "group-dot" }),
-      el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
-      el("span", { class: "group-count", text: `${group.length}` }),
-      ...(hint ? [el("span", { class: "group-hint", text: hint })] : []),
-    ]);
-    header.dataset.status = status;
-    header.dataset.key = `header-${status}`;
-    header.dataset.hash = `${status}-${group.length}-${hint || ""}`;
-    nodes.push(header);
-    for (const t of group) {
+    // Each status is one card: its head, the backlog's readiness strip, the
+    // column labels, then the rows. The nodes stay siblings in the list so
+    // drafts, row reuse and keyboard roving work across groups; CSS draws the
+    // card from the first node of each run to the one marked `group-end`.
+    const groupNodes = [buildGroupHeader(status, group)];
+    let rows = group;
+    if (status === "backlog") {
+      const strip = buildBacklogReadiness(group, context);
+      if (strip) groupNodes.push(strip);
+      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t.id)?.pool === readyPoolFilter);
+    }
+    groupNodes.push(buildGroupColumns(status));
+    for (const t of rows) {
       const rowKey = `task-${t.id}`;
+      const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
-        const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
-        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t), ...buildDrainWaitBadge(t)];
+        const idCell = el("span", { class: "id-cell" }, [
+          t.status === "backlog" ? buildReadinessDot(t) : null,
+          makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
+        ]);
+        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
+        const [prefix, rest] = splitTitlePrefix(t.title);
         // The title is the row's disclosure: the row holds the copy-id button,
-        // the selects and the quick action, so it cannot be a button itself.
-        const titleCell = (aggregate && t.workspace_name) || titleBadges.length > 0
-          ? el("button", { class: "title" }, [
-              ...(aggregate && t.workspace_name
-                ? [el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })]
-                : []),
-              ...titleBadges,
-              t.title,
-            ])
-          : el("button", { class: "title", text: t.title });
+        // the crew select and the quick action, so it cannot be a button itself.
+        const titleCell = el("button", { class: "title" }, [
+          aggregate && t.workspace_name
+            ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
+            : null,
+          ...titleBadges,
+          prefix ? el("span", { class: "title-prefix", text: prefix }) : null,
+          rest,
+        ]);
         const quickError = buildQuickActionError(t);
-        row = el("div", { class: `row${quickError ? " has-quick-error" : ""}`, title: t.title }, [
-          idSpan,
+        row = el("div", { class: `row${run ? " run-layout" : ""}${quickError ? " has-quick-error" : ""}`, title: t.title }, [
+          idCell,
           titleCell,
-          buildStatusUpdateControl(t, context),
           buildCrewUpdateControl(t, context),
+          run ? buildRunCell(t) : null,
           buildQuickAction(t, context),
           ...(quickError ? [quickError] : []),
         ]);
@@ -3261,16 +3479,16 @@ export function renderTasks(tasks, context) {
         });
         if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
       }
-      nodes.push(row);
+      groupNodes.push(row);
       if (expandedTaskIds.has(t.id)) {
         const key = `detail-${t.id}`;
         const draft = drafts.get(key);
         if (draft) {
-          nodes.push(draft);
+          groupNodes.push(draft);
         } else {
           const state = taskDetailState(t, context);
           // Diff by full task object stringified, plus the feedback the detail's
-          // own controls render (the row hash only covers status and crew). A
+          // own controls render (the row hash only covers the crew). A
           // placeholder diffs on its read state instead; a detail rendered from
           // the cached projection must not be rebuilt just because a refresh
           // has a read in flight.
@@ -3287,10 +3505,16 @@ export function renderTasks(tasks, context) {
             detail.id = key;
             detail.dataset.hash = detailHash;
           }
-          nodes.push(detail);
+          groupNodes.push(detail);
         }
       }
     }
+    if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
+    groupNodes.forEach((node, index) => {
+      node.dataset.group = status;
+      node.classList.toggle("group-end", index === groupNodes.length - 1);
+    });
+    nodes.push(...groupNodes);
   }
   syncNodes(body, nodes);
   const commentHash = getCommentHash();

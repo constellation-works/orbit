@@ -116,17 +116,21 @@
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
             <header class="tasks-head">
-              <h2 class="panel-title">Tasks</h2>
+              <div class="tasks-heading">
+                <h2 class="panel-title">Tasks</h2>
+                <span class="count" id="tasks-count">-</span>
+              </div>
               <div class="task-search-wrap">
+                <svg class="task-search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></svg>
                 <input type="search" id="task-search" placeholder="Filter by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" aria-describedby="task-lookup-status" title="Press Enter on a task ID to open it, even outside this list or workspace" />
+                <kbd class="task-search-key" aria-hidden="true">/</kbd>
                 <span id="task-lookup-status" class="task-lookup-status" role="status"></span>
               </div>
-              <span class="count" id="tasks-count">-</span>
             </header>
             <div class="controls">
               <div id="task-filter" role="group" aria-label="Filter tasks by status"></div>
             </div>
-            <div class="filter-summary" id="task-filter-summary" role="status" aria-live="polite"></div>
+            <div class="filter-summary visually-hidden" id="task-filter-summary" role="status" aria-live="polite"></div>
             <nav class="task-pagination" aria-label="Task pages">
               <button id="tasks-previous" type="button" disabled>Previous</button>
               <span id="tasks-page-status" role="status" aria-live="polite"></span>

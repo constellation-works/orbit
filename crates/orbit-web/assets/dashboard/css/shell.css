@@ -546,56 +546,44 @@ button.scope-chip:hover {
   border-color: var(--accent);
   background: rgba(110, 159, 255, 0.12);
 }
-.ws-badge {
+/* Title badges: a workspace name, an `os:` routing tag, a readiness gap. One
+   shape, sitting on the title's baseline. */
+.ws-badge,
+.os-badge,
+.readiness-badge {
   display: inline-block;
   margin-right: 6px;
-  padding: 0 4px;
-  font-size: 10px;
-  color: var(--fg-dim);
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
   border: 1px solid var(--border);
-  border-radius: 2px;
-  vertical-align: middle;
+  border-radius: 4px;
+  vertical-align: 1px;
 }
+.ws-badge { color: var(--fg-dim); }
 
 /* An `os:` routing tag: the host a task needs, set apart from plain labels. */
 .os-badge {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 4px;
-  font-size: 10px;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 2px;
-  vertical-align: middle;
+  color: #a8c2f0;
+  background: #16213a;
+  border-color: #2a3b5e;
 }
 .os-badge-invalid {
   color: var(--fg-dim);
+  background: transparent;
   border-style: dashed;
 }
 
 /* Task readiness, in the os-badge slot: amber while a gap blocks automation,
    muted when every gap is advisory, neutral while a task pilot prepares it. */
-.readiness-badge {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 4px;
-  font-size: 10px;
-  border: 1px solid;
-  border-radius: 2px;
-  vertical-align: middle;
-}
 .readiness-blocking {
-  color: var(--state-pending);
-  border-color: var(--state-pending);
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  border-color: var(--warn-line);
 }
 .readiness-advisory {
   color: var(--fg-mute);
   border-color: var(--border);
-}
-/* A backlog task the drain readiness snapshot reports as waiting. */
-.drain-wait-badge {
-  color: var(--priority-medium);
-  border-color: var(--priority-medium);
 }
 .readiness-preparing {
   color: var(--fg-dim);
