@@ -11,7 +11,8 @@ Rules:\n\
 - Output valid JSON only. No markdown fences. No explanatory text.\n\
 - result MUST be a JSON object (never null, never omitted). It may be {} for side-effect-only activities.\n\
 - If execution cannot complete, return status=\"failed\" with non-empty error.code and error.message (result may be {}).\n\
-- Persist meaningful state via task artifacts (orbit.task.update), not via the result object.";
+- Persist meaningful state via task artifacts (orbit.task.update), not via the result object.\n\
+- This is one non-interactive session and it ends when you stop. Run every command in the foreground and wait for its result, with a long enough timeout. Never leave a process running past the command that started it (nohup, a trailing &, setsid, disown), and never plan to check on one later: nothing resumes you, and its result is lost.";
 
 pub(crate) fn render_prompt_with_embedded_envelope(envelope_json: &[u8]) -> Vec<u8> {
     debug!(

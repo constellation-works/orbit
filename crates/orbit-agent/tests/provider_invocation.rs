@@ -282,6 +282,11 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                             "Claude cron disable must reach subprocess; without it a scheduled \
                              wake-up turn emits a second result over the envelope (ORB-14815)"
                         );
+                        assert!(
+                            vars.contains(&("BASH_MAX_TIMEOUT_MS", "3600000")),
+                            "Claude must be able to wait on a long gate in the foreground; at \
+                             the 10-minute default it detaches the gate and ends (ORB-15130)"
+                        );
                     }
                     if let Some(model) = model {
                         assert!(
