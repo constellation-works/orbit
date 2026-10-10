@@ -15,7 +15,7 @@ const listeners = new Set();
 function publish() {
   const next = [
     [...runStarts].map(([id, started]) => `${id}@${started}`).join(","),
-    [...lockFiles].map(([id, files]) => `${id}:${files.length}`).join(","),
+    JSON.stringify([...lockFiles].sort(([left], [right]) => left.localeCompare(right))),
     lockTotal ?? "",
   ].join("|");
   if (next === signature) return;

@@ -972,7 +972,7 @@ function buildRunCell(task) {
 
 function runCellSignature(task) {
   const { host, elapsed, files } = runCellParts(task);
-  return `${host}|${elapsed}|${files.length}`;
+  return JSON.stringify([host, elapsed, files]);
 }
 
 // The detail's Readiness block: each gap with its severity and its fix.
