@@ -1116,6 +1116,14 @@ export function formatDateTime(value, { seconds = false } = {}) {
   return `${dateTimeText(dateParts(date, false), seconds)} ${zoneName(date)}`;
 }
 
+/// "2026-10-06", using the browser's local calendar date.
+export function formatDate(value) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  const parts = dateParts(date, false);
+  return `${parts.y}-${pad2(parts.mo)}-${pad2(parts.d)}`;
+}
+
 /// A local wall-clock time, "23:32:57 PDT"; `zone: false` drops the zone for
 /// dense columns whose title or header carries it.
 export function formatClock(value, { seconds = true, zone = true } = {}) {

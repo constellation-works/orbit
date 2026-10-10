@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock, elapsedDurationInfo } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -30,7 +30,6 @@ const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled"
 let activeRunId = null;
 let activeRunDetail = null;
 let activeRunDetailError = null;
-let activeRunDetailLoading = false;
 let activeRunEvents = [];
 let activeRunEventsTotal = 0;
 let activeRunEventsOffset = 0;
@@ -134,7 +133,6 @@ function bumpRunDetailFetches() {
 }
 
 export function beginRunDetailFetch(channel) {
-  if (channel === "detail") activeRunDetailLoading = true;
   return {
     runId: activeRunId,
     workspace: getWorkspace(),
@@ -158,7 +156,6 @@ function retireRunDetailView() {
   bumpRunDetailFetches();
   activeRunDetail = null;
   activeRunDetailError = null;
-  activeRunDetailLoading = !!activeRunId;
   activeRunEvents = [];
   activeRunEventsTotal = 0;
   activeRunEventsOffset = 0;
@@ -183,10 +180,9 @@ export function setActiveRunId(v) {
 onWorkspaceChange(retireRunDetailView);
 
 export function getActiveRunDetail() { return activeRunDetail; }
-export function setActiveRunDetail(v) { activeRunDetail = v; activeRunDetailError = null; activeRunDetailLoading = false; }
+export function setActiveRunDetail(v) { activeRunDetail = v; activeRunDetailError = null; }
 export function setActiveRunDetailError(v) {
   activeRunDetailError = v;
-  if (v) activeRunDetailLoading = false;
 }
 
 export function getActiveRunEvents() { return activeRunEvents; }
@@ -759,7 +755,7 @@ function buildChildDispatches(run) {
 export function renderRunSteps() {
   const body = $("run-steps-body");
   if (!body) return;
-  if (!activeRunDetail || activeRunDetailLoading || activeRunDetailError) {
+  if (!activeRunDetail || activeRunDetailError) {
     if (activeRunDetailError || !activeRunId) {
       syncNodes(body, [el("div", { class: "empty-state", text: activeRunDetailError || "No run selected." })]);
     } else {
@@ -1244,7 +1240,7 @@ export function renderRunEvents() {
     const summary = summarizeEvent(ev);
     const tr = el("tr");
     const date = new Date(ev.ts);
-    const day = Number.isFinite(date.getTime()) ? date.toLocaleDateString() : null;
+    const day = Number.isFinite(date.getTime()) ? formatDate(ev.ts) : null;
     const clock = formatClock(ev.ts);
     const time = day && day !== previousDay ? `${day} ${clock}` : (clock || "-");
     previousDay = day;

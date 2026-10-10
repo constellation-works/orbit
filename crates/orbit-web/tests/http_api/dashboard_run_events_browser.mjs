@@ -21,7 +21,14 @@ const list = items => ({ items, total: items.length, limit: 100, truncated: fals
 let releaseDetail;
 let delayDetail = true;
 let failDetail = false;
-const detailReady = new Promise(resolve => { releaseDetail = resolve; });
+let detailRequestCount = 0;
+let notifySecondDetailRequest;
+let detailReady;
+function armDetailDelay() {
+  delayDetail = true;
+  detailReady = new Promise(resolve => { releaseDetail = resolve; });
+}
+armDetailDelay();
 const requests = [];
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://fixture');
@@ -40,9 +47,11 @@ const server = http.createServer(async (req, res) => {
     case '/api/diagnostics/friction': payload = []; break;
     case '/api/job-runs': payload = list([run]); break;
     case '/api/runs/jrun-events-fixture':
+      detailRequestCount += 1;
+      if (detailRequestCount === 2) notifySecondDetailRequest?.();
       if (delayDetail) await detailReady;
       if (failDetail) { res.writeHead(500); res.end(JSON.stringify({ error: 'fixture read failure' })); return; }
-      payload = { run, steps: [] };
+      payload = { run, steps: [{ step_index: 0, target_type: 'crew', target_id: 'fixture', state: 'success', exit_code: 0, duration_ms: 1000 }] };
       break;
     case '/api/runs/jrun-events-fixture/events': {
       assert.equal(url.searchParams.get('tail'), 'true');
@@ -75,8 +84,9 @@ try {
   await page.screenshot({ path: path.join(evidence, 'steps-loading-1440.png'), animations: 'disabled' });
   delayDetail = false;
   releaseDetail();
-  await page.locator('#run-steps-body .empty-state').waitFor({ state: 'attached' });
-  assert.match(await page.locator('#run-steps-body').textContent(), /No steps recorded/);
+  const stepRow = page.locator('#run-steps-body .step-row');
+  await stepRow.waitFor({ state: 'attached' });
+  assert.match(await stepRow.textContent(), /crew:fixture/);
   await page.evaluate(async () => (await import('/static/js/router.js')).setRunDetailSubtab('events'));
   const rows = page.locator('#run-events-body tbody tr');
   assert.equal(await rows.count(), 100);
@@ -84,8 +94,8 @@ try {
   assert.match(await rows.nth(98).textContent(), /run_cancelled/);
   assert.match(await rows.last().textContent(), /run_finished/);
   const times = await rows.locator('td:first-child').allTextContents();
-  assert.match(times[0], /10\/9\/2026 23:59:10 PDT/);
-  assert.match(times[50], /10\/10\/2026 00:00:00 PDT/);
+  assert.match(times[0], /2026-10-09 23:59:10 PDT/);
+  assert.match(times[50], /2026-10-10 00:00:00 PDT/);
   assert.match(times[99], /^00:00:49 PDT$/);
   assert.equal(new Set(times).size, 100, 'each event second is distinguishable');
   results.times = { first: times[0], midnight: times[50], last: times[99] };
@@ -106,6 +116,15 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Load earlier', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: 'Newest events', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#run-events-body tbody tr')?.dataset.key === 'runev-event-150');
+  armDetailDelay();
+  const secondDetailRequest = new Promise(resolve => { notifySecondDetailRequest = resolve; });
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await secondDetailRequest;
+  assert.equal(await page.locator('#run-steps-body .skeleton-state').count(), 0, 'refresh keeps loaded steps visible');
+  assert.equal(await page.locator('#run-steps-body .step-row').count(), 1, 'refresh preserves the loaded step row while detail is pending');
+  delayDetail = false;
+  releaseDetail();
+  await page.waitForFunction(() => document.querySelector('#run-steps-body .step-row')?.textContent.includes('crew:fixture'));
   failDetail = true;
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#run-detail-meta').textContent.includes('Unable to load run'));
