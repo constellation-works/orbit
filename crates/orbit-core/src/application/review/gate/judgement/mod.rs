@@ -10,7 +10,9 @@ pub(super) use comment::{
     Delivery, comment_lead, review_fixes_section, verdict_comment, write_artifact,
 };
 pub(super) use repairs::repair_author_label;
+pub(super) use verdict::extend_note;
 
+use orbit_automation::review::ValidationContext;
 use orbit_types::workflow::{RetainedObligation, RetiredValidation, ReviewVerdict};
 
 /// The reviewer's claims, checked against the repository and the task scope.
@@ -49,4 +51,18 @@ pub(super) struct Judgement {
     /// only revision the host retained for the attempt, so the reviewer never
     /// updated what it first persisted.
     initial_report_only: bool,
+}
+
+impl Judgement {
+    /// What the records are judged against over `scope`: this judgement's
+    /// retained obligations, retirements and the owner's admitted commands.
+    pub(super) fn validation_context<'a>(&'a self, scope: &'a [String]) -> ValidationContext<'a> {
+        ValidationContext {
+            scope,
+            obligations: &self.retained_obligations,
+            retired: &self.retired_validation,
+            required_validation_commands: self.required_validation_commands.as_deref(),
+            baseline_commands: &self.baseline_commands,
+        }
+    }
 }

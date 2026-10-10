@@ -28,21 +28,18 @@
 
 use std::collections::BTreeMap;
 
-use orbit_automation::review::{ValidationContext, validation_evidence};
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::run_host_sandbox_test;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    EvidenceHostOs, FindingDisposition, HostEvidenceReason, HostEvidenceRecord, HostSandboxCommand,
-    ReviewEvidenceKind, ReviewExternalEvidence, ValidationOutcome, ValidationRole,
+    EvidenceHostOs, HostEvidenceReason, HostEvidenceRecord, HostSandboxCommand, ReviewEvidenceKind,
+    ReviewExternalEvidence, ValidationOutcome, ValidationRole,
 };
 use serde_json::json;
 
 use crate::OrbitRuntime;
 
-use super::super::evidence::{
-    canonical_requirements, satisfied_external_evidence, with_external_checks_passed,
-};
+use super::super::evidence::{canonical_requirements, satisfied_external_evidence};
 use super::super::fulfilment::fulfilment_artifact_paths;
 use super::context::GateContext;
 use super::judgement::{Judgement, write_artifact};
@@ -65,10 +62,7 @@ impl Judgement {
         };
         if !context.claimed
             || self.verdict.passed()
-            || self
-                .findings
-                .iter()
-                .any(|finding| finding.disposition == FindingDisposition::Open)
+            || self.has_open_findings()
             || !self
                 .external_evidence
                 .iter()
@@ -80,21 +74,7 @@ impl Judgement {
         let Some(requirements) = canonical_requirements(&self.external_evidence) else {
             return Ok(satisfied);
         };
-        let Some(validation) = with_external_checks_passed(&self.validation, &requirements) else {
-            return Ok(satisfied);
-        };
-        if validation_evidence(
-            &validation,
-            &ValidationContext {
-                scope,
-                obligations: &self.retained_obligations,
-                retired: &self.retired_validation,
-                required_validation_commands: self.required_validation_commands.as_deref(),
-                baseline_commands: &self.baseline_commands,
-            },
-        )
-        .is_err()
-        {
+        if !self.evidence_would_complete(&requirements, scope) {
             return Ok(satisfied);
         }
         let arrived = satisfied_external_evidence(runtime, task_id, candidate)?;
