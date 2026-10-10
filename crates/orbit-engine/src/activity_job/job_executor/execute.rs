@@ -111,6 +111,7 @@ pub fn execute_job_with_resume(
     let mut overall_message = None;
     let mut evidence_hold = None;
     let mut forge_hold = None;
+    let mut child_cancelled = false;
     let mut index = 0;
     while let Some(step) = job.steps.get(index) {
         let step_index = index as u32;
@@ -181,6 +182,12 @@ pub fn execute_job_with_resume(
                 forge_hold = Some(hold);
                 break;
             }
+            Err((error @ DispatchError::ChildRunCancelled { .. }, _)) => {
+                overall_ok = false;
+                overall_message = Some(format!("step `{}` {error}", step.id));
+                child_cancelled = true;
+                break;
+            }
             Err((error, unsuccessful)) => {
                 let verdict = attempt_final_recovery(
                     job,
@@ -229,6 +236,7 @@ pub fn execute_job_with_resume(
         success: overall_ok,
         evidence_hold,
         forge_hold,
+        child_cancelled,
         pipeline: ctx.pipeline_value(),
         message: (!overall_ok).then_some(overall_message).flatten(),
         audit_failures: audit.audit_failure_count(),

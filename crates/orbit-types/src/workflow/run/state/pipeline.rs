@@ -184,6 +184,11 @@ pub struct PipelineState {
     /// and on runs recorded before this existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_pass_unset: Vec<String>,
+    /// The leaf failure this run's own failure echoes, when it failed only
+    /// because a child it waited on failed [ORB-15202]. Absent for a run that
+    /// failed on its own, and on runs recorded before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_cause: Option<crate::workflow::RunRootCause>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -223,6 +228,7 @@ impl PipelineState {
             forge_hold_expired_at: None,
             trigger: None,
             env_pass_unset: Vec::new(),
+            root_cause: None,
             updated_at: Utc::now(),
         }
     }

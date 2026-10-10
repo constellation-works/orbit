@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::job::{JobRunListParams, job_run_task_ids};
+use orbit_core::application::job::{JobRunListParams, fold_run_incidents, job_run_task_ids};
 use orbit_types::workflow::JobRunState;
 use serde_json::json;
 
@@ -21,7 +21,7 @@ fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
+    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nA gate or auto run that failed only because a child failed records the leaf it echoes in `.root_cause` ({leaf_run_id, task_id, step, code}); it is null for a run that failed on its own. --incidents folds every listed run that echoes the same leaf into one row, the leaf's own when it is listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
@@ -49,6 +49,11 @@ pub struct RunHistoryArgs {
     /// releases its task reservations
     #[arg(long)]
     pub no_reconcile: bool,
+
+    /// Show one row per incident: fold runs that failed only because a child
+    /// failed into the run that failed on its own
+    #[arg(long)]
+    pub incidents: bool,
 }
 
 impl Execute for RunHistoryArgs {
@@ -68,6 +73,7 @@ impl Execute for RunHistoryArgs {
                 ..Default::default()
             },
             RunRead::from_no_reconcile(self.no_reconcile),
+            self.incidents,
         )
     }
 }
@@ -76,6 +82,7 @@ pub(crate) fn run_history_payload(
     runtime: &OrbitRuntime,
     params: JobRunListParams,
     read: RunRead,
+    incidents: bool,
 ) -> CommandOut {
     let include_job_id = params.job_id.is_none();
     let state_filtered = params.state.is_some() || !params.states.is_empty();
@@ -90,10 +97,24 @@ pub(crate) fn run_history_payload(
         .map(|run| states.get(&run.run_id).and_then(Option::as_ref))
         .collect::<Vec<_>>();
 
-    let values = runs
+    // [ORB-15202] Each incident keeps one row: its leaf's when listed.
+    let rows = if incidents {
+        fold_run_incidents(&runs, &states)
+            .into_iter()
+            .map(|incident| (incident.index, Some(incident.cascaded_run_ids)))
+            .collect::<Vec<_>>()
+    } else {
+        (0..runs.len()).map(|index| (index, None)).collect()
+    };
+    let values = rows
         .iter()
-        .zip(states.iter())
-        .map(|(run, state)| cli_job_run_to_json(run, *state))
+        .map(|(index, cascaded)| {
+            let mut value = cli_job_run_to_json(&runs[*index], states[*index]);
+            if let Some(cascaded) = cascaded {
+                value["cascaded_run_ids"] = json!(cascaded);
+            }
+            value
+        })
         .collect::<Vec<_>>();
     let doc = json!({ "runs": values });
 
@@ -118,9 +139,13 @@ pub(crate) fn run_history_payload(
         Column::new("FINISHED_AT").fixed(),
         Column::new("DURATION").fixed().filtered(true),
     ]);
+    if incidents {
+        columns.push(Column::new("CASCADED").number());
+    }
     let mut table = Table::new(columns).empty_message("no runs recorded");
-    for (run, state) in runs.iter().zip(states.iter()) {
+    for (index, cascaded) in &rows {
         use comfy_table::Cell;
+        let (run, state) = (&runs[*index], &states[*index]);
         let mut row = vec![
             Cell::new(&run.run_id),
             Cell::new(format_history_role(
@@ -143,6 +168,9 @@ pub(crate) fn run_history_payload(
                     .unwrap_or_default(),
             ),
         ]);
+        if let Some(cascaded) = cascaded {
+            row.push(Cell::new(cascaded.len().to_string()));
+        }
         table.add_row(row);
     }
     let mut blocks = vec![Block::table(table)];

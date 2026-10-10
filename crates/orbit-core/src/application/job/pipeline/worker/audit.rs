@@ -44,23 +44,6 @@ impl OrbitRuntime {
         );
     }
 
-    pub(crate) fn record_pipeline_failure_step(
-        &self,
-        run: &JobRun,
-        started_at: chrono::DateTime<Utc>,
-        finished_at: chrono::DateTime<Utc>,
-        message: &str,
-    ) -> Result<(), OrbitError> {
-        self.record_pipeline_diagnostic_step(
-            run,
-            started_at,
-            finished_at,
-            None,
-            message,
-            JobRunState::Failed,
-        )
-    }
-
     /// [ORB-10002] Record a terminal diagnostic step with an explicit state
     /// (`failed` for job errors, `interrupted` for orphan reconciliation).
     pub(crate) fn record_pipeline_diagnostic_step(

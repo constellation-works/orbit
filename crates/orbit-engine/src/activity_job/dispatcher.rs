@@ -183,6 +183,12 @@ pub enum DispatchError {
     #[error("forge_unavailable: the forge refused the push of {} to {} {} times", .0.head_sha, .0.target_ref, .0.attempts)]
     ForgeUnavailableHold(Box<orbit_types::workflow::ForgeUnavailableHold>),
 
+    /// A child run this step waited on was cancelled and none failed
+    /// [ORB-15202]. End the run `cancelled`, without retry, recovery, or the
+    /// failure handoff: an operator's cancel is not a parent failure.
+    #[error("child_cancelled: {message}")]
+    ChildRunCancelled { message: String },
+
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
@@ -309,6 +315,7 @@ impl DispatchError {
                 | DispatchError::DeterministicActionRefused { .. }
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
+                | DispatchError::ChildRunCancelled { .. }
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -455,6 +462,7 @@ fn dispatch_v2_activity_inner(
         Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::ForgeUnavailableHold(_)) => {
             "held"
         }
+        Err(DispatchError::ChildRunCancelled { .. }) => "cancelled",
         Err(_) => "error",
     };
     input.audit.emit_lossy(

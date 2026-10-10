@@ -13,8 +13,8 @@ use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     CommitIdentity, REVIEW_ABANDONED_MARKER, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
-    REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate,
-    ReviewTiming, ReviewerIdentity,
+    REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
+    ReviewAttemptState, ReviewCertificate, ReviewTiming, ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -163,7 +163,7 @@ pub(crate) fn review_gate_settle(
                 if admission_output.get("timing").and_then(Value::as_str)
                     == Some(ReviewTiming::BeforeLanding.as_str())
                 {
-                    "the pull request stays open and unmerged until a recorded decision lands it"
+                    REVIEW_LANDING_DECISION_PENDING
                 } else {
                     "the candidate stays unpublished until a recorded decision resumes delivery"
                 }
@@ -187,7 +187,7 @@ pub(crate) fn review_gate_settle(
                 if admission_output.get("timing").and_then(Value::as_str)
                     == Some(ReviewTiming::BeforeLanding.as_str())
                 {
-                    "the pull request stays open and unmerged until a recorded decision lands it"
+                    REVIEW_LANDING_DECISION_PENDING
                 } else {
                     "the candidate stays unpublished until a recorded decision resumes delivery"
                 }

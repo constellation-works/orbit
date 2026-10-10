@@ -86,6 +86,9 @@ pub struct JobOutcome {
     /// [ORB-14617] A delivery push the forge kept refusing: the run holds at
     /// that step, without a delivery failure, for a later resume.
     pub forge_hold: Option<orbit_types::workflow::ForgeUnavailableHold>,
+    /// [ORB-15202] A child the run waited on was cancelled and none failed:
+    /// the run ends `cancelled`, and `message` says which child.
+    pub child_cancelled: bool,
     pub pipeline: Value,
     pub message: Option<String>,
     /// [ORB-00414] Number of audit-write failures observed during the run.

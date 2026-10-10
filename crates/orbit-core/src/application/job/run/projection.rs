@@ -174,6 +174,9 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
             .map(|state| state.env_pass_unset.as_slice())
             .unwrap_or_default()
     );
+    // [ORB-15202] The leaf a cascaded failure echoes; null for a run that
+    // failed on its own.
+    value["root_cause"] = json!(state_for_agent_result.and_then(|state| state.root_cause.as_ref()));
     value
 }
 

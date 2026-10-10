@@ -18,7 +18,8 @@
 //! backlog instead (`baseline_red_hold`): nothing about the work is wrong, and
 //! admission releases the hold once the required command passes on a new base.
 //! A task the run's failure
-//! handoff already held is left as it is.
+//! handoff already held is left as it is. Since [ORB-15202] such a run ends
+//! `held`, not `failed`, and its tasks are held exactly as before.
 //!
 //! [ORB-14266] A run that failed on its provider — `[provider_capacity]`,
 //! `[provider_unavailable]` or `[provider_refusal]` — did not judge the work
@@ -66,8 +67,8 @@ use orbit_engine::{
 };
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, ProviderFailureClass,
-    is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HeldFailure, JobRun, JobRunState,
+    ProviderFailureClass, is_baseline_red_failure,
 };
 
 use crate::OrbitRuntime;
@@ -101,6 +102,11 @@ pub struct InfraBlockedTask {
 /// resumable from its step checkpoints, but nothing resumes it on its own, so
 /// its task must not keep looking like live work. Resume re-admits the blocked
 /// task, so blocking it does not get in the way of the resume.
+///
+/// `Held` is included for a run held on a failure it did not cause
+/// [ORB-15202] (see [`HeldFailure`]): its tasks get the disposition the
+/// failure always had. A run held for review evidence or the forge is left to
+/// its own resumption.
 pub(crate) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
     matches!(
         state,
@@ -108,6 +114,7 @@ pub(crate) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
             | JobRunState::Timeout
             | JobRunState::Cancelled
             | JobRunState::Interrupted
+            | JobRunState::Held
     )
 }
 
@@ -281,6 +288,18 @@ impl OrbitRuntime {
         let (error_code, error_message) = match diagnostic {
             Some((code, message)) => (Some(code.to_string()), Some(message.to_string())),
             None => failed_run_error_context(&run),
+        };
+        // [ORB-15202] A run held on a red base or an awaited decision couples
+        // out exactly as the failure it records; any other hold names its own
+        // resumption and leaves its tasks alone.
+        let state = match state {
+            JobRunState::Held
+                if HeldFailure::of(error_code.as_deref(), error_message.as_deref()).is_some() =>
+            {
+                JobRunState::Failed
+            }
+            JobRunState::Held => return Ok(()),
+            state => state,
         };
         let blocked_update = if state == JobRunState::Interrupted {
             blocked_workflow_interruption_update
