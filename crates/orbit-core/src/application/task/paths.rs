@@ -502,7 +502,7 @@ pub(crate) fn compute_task_add_warnings(
     let is_chore = task_type == TaskType::Chore;
     if context_files.is_empty() && !is_chore {
         warnings.push(
-            "task created without context_files — consider adding selectors for files/dirs/symbols this task will modify (use orbit.task.update with context_files)".to_string(),
+            "task created without context_files: it holds no file lock, so a drain will not approve it, and once promoted it can conflict with concurrent work. Add selectors for the files/dirs/symbols it will modify (orbit.task.update with context_files), or let the task pilot prepare it before promoting it".to_string(),
         );
     }
 

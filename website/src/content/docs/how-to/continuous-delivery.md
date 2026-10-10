@@ -128,6 +128,11 @@ Common reasons a backlog task waits:
   It waits so the higher-priority task gets each lock as it frees, instead of
   losing it to smaller tasks one lock at a time. It starts once that task
   starts. Unrelated work is not held.
+- **`awaiting_footprint`** or **`awaiting_exclusive_slot`**: the task has no
+  `context_files`, so it holds no file lock and could collide with anything.
+  A drain with more than one slot waits for the task pilot to fill them in,
+  then starts the task only when nothing else is running. File such tasks as
+  `proposed` and let the pilot prepare them before promoting them.
 - **`crew_not_allowed`**, when you preview a
   [crew restriction](#restrict-a-window-to-some-crews).
 - **`pilot_duplicate`** or **`pilot_already_landed`**: the latest applied

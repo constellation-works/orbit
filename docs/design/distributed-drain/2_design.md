@@ -80,9 +80,17 @@ including the interval before a leaf run exists. Owner and follower drains use t
 **Footprints.** There is no epic path ([§7.1](#71-epic-machinery)); an `epic`-tagged task is an
 ordinary entry using its own `context_files`, and sequencing is expressed with dependencies.
 
-- `context_files` are optional for local auto, ship (including explicit selection), and owner
-  pull admission. A backlog task with no selectors is admitted on the next pass without holding
-  a context lock; it needs no `no-diff-expected` tag or pilot preparation. Conflicts from undeclared
+- `context_files` are optional, but an empty list holds no context lock. A single-slot local
+  drain, an explicit `orbit run ship <id>` and owner pull admission admit a backlog task with no
+  selectors on the next pass. A local drain or discovery ship with more than one slot treats such
+  a task (no `no-diff-expected` tag) as a whole-tree footprint [ORB-15191]. While an enabled
+  `preparation_eligible` routine this host owns would still prepare it (its eligibility admits
+  the task, the pilot has not assessed it, and `max_wait_minutes + deadline_minutes` since its
+  last change have not elapsed), the task waits as `awaiting_footprint`. Otherwise it starts only
+  when no other leaf is in flight and nothing editing was selected ahead of it in the wave
+  (`awaiting_exclusive_slot`); the first such waiter reserves the tree, so lower-ranked editing
+  work defers to it (`exclusive_reservation`). While it runs, other editing work is deferred
+  (`unknown_footprint`) and `no-diff-expected` work still admits. Conflicts from undeclared
   edits are handled at landing by rebase and conflict repair. Remote pull claims tagged
   `no-diff-expected` work like any other: the claimed leaf hands off `NoDiff`
   ([task-pull](./specs/task-pull.md)). Work that must stay on the owner is pinned with an
@@ -1116,6 +1124,7 @@ Acceptance criteria, not reported as passing.
 | No-diff/already-landed delivery | Typed evidence and completion authority still required |
 | In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
 | Critical or high-priority task waits on several locks that free one at a time | It reserves its surface: lower-ranked backlog work overlapping it waits as `surface_reserved` naming it, non-overlapping work admits, and it takes the wave once its locks free. At most two reserve per pass; nothing persists between passes ([ORB-14310]) |
+| Backlog task with no `context_files` in a multi-slot local drain or discovery ship | Waits for this host's task pilot (`awaiting_footprint`), else runs only with no other leaf in flight (`awaiting_exclusive_slot`) and holds the tree while it runs; single-slot runs, explicit ship and owner pull admission keep admitting it on the next pass ([ORB-15191]) |
 | Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
 | Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
@@ -1187,5 +1196,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14695] — released a claimed leaf whose provider account hit its usage limit as an unbudgeted `provider` failure that excludes every crew of that provider for the window.
 - [ORB-15088] — answered an owner's lock-wait timeout as the retryable `lock_busy`, retried a bound worker's owner reads on it, and settled a step it still fails as `transient`.
 - [ORB-14697] — excluded crews whose provider the follower reads at or near its usage limit from each pass's crew window (`provider_limit`, lifting at `until` in the same drain), replacing the window-long exclusion a limit release added.
+- [ORB-15191] — made a multi-slot local drain or discovery ship wait for the task pilot to prepare empty-context backlog work (`awaiting_footprint`), then run it only alone (`awaiting_exclusive_slot`), after three such tasks edited one stylesheet concurrently.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_engine::DispatchError;
@@ -12,15 +12,21 @@ use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::auto_admission::{DeferralReason, DeferredAdmission};
 use super::surface_reservation::{
     MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
 };
+use super::unknown_footprint::{
+    FootprintGuard, FootprintWait, FootprintWave, footprint_waits, whole_tree_holder,
+};
 use crate::OrbitRuntime;
+use crate::adapter::engine_host::v2_host::workspace_auto::read_live_leaf_runs;
 use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::application::task::{PilotAdmissionHold, list_task_metadata_in};
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
-    TaskLockOverlap, active_task_lock_holders, lock_holder_index, task_lock_overlaps,
+    TaskLockOverlap, active_task_lock_holders, lock_context_files_for_task, lock_holder_index,
+    task_lock_overlaps,
 };
 
 const MAX_TASK_PARENT_CHAIN_DEPTH: usize = 32;
@@ -141,6 +147,14 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// `backlog`. `conflicts` names the reserving task; reservations are
     /// bounded per pass (see `surface_reservation`).
     SurfaceReserved,
+    /// The task declares no footprint and a task pilot on this host will
+    /// prepare one; a multi-slot ship waits for it [ORB-15191]. `detail`
+    /// names the deadline and the fix.
+    AwaitingFootprint,
+    /// The task declares no footprint, no pilot will prepare one, and other
+    /// work is in flight or ranked ahead, so a multi-slot ship leaves it for a
+    /// run where it goes alone [ORB-15191]. `detail` names the fix.
+    AwaitingExclusiveSlot,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
@@ -179,6 +193,10 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
     /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
     /// same-priority backlog in `admissible_leaves`.
     pub(in crate::adapter::engine_host::v2_host) expiring_batches: BTreeMap<String, DateTime<Utc>>,
+    /// The admissible leaves that declare no footprint, and what each waits
+    /// for in a multi-slot run [ORB-15191]. The snapshot does not know the
+    /// run's slots, so the wave applies them, not this filter.
+    pub(in crate::adapter::engine_host::v2_host) footprint_waits: BTreeMap<String, FootprintWait>,
 }
 
 /// The tasks a live claim is currently executing [ORB-12500].
@@ -254,12 +272,47 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
             &pools,
             mode,
         )?;
-        // Nothing reads the lookup after this, so the admissible tasks move
-        // out of it rather than being cloned; the rest is dropped with it.
-        let tasks = snapshot
-            .admissible_leaves
+        // [ORB-15191] A ship that fans out to more than one task holds work
+        // with no footprint to the drain's rule: it waits for its pilot, or
+        // goes alone. Other live leaves carrying tasks are the work in flight;
+        // this run carries none yet.
+        let live_tasks = read_live_leaf_runs(runtime)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("list live leaf runs: {error}"),
+            })?
+            .into_iter()
+            .flat_map(|run| run.task_ids)
+            .collect::<BTreeSet<_>>();
+        let mut wave = FootprintWave::new(FootprintGuard {
+            enabled: max_tasks > 1,
+            leaves_in_flight: !live_tasks.is_empty(),
+            whole_tree_holder: whole_tree_holder(&live_tasks, &snapshot.task_lookup),
+            waits: &snapshot.footprint_waits,
+        });
+        let mut shipped = Vec::new();
+        for task_id in &snapshot.admissible_leaves {
+            if shipped.len() >= max_tasks {
+                break;
+            }
+            let Some(task) = snapshot.task_lookup.get(task_id) else {
+                continue;
+            };
+            let edits =
+                !lock_context_files_for_task(task, runtime.paths().repo_root.as_path()).is_empty();
+            match wave.awaiting(task).or_else(|| wave.check(task, edits)) {
+                Some(deferred) => snapshot.excluded.push(footprint_exclusion(deferred)),
+                None => {
+                    wave.selected(task, edits);
+                    shipped.push(task_id.clone());
+                }
+            }
+        }
+        snapshot.excluded.sort_by(|a, b| a.id.cmp(&b.id));
+        // Nothing reads the lookup after this, so the shipped tasks move out
+        // of it rather than being cloned; the rest is dropped with it.
+        let tasks = shipped
             .iter()
-            .take(max_tasks)
             .filter_map(|task_id| snapshot.task_lookup.remove(task_id))
             .collect();
         (tasks, snapshot.excluded)
@@ -805,6 +858,7 @@ fn backlog_snapshot_in_mode(
         }
     }
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
+    let footprint_waits = footprint_waits(runtime, action, backlog.iter().copied(), Utc::now())?;
     let admissible_leaves = backlog.into_iter().map(|task| task.id.clone()).collect();
     Ok(BacklogSnapshot {
         task_lookup,
@@ -814,6 +868,7 @@ fn backlog_snapshot_in_mode(
         excluded,
         lock_holders,
         expiring_batches,
+        footprint_waits,
     })
 }
 
@@ -833,6 +888,30 @@ fn expiring_backlog_batches(
             );
             BTreeMap::new()
         }
+    }
+}
+
+/// A ship's exclusion for a task the unknown-footprint rule withheld. A
+/// whole-tree conflict is a context lock on every path, named by its holder.
+fn footprint_exclusion(deferred: DeferredAdmission) -> BacklogTaskExclusion {
+    let reason = match deferred.reason {
+        DeferralReason::Conflict => BacklogTaskExclusionReason::ContextLockConflict,
+        DeferralReason::AwaitingFootprint => BacklogTaskExclusionReason::AwaitingFootprint,
+        DeferralReason::AwaitingExclusiveSlot => BacklogTaskExclusionReason::AwaitingExclusiveSlot,
+    };
+    BacklogTaskExclusion {
+        id: deferred.task_id,
+        reason,
+        conflicts: deferred
+            .conflicts
+            .into_iter()
+            .map(|conflict| BacklogTaskConflict {
+                requested_file: conflict.requested_selector,
+                locking_task_id: conflict.blocking_task_id,
+            })
+            .collect(),
+        crew: None,
+        detail: deferred.detail,
     }
 }
 

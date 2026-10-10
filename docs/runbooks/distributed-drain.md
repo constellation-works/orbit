@@ -329,9 +329,11 @@ orbit task lint --restore-pruned
 ```
 
 `--restore-pruned` never invents scope. Unrestorable entries stay unrestorable;
-supply own `context_files` yourself. Context is optional for local auto, ship
-and distributed pull admission: selector-free backlog tasks are admitted on
-the next pass without a context lock. Undeclared edit conflicts are handled at
+supply own `context_files` yourself. Empty context holds no context lock.
+Distributed pull admission, an explicit ship and a single-slot local drain
+admit selector-free backlog tasks on the next pass. A local drain or ship with
+more than one slot waits for this host's task pilot to prepare one
+(`awaiting_footprint`), then runs it only alone (`awaiting_exclusive_slot`). Undeclared edit conflicts are handled at
 landing by rebase and conflict repair. Operator task-scope reservation still
 requires a declared surface. A live task-pilot preparation (its reservation
 from prepare, then its checkpoint) still holds its tasks until that run settles.

@@ -14,6 +14,8 @@
 //!   still admits CPU-light auto-tasks within a reserved budget [ORB-14624].
 //! - Frozen-batch expiry [ORB-14624]: a task whose frozen delivery batch
 //!   nears its deadline sorts ahead of same-priority backlog.
+//! - Unknown footprints [ORB-15191]: a multi-slot drain or ship waits for the
+//!   task pilot to prepare empty-context backlog work, else runs it alone.
 //!
 //! Every test re-runs itself in a child of this binary with inherited Orbit
 //! authority cleared, a disposable `HOME`, and a bounded wait.
@@ -48,6 +50,7 @@ use tempfile::TempDir;
 
 mod replay_crew;
 mod reservation_grants;
+mod unknown_footprint;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent
@@ -198,6 +201,9 @@ fn admitted(output: &Value) -> Vec<String> {
 
 /// Selector-free backlog work is admitted on the first auto/ship pass, even
 /// while another task holds the workspace, and reserves no context locks.
+/// With no pilot to prepare it and no other leaf in flight it goes alone, so
+/// only work that edits nothing shares its wave ([`unknown_footprint`]
+/// covers the waits).
 #[test]
 fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
     if !isolated("empty_context_is_admitted_on_auto_ship_and_readiness_without_locks") {

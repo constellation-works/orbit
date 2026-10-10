@@ -230,9 +230,10 @@ for a pull drain as for a local one.
    skip to the run and base, and the owner rechecks the tag on its own copy of the task
    [ORB-14791].
    `context_files` are optional: an otherwise eligible backlog task with empty context is
-   admitted on this pass with an empty footprint and holds no context lock. A live pilot
-   preparation (its reservation from prepare, then its checkpoint) still defers its tasks
-   until that run settles. Undeclared edit
+   admitted on this pass with an empty footprint and holds no context lock. Owner pull
+   admission does not apply the local multi-slot unknown-footprint rule
+   ([design §Footprints](../2_design.md)). A live pilot preparation (its reservation from
+   prepare, then its checkpoint) still defers its tasks until that run settles. Undeclared edit
    conflicts are handled by rebase and conflict repair at landing.
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
    canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),

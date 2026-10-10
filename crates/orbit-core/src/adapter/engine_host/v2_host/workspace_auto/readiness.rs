@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::auto_admission::{
-    AdmissionHolders, select_admissions,
+    AdmissionHolders, DeferralReason, select_admissions,
 };
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
@@ -18,6 +18,9 @@ use crate::adapter::engine_host::v2_host::admission::cpu_light::{
 };
 use crate::adapter::engine_host::v2_host::admission::leaf_occupancy::{
     occupancy_json, read_leaf_occupancy,
+};
+use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
+    FootprintGuard, whole_tree_holder,
 };
 use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::runtime::engine::crew::CrewAllowlist;
@@ -224,12 +227,19 @@ pub fn explain_workspace_auto_readiness(
         &snapshot.task_lookup,
         workspace_root,
     );
+    let footprint = FootprintGuard {
+        enabled: max_active_leaf_runs > 1,
+        leaves_in_flight: shared_occupancy.occupied > 0,
+        whole_tree_holder: whole_tree_holder(&claimed, &snapshot.task_lookup),
+        waits: &snapshot.footprint_waits,
+    };
     let selection = select_admissions(
         examined,
         &snapshot.task_lookup,
         workspace_root,
         &holders,
         free_slots,
+        footprint,
     );
     let candidate_pool_truncated =
         pending.len() > examined.len() && selection.selected.len() < free_slots;
@@ -332,7 +342,9 @@ pub fn explain_workspace_auto_readiness(
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
                     | BacklogTaskExclusionReason::HostOperationalHandoff
                     | BacklogTaskExclusionReason::NativeOsRequired
-                    | BacklogTaskExclusionReason::PrForgeRemoteMissing => {
+                    | BacklogTaskExclusionReason::PrForgeRemoteMissing
+                    | BacklogTaskExclusionReason::AwaitingFootprint
+                    | BacklogTaskExclusionReason::AwaitingExclusiveSlot => {
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
@@ -492,6 +504,14 @@ pub fn explain_workspace_auto_readiness(
             } else if admitted.contains(&task.id) {
                 object.insert("eligible".to_string(), Value::Bool(true));
                 object.insert("reason".to_string(), Value::String("ready".to_string()));
+            } else if let Some(deferred) = selection
+                .deferred_for(&task.id)
+                .filter(|deferred| deferred.reason == DeferralReason::AwaitingFootprint)
+            {
+                // [ORB-15191] Reported ahead of capacity: the task waits for
+                // its pilot whether or not a slot is free.
+                object.insert("reason".to_string(), json!(deferred.reason.as_str()));
+                object.insert("detail".to_string(), json!(deferred.detail));
             } else if gate == ResourceGate::LightOnly && light_budget.remaining() == 0 {
                 object.insert(
                     "reason".to_string(),
@@ -506,9 +526,16 @@ pub fn explain_workspace_auto_readiness(
             } else if let Some(deferred) = selection.deferred_for(&task.id) {
                 // [ORB-11973] A slot was free and this task did not take it,
                 // which is a different problem from having no slot at all.
-                object.insert("reason".to_string(), Value::String("conflict_deferred".to_string()));
-                object.insert("blocking_task_ids".to_string(), json!(deferred.blocking_task_ids()));
-                object.insert("conflicts".to_string(), deferred.to_json()["conflicts"].clone());
+                // [ORB-15191] A task with no footprint waiting to go alone
+                // says so, with the fix.
+                object.insert("reason".to_string(), json!(deferred.reason.as_str()));
+                if let Some(detail) = &deferred.detail {
+                    object.insert("detail".to_string(), json!(detail));
+                }
+                if deferred.reason == DeferralReason::Conflict {
+                    object.insert("blocking_task_ids".to_string(), json!(deferred.blocking_task_ids()));
+                    object.insert("conflicts".to_string(), deferred.to_json()["conflicts"].clone());
+                }
             } else {
                 object.insert("reason".to_string(), Value::String("capacity_saturated".to_string()));
                 object.insert("active_run_ids".to_string(), json!(live_leaves.iter().map(|run| &run.run_id).collect::<Vec<_>>()));

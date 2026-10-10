@@ -3,6 +3,7 @@ use orbit_core::application::task::{ContextCreationAuthorization, TaskAddParams}
 use orbit_core::{
     ExternalRef, OrbitRuntime, TaskComplexity, TaskCreateStatus, TaskPriority, TaskType,
 };
+use orbit_types::task::backlog_footprint_warning;
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -130,14 +131,18 @@ impl Execute for TaskAddArgs {
             model,
         )?;
 
+        let mut warnings = required_tool_warnings;
+        // [ORB-15191] Filed straight into the backlog with no footprint, a
+        // live drain admits it before a pilot can prepare one.
+        if let Some(warning) = backlog_footprint_warning(&task) {
+            eprintln!("warning: {warning}");
+            warnings.push(warning);
+        }
         let mut document = task_to_json_for_runtime(runtime, &task)?;
-        if !required_tool_warnings.is_empty()
+        if !warnings.is_empty()
             && let Some(object) = document.as_object_mut()
         {
-            object.insert(
-                "warnings".to_string(),
-                serde_json::json!(required_tool_warnings),
-            );
+            object.insert("warnings".to_string(), serde_json::json!(warnings));
         }
         Ok(Payload::detail(document, task.id).into())
     }

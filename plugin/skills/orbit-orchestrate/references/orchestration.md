@@ -165,6 +165,13 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
+  no `context_files` in a run with more than one slot. It waits for the task
+  pilot, then for a slot with nothing else in flight; `detail` names the
+  deadline and the fix. A `conflict_deferred` whose `provenance` is
+  `unknown_footprint` is blocked by a running task with no footprint, and
+  `exclusive_reservation` by such a task waiting to go alone. See
+  [Prepare selectors](#prepare-selectors-before-dispatching-under-traffic).
 - `capacity.occupancy` breaks the occupied slots down by what each is doing —
   `lock_waiting`, `implementing`, `post_implementation`, or `unknown` — with
   the wrapper, task, and descendant run IDs behind each. A drain whose slots
@@ -180,7 +187,20 @@ orbit run show <run_id>
 ## Prepare selectors before dispatching under traffic
 
 `context_files` is what conflict detection and file reservation read. Prepare a verified footprint before dispatch under traffic. An empty
-surface is admitted without a context lock, so it protects no files.
+surface holds no context lock, so it protects no files.
+
+**Never file with `--status backlog`, or promote, a task with empty
+`context_files` while a drain is live.** File it `proposed`, run the pilot or
+set selectors, then promote. On 2026-10-10 three tasks filed straight into a
+live four-slot drain's backlog with no selectors were admitted together and
+all edited `website/src/styles/custom.css`; two of the runs were cancelled.
+A drain or ship with more than one slot now treats such a task (no
+`context_files`, no `no-diff-expected` tag) as a whole-tree footprint. While
+an enabled task-pilot routine this host owns would still prepare it, the task
+waits (`awaiting_footprint`). After that, or once the pilot has assessed it
+and left it empty, it starts only when no other leaf is in flight
+(`awaiting_exclusive_slot`) and, while it runs, no other editing work is
+admitted. A single-slot drain and `orbit run ship <id>` admit it as before.
 
 Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
 read-only in bounded partitions, and its apply step persists only selectors it

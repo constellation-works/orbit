@@ -469,6 +469,68 @@ fn task_show_and_write_tools_report_readiness_gaps() {
     assert!(!String::from_utf8_lossy(&shown.stdout).contains("Readiness:"));
 }
 
+/// [ORB-15191] A write that leaves a task in the backlog with no
+/// `context_files` warns that it holds no file lock, on the CLI and MCP
+/// surfaces alike. The warning is the task's own advisory backlog readiness
+/// gap with its fix, so the assertion pins that consistency rather than the
+/// wording. A task with selectors or tagged `no-diff-expected` gets none.
+#[test]
+fn backlog_writes_without_context_warn_about_the_missing_file_lock() {
+    let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("existing.rs"), "pub fn fixture() {}\n").expect("fixture file");
+    let expected = |task: &Value| -> Value {
+        let gaps = task["readiness"]["gaps"]
+            .as_array()
+            .expect("readiness gaps");
+        assert_eq!(gaps.len(), 1, "{task}");
+        let gap = &gaps[0];
+        assert_eq!(gap["code"], json!("missing_context_files"), "{task}");
+        assert_eq!(gap["severity"], json!("advisory"), "{task}");
+        json!([format!(
+            "{} Fix: {}.",
+            gap["message"].as_str().expect("gap message"),
+            gap["fix"].as_str().expect("gap fix")
+        )])
+    };
+    let add = |extra: &[&str]| -> Value {
+        let mut args = vec![
+            "task",
+            "add",
+            "--title",
+            "Backlog work",
+            "--complexity",
+            "low",
+            "--status",
+            "backlog",
+            "--json",
+        ];
+        args.extend_from_slice(extra);
+        workspace.task_json(&args)
+    };
+
+    let cold = add(&[]);
+    assert_eq!(cold["status"], json!("backlog"), "{cold}");
+    assert_eq!(cold["warnings"], expected(&cold), "{cold}");
+    for extra in [
+        ["--context", "file:existing.rs"],
+        ["--tag", "no-diff-expected"],
+    ] {
+        let added = add(&extra);
+        assert!(added.get("warnings").is_none(), "{extra:?}: {added}");
+    }
+
+    let id = cold["id"].as_str().expect("task id");
+    let updated = workspace.task_json(&["task", "update", id, "--priority", "high", "--json"]);
+    assert_eq!(updated["warnings"], expected(&updated), "{updated}");
+    let input = json!({"id": id, "model": "codex", "priority": "low"}).to_string();
+    let tool = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
+    assert_eq!(tool["warnings"], expected(&tool), "{tool}");
+    let input =
+        json!({"id": id, "model": "codex", "context_files": ["file:existing.rs"]}).to_string();
+    let prepared = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
+    assert!(prepared.get("warnings").is_none(), "{prepared}");
+}
+
 /// The existence guard is an operator-surface default, not a wall: work that
 /// creates a file records its selector with the explicit escape, and that
 /// declaration is durable creation intent for exactly the selectors it named.

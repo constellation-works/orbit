@@ -62,7 +62,8 @@ pub use os_requirement::{HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_t
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use readiness::{
     ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage, TaskReadiness,
-    readiness_gaps, task_readiness, task_readiness_json,
+    backlog_footprint_warning, declares_no_footprint, readiness_gaps, task_readiness,
+    task_readiness_json,
 };
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,

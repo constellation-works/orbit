@@ -7,12 +7,15 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::auto_admission::{
-    AdmissionHolders, select_admissions,
+    AdmissionHolders, DeferralReason, select_admissions,
 };
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusion, allowlist_from_input, backlog_snapshot,
 };
 use crate::adapter::engine_host::v2_host::admission::cpu_light::{LightBudget, ResourceGate};
+use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
+    FootprintGuard, whole_tree_holder,
+};
 
 use super::action_failed;
 use super::drains::{
@@ -212,12 +215,21 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         &snapshot.task_lookup,
         runtime.paths().repo_root.as_path(),
     );
+    // [ORB-15191] Work with no footprint waits for its pilot or goes alone,
+    // unless this drain runs one leaf at a time.
+    let footprint = FootprintGuard {
+        enabled: max_active_leaf_runs > 1,
+        leaves_in_flight: occupancy.occupied > 0,
+        whole_tree_holder: whole_tree_holder(&claimed, &snapshot.task_lookup),
+        waits: &snapshot.footprint_waits,
+    };
     let selection = select_admissions(
         examined,
         &snapshot.task_lookup,
         runtime.paths().repo_root.as_path(),
         &holders,
         free_slots,
+        footprint,
     );
     // `max_tasks` bounds how much of the backlog one iteration expands lock
     // footprints for. It only hides work when the wave ran out of *examined*
@@ -261,9 +273,10 @@ pub(in super::super) fn classify_workspace_auto_tasks(
                 .iter()
                 .map(|deferred| DrainWaitingTask {
                     task_id: deferred.task_id.clone(),
-                    reason: None,
+                    reason: (deferred.reason != DeferralReason::Conflict)
+                        .then(|| deferred.reason.as_str().to_string()),
                     blocked_by: deferred.blocking_task_ids(),
-                    detail: None,
+                    detail: deferred.detail.clone(),
                 })
                 .collect(),
             deferred_total: selection.deferred.len() as u64,
