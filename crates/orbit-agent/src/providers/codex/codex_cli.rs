@@ -13,6 +13,7 @@ pub(crate) struct CodexCliTransport {
     sandbox: String,
     approval_policy: Option<String>,
     writable_dirs: Vec<String>,
+    allow_login_shell: Option<bool>,
 }
 
 impl CodexCliTransport {
@@ -22,6 +23,7 @@ impl CodexCliTransport {
         sandbox: String,
         approval_policy: Option<String>,
         writable_dirs: Vec<String>,
+        allow_login_shell: Option<bool>,
     ) -> Self {
         Self {
             model,
@@ -29,6 +31,7 @@ impl CodexCliTransport {
             sandbox,
             approval_policy,
             writable_dirs,
+            allow_login_shell,
         }
     }
 
@@ -56,6 +59,16 @@ impl CodexCliTransport {
         if let Some(approval_policy) = &self.approval_policy {
             args.push("--config".to_string());
             args.push(codex_config_string_arg("approval_policy", approval_policy));
+        }
+        // Codex runs each shell command as `<user shell> -lc` by default, and
+        // the login profiles it rereads can reorder the PATH Orbit composed
+        // (macOS `/etc/zprofile` runs `path_helper`). `false` makes it run
+        // `<user shell> -c` and refuse a model request for a login shell, so
+        // the configured `workflow.validation_env.path` reaches every
+        // command [ORB-15204].
+        if let Some(allow_login_shell) = self.allow_login_shell {
+            args.push("--config".to_string());
+            args.push(format!("allow_login_shell={allow_login_shell}"));
         }
         if let Some(model) = &self.model {
             args.push("--model".to_string());

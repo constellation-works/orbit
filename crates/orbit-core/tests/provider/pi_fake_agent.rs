@@ -47,7 +47,7 @@ cat > '{stdin}'
 }
 
 struct Harness {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     argv_path: PathBuf,
     stdin_path: PathBuf,
     edit_path: PathBuf,
@@ -56,19 +56,45 @@ struct Harness {
 
 impl Harness {
     fn new(body: &str) -> Self {
+        Self::build(body, None)
+    }
+
+    /// A harness whose runtime reads `config` as its workspace `config.toml`.
+    /// `{DIR}` in `config` and `body` names the harness directory.
+    fn with_workspace_config(body: &str, config: &str) -> Self {
+        Self::build(body, Some(config))
+    }
+
+    fn build(body: &str, config: Option<&str>) -> Self {
         let dir = tempfile::tempdir().expect("harness tempdir");
         let argv_path = dir.path().join("argv.txt");
         let stdin_path = dir.path().join("stdin.txt");
         let edit_path = dir.path().join("workspace/edited.txt");
         std::fs::create_dir_all(edit_path.parent().expect("workspace parent"))
             .expect("create fake workspace");
-        let body = body.replace("{EDIT_PATH}", &edit_path.display().to_string());
+        let body = body
+            .replace("{EDIT_PATH}", &edit_path.display().to_string())
+            .replace("{DIR}", &dir.path().display().to_string());
         let program = fake_pi(dir.path(), &body, &argv_path, &stdin_path);
 
-        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let runtime = match config {
+            None => OrbitRuntime::in_memory().expect("build runtime"),
+            Some(config) => {
+                let global = dir.path().join("global");
+                let workspace = dir.path().join("workspace/.orbit");
+                std::fs::create_dir_all(&global).expect("create global root");
+                std::fs::create_dir_all(&workspace).expect("create workspace root");
+                std::fs::write(
+                    workspace.join("config.toml"),
+                    config.replace("{DIR}", &dir.path().display().to_string()),
+                )
+                .expect("write workspace config");
+                OrbitRuntime::from_roots(&global, &workspace).expect("build runtime")
+            }
+        };
         seed_pi_executor(&runtime, &program, false);
         Self {
-            _dir: dir,
+            dir,
             argv_path,
             stdin_path,
             edit_path,
@@ -248,6 +274,49 @@ fn crew_effort_is_optional_and_omitted_when_unset() {
     assert!(!harness.argv().iter().any(|arg| arg == "--thinking"));
 }
 
+/// A reviewer on a Mac follower resolved `/usr/bin/python3` (3.9) while host
+/// validation ran Homebrew's through `workflow.validation_env.path`, so the
+/// two disagreed on the same base [ORB-15204]. An agent session must resolve
+/// tools through that configured prefix first. This covers the environment the
+/// provider process starts with; Codex, whose tool commands run in a login
+/// shell that rereads profiles, is covered at that boundary in
+/// `codex_fake_agent`.
+#[test]
+fn agent_session_resolves_python3_through_the_validation_env_prefix() {
+    let body = format!(
+        "python3 --version > '{{DIR}}/python3-version.txt' 2>&1\n{}",
+        success_body()
+    );
+    let harness = Harness::with_workspace_config(
+        &body,
+        "[workflow.validation_env]\nlogin_shell = false\npath = [\"{DIR}/validation-bin\"]\n",
+    );
+    let bin = harness.dir.path().join("validation-bin");
+    std::fs::create_dir_all(&bin).expect("create validation bin");
+    let python = bin.join("python3");
+    std::fs::write(
+        &python,
+        "#!/bin/sh\necho 'Python 3.99.0 (validation_env)'\n",
+    )
+    .expect("write validation python3");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod validation python3");
+    }
+
+    let outcome = dispatch(&harness, spec(60));
+
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+    assert_eq!(
+        std::fs::read_to_string(harness.dir.path().join("python3-version.txt"))
+            .expect("the agent recorded python3 --version"),
+        "Python 3.99.0 (validation_env)\n",
+        "the agent session's python3 must be the one validation_env.path puts first",
+    );
+}
+
 #[test]
 fn non_zero_exit_fails_even_with_a_success_frame() {
     let body = success_body().replace("exit 0", "exit 9");
@@ -320,7 +389,7 @@ fn shipped_executor_is_sandboxed_and_missing_binary_is_stable() {
     let missing = dir.path().join("missing/pi");
     seed_pi_executor(&runtime, &missing, false);
     let harness = Harness {
-        _dir: dir,
+        dir,
         argv_path: argv,
         stdin_path: stdin,
         edit_path: PathBuf::new(),

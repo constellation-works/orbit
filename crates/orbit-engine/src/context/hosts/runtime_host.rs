@@ -429,7 +429,8 @@ pub trait RuntimeHost: Send + Sync {
 
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
-    /// settings (for example Codex reads `"sandbox"` and `"approval_policy"`).
+    /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and
+    /// `"allow_login_shell"`).
     fn agent_provider_config(&self) -> HashMap<String, String> {
         HashMap::new()
     }
@@ -441,7 +442,8 @@ pub trait RuntimeHost: Send + Sync {
     /// needs. The default is the built-in baseline plus those extras: a host
     /// with no configuration still starts a provider, but never forwards
     /// ambient credentials. `OrbitRuntime` overrides it with the operator's
-    /// `[execution.env]` policy. [ORB-10917]
+    /// `[execution.env]` policy, with `workflow.validation_env.path` ahead of
+    /// PATH. [ORB-10917] [ORB-15204]
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
     }

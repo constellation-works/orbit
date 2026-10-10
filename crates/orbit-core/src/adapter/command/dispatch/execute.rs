@@ -512,8 +512,7 @@ impl OrbitRuntime {
                 } else {
                     None
                 };
-                let proc_spawn_environment =
-                    Some(self.execution_env_policy().agent_subprocess_env(&[]));
+                let proc_spawn_environment = Some(self.agent_environment(&[]));
                 let cwd = std::env::current_dir()
                     .ok()
                     .map(|path| path.to_string_lossy().into_owned());

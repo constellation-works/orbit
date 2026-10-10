@@ -14,6 +14,9 @@
 //! environment, so the allowlist model still decides everything else. An
 //! operator can prepend or replace PATH entries and disable the login-shell
 //! probe. Every resolution records which [`ValidationEnvSource`] decided PATH.
+//! Agent sessions receive the configured entries too
+//! ([`ValidationEnvPolicy::agent_environment`]), so a reviewer's `python3` is
+//! the one validation runs.
 //!
 //! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
 //! interactive rc files as well as profiles. Startup failure, nonzero exit,
@@ -155,6 +158,54 @@ impl Default for ValidationEnvPolicy {
             path: Vec::new(),
             path_mode: ValidationPathMode::Prepend,
         }
+    }
+}
+
+impl ValidationEnvPolicy {
+    /// `env` with [`Self::path`] ahead of its PATH: the environment an agent
+    /// session starts with, so the interpreter and tools a reviewer or
+    /// implementer runs are the ones required validation runs with
+    /// [ORB-15204]. The entries are prepended under either
+    /// [`Self::path_mode`], because the rest of PATH still locates the
+    /// provider CLI. The login-shell probe is not applied. A provider that
+    /// would reread login profiles is told not to while
+    /// [`Self::pins_agent_path`] holds, since a profile can reorder PATH
+    /// (macOS `path_helper`). A PATH that already starts with the
+    /// entries (a nested Orbit process inside an agent) is kept as is.
+    pub fn agent_environment(&self, mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+        let configured = self.expanded_path(lookup(&env, "HOME")).join(":");
+        if configured.is_empty() {
+            return env;
+        }
+        let path = match lookup(&env, "PATH") {
+            Some(inherited)
+                if inherited == configured || inherited.starts_with(&format!("{configured}:")) =>
+            {
+                return env;
+            }
+            Some(inherited) => format!("{configured}:{inherited}"),
+            None => configured,
+        };
+        env.retain(|(name, _)| name != "PATH");
+        env.push(("PATH".to_string(), path));
+        env
+    }
+
+    /// Whether [`Self::path`] has an entry, so agent sessions must run their
+    /// commands with the PATH [`Self::agent_environment`] composed rather
+    /// than one a login shell rebuilds from profiles [ORB-15204].
+    pub fn pins_agent_path(&self) -> bool {
+        self.path.iter().any(|entry| !entry.trim().is_empty())
+    }
+
+    /// The non-empty [`Self::path`] entries with `~` expanded against `home`.
+    fn expanded_path(&self, home: Option<&str>) -> Vec<String> {
+        self.path
+            .iter()
+            .map(|entry| entry.trim())
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| expand_home(entry, home))
+            .collect()
     }
 }
 
@@ -439,14 +490,7 @@ impl ValidationEnvironment {
             Some(Err(error)) => login_shell_error = Some(error),
             None => {}
         }
-        let home = env.get("HOME").cloned();
-        let config_path: Vec<String> = policy
-            .path
-            .iter()
-            .map(|entry| entry.trim())
-            .filter(|entry| !entry.is_empty())
-            .map(|entry| expand_home(entry, home.as_deref()))
-            .collect();
+        let config_path = policy.expanded_path(env.get("HOME").map(String::as_str));
         if !config_path.is_empty() {
             let configured = config_path.join(":");
             let path = match (policy.path_mode, env.get("PATH")) {

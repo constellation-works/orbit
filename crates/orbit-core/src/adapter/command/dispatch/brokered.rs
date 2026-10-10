@@ -123,11 +123,7 @@ impl RunDispatch {
             tool_deny_policy: run.tool_deny_policy.clone(),
             agent_name: agent.clone(),
             model_name: agent,
-            proc_spawn_environment: Some(
-                self.runtime
-                    .execution_env_policy()
-                    .agent_subprocess_env(&[]),
-            ),
+            proc_spawn_environment: Some(self.runtime.agent_environment(&[])),
             fs_profile: Some(run.caller.fs_profile.name.clone()),
             activity_binding: run.job_run_id.clone().map(|job_run_id| ActivityBinding {
                 job_run_id,

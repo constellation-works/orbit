@@ -64,10 +64,21 @@ impl AgentRuntimeFactory for CodexFactory {
             })
             .transpose()?
             .unwrap_or_default();
+        let allow_login_shell = config
+            .get("allow_login_shell")
+            .map(|raw| match raw.as_str() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                other => Err(OrbitError::InvalidInput(format!(
+                    "invalid codex allow_login_shell provider option `{other}`: use true or false"
+                ))),
+            })
+            .transpose()?;
         Ok(ProviderOptions::Codex {
             sandbox,
             approval_policy,
             writable_dirs,
+            allow_login_shell,
         })
     }
 
@@ -77,6 +88,7 @@ impl AgentRuntimeFactory for CodexFactory {
                 sandbox,
                 approval_policy,
                 writable_dirs,
+                allow_login_shell,
             } => Ok(Box::new(CodexRuntime::new(
                 cfg.command.clone(),
                 CodexCliTransport::new(
@@ -85,6 +97,7 @@ impl AgentRuntimeFactory for CodexFactory {
                     sandbox.clone(),
                     approval_policy.clone(),
                     writable_dirs.clone(),
+                    *allow_login_shell,
                 ),
                 self.key(),
                 self.required_env_vars(),

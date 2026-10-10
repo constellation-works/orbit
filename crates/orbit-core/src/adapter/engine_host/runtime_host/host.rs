@@ -527,12 +527,18 @@ impl RuntimeHost for OrbitRuntime {
                     .unwrap_or_else(|_| "[]".to_string()),
             );
         }
+        // Codex's default login shell rereads profiles, and macOS
+        // `path_helper` then moves `workflow.validation_env.path` behind
+        // `/usr/bin`; keep the composed PATH by running a non-login shell.
+        // [ORB-15204]
+        if self.validation_env_policy().pins_agent_path() {
+            config.insert("allow_login_shell".to_string(), "false".to_string());
+        }
         config
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        self.execution_env_policy()
-            .agent_subprocess_env(required_env_vars)
+        self.agent_environment(required_env_vars)
     }
 
     fn requires_claude_worker_credential(&self) -> bool {

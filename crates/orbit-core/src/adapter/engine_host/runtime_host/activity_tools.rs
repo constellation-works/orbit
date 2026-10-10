@@ -169,7 +169,7 @@ pub(super) fn tool_context_for_activity(
     let proc_allowed_programs = proc_allowed_programs
         .map(|programs| programs.to_vec())
         .unwrap_or_default();
-    let proc_spawn_environment = Some(runtime.execution_env_policy().agent_subprocess_env(&[]));
+    let proc_spawn_environment = Some(runtime.agent_environment(&[]));
     let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
 
     ToolContext {
