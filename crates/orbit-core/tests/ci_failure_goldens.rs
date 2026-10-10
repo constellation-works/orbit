@@ -764,6 +764,7 @@ fn ci_operator_pr_cover_reports_open_landed_closed_and_unavailable_states() {
     let gh = bin.join("gh");
     std::fs::write(&gh, format!("#!/bin/sh\ncat '{}'\n", response.display())).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    orbit_common::test_env::prime_executable(&mut std::process::Command::new(&gh));
     // This entire fixture is an isolated child; no other runtime sees this PATH.
     unsafe {
         std::env::set_var(

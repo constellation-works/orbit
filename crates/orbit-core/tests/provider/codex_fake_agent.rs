@@ -31,6 +31,10 @@ use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenia
 
 const VALIDATION_PYTHON: &str = "Python 3.99.0 (validation_env)";
 const PROFILE_PYTHON: &str = "Python 3.9.6 (login profile)";
+/// A tool only the owner's login shell puts on PATH.
+const LOGIN_TOOL: &str = "orbit-login-only-tool";
+/// Names the owner home a re-executed reviewer fixture runs under.
+const OWNER_HOME_ENV: &str = "ORBIT_TEST_CODEX_OWNER_HOME";
 
 struct Harness {
     dir: tempfile::TempDir,
@@ -79,6 +83,18 @@ impl Harness {
     }
 
     /// What `python3 --version` printed in the agent's tool shell.
+    /// The PATH the agent's tool shell ran with, and where it found
+    /// [`LOGIN_TOOL`] (empty when it did not).
+    fn tool_shell(&self) -> (String, String) {
+        let recorded = std::fs::read_to_string(self.dir.path().join("tool-shell.txt"))
+            .expect("fake codex recorded its tool shell");
+        let mut lines = recorded.lines().map(str::to_string);
+        (
+            lines.next().unwrap_or_default(),
+            lines.next().unwrap_or_default(),
+        )
+    }
+
     fn tool_python(&self) -> String {
         std::fs::read_to_string(self.dir.path().join("python3-version.txt"))
             .expect("fake codex ran python3 in its tool shell")
@@ -110,9 +126,11 @@ done
 shell=/bin/zsh
 [ -x "$shell" ] || shell=/bin/bash
 HOME='{dir}/home' ZDOTDIR='{dir}/home' "$shell" "$mode" 'python3 --version' > '{dir}/python3-version.txt' 2>&1
+HOME='{dir}/home' ZDOTDIR='{dir}/home' "$shell" "$mode" 'printf "%s\n" "$PATH"; command -v {LOGIN_TOOL} || true' > '{dir}/tool-shell.txt' 2>&1
 printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"probed":true}},"error":null}}'
 "#,
         dir = dir.display(),
+        LOGIN_TOOL = LOGIN_TOOL,
     );
     std::fs::write(&program, script).expect("write fake codex");
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
@@ -140,6 +158,10 @@ fn seed_codex_executor(runtime: &OrbitRuntime, program: &Path) {
 }
 
 fn dispatch(harness: &Harness) -> DispatchOutcome {
+    dispatch_as(harness, "codex_fake_agent")
+}
+
+fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
@@ -168,7 +190,7 @@ fn dispatch(harness: &Harness) -> DispatchOutcome {
         trusted_host_execution: false,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
-        activity_name: "codex_fake_agent",
+        activity_name,
         spec: &spec,
         fs_profile: None,
         input: serde_json::json!({"prompt": "Run python3 --version."}),
@@ -221,4 +243,108 @@ fn codex_keeps_its_login_shell_when_no_validation_path_is_configured() {
         harness.argv(),
     );
     assert_eq!(harness.tool_python(), PROFILE_PYTHON);
+}
+
+/// The before-landing reviewer (`agent_review_repair`) finds a tool that only
+/// the owner's login shell puts on PATH. A Mac reviewer rediscovered a working
+/// PATH by trial before `make ci-fast` passed, while host validation ran with
+/// the login-shell PATH [ORB-15293]. With `path` configured Codex runs a
+/// non-login shell, so only Orbit's composition can supply that entry: every
+/// entry of the required-validation PATH must reach the reviewer's shell, the
+/// configured ones first.
+#[test]
+fn a_reviewer_shell_carries_every_required_validation_path_entry() {
+    let Some(owner_home) = std::env::var_os(OWNER_HOME_ENV) else {
+        rerun_with_owner_home(
+            "codex_fake_agent::a_reviewer_shell_carries_every_required_validation_path_entry",
+        );
+        return;
+    };
+    let login_bin = PathBuf::from(&owner_home).join("login-bin");
+    let harness = Harness::new("[workflow.validation_env]\npath = [\"{DIR}/validation-bin\"]\n");
+    let validation = harness.runtime.validation_environment();
+    assert_eq!(
+        validation
+            .login_shell_path
+            .as_deref()
+            .map(|path| path.contains(&*login_bin.to_string_lossy())),
+        Some(true),
+        "the owner's login shell must have been probed: {validation:?}",
+    );
+
+    dispatch_as(&harness, "agent_review_repair");
+
+    let (shell_path, found) = harness.tool_shell();
+    assert_eq!(
+        found,
+        login_bin.join(LOGIN_TOOL).display().to_string(),
+        "the reviewer must find what only the login shell adds; its PATH was {shell_path}",
+    );
+    let entries: Vec<&str> = shell_path.split(':').collect();
+    for entry in validation
+        .path()
+        .unwrap()
+        .split(':')
+        .filter(|entry| !entry.is_empty())
+    {
+        assert!(
+            entries.contains(&entry),
+            "required validation searches {entry}; the reviewer's PATH lacks it: {shell_path}",
+        );
+    }
+    let position = |entry: &Path| {
+        let entry = entry.display().to_string();
+        entries
+            .iter()
+            .position(|seen| *seen == entry)
+            .unwrap_or_else(|| panic!("{entry} is on the reviewer's PATH: {shell_path}"))
+    };
+    assert!(
+        position(&harness.dir.path().join("validation-bin")) < position(&login_bin),
+        "configured entries stay first: {shell_path}",
+    );
+    assert_eq!(harness.tool_python(), VALIDATION_PYTHON);
+}
+
+/// Re-run `test` in a child whose `HOME` is an owner home with login profiles
+/// that append a `login-bin` holding [`LOGIN_TOOL`], covering the common
+/// account shells, so the runtime's login-shell probe reads fixture profiles
+/// and never the operator's.
+fn rerun_with_owner_home(test: &str) {
+    let home = tempfile::tempdir().expect("owner home");
+    let login_bin = home.path().join("login-bin");
+    std::fs::create_dir_all(&login_bin).expect("create login bin");
+    let tool = login_bin.join(LOGIN_TOOL);
+    std::fs::write(&tool, "#!/bin/sh\n").expect("write login tool");
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("chmod tool");
+    let append = format!("PATH=\"$PATH:{}\"; export PATH\n", login_bin.display());
+    for profile in [".zprofile", ".bash_profile", ".profile"] {
+        std::fs::write(home.path().join(profile), &append).expect("write login profile");
+    }
+    let fish = home.path().join(".config/fish");
+    std::fs::create_dir_all(&fish).expect("create fish config");
+    std::fs::write(
+        fish.join("config.fish"),
+        format!("set -gx PATH $PATH {}\n", login_bin.display()),
+    )
+    .expect("write fish config");
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(OWNER_HOME_ENV, home.path())
+        .env("HOME", home.path())
+        .env_remove("ZDOTDIR")
+        .current_dir(home.path());
+    let logs = tempfile::tempdir().expect("child logs");
+    let output = orbit_common::test_env::run_child_test(&mut command, test, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        test,
+        output.status,
+        output.stdout,
+        output.stderr,
+    );
 }

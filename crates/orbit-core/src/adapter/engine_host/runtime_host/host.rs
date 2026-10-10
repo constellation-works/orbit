@@ -542,7 +542,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        self.agent_environment(required_env_vars)
+        self.agent_session_environment(required_env_vars)
     }
 
     fn requires_claude_worker_credential(&self) -> bool {

@@ -48,7 +48,11 @@ unset ORBIT_LOG_GOLDEN_CASE
 
 cargo="${CARGO:-cargo}"
 
-"$cargo" test -p orbit-core --test ci_failure_goldens
+# Only the golden fixture: the binary's behavioural tests belong to the
+# affected-test gate, and beside it they multiply the store writes that slow
+# the fixture on a loaded host (ORB-15293).
+"$cargo" test -p orbit-core --test ci_failure_goldens \
+  ci_failure_fixture_goldens -- --exact
 "$cargo" test -p orbit-tools --test tools -- \
   public_tool_surface::github_log_goldens:: mcp_definitions::
 "$cargo" test -p orbit-cli --test output -- help_goldens:: output_goldens::

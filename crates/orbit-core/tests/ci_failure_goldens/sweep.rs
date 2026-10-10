@@ -59,6 +59,12 @@ pub(crate) fn isolated_with_fake_gh(test: &str) -> bool {
     let gh = bin.join("gh");
     std::fs::write(&gh, FAKE_GH).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let primer = TempDir::new().unwrap();
+    orbit_common::test_env::prime_executable(
+        std::process::Command::new(&gh)
+            .args(["auth", "status"])
+            .env(STATE_ENV, primer.path()),
+    );
     let mut path = vec![bin];
     path.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
