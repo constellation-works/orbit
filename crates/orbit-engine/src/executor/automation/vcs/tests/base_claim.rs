@@ -1,21 +1,32 @@
+#[cfg(unix)]
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use orbit_common::test_env::canonical_temp_dir;
+#[cfg(unix)]
 use serde_json::json;
 
-use super::super::base_claim::{
-    BaseFailureVerdict, BaseReplay, ReplayBudget, failure_identities, verify_base_failure,
-};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+use super::super::base_claim::failure_identities;
+#[cfg(unix)]
+use super::super::base_claim::{BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure};
+#[cfg(unix)]
 use crate::RuntimeHost;
 
+#[cfg(unix)]
 struct Host;
 
+#[cfg(unix)]
 impl RuntimeHost for Host {}
 
+#[cfg(unix)]
 fn git_ok(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args([
@@ -89,6 +100,7 @@ error: this `if` has identical blocks
 // candidate stops a quarter of the window early). The boundary test drives
 // the uncut paths [ORB-15328].
 #[test]
+#[cfg(unix)]
 fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the_base() {
     let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
     let repo = root.path().join("repo");
