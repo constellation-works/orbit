@@ -422,13 +422,15 @@ thread_local! {
 
 /// Install a hook that runs once, after the tail count and before the page
 /// select, while the read snapshot is open.
+/// Visible to the parent module only so sibling tests can force this interleaving.
 #[cfg(test)]
-fn set_tail_snapshot_rendezvous(hook: impl FnOnce() + 'static) {
+pub(super) fn set_tail_snapshot_rendezvous(hook: impl FnOnce() + 'static) {
     TAIL_SNAPSHOT_RENDEZVOUS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
 
+// Parent visibility is only for sibling tests to clear their rendezvous hook.
 #[cfg(test)]
-fn clear_tail_snapshot_rendezvous() {
+pub(super) fn clear_tail_snapshot_rendezvous() {
     TAIL_SNAPSHOT_RENDEZVOUS.with(|slot| *slot.borrow_mut() = None);
 }
 
@@ -438,6 +440,3 @@ fn fire_tail_snapshot_rendezvous() {
         hook();
     }
 }
-
-#[cfg(test)]
-mod tests;
