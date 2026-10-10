@@ -311,6 +311,8 @@ export function renderRunDetailMeta() {
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);
+  const cancelled = buildRunCancellation(run);
+  if (cancelled) wrap.appendChild(cancelled);
   if (run.state === "held") wrap.appendChild(buildRunHold(run));
   wrap.appendChild(grid);
   const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
@@ -526,6 +528,75 @@ function buildStillWaiting(pass, run = {}) {
 
 const FAILED_RUN_STATES = new Set(["failed", "timeout", "interrupted"]);
 const FAILED_STEP_STATES = new Set(["error", "failed", "timeout", "interrupted"]);
+// Task ids are a 2–5 letter prefix plus digits, outside the ADR, L, and F
+// artifact namespaces. Anything else that looks similar has no task to open.
+const NON_TASK_PREFIX = new Set(["ADR", "L", "F"]);
+const FAILURE_ID = /\bjrun-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b|\b[A-Z]{2,5}-\d+\b/g;
+
+function navigableTaskId(token) {
+  const match = /^([A-Z]{2,5})-(\d+)$/.exec(token);
+  return Boolean(match) && !NON_TASK_PREFIX.has(match[1]);
+}
+
+function failureRunLink(runId) {
+  const link = el("button", {
+    class: "failure-id-link",
+    type: "button",
+    text: runId,
+    title: `Open ${runId}`,
+  });
+  link.addEventListener("click", () => navigateToRun(runId));
+  return link;
+}
+
+function failureTaskLink(taskId, workspaceId) {
+  const link = el("a", { class: "failure-id-link", text: taskId, title: `Open ${taskId}` });
+  const url = new URL(window.location.href);
+  url.searchParams.set("workspace", workspaceId || getWorkspace() || "");
+  url.hash = `tasks?status=all&q=${encodeURIComponent(taskId)}`;
+  link.href = `${url.search}${url.hash}`;
+  return link;
+}
+
+// Run and task ids become links. A token with no run or task target (an ADR
+// id, a lowercase task lookalike) stays plain text. Strings are text nodes,
+// never HTML.
+function linkifyFailureText(text, workspaceId) {
+  const source = text == null ? "" : String(text);
+  const nodes = [];
+  const pattern = new RegExp(FAILURE_ID.source, "g");
+  let cursor = 0;
+  for (const match of source.matchAll(pattern)) {
+    const token = match[0];
+    const start = match.index;
+    if (start > cursor) nodes.push(source.slice(cursor, start));
+    if (token.startsWith("jrun-")) nodes.push(failureRunLink(token));
+    else if (navigableTaskId(token)) nodes.push(failureTaskLink(token, workspaceId));
+    else nodes.push(token);
+    cursor = start + token.length;
+  }
+  if (cursor < source.length) nodes.push(source.slice(cursor));
+  if (nodes.length === 0) nodes.push("");
+  return nodes;
+}
+
+function appendLinkified(parent, text, workspaceId) {
+  for (const node of linkifyFailureText(text, workspaceId)) parent.append(node);
+}
+
+function buildFailureRoot(root, workspaceId) {
+  if (!root || typeof root.run_id !== "string" || root.run_id === "") return null;
+  const line = el("p", { class: "run-failure-root" });
+  line.append(el("strong", { text: "Root cause: " }));
+  line.append(failureRunLink(root.run_id));
+  if (root.state) line.append(` ${root.state}`);
+  if (root.step) line.append(` at ${root.step}`);
+  if (root.message) {
+    line.append(" - ");
+    appendLinkified(line, root.message, workspaceId);
+  }
+  return line;
+}
 
 // A failed run leads with why: the step it stopped at and the error it
 // recorded, above the metadata, so nobody has to open Errors or expand every
@@ -548,8 +619,39 @@ function buildRunFailure(run, steps) {
   ]);
   const box = el("section", { class: "run-failure" }, [head]);
   box.setAttribute("aria-label", "Why this run failed");
-  if (message) box.appendChild(el("pre", { class: "run-failure-message mono", text: message }));
+  const workspaceId = run.workspace_id || getWorkspace();
+  if (message) {
+    const pre = el("pre", { class: "run-failure-message mono" });
+    appendLinkified(pre, message, workspaceId);
+    box.appendChild(pre);
+  }
+  const root = buildFailureRoot(run.failure_root, workspaceId);
+  if (root) box.appendChild(root);
   if (code === "protocol_skew") box.appendChild(el("p", { text: "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain." }));
+  return box;
+}
+
+// A cancelled run says who cancelled it, when, and why. The reason is the
+// recorded text, or the explicit phrase when the cancel record has none.
+function buildRunCancellation(run) {
+  if (run.state !== "cancelled") return null;
+  const record = run.cancellation || {};
+  const actor = typeof record.actor === "string" ? record.actor.trim() : "";
+  const at = record.at || "";
+  const reason = typeof record.reason === "string" && record.reason.trim() ? record.reason : "no reason recorded";
+  const head = el("div", { class: "run-failure-head" }, [
+    el("strong", { text: "Cancelled" }),
+    actor ? el("span", { class: "run-failure-where", text: ` by ${actor}` }) : null,
+    at ? el("span", { class: "run-cancelled-when", text: ` at ${fmtAbsTime(at)}` }) : null,
+  ]);
+  const box = el("section", { class: "run-failure run-cancelled" }, [head]);
+  box.setAttribute("aria-label", "Why this run was cancelled");
+  const workspaceId = run.workspace_id || getWorkspace();
+  const reasonNode = el("p", { class: "run-cancelled-reason" });
+  appendLinkified(reasonNode, reason, workspaceId);
+  box.appendChild(reasonNode);
+  const root = buildFailureRoot(run.failure_root, workspaceId);
+  if (root) box.appendChild(root);
   return box;
 }
 

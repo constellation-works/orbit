@@ -26,6 +26,7 @@ mod plugins;
 mod reliability;
 mod routes;
 mod routines;
+mod run_failure;
 mod run_tasks;
 mod runs;
 mod scoreboard;

@@ -628,6 +628,9 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             .and_then(|state| state.drain_last_pass.as_ref()),
     )
     .unwrap_or(Value::Null);
+    // The failure chain and the cancel record are detail-only. One response
+    // carries both, so the page does not fetch each child to find the cause.
+    crate::api::run_failure::attach_run_failure_context(runtime, run, state.as_ref(), &mut full);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
     let stored_steps = full

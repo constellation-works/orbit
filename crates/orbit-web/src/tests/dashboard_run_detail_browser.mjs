@@ -377,6 +377,9 @@ export async function assertRunDetailPresentation(page, evidence) {
     || await page.locator('.step-row .idx').textContent() !== '#1') {
     throw new Error('A failed single-step run must display one-based, singular step labels');
   }
+  if (await page.locator('.run-failure-root').count()) {
+    throw new Error('A run that failed on its own must not invent a root-cause line');
+  }
   if (await page.locator('.step-header > span').count() !== 5 || !(await page.locator('.step-header .exit').textContent())) throw new Error('Step columns must identify the exit code');
   await page.locator('.step-row').click();
   if (!(await page.locator('.step-logs-empty').isVisible())) throw new Error('Empty step expansion must explain that it has no logs');
@@ -395,6 +398,99 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunSteps();
   });
   if (!(await page.locator('.step-logs-empty').isVisible()) || await page.locator('.step-log-section').count()) throw new Error('A metadata-only log record must still show empty-log feedback');
+
+  const chainMessage = 'gate runs did not succeed: results[0] run jrun-20261010-0552-c2 status failed: result run jrun-20261010-0552-c3 status cancelled for ORB-15159; see ADR-12 and ORB-abc';
+  await render({
+    state: 'failed',
+    workspace_id: 'fixture-workspace',
+    error_message: chainMessage,
+    failure_root: {
+      run_id: 'jrun-20261010-0552-c3',
+      state: 'cancelled',
+      step: 'landing_review',
+      message: 'stopped for ORB-15178',
+    },
+  }, [step]);
+  const chain = await page.locator('.run-failure').evaluate(node => ({
+    message: node.querySelector('.run-failure-message').textContent,
+    root: node.querySelector('.run-failure-root').textContent,
+    links: [...node.querySelectorAll('.failure-id-link')].map(link => ({
+      tag: link.tagName,
+      text: link.textContent,
+      type: link.getAttribute('type'),
+      href: link.getAttribute('href'),
+    })),
+  }));
+  if (chain.message !== chainMessage) throw new Error(`Failure message must keep its text around the links: ${chain.message}`);
+  if (chain.root !== 'Root cause: jrun-20261010-0552-c3 cancelled at landing_review - stopped for ORB-15178') {
+    throw new Error(`Root cause line must name the deepest descendant: ${chain.root}`);
+  }
+  const linkedText = chain.links.map(link => link.text);
+  if (JSON.stringify(linkedText) !== JSON.stringify([
+    'jrun-20261010-0552-c2', 'jrun-20261010-0552-c3', 'ORB-15159', 'jrun-20261010-0552-c3', 'ORB-15178',
+  ])) throw new Error(`Failure ids must link in order: ${JSON.stringify(chain.links)}`);
+  if (chain.links.some(link => link.text.startsWith('jrun-') && (link.tag !== 'BUTTON' || link.type !== 'button'))) {
+    throw new Error(`Run ids in a failure must be buttons: ${JSON.stringify(chain.links)}`);
+  }
+  const taskLinksOk = chain.links.filter(link => link.text.startsWith('ORB-')).every(link => {
+    const url = new URL(link.href, 'http://127.0.0.1/');
+    const [route, query] = url.hash.slice(1).split('?');
+    const params = new URLSearchParams(query);
+    return link.tag === 'A' && url.searchParams.get('workspace') === 'fixture-workspace'
+      && route === 'tasks' && params.get('status') === 'all' && params.get('q') === link.text;
+  });
+  if (!taskLinksOk) throw new Error(`Task ids in a failure must link to the task: ${JSON.stringify(chain.links)}`);
+  if (chain.links.some(link => link.text === 'ADR-12' || link.text === 'ORB-abc') || !chain.message.includes('ADR-12') || !chain.message.includes('ORB-abc')) {
+    throw new Error('ADR ids and invalid task lookalikes stay plain text');
+  }
+  await page.screenshot({ path: path.join(evidence, 'run-failure-chain-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.evaluate(() => {
+    globalThis.failureChainFetch = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const url = new URL(input, window.location.href);
+      const match = url.pathname.match(/^\/api\/runs\/(jrun-20261010-0552-c\d+)(?:\/(events|logs))?$/);
+      if (!match) return globalThis.failureChainFetch(input, options);
+      const body = match[2] ? [] : { run: { run_id: match[1], state: 'cancelled' }, steps: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+  });
+  try {
+    await page.locator('.run-failure-message .failure-id-link', { hasText: 'jrun-20261010-0552-c2' }).click();
+    await page.waitForFunction(() => document.getElementById('run-detail-title').textContent === 'Run jrun-20261010-0552-c2');
+    const unnamed = await page.locator('.run-cancelled').evaluate(node => ({
+      label: node.getAttribute('aria-label'),
+      head: node.querySelector('.run-failure-head').textContent,
+      reason: node.querySelector('.run-cancelled-reason').textContent,
+    }));
+    if (unnamed.label !== 'Why this run was cancelled' || unnamed.head !== 'Cancelled' || unnamed.reason !== 'no reason recorded') {
+      throw new Error(`A cancelled run with no record must say so: ${JSON.stringify(unnamed)}`);
+    }
+  } finally {
+    await page.evaluate(() => {
+      globalThis.fetch = globalThis.failureChainFetch;
+      delete globalThis.failureChainFetch;
+    });
+  }
+  await render({
+    state: 'cancelled',
+    cancellation: {
+      actor: 'dashboard',
+      source: 'web',
+      reason: 'operator stopped the drain',
+      at: '2026-10-10T05:52:00Z',
+    },
+  }, []);
+  const named = await page.locator('.run-cancelled').evaluate(node => ({
+    label: node.getAttribute('aria-label'),
+    head: node.querySelector('.run-failure-head').textContent,
+    reason: node.querySelector('.run-cancelled-reason').textContent,
+    when: node.querySelector('.run-cancelled-when')?.textContent || '',
+  }));
+  if (named.label !== 'Why this run was cancelled' || !named.head.startsWith('Cancelled by dashboard')
+    || named.reason !== 'operator stopped the drain' || !named.when.trim()) {
+    throw new Error(`A cancelled run must name who, why, and when: ${JSON.stringify(named)}`);
+  }
+  await page.screenshot({ path: path.join(evidence, 'run-cancelled-1440.png'), fullPage: true, animations: 'disabled' });
 
   for (const knowledge_metrics of [undefined, null, {}]) {
     await render({ state: 'success', knowledge_metrics }, []);
