@@ -1126,7 +1126,7 @@ function renderAudit(events, ctx) {
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
     tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
-    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: cmd || "" }));
+    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: ev.tool_name || cmd || "" }));
     tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
     tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
     tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));

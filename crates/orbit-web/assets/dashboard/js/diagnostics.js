@@ -707,7 +707,7 @@ function formatCountRate(count, total) {
   const n = Number(count) || 0;
   const d = Number(total) || 0;
   if (d <= 0) return `${n} / ${d}`;
-  return `${n} / ${d} (${((n / d) * 100).toFixed(1)}%)`;
+  return `${n}·${((n / d) * 100).toFixed(1)}%`;
 }
 
 function complexityLabel(value) {
