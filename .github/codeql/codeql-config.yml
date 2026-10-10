@@ -12,6 +12,7 @@ paths-ignore:
   - "**/tests/**"
   - "**/*_test.rs"
   - "**/*_tests.rs"
+  - "**/test_support.rs"
   - "crates/**/examples/**"
   - "**/benches/**"
   - ".orbit/**"

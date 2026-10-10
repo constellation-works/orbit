@@ -11,6 +11,7 @@
 
 mod linux_landlock;
 mod linux_sandbox;
+mod macos_compile;
 mod macos_sandbox;
 
 mod apply_probe;

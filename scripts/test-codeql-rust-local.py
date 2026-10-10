@@ -80,7 +80,8 @@ else:
     sys.exit(99)
 '''
 
-TRACKED = ["Cargo.toml", "crates/core/src/lib.rs", "crates/core/tests/it.rs"]
+TRACKED = ["Cargo.toml", "crates/core/src/lib.rs", "crates/core/src/test_support.rs",
+           "crates/core/tests/it.rs"]
 # Residue a checkout accumulates: generated build output, earlier run scratch
 # with a prepared toolchain, and ad-hoc measurement files.
 RESIDUE = ["target/debug/build/serde-1/out/generated.rs",
