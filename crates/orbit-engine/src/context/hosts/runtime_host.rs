@@ -450,7 +450,8 @@ pub trait RuntimeHost: Send + Sync {
     /// with no configuration still starts a provider, but never forwards
     /// ambient credentials. `OrbitRuntime` overrides it with the operator's
     /// `[execution.env]` policy, with `workflow.validation_env.path` ahead of
-    /// PATH. [ORB-10917] [ORB-15204]
+    /// PATH and the rest of the resolved validation PATH after it, the same
+    /// for every agent lane. [ORB-10917] [ORB-15204] [ORB-15293]
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
     }

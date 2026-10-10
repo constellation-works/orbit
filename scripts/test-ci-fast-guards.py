@@ -440,7 +440,16 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(
             calls,
             [
-                ["test", "-p", "orbit-core", "--test", "ci_failure_goldens"],
+                [
+                    "test",
+                    "-p",
+                    "orbit-core",
+                    "--test",
+                    "ci_failure_goldens",
+                    "ci_failure_fixture_goldens",
+                    "--",
+                    "--exact",
+                ],
                 [
                     "test",
                     "-p",

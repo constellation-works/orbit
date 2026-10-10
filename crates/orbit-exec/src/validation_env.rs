@@ -14,9 +14,10 @@
 //! environment, so the allowlist model still decides everything else. An
 //! operator can prepend or replace PATH entries and disable the login-shell
 //! probe. Every resolution records which [`ValidationEnvSource`] decided PATH.
-//! Agent sessions receive the configured entries too
+//! Agent sessions receive the configured entries first
 //! ([`ValidationEnvPolicy::agent_environment`]), so a reviewer's `python3` is
-//! the one validation runs.
+//! the one validation runs, and every other resolved PATH entry after their
+//! own ([`ValidationEnvironment::extend_agent_environment`]).
 //!
 //! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
 //! interactive rc files as well as profiles. Startup failure, nonzero exit,
@@ -162,12 +163,14 @@ impl Default for ValidationEnvPolicy {
 }
 
 impl ValidationEnvPolicy {
-    /// `env` with [`Self::path`] ahead of its PATH: the environment an agent
-    /// session starts with, so the interpreter and tools a reviewer or
-    /// implementer runs are the ones required validation runs with
-    /// [ORB-15204]. The entries are prepended under either
+    /// `env` with [`Self::path`] ahead of its PATH, so the interpreter and
+    /// tools a reviewer or implementer runs are the ones required validation
+    /// runs with [ORB-15204]. The entries are prepended under either
     /// [`Self::path_mode`], because the rest of PATH still locates the
-    /// provider CLI. The login-shell probe is not applied. A provider that
+    /// provider CLI. The login-shell probe is not applied here: an agent
+    /// session's dispatch also appends the probed entries through
+    /// [`ValidationEnvironment::extend_agent_environment`], and a command
+    /// `proc.spawn` runs inside that session inherits them. A provider that
     /// would reread login profiles is told not to while
     /// [`Self::pins_agent_path`] holds, since a profile can reorder PATH
     /// (macOS `path_helper`). A PATH that already starts with the
@@ -519,6 +522,41 @@ impl ValidationEnvironment {
     /// The PATH commands run with, when one is set.
     pub fn path(&self) -> Option<&str> {
         lookup(&self.env, "PATH")
+    }
+
+    /// `env`, an agent session's environment from
+    /// [`ValidationEnvPolicy::agent_environment`], with every entry of this
+    /// resolved PATH that `env`'s PATH lacks appended. A session in any lane,
+    /// implementer or reviewer, then finds every tool required validation
+    /// finds, including the ones only the login-shell probe located, instead
+    /// of rediscovering a working PATH by trial [ORB-15293]. Appending keeps
+    /// the session's own order, configured entries first, deciding which copy
+    /// runs and where the provider CLI is found. Toolchain locators stay with
+    /// the `[execution.env]` allowlist.
+    pub fn extend_agent_environment(
+        &self,
+        mut env: Vec<(String, String)>,
+    ) -> Vec<(String, String)> {
+        let inherited = lookup(&env, "PATH").unwrap_or_default().to_string();
+        let mut seen: Vec<&str> = inherited.split(':').collect();
+        let mut appended = Vec::new();
+        for entry in self.path().unwrap_or_default().split(':') {
+            if !entry.is_empty() && !seen.contains(&entry) {
+                seen.push(entry);
+                appended.push(entry);
+            }
+        }
+        if appended.is_empty() {
+            return env;
+        }
+        let path = if inherited.is_empty() {
+            appended.join(":")
+        } else {
+            format!("{inherited}:{}", appended.join(":"))
+        };
+        env.retain(|(name, _)| name != "PATH");
+        env.push(("PATH".to_string(), path));
+        env
     }
 
     /// Executable candidates in PATH order. Duplicate or symlinked entries

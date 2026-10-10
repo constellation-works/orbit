@@ -244,7 +244,9 @@ pub(super) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
 /// PATH), when resolution is disabled without a configured PATH, or when the
 /// resolved PATH drops login-shell entries. It also reports the successful
 /// probe mode, interactive fallback reason and tool locations, warning when a
-/// later PATH entry contains a different executable shadowed by an earlier one.
+/// later PATH entry contains a different executable shadowed by an earlier one,
+/// or when an agent session would resolve `python3`, `git`, `make` or `cargo`
+/// to a different executable than required validation.
 pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     if runtime.workflow_required_validation_commands().is_empty() {
         return check(
@@ -300,6 +302,27 @@ pub(super) fn doctor_check_validation_env(runtime: &OrbitRuntime) -> WorkspaceDo
             }
         } else {
             details.push(format!("{tool} is absent from PATH"));
+        }
+    }
+    // Implementer and reviewer sessions start from one environment. A tool it
+    // resolves differently from required validation is what made a reviewer
+    // hand-build a PATH wrapper before its gates would pass [ORB-15293].
+    let mut session = environment.clone();
+    session.env = runtime.agent_session_environment(&[]);
+    for tool in ["python3", "git", "make", "cargo"] {
+        let validation = environment.program_paths(tool).into_iter().next();
+        let agent = session.program_paths(tool).into_iter().next();
+        if agent != validation {
+            let shown = |path: Option<std::path::PathBuf>| {
+                path.map_or_else(|| "nothing".to_string(), |path| path.display().to_string())
+            };
+            details.push(format!(
+                "{tool}: agent sessions (implement and review lanes) resolve {}, required \
+                 validation resolves {}",
+                shown(agent),
+                shown(validation)
+            ));
+            warning = true;
         }
     }
     let message = details.join("; ");

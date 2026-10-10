@@ -779,14 +779,28 @@ impl OrbitRuntime {
         orbit_exec::ValidationEnvironment::resolve(base, self.validation_env_policy(), &shell)
     }
 
-    /// The environment an agent session starts with: the provider CLI and
-    /// the commands its shell or `proc.spawn` runs. It is the
+    /// The environment `proc.spawn` runs a command with: the
     /// `[execution.env]` allowlist plus `extras`, with
     /// `workflow.validation_env.path` ahead of PATH, so a reviewer resolves
-    /// the interpreter and tools required validation uses [ORB-15204].
+    /// the interpreter and tools required validation uses [ORB-15204]. Inside
+    /// an agent session the inherited PATH already carries
+    /// [`Self::agent_session_environment`]'s entries, so no login shell is
+    /// probed per call.
     pub(crate) fn agent_environment(&self, extras: &[&str]) -> Vec<(String, String)> {
         self.validation_env_policy()
             .agent_environment(self.execution_env_policy().agent_subprocess_env(extras))
+    }
+
+    /// The environment an agent session starts with, in every lane
+    /// (implementer, before-PR and before-landing reviewer): the provider CLI
+    /// and the commands its shell runs. It is the `proc.spawn` environment
+    /// (`workflow.validation_env.path` first) with every entry of
+    /// [`Self::validation_environment`]'s PATH that it lacks appended, so a
+    /// session finds each tool required validation finds without a
+    /// hand-built PATH wrapper [ORB-15293].
+    pub fn agent_session_environment(&self, extras: &[&str]) -> Vec<(String, String)> {
+        self.validation_environment()
+            .extend_agent_environment(self.agent_environment(extras))
     }
 
     /// Why required validation may not find the user's toolchain on this

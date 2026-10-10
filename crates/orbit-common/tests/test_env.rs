@@ -144,6 +144,26 @@ fn a_fixture_overrun_names_its_phase_and_progress() {
     }
 }
 
+/// ORB-15293: a golden fixture slowed by write latency on a loaded host was
+/// failed by a deadline measured from its start while it still advanced. The
+/// deadline bounds the gap between items, not the fixture's total.
+#[test]
+fn a_fixture_that_keeps_advancing_outlives_its_stall_deadline() {
+    let deadline = Duration::from_secs(2);
+    let mut progress = FixtureProgress::with_deadline("slow cases", deadline);
+    progress.phase("cases", 30);
+    let started = std::time::Instant::now();
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(100));
+        progress.advance();
+    }
+    assert!(
+        started.elapsed() > deadline,
+        "the fixture outran its deadline"
+    );
+    progress.finish();
+}
+
 fn panic_message(error: Box<dyn std::any::Any + Send>) -> String {
     match error.downcast::<String>() {
         Ok(message) => *message,
@@ -225,6 +245,7 @@ mod orphaned_fixture_children {
     use std::time::Instant;
 
     const DIR_ENV: &str = "ORBIT_ORPHAN_FIXTURE_DIR";
+    const CHATTY_SECS_ENV: &str = "ORBIT_CHATTY_CHILD_SECS";
     /// Long enough that a survivor is unmistakable, short enough that a failed
     /// run does not leave processes for long.
     const SURVIVOR_SECS: &str = "120";
@@ -332,10 +353,16 @@ mod orphaned_fixture_children {
                 "orphan_child_entry",
                 dir.path(),
                 Duration::from_secs(2),
+                Duration::from_secs(60),
             )
         }));
         let message = panic_message(result.expect_err("an overrunning child fails the caller"));
-        for expected in ["orphan_child_entry", "host load", "fixture child running"] {
+        for expected in [
+            "orphan_child_entry",
+            "printed nothing for 2s",
+            "host load",
+            "fixture child running",
+        ] {
             assert!(message.contains(expected), "{expected:?} in {message}");
         }
         let child = wait_for_pid(&dir.path().join("child.pid"));
@@ -348,6 +375,72 @@ mod orphaned_fixture_children {
             kill_leftovers(&[child, grandchild]);
         }
         outcome.unwrap();
+    }
+
+    /// ORB-15293: a child that keeps reporting progress is slow, not hung, so
+    /// the quiet deadline must not kill it however long it runs in total.
+    #[test]
+    fn a_child_that_keeps_printing_outlives_its_quiet_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = reexec("chatty_child_entry", dir.path());
+        command.env(CHATTY_SECS_ENV, "8");
+        let started = Instant::now();
+        let output = run_child_test_within(
+            &mut command,
+            "orphaned_fixture_children::chatty_child_entry",
+            dir.path(),
+            Duration::from_secs(4),
+            Duration::from_secs(120),
+        );
+        assert!(
+            started.elapsed() > Duration::from_secs(4),
+            "child ran past the quiet deadline"
+        );
+        assert_child_test_passed(
+            "chatty_child_entry",
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+    }
+
+    /// Progress buys time only up to the ceiling, which stays below nextest's
+    /// termination so the parent still reports what the child printed.
+    #[test]
+    fn a_child_printing_past_its_ceiling_is_killed_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = reexec("chatty_child_entry", dir.path());
+        command.env(CHATTY_SECS_ENV, SURVIVOR_SECS);
+        let started = Instant::now();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_child_test_within(
+                &mut command,
+                "chatty_child_entry",
+                dir.path(),
+                Duration::from_secs(60),
+                Duration::from_secs(2),
+            )
+        }));
+        let message = panic_message(result.expect_err("a child past its ceiling fails the caller"));
+        for expected in ["chatty_child_entry", "2s ceiling", "chatty progress"] {
+            assert!(message.contains(expected), "{expected:?} in {message}");
+        }
+        assert!(
+            started.elapsed() < BOUND,
+            "the ceiling, not the child, ended the run"
+        );
+    }
+
+    /// Prints a progress line every 200 ms for `CHATTY_SECS_ENV` seconds.
+    #[test]
+    #[ignore = "re-executed by the child progress regressions"]
+    fn chatty_child_entry() {
+        let secs: u64 = std::env::var(CHATTY_SECS_ENV).unwrap().parse().unwrap();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(secs) {
+            let _ = writeln!(std::io::stderr(), "chatty progress");
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     /// Plays the nextest-owned test process: runs a fixture child and waits.

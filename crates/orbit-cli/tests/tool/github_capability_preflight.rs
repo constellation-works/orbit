@@ -55,6 +55,7 @@ impl Lane {
         let gh = self.path.join("gh");
         std::fs::write(&gh, script).expect("write gh stub");
         set_executable(&gh);
+        test_env::prime_executable(&mut std::process::Command::new(&gh));
     }
 
     fn preflight(&self) -> Value {
