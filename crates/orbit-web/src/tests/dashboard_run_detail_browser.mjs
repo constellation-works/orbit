@@ -217,6 +217,63 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunKnowledge();
     detail.renderRunGantt();
   }, { run, steps, logs });
+  const waitingRun = {
+    state: 'success', workspace_id: 'fixture-workspace',
+    env_pass_unset: ['CLAUDE_CODE_OAUTH_TOKEN'],
+    drain_last_pass: {
+      queued: 7,
+      deferred: [{ task_id: 'ORB-15181', reason: 'context_lock_conflict', blocked_by: ['ORB-15183'] }],
+      deferred_total: 1,
+      excluded: [
+        { task_id: 'ORB-15196', reason: 'active_pilot_preparation' },
+        { task_id: 'ORB-15071', reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' },
+      ],
+      excluded_total: 2,
+    },
+  };
+  await render(waitingRun, []);
+  const unsetNotice = page.locator('#run-detail-meta .child-dispatch-notice').first();
+  const unsetText = await unsetNotice.textContent();
+  if (!unsetText.includes('CLAUDE_CODE_OAUTH_TOKEN') || !unsetText.includes('execution.env.pass')) {
+    throw new Error(`Unset environment notice must preserve config and environment-name case: ${unsetText}`);
+  }
+  if (await unsetNotice.evaluate(node => getComputedStyle(node).textTransform) === 'uppercase') {
+    throw new Error('Run-detail notices must preserve the case of config keys and environment names');
+  }
+  const waitingNotice = page.locator('#run-detail-meta .still-waiting .child-dispatch-notice');
+  const waitingText = await waitingNotice.textContent();
+  if (!waitingText.includes('3 backlog tasks have recorded wait reasons (1 deferred, 2 excluded)')
+    || !waitingText.includes('6 additional admissible tasks were not started and are not listed below')) {
+    throw new Error(`Still-waiting summary must count reason rows and explain unlisted admissible tasks: ${waitingText}`);
+  }
+  if (await waitingNotice.evaluate(node => getComputedStyle(node).textTransform) === 'uppercase') {
+    throw new Error('Still-waiting notice must preserve normal sentence casing');
+  }
+  const waitingRows = page.locator('#run-detail-meta .still-waiting .waiting-task');
+  if (await waitingRows.count() !== 3) throw new Error('Still-waiting reason totals must match the rows shown');
+  const expectedReasons = await page.evaluate(async tasks => {
+    const { drainWaitBadge } = await import('/js/drain-waits.js');
+    return tasks.map(task => `: ${drainWaitBadge(task).text}`);
+  }, [...waitingRun.drain_last_pass.deferred, ...waitingRun.drain_last_pass.excluded]);
+  const renderedReasons = await waitingRows.locator('.waiting-task-reason').allTextContents();
+  if (JSON.stringify(renderedReasons) !== JSON.stringify(expectedReasons)) {
+    throw new Error(`Run-detail waits must use the Drain card's human reason labels: ${JSON.stringify(renderedReasons)}`);
+  }
+  const waitingLinks = await page.locator('#run-detail-meta .still-waiting .waiting-task-link').evaluateAll(nodes => nodes.map(node => ({
+    id: node.textContent.trim(), href: node.href,
+  })));
+  const expectedTaskIds = ['ORB-15181', 'ORB-15183', 'ORB-15196', 'ORB-15071'];
+  const linksMatchTasks = waitingLinks.every(link => {
+    const url = new URL(link.href);
+    const [route, query] = url.hash.slice(1).split('?');
+    const params = new URLSearchParams(query);
+    return url.searchParams.get('workspace') === 'fixture-workspace'
+      && route === 'tasks' && params.get('status') === 'all' && params.get('q') === link.id;
+  });
+  if (JSON.stringify(waitingLinks.map(link => link.id)) !== JSON.stringify(expectedTaskIds) || !linksMatchTasks) {
+    throw new Error(`Every waiting task and blocker ID must link to its task: ${JSON.stringify(waitingLinks)}`);
+  }
+
   const childDispatches = ['success', 'cancelled', 'failed', null, 'running', 'success'].map((state, index) => ({
     child_run_id: `jrun-child-${index}`, job_name: 'task_auto_pipeline',
     phase: 'submitted', child_status: 'running', parent_step_id: 'leaf_invoke', state,
