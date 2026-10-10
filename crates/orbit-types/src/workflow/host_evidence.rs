@@ -100,18 +100,6 @@ impl HostEvidenceReason {
             Self::TestFailed => "test_failed",
         }
     }
-
-    /// Whether the command was refused before anything ran.
-    pub fn refused_before_run(self) -> bool {
-        matches!(
-            self,
-            Self::ShellMetacharacter
-                | Self::CommandNotAllowed
-                | Self::ArgumentNotAllowed
-                | Self::OsMismatch
-                | Self::CandidateChanged
-        )
-    }
 }
 
 /// A typed refusal with the detail that explains it.

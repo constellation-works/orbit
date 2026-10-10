@@ -894,7 +894,7 @@ use orbit_types::policy::PolicyError;
 use orbit_types::record::RecordError;
 use orbit_types::resource::ResourceError;
 use orbit_types::task::TaskError;
-use orbit_types::tool::{ToolError, WorkerBindingError};
+use orbit_types::tool::WorkerBindingError;
 use orbit_types::workflow::{
     FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
     ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
@@ -947,12 +947,6 @@ impl From<PolicyError> for OrbitError {
 
 impl From<ResourceError> for OrbitError {
     fn from(error: ResourceError) -> Self {
-        Self::InvalidInput(error.to_string())
-    }
-}
-
-impl From<ToolError> for OrbitError {
-    fn from(error: ToolError) -> Self {
         Self::InvalidInput(error.to_string())
     }
 }

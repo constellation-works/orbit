@@ -131,11 +131,6 @@ macro_rules! define_deterministic_actions {
         }
 
         impl DeterministicAction {
-            pub const NAMES: &[&str] = &[
-                $( $core_name, )*
-                $( $engine_name, )*
-            ];
-
             pub fn parse(name: &str) -> Option<Self> {
                 match name {
                     $( $core_name => Some(Self::Core(CoreDeterministicAction::$core_variant)), )*

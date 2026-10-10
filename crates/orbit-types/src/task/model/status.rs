@@ -329,20 +329,6 @@ impl TaskComplexity {
         !matches!(self, TaskComplexity::Unassessed)
     }
 
-    /// Ascending rank of the assessed tiers, for comparing one assessment
-    /// against another or against a policy ceiling. [`TaskComplexity::Unassessed`]
-    /// is the absence of an assessment, so it ranks below every assessed tier
-    /// and never reads as an escalation.
-    pub fn assessment_rank(self) -> u8 {
-        match self {
-            TaskComplexity::Unassessed => 0,
-            TaskComplexity::Low => 1,
-            TaskComplexity::Medium => 2,
-            TaskComplexity::Hard => 3,
-            TaskComplexity::XHard => 4,
-        }
-    }
-
     /// Reject [`TaskComplexity::Unassessed`] on human/agent create and update
     /// surfaces.
     pub fn require_assessed(self) -> Result<Self, TaskError> {

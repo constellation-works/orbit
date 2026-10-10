@@ -97,13 +97,6 @@ pub struct ToolSessionContext {
 }
 
 impl ToolSessionContext {
-    pub fn with_workspace(workspace: impl Into<String>) -> Self {
-        Self {
-            workspace: Some(workspace.into()),
-            ..Self::default()
-        }
-    }
-
     /// Construct the trusted defaults for the local standalone MCP adapter.
     pub fn trusted_local(
         workspace_id: Option<String>,
