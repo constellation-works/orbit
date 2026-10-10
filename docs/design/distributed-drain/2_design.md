@@ -102,6 +102,16 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   `allow_missing_context` governs explicit operator existence checks and records the exact
   creation intent task-pilot honours; it never affects admission. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
+- A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-sweep` or
+  `security-review`) carries its evidence as selectors: every cited source path plus the
+  regression-test location. Task-pilot may add modification targets to it but never drops one of
+  those selectors that still resolves at the pinned source; apply keeps any the pilot omitted, in
+  the filed order, and reports them as `context_evidence_retained`, so re-assessment does not
+  rewrite the scope [ORB-15285]. The evidence stays in `context_files` and so in the lock
+  surface: a finding's evidence names the files its repair is likely to edit, the review templates
+  bound it to the cited paths, and the per-complexity over-attachment finding counts retained
+  selectors. A selector that no longer resolves is dropped and reported like any other missing
+  target, and an operator `orbit.task.update` that narrows the scope is respected.
 - The original canonical footprint is immutable in the admission receipt. The live claim
   protects it through execution and review, including after reservation expiry; only owner-validated
   widening at handoff may add selectors, and checkout contents cannot shrink it.
@@ -1202,5 +1212,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-15088] — answered an owner's lock-wait timeout as the retryable `lock_busy`, retried a bound worker's owner reads on it, and settled a step it still fails as `transient`.
 - [ORB-14697] — excluded crews whose provider the follower reads at or near its usage limit from each pass's crew window (`provider_limit`, lifting at `until` in the same drain), replacing the window-long exclusion a limit release added.
 - [ORB-15191] — made a multi-slot local drain or discovery ship wait for the task pilot to prepare empty-context backlog work (`awaiting_footprint`), then run it only alone (`awaiting_exclusive_slot`), after three such tasks edited one stylesheet concurrently.
+- [ORB-15285] — kept a review-filed task's evidence selectors through task-pilot assessments that propose only modification targets.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

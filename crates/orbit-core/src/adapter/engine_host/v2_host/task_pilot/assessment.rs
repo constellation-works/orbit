@@ -547,6 +547,72 @@ pub(super) fn unauthorized_missing_targets(
     Ok(findings)
 }
 
+/// Tags the review templates stamp on the findings they file. Each template
+/// requires a finding to carry its evidence — every cited source path and
+/// the regression-test location — as `context_files`.
+const REVIEW_FINDING_TAGS: [&str; 4] = [
+    "code-review",
+    "delivery-code-review",
+    "qa-sweep",
+    "security-review",
+];
+
+/// Whether a review filed the task, so its selectors are evidence the pilot
+/// may add to but not drop.
+pub(super) fn review_filed(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|tag| REVIEW_FINDING_TAGS.contains(&tag.as_str()))
+}
+
+/// The selectors of a review-filed task's prepared scope that `after` omits
+/// and that still resolve, with their recorded kind, at the pinned source (or
+/// in the workspace without one). A pilot narrowing the scope to its
+/// modification targets would otherwise erase the review's evidence on every
+/// assessment. A selector that no longer resolves is not kept: it falls to
+/// the same missing-target handling as any other dropped selector.
+pub(super) fn retained_review_evidence(
+    action: &str,
+    before: &[String],
+    after: &[String],
+    workspace_root: &Path,
+    source: Option<&SourceSnapshot>,
+) -> Result<Vec<String>, DispatchError> {
+    let mut retained = Vec::new();
+    for selector in before {
+        if after.contains(selector) || retained.contains(selector) {
+            continue;
+        }
+        let Ok(anchor) = anchor_path(selector) else {
+            continue;
+        };
+        let expected_dir = selector.starts_with("dir:");
+        let resolves = match source {
+            Some(source) => {
+                canonical_selector(selector).ok().as_ref() == Some(selector)
+                    && matches!(
+                        (
+                            source.path_kind(action, workspace_root, &anchor)?,
+                            expected_dir
+                        ),
+                        (GitPathKind::Tree, true) | (GitPathKind::Blob, false)
+                    )
+            }
+            None => {
+                canonical_selector_in_workspace(selector, workspace_root)
+                    .ok()
+                    .as_ref()
+                    == Some(selector)
+                    && exists_in_workspace(selector, workspace_root)
+                    && validate_selector_target_kind(action, "", selector, workspace_root).is_ok()
+            }
+        };
+        if resolves {
+            retained.push(selector.clone());
+        }
+    }
+    Ok(retained)
+}
+
 /// How an operator records that a missing selector is a target the task will
 /// create. Agents' proposals, comments and plans never grant it.
 fn reauthorization_hint(selector: &str) -> String {
