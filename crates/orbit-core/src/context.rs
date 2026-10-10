@@ -661,6 +661,14 @@ impl OrbitContext {
         &self.policy.execution_env_policy
     }
 
+    pub(crate) fn apply_child_env_defaults(&mut self, defaults: &[(String, String)]) {
+        self.policy.execution_env_policy = self
+            .policy
+            .execution_env_policy
+            .clone()
+            .with_defaults(defaults);
+    }
+
     pub(crate) fn codex_execution_policy(&self) -> &CodexExecutionPolicy {
         &self.policy.codex_execution_policy
     }

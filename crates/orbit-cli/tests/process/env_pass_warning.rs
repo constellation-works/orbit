@@ -22,6 +22,10 @@ const UNSET: &str = "FIXTURE_WORKER_TOKEN_UNSET";
 const SET: &str = "FIXTURE_WORKER_TOKEN_SET";
 const MACOS_TEMPLATE_VAR: &str = "__CF_USER_TEXT_ENCODING";
 const SECRET: &str = "secret-value-that-must-never-be-printed";
+#[cfg(unix)]
+const AMBIENT_SECRET: &str = "ambient-secret-that-must-never-be-printed";
+const NOT_PASSED: &str = "FIXTURE_NOT_PASS_LISTED";
+const EMPTY: &str = "FIXTURE_EMPTY_TOKEN";
 const JOB: &str = "env_pass_fixture";
 
 struct Fixture {
@@ -113,7 +117,9 @@ impl Fixture {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env_remove(UNSET)
-            .env_remove(SET);
+            .env_remove(SET)
+            .env_remove(NOT_PASSED)
+            .env_remove(EMPTY);
         for (name, secret) in set {
             command.env(name, secret);
         }
@@ -301,19 +307,76 @@ impl Fixture {
         fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod clock.env");
     }
 
-    fn tick(&self) -> (Value, String) {
-        let output = self
-            .command(&[])
-            .args(["clock", "tick", "--json"])
-            .output()
-            .expect("clock tick");
+    fn tick_with(&self, set: &[(&str, &str)], dry_run: bool) -> (Value, String) {
+        let mut command = self.command(set);
+        command.args(["clock", "tick", "--json"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command.output().expect("clock tick");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         assert!(
-            !stdout.contains(SECRET) && !stderr.contains(SECRET),
+            output.status.success(),
+            "clock tick failed: {stdout}{stderr}"
+        );
+        assert!(
+            [SECRET, AMBIENT_SECRET]
+                .iter()
+                .all(|secret| { !stdout.contains(secret) && !stderr.contains(secret) }),
             "clock tick printed a clock.env value: {stdout}{stderr}"
         );
         (serde_json::from_str(&stdout).expect("tick JSON"), stderr)
+    }
+
+    fn tick(&self) -> (Value, String) {
+        self.tick_with(&[], false)
+    }
+
+    fn clock_probe(&self) {
+        use std::os::unix::fs::PermissionsExt;
+
+        // This fixed executor checks its actual environment after both detached
+        // worker and provider dispatch. It emits only boolean results.
+        let provider = self.home.join("codex");
+        fs::write(&provider, format!(
+            "#!/bin/sh\ncat >/dev/null\n\
+             file=false; ambient=false; empty=false; filtered=false\n\
+             [ \"${{{UNSET}-}}\" = '{SECRET}' ] && file=true\n\
+             [ \"${{{SET}-}}\" = '{AMBIENT_SECRET}' ] && ambient=true\n\
+             [ \"${{{EMPTY}-}}\" = '{SECRET}' ] && empty=true\n\
+             [ \"${{{NOT_PASSED}+present}}\" != present ] && filtered=true\n\
+             printf '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{\"file\":%s,\"ambient\":%s,\"empty\":%s,\"filtered\":%s}},\"error\":null}}\\n' \"$file\" \"$ambient\" \"$empty\" \"$filtered\"\n"
+        )).expect("write credential probe");
+        fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+        let root = self.home.join(".orbit");
+        fs::write(
+            root.join("resources/executors/codex.yaml"),
+            serde_json::json!({
+                "schemaVersion": 2, "kind": "Executor", "metadata": {"name": "codex"},
+                "spec": {"executor_type": "direct_agent", "command": provider,
+                    "args": [], "sandbox": "off", "env": {}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join(format!("resources/jobs/{JOB}.yaml")),
+            serde_json::json!({
+                "schemaVersion": 2, "kind": "Job", "metadata": {"name": JOB},
+                "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                    "id": "probe", "spec": {"type": "agent_loop", "provider": "codex",
+                        "backend": "cli", "description": "Probe the child environment",
+                        "instruction": "Return the fixed fixture response",
+                        "wall_clock_timeout_seconds": 10}
+                }]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(self.repo.join(".orbit/routines/clock-env-fixture.yaml"), format!(
+            "schemaVersion: 1\nname: clock-env-fixture\nenabled: true\ntrigger: {{ cron: '* * * * *' }}\ntarget: job:{JOB}\n"
+        )).unwrap();
     }
 }
 
@@ -343,4 +406,181 @@ fn clock_tick_loads_only_pass_listed_names_from_an_owner_only_clock_env() {
         stderr.contains("clock.env") && stderr.contains("chmod 600"),
         "a group/world-readable file is refused with its fix: {stderr}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_credentials_reach_workers_with_ambient_precedence_and_dry_run_loads_nothing() {
+    const CHILD: &str = "env_pass_warning::clock_worker_credentials_child";
+    let temp = tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", CHILD, "--ignored", "--nocapture"]);
+    let output = test_env::run_child_test(&mut command, CHILD, temp.path());
+    test_env::assert_child_test_passed(CHILD, output.status, &output.stdout, &output.stderr);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "isolated clock worker credential boundary"]
+fn clock_worker_credentials_child() {
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::new();
+    fixture.pass_list(&["HOME", "PATH", UNSET, SET, EMPTY]);
+    fixture.clock_env(
+        &format!("{UNSET}={SECRET}\n{SET}={SECRET}\n{EMPTY}={SECRET}\n{NOT_PASSED}={SECRET}\n"),
+        0o600,
+    );
+    fixture.clock_probe();
+
+    let ambient = [(SET, AMBIENT_SECRET), (EMPTY, "")];
+    let (dry, _) = fixture.tick_with(&ambient, true);
+    assert_eq!(dry["clock_env_loaded"], serde_json::json!([]));
+    assert!(
+        dry["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|report| report["run_id"].is_null())
+    );
+
+    // A new routine first records its baseline. Seed a due cursor in this
+    // isolated process so the real clock fires without waiting a minute.
+    let connection = rusqlite::Connection::open(fixture.home.join(".orbit/orbit.db")).unwrap();
+    let baseline = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    connection
+        .execute(
+            "INSERT INTO routine_cursors (routine_name, baseline_at, last_slot, updated_at) \
+         VALUES ('clock-env-fixture', ?1, NULL, ?1)",
+            rusqlite::params![baseline],
+        )
+        .unwrap();
+    drop(connection);
+
+    let (tick, _) = fixture.tick_with(&ambient, false);
+    assert_eq!(tick["clock_env_loaded"], serde_json::json!([UNSET, EMPTY]));
+    let run = tick["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|report| report["routine"] == "clock-env-fixture")
+        .unwrap_or_else(|| panic!("credential probe routine missing: {tick}"));
+    let id = run["run_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("probe did not fire: {tick}"));
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let output = fixture.show(id);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            [SECRET, AMBIENT_SECRET]
+                .iter()
+                .all(|secret| { !stdout.contains(secret) && !stderr.contains(secret) }),
+            "run observation printed a credential"
+        );
+        assert!(output.status.success(), "run show failed: {stdout}{stderr}");
+        let shown: Value = serde_json::from_str(&stdout).unwrap();
+        if shown["run"]["state"] == "success" {
+            assert_eq!(shown["run"]["env_pass_unset"], serde_json::json!([]));
+            for invariant in ["file", "ambient", "empty", "filtered"] {
+                assert_eq!(
+                    shown["pipeline_state"]["pipeline"]["probe"][invariant], true,
+                    "worker/provider environment invariant {invariant}: {shown}"
+                );
+            }
+            break;
+        }
+        assert!(
+            !matches!(
+                shown["run"]["state"].as_str(),
+                Some("failed" | "cancelled" | "interrupted")
+            ),
+            "clock worker ended unsuccessfully: {shown}"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "clock worker did not succeed: {shown}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn clock_credential_loader_preserves_the_process_environment_with_a_background_reader() {
+    const CHILD: &str = "env_pass_warning::clock_credential_loader_child";
+    let fixture = Fixture::new();
+    fixture.clock_env(
+        &format!("{UNSET}={SECRET}\n{SET}={SECRET}\n{EMPTY}={SECRET}\n"),
+        0o600,
+    );
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", CHILD, "--ignored", "--nocapture"])
+        .env("HOME", &fixture.home)
+        .env(SET, AMBIENT_SECRET)
+        .env(EMPTY, "")
+        .env_remove(UNSET);
+    let output = test_env::run_child_test(&mut command, CHILD, fixture._temp.path());
+    test_env::assert_child_test_passed(CHILD, output.status, &output.stdout, &output.stderr);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "isolated credential-loader boundary"]
+fn clock_credential_loader_child() {
+    let root = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".orbit");
+    std::thread::scope(|scope| {
+        let (ready, started) = std::sync::mpsc::sync_channel(1);
+        let (finish, finished) = std::sync::mpsc::sync_channel(1);
+        let reader = scope.spawn(move || {
+            ready.send(()).unwrap();
+            finished.recv().unwrap();
+            assert!(
+                std::env::var_os(UNSET).is_none(),
+                "loader must not export into the process"
+            );
+            assert_eq!(std::env::var(SET).unwrap(), AMBIENT_SECRET);
+            assert_eq!(std::env::var(EMPTY).unwrap(), "");
+        });
+        started.recv().unwrap();
+        let entries = orbit_common::security::operator_env::load_clock_env(
+            &root,
+            &[UNSET.to_string(), SET.to_string(), EMPTY.to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            entries,
+            [
+                (UNSET.to_string(), SECRET.to_string()),
+                (EMPTY.to_string(), SECRET.to_string())
+            ]
+        );
+        let policy =
+            orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(&root))
+                .unwrap()
+                .execution_env
+                .with_defaults(&entries);
+        let environment: std::collections::BTreeMap<_, _> =
+            policy.agent_subprocess_env(&[EMPTY]).into_iter().collect();
+        assert_eq!(environment.get(UNSET).map(String::as_str), Some(SECRET));
+        assert_eq!(
+            environment.get(SET).map(String::as_str),
+            Some(AMBIENT_SECRET)
+        );
+        assert_eq!(
+            environment.get(EMPTY).map(String::as_str),
+            Some(""),
+            "another workspace's default cannot be admitted through provider extras"
+        );
+        assert!(policy.unset_pass_names().is_empty());
+        let diagnostic = format!("{policy:?}");
+        assert!(
+            !diagnostic.contains(SECRET) && !diagnostic.contains(AMBIENT_SECRET),
+            "policy diagnostics must omit credential values"
+        );
+        finish.send(()).unwrap();
+        reader.join().unwrap();
+    });
 }

@@ -252,7 +252,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // five-minute intervals instead of retaining the old 120-second default.
     let options = configured_sweep_options(global_root, options)?;
     // One runtime per active workspace; discovery and dispatch share them.
-    let discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
+    let mut discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
     let mut skipped_workspaces: BTreeSet<String> =
         discovered.skipped_workspaces.iter().cloned().collect();
     for entry in &discovered.entries {
@@ -344,7 +344,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let clock_env_loaded = if options.dry_run {
         Vec::new()
     } else {
-        export_clock_env_for(global_root, &discovered.entries, &mut load_errors)
+        load_clock_env_for(global_root, &mut discovered, &mut load_errors)
     };
 
     let dispatch = RuntimeDispatch {
@@ -623,22 +623,33 @@ pub(crate) fn run_sweep_at_with_providers_at(
     })
 }
 
-/// Export the `clock.env` values any discovered workspace's effective
+/// Load the `clock.env` values any discovered workspace's effective
 /// `execution.env.pass` lists. A refused or unreadable file is a load error
 /// row, not a failed tick: runs still start, and a Claude activity without its
 /// token then fails fast with an actionable error.
-fn export_clock_env_for(
+fn load_clock_env_for(
     global_root: &Path,
-    entries: &[(Workspace, OrbitRuntime)],
+    discovered: &mut super::loader::DiscoveredWorkspaces,
     load_errors: &mut Vec<RoutineLoadError>,
 ) -> Vec<String> {
-    let pass: BTreeSet<String> = entries
+    let pass: BTreeSet<String> = discovered
+        .entries
         .iter()
+        .chain(&discovered.replicas)
         .flat_map(|(_, runtime)| runtime.env_pass_names())
         .collect();
     let pass: Vec<String> = pass.into_iter().collect();
-    match orbit_common::security::operator_env::export_clock_env(global_root, &pass) {
-        Ok(loaded) => loaded,
+    match orbit_common::security::operator_env::load_clock_env(global_root, &pass) {
+        Ok(defaults) => {
+            for (_, runtime) in discovered
+                .entries
+                .iter_mut()
+                .chain(&mut discovered.replicas)
+            {
+                runtime.context.apply_child_env_defaults(&defaults);
+            }
+            defaults.into_iter().map(|(name, _)| name).collect()
+        }
         Err(error) => {
             let path = orbit_common::security::operator_env::clock_env_file_path(global_root);
             load_errors.push(RoutineLoadError {

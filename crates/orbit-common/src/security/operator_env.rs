@@ -130,34 +130,26 @@ fn unquote(value: &str) -> &str {
     value
 }
 
-/// Export into this process the `pass` names the clock environment file holds
-/// and the process lacks, returning the names exported (never values). A value
-/// already present and non-empty in the process wins over the file.
+/// Load child-environment defaults for the `pass` names the clock environment
+/// file holds and the process lacks. A non-empty ambient value wins.
 ///
-/// Meant for `orbit clock tick`, which calls it before it starts any run so the
-/// workers it launches inherit the values and the usual `execution.env.pass`
-/// allowlist then applies to them unchanged.
-pub fn export_clock_env(global_root: &Path, pass: &[String]) -> Result<Vec<String>, OrbitError> {
-    let Some(entries) = read_env_file(&clock_env_file_path(global_root), pass)? else {
-        return Ok(Vec::new());
-    };
-    let mut exported = Vec::new();
-    for (name, value) in entries {
-        if std::env::var_os(&name).is_some_and(|held| !held.is_empty()) {
-            continue;
-        }
-        // SAFETY: the tick calls this once, at the start of its pass, before it
-        // spawns any thread or child that could read the environment
-        // concurrently.
-        unsafe { std::env::set_var(&name, value) };
-        exported.push(name);
-    }
-    Ok(exported)
+/// This only reads the environment and is safe for multithreaded callers.
+/// Callers must pass the returned values as child-environment data and report
+/// only their names; no credential is exported into the ambient process.
+pub fn load_clock_env(
+    global_root: &Path,
+    pass: &[String],
+) -> Result<Vec<(String, String)>, OrbitError> {
+    Ok(read_env_file(&clock_env_file_path(global_root), pass)?
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(name, _)| std::env::var_os(name).is_none_or(|held| held.is_empty()))
+        .collect())
 }
 
 /// Names `pass` lists that the clock environment file holds a value for, or
 /// `None` when the file is absent. Used to report on the file without
-/// exporting it. A refused or unreadable file is an error.
+/// supplying its values to children. A refused or unreadable file is an error.
 pub fn clock_env_file_names(
     global_root: &Path,
     pass: &[String],
