@@ -1,21 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// A long title, one that fits, and one with no break opportunity at all.
+const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel';
+const titleTexts = [longTitle, longTitle, 'Short title', 'LongUnbrokenTitle'.repeat(8)];
+
 // Runs inside the full dashboard browser harness, with its default dock.
 export async function assertTaskTitleLayout(page, evidence) {
-  await page.evaluate(async () => {
+  await page.evaluate(async titleTexts => {
     const { setWorkspace } = await import('/js/common.js');
     const { setActiveTab } = await import('/js/router.js');
     const { renderTasks, cacheCrewPayload } = await import('/js/tasks.js');
     setWorkspace('one');
     await globalThis.showTaskPaginationEvidence();
     setActiveTab('tasks', { refresh: false });
-    const longTitle = 'Dashboard task titles should show enough information to recognise the work before opening the full detail panel';
     const tasks = [
-      { id: 'TITLE-1', title: longTitle },
-      { id: 'TITLE-2', title: longTitle, os_requirement: { any_of: ['macos'] }, readiness: { preparing: true, gaps: [] } },
-      { id: 'TITLE-3', title: 'Short title' },
-      { id: 'TITLE-4', title: 'LongUnbrokenTitle'.repeat(8) },
+      { id: 'TITLE-1', title: titleTexts[0] },
+      { id: 'TITLE-2', title: titleTexts[1], os_requirement: { any_of: ['macos'] }, readiness: { preparing: true, gaps: [] } },
+      { id: 'TITLE-3', title: titleTexts[2] },
+      { id: 'TITLE-4', title: titleTexts[3] },
     ].map(task => ({ ...task, status: 'backlog', priority: 'medium', status_transitions: [{ status: 'in-progress', required_field: null }] }));
     const context = {
       getTasks: () => tasks,
@@ -37,47 +40,88 @@ export async function assertTaskTitleLayout(page, evidence) {
     cacheCrewPayload({ default_crew: 'opus', crews: [{ name: 'sol' }, { name: 'opus' }] });
     document.querySelector('main.tasks-layout').style.removeProperty('--dock-w');
     globalThis.taskTitleFixture.render();
-  });
+  }, titleTexts);
   try {
     const measurements = [];
-    for (const viewport of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 375, height: 812 }]) {
       await page.setViewportSize(viewport);
       const layout = await page.evaluate(() => {
         const rows = [...document.querySelectorAll('#tasks-body .row[data-key^="task-TITLE-"]')];
-        const titles = rows.slice(0, 2).map(row => {
+        const titles = rows.map(row => {
           const title = row.querySelector('.title');
+          const style = getComputedStyle(title);
           const box = title.getBoundingClientRect();
           const text = [...title.childNodes].find(node => node.nodeType === Node.TEXT_NODE);
-          const lines = new Set();
+          const lineTops = new Set();
           let visibleCharacters = 0;
+          let characterHeight = 0;
           for (let index = 0; index < text.length; index++) {
             const range = document.createRange();
             range.setStart(text, index);
             range.setEnd(text, index + 1);
             const rect = range.getBoundingClientRect();
-            // Leave room for the ellipsis at the end of the second line.
-            const right = box.right - (rect.bottom > box.top + 20 ? 12 : 0);
-            if (rect.width > 0 && rect.bottom <= box.bottom + 1 && rect.right <= right && rect.left >= box.left) {
-              visibleCharacters++;
-              lines.add(Math.round(rect.top));
-            }
+            if (rect.width === 0) continue;
+            lineTops.add(Math.round(rect.top));
+            characterHeight = Math.max(characterHeight, rect.height);
+            // Leave room for the ellipsis at the end of the line.
+            if (rect.left >= box.left && rect.right <= box.right - 12) visibleCharacters++;
           }
-          return { width: box.width, visibleCharacters, lines: lines.size };
+          const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+          return {
+            id: row.dataset.key,
+            whiteSpace: style.whiteSpace,
+            textOverflow: style.textOverflow,
+            overflowX: style.overflowX,
+            width: box.width,
+            contentHeight: title.clientHeight - padding,
+            characterHeight,
+            textLines: lineTops.size,
+            overflowing: title.scrollWidth > title.clientWidth,
+            visibleCharacters,
+            rowTooltip: row.getAttribute('title'),
+          };
         });
+        const body = document.getElementById('tasks-body');
         return {
           panelWidth: document.getElementById('tasks-panel').getBoundingClientRect().width,
           grid: getComputedStyle(rows[0]).gridTemplateColumns,
+          stacked: getComputedStyle(rows[0]).gridTemplateAreas !== 'none',
           heights: rows.map(row => row.getBoundingClientRect().height),
           titles,
-          horizontalOverflow: document.getElementById('tasks-body').scrollWidth > document.getElementById('tasks-body').clientWidth + 1,
+          horizontalOverflow: body.scrollWidth > body.clientWidth + 1,
         };
       });
-      measurements.push({ ...viewport, ...layout });
-      if (Math.max(...layout.heights) - Math.min(...layout.heights) > 1 || layout.horizontalOverflow) {
-        throw new Error(`Task rows must have consistent height without sideways scrolling: ${JSON.stringify(measurements.at(-1))}`);
+      const measured = { ...viewport, ...layout };
+      measurements.push(measured);
+      const fail = reason => { throw new Error(`${reason}: ${JSON.stringify(measured)}`); };
+      if (layout.horizontalOverflow) fail('Task rows must not scroll sideways');
+      // Rows keep one height whatever the title length or badges, and the
+      // desktop row is compact because no title reserves a second line.
+      if (Math.max(...layout.heights) - Math.min(...layout.heights) > 1) fail('Task rows must have a consistent height');
+      if (!layout.stacked && Math.max(...layout.heights) > 44) fail('A desktop task row must stay compact (44px at most)');
+      for (const title of layout.titles) {
+        if (title.whiteSpace !== 'nowrap' || title.textLines !== 1) fail(`Task title ${title.id} must render on a single line`);
+        if (title.contentHeight >= title.characterHeight * 1.5) fail(`Task title ${title.id} must be one line box tall`);
       }
-      if (viewport.width >= 1280 && layout.titles.some(title => title.lines !== 2 || title.visibleCharacters < 60)) {
-        throw new Error(`Plain and badged titles must show at least 60 characters in two lines: ${JSON.stringify(measurements.at(-1))}`);
+      const [plain, badged, short, unbroken] = layout.titles;
+      for (const title of [plain, badged, unbroken]) {
+        if (!title.overflowing || title.textOverflow !== 'ellipsis' || title.overflowX !== 'hidden') {
+          fail(`Overflowing title ${title.id} must be clipped with an ellipsis`);
+        }
+      }
+      if (short.overflowing) fail('A short title must show whole, without an ellipsis');
+      for (const [index, title] of layout.titles.entries()) {
+        if (title.rowTooltip !== titleTexts[index]) fail(`Row ${title.id} must carry the full title as its tooltip`);
+      }
+      // The clipped text stays reachable by name for assistive technology.
+      for (const [index, taskId] of ['TITLE-1', 'TITLE-2', 'TITLE-3', 'TITLE-4'].entries()) {
+        const named = await page.locator(`#tasks-body [data-key="task-${taskId}"]`).getByRole('button', { name: titleTexts[index] }).count();
+        if (named !== 1) fail(`The ${taskId} title button must be named with its full title`);
+      }
+      // Beside the default dock the single line must still be wide enough to
+      // recognise the work: the title column gained its width in ORB-15231.
+      if (viewport.width >= 1280 && (plain.width < 260 || plain.visibleCharacters < 30 || badged.visibleCharacters < 20)) {
+        fail('Plain and badged titles must show enough of their text on one line');
       }
       await page.screenshot({ path: path.join(evidence, `task-titles-${viewport.width}.png`) });
     }
