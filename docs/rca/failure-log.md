@@ -33,6 +33,30 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
+## 2026-10-10: Mac leaves fail the required affected gate on unrelated timing tests
+
+- **Where:** Mac follower, the implementer's required `make ci-test-affected`
+  inside `implement_one`.
+- **Symptom:** `error.code=validation_blocker` (or `required_validation_failed`):
+  "the required make ci-test-affected gate did not pass cleanly across three
+  full runs. Each run failed a different set of orbit-cli timing-sensitive
+  tests, and each failing set passed when rerun in isolation."
+- **Cause:** On macOS, `File::sync_all` is `fcntl(F_FULLFSYNC)`, about 20 ms
+  and a flush of the whole drive, and `orbit_common::fs::io` atomic writes call
+  it twice. macOS has no tmpfs, so `bulk_write_temp_dir()` leaves fixtures on
+  APFS. orbit-cli test targets run 5-20x slower than on the owner (`task`
+  486 s against 22.5 s), concurrent leaves queue behind each other's flushes,
+  and timing-sensitive tests in binaries the change never touched
+  (`delivery_remote_source`, `output`, `process`) fail differently on each
+  run. The implementation and its own tests had passed.
+- **Fix:** ORB-15345 (open): one durability-sync helper with a test-only
+  relaxed mode, on for every test entry point.
+- **Tasks:** ORB-15301 (#4200, landed by hand), ORB-15229 (PR raised by hand;
+  its Chromium fixture passed on the owner).
+- **Final recovery:** escalate, applied, for both (`jrun-20261010-2033-c1`,
+  `jrun-20261010-1941-c1`), leaving the fix uncommitted in the retained
+  worktree. For ORB-15229 it reran the gate first, and the gate failed again.
+
 ## 2026-10-10: Final recovery cannot start for a task whose required tools it disallows
 
 - **Where:** owner, `final_recovery` admission after a failed step.

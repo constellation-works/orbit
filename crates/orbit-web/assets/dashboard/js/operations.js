@@ -1295,6 +1295,56 @@ function jobRunningCard(run, workspaceId) {
   ]);
 }
 
+// A run names the tasks it works on: `tasks` carries titles when the server
+// has them, `task_ids` is the fallback.
+function runTaskRefs(run) {
+  const refs = Array.isArray(run.tasks) ? run.tasks : (Array.isArray(run.task_ids) ? run.task_ids : []).map((id) => ({ id }));
+  return refs.filter((task) => task && task.id);
+}
+
+// One group per task, so a task's auto, gate and pr runs share a card. A run
+// naming several tasks appears under each. Runs with no task stay separate.
+function runningGroups(running) {
+  const byTask = new Map();
+  const untasked = [];
+  for (const run of running) {
+    const tasks = runTaskRefs(run);
+    if (!tasks.length) untasked.push(run);
+    for (const task of tasks) {
+      if (!byTask.has(task.id)) byTask.set(task.id, { task, runs: [] });
+      const group = byTask.get(task.id);
+      if (!group.task.title && task.title) group.task = task;
+      group.runs.push(run);
+    }
+  }
+  return { tasks: [...byTask.values()], untasked };
+}
+
+function runningTaskCard(group, workspaceId) {
+  const { task, runs } = group;
+  const startedAt = (run) => run.started_at || run.scheduled_at || run.created_at;
+  const oldest = runs.reduce((earliest, run) => (new Date(startedAt(run) || 0) < new Date(startedAt(earliest) || 0) ? run : earliest));
+  const card = el("div", { class: "operation-running-card operation-running-task" }, [
+    el("div", { class: "operation-running-head" }, [
+      outcomeDot(oldest.state),
+      taskLink(task.id, workspaceId),
+      task.title ? el("span", { class: "operation-running-task-title", text: task.title, title: task.title }) : null,
+    ].filter(Boolean)),
+    el("div", { class: "operation-running-meta" }, [
+      el("span", { text: `started ${relativeTime(startedAt(oldest)) || "—"}`, title: time(startedAt(oldest)) }),
+      el("span", { text: `${runs.length} in flight` }),
+    ]),
+    el("ul", { class: "operation-running-steps" }, runs.map((run) => el("li", { class: "operation-running-step" }, [
+      el("span", { class: "mono", text: run.job_id }),
+      run.run_role ? el("span", { class: "mono", text: run.run_role }) : null,
+      run.resolved_crew ? el("span", { class: "mono", text: run.resolved_crew }) : null,
+      runLink(run.run_id, workspaceId),
+    ].filter(Boolean)))),
+  ]);
+  card.dataset.task = task.id;
+  return card;
+}
+
 function jobCommand(jobId, workspace) {
   return `orbit run job ${jobId} --workspace ${workspace?.name || workspace?.id || "<workspace>"}`;
 }
@@ -1403,15 +1453,20 @@ function renderJobs(payload) {
   const runs = Array.isArray(payload.runs?.items) ? payload.runs.items : Array.isArray(payload.runs) ? payload.runs : [];
   const catalog = jobCatalog(lastOperations, runs, workspace.name);
   const running = runs.filter((run) => run.state === "running" || run.state === "pending");
+  const groups = runningGroups(running);
+  const taskCount = groups.tasks.length;
   const strip = el("section", { class: "operation-running" });
   strip.setAttribute("aria-label", "Running now");
   strip.appendChild(el("div", { class: "operation-running-title" }, [
     el("strong", { text: "Running now" }),
-    el("span", { class: "mono", text: String(running.length) }),
-    el("span", { class: "muted", text: running.length ? "runs with a job step in flight" : "nothing in flight" }),
+    el("span", { class: "mono", text: `${taskCount} task${taskCount === 1 ? "" : "s"}` }),
+    el("span", { class: "muted", text: running.length ? `(${running.length} run${running.length === 1 ? "" : "s"} in flight)` : "nothing in flight" }),
   ]));
   if (running.length) {
-    strip.appendChild(el("div", { class: "operation-running-grid" }, running.map((run) => jobRunningCard(run, workspace.id))));
+    strip.appendChild(el("div", { class: "operation-running-grid" }, [
+      ...groups.tasks.map((group) => runningTaskCard(group, workspace.id)),
+      ...groups.untasked.map((run) => jobRunningCard(run, workspace.id)),
+    ]));
   }
   body.appendChild(strip);
   if (catalog.size === 0) {

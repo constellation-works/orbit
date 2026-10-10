@@ -134,6 +134,8 @@ globalThis.fetch = async (path, options = {}) => {
       : [
         ...(submittedJob ? [submittedJob] : []),
         { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
+        { run_id: 'jrun-task-auto', job_id: 'task_auto_pipeline', state: 'running', run_role: 'child', resolved_crew: 'haiku', created_at: '2026-09-07T20:58:00Z', started_at: '2026-09-07T20:58:02Z', finished_at: null, duration_ms: null, tasks: [{ id: 'ORB-15001', title: 'Group running pipelines by task' }] },
+        { run_id: 'jrun-task-pr', job_id: 'task_pr_pipeline', state: 'running', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T20:57:00Z', started_at: '2026-09-07T20:57:05Z', finished_at: null, duration_ms: null, tasks: [{ id: 'ORB-15001', title: 'Group running pipelines by task' }] },
         { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
         { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
       ];
@@ -575,10 +577,21 @@ assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay
 assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');
 // Jobs are projected from routine targets plus recent runs. Authorized Run
 // submits in the selected workspace and refreshes the run cells.
-const jobsText = get('jobs-body').textContent;
-assert(jobsText.includes('Running now1'), `running strip counts in-flight runs: ${jobsText.slice(0, 120)}`);
+// Running now: three runs in flight, two of them for ORB-15001. The count names
+// tasks and runs separately, the task's pipeline runs share one card linked to
+// the task, and a run with no task keeps its own card.
+const runningStrip = get('jobs-body').querySelector('.operation-running');
+const runningTitle = runningStrip.querySelector('.operation-running-title').textContent;
+assert(runningTitle.includes('1 task') && runningTitle.includes('(3 runs in flight)'), `running strip counts tasks and runs apart: ${runningTitle}`);
+const taskCards = Array.from(runningStrip.querySelectorAll('.operation-running-task'));
+assert(taskCards.length === 1 && taskCards[0].dataset.task === 'ORB-15001', `pipeline runs for one task group under one card: ${taskCards.map(card => card.dataset.task)}`);
+assert(['task_auto_pipeline', 'task_pr_pipeline'].every(id => taskCards[0].textContent.includes(id)), 'the task card lists each in-flight pipeline step');
+assert(taskCards[0].textContent.includes('Group running pipelines by task'), 'the task card shows the task title');
+assert(descendants(taskCards[0]).some(node => node.textContent === 'ORB-15001' && String(node.href || '').includes('open=ORB-15001')), 'the task card links its task id');
+const untaskedCards = Array.from(runningStrip.querySelectorAll('.operation-running-card:not(.operation-running-task)'));
+assert(untaskedCards.length === 1 && untaskedCards[0].textContent.includes('jrun-fixture-running'), 'a run with no task keeps its own card');
 const jobCards = descendants(get('jobs-body')).filter(node => String(node.className || '').includes('job-card'));
-assert(jobCards.length === 3 && ['fixture', 'task_pr_pipeline', 'parked_pipeline'].every(id => jobCards.some(card => card.dataset.job === id)), `catalogue unions routine targets (paused included) and run job ids: ${jobCards.map(card => card.dataset.job)}`);
+assert(jobCards.length === 4 && ['fixture', 'task_pr_pipeline', 'parked_pipeline', 'task_auto_pipeline'].every(id => jobCards.some(card => card.dataset.job === id)), `catalogue unions routine targets (paused included) and run job ids: ${jobCards.map(card => card.dataset.job)}`);
 const fixtureCard = jobCards.find(card => card.dataset.job === 'fixture');
 const jobRunButton = id => {
   const card = descendants(get('jobs-body')).find(node => node.dataset?.job === id);
