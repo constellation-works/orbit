@@ -43,7 +43,7 @@ use orbit_engine::{
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
-    TaskComment, TaskPriority, TaskStatus, TaskType,
+    TaskComment, TaskPriority, TaskStatus, TaskType, push_external_ref_if_missing,
 };
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{
@@ -1259,6 +1259,46 @@ fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip() {
             action(&host, "pr_promote", &input).expect("the live base can enter review");
             assert_eq!(host.status(TASK_ID), TaskStatus::Review);
             assert!(host.comments(TASK_ID).is_empty());
+        },
+    );
+}
+
+/// Promotion records the published PR's page with its number, so the task
+/// links the pull request a reviewer must read. A provider URL that is not an
+/// https page is dropped rather than failing the promotion.
+#[test]
+fn pr_promote_records_the_pull_request_page_with_its_number() {
+    isolated(
+        "pr_promote_records_the_pull_request_page_with_its_number",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+            let opened = action(&host, "pr_open", &input).expect("the candidate publishes");
+            let pr_url = opened["pr_url"].as_str().expect("pr_open reports the page");
+            assert!(pr_url.starts_with("https://"), "{opened}");
+
+            input["pr_number"] = opened["pr_number"].clone();
+            input["pr_url"] = json!(pr_url);
+            action(&host, "pr_promote", &input).expect("the published PR enters review");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert_eq!(
+                host.task(TASK_ID).external_refs,
+                vec![ExternalRef {
+                    system: GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
+                    id: PR_NUMBER.to_string(),
+                    url: Some(pr_url.to_string()),
+                }]
+            );
+
+            let unlinked = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            input["pr_url"] = json!("javascript:alert(1)");
+            action(&unlinked, "pr_promote", &input)
+                .expect("an unusable page does not fail the promotion");
+            let refs = unlinked.task(TASK_ID).external_refs;
+            assert_eq!(refs.len(), 1, "{refs:?}");
+            assert_eq!(refs[0].id, PR_NUMBER);
+            assert_eq!(refs[0].url, None, "only an https page is recorded");
         },
     );
 }
@@ -3916,6 +3956,10 @@ impl DeliveryHost {
         self.tasks.lock().unwrap().get_mut(id).unwrap().status = status;
     }
 
+    fn task(&self, id: &str) -> Task {
+        self.tasks.lock().unwrap()[id].clone()
+    }
+
     fn status(&self, id: &str) -> TaskStatus {
         self.tasks.lock().unwrap()[id].status
     }
@@ -4136,6 +4180,9 @@ impl RuntimeHost for DeliveryHost {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
         if let Some(status) = update.status {
             task.status = status;
+        }
+        for external_ref in update.external_refs {
+            push_external_ref_if_missing(&mut task.external_refs, external_ref);
         }
         self.status_events.lock().unwrap().push((
             task_id.to_string(),

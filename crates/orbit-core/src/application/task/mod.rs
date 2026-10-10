@@ -22,6 +22,7 @@ mod paths;
 mod pilot_admission;
 mod pilot_no_diff;
 mod pr_closure;
+mod pull_request_links;
 mod query;
 mod records;
 mod resolves;
@@ -68,6 +69,7 @@ pub use provider_limit_view::{
     CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,
     UngatedLaneLimit, short_time,
 };
+pub use pull_request_links::PullRequestLinks;
 pub(crate) use validation_tools::positive_validation_tools;
 
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
