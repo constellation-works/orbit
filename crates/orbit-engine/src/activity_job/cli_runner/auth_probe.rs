@@ -105,9 +105,9 @@ pub fn run_auth_probe(
             .iter()
             .map(|(key, value)| ((*key).into(), (*value).into())),
     );
-    env.extend(
-        orbit_tool_env().map_err(|error| DispatchError::CliInvocationPermanent(error.message))?,
-    );
+    let tool_env = orbit_tool_env(&env)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    env.extend(tool_env);
     let mut spawned = spawn_for_supervision(
         &program,
         &probe.args,

@@ -157,6 +157,10 @@ non-interactive probe. `workflow.validation_env.path` adds explicit PATH entries
 (leading `~/` expands to the owner's home); `workflow.validation_env.path_mode`
 is `prepend` by default or `replace` to use only those entries. Only allow-listed
 toolchain variables cross the probe; it does not copy the shell's environment.
+Agent sessions start with the same `path` entries ahead of their PATH, so a
+reviewer runs the `python3` validation runs. A provider whose commands run in a
+login shell rereads profiles; on macOS `path_helper` then demotes inherited
+entries, so keep the toolchain first in `~/.zprofile` as well.
 
 The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 

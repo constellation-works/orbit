@@ -779,6 +779,16 @@ impl OrbitRuntime {
         orbit_exec::ValidationEnvironment::resolve(base, self.validation_env_policy(), &shell)
     }
 
+    /// The environment an agent session starts with: the provider CLI and
+    /// the commands its shell or `proc.spawn` runs. It is the
+    /// `[execution.env]` allowlist plus `extras`, with
+    /// `workflow.validation_env.path` ahead of PATH, so a reviewer resolves
+    /// the interpreter and tools required validation uses [ORB-15204].
+    pub(crate) fn agent_environment(&self, extras: &[&str]) -> Vec<(String, String)> {
+        self.validation_env_policy()
+            .agent_environment(self.execution_env_policy().agent_subprocess_env(extras))
+    }
+
     /// Why required validation may not find the user's toolchain on this
     /// host, for drain submission and `orbit doctor` [ORB-13987]. `None` when
     /// no required commands are configured or the environment resolved

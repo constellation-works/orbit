@@ -59,14 +59,24 @@ pub fn locate_provider_launcher(program: &str, cwd: Option<&Path>) -> Option<Pat
 /// Cargo install even after the operator deploys `~/.orbit/bin/orbit`. Export
 /// the selected binary for hook scripts and put its directory first for bare
 /// `orbit tool ...` invocations inside the provider (including Bubblewrap).
-pub(crate) fn orbit_tool_env() -> Result<Vec<(String, String)>, SpawnError> {
+/// The rest of the pinned `PATH` is `child_env`'s, so the host's agent
+/// environment (`workflow.validation_env.path` first) survives; the
+/// process `PATH` stands in only when `child_env` has none. [ORB-15204]
+pub(crate) fn orbit_tool_env(
+    child_env: &[(String, String)],
+) -> Result<Vec<(String, String)>, SpawnError> {
     let current_exe = std::env::current_exe().map_err(|error| {
         SpawnError::permanent(format!(
             "resolve dispatching Orbit executable for agent tool environment: {error}"
         ))
     })?;
     let configured = std::env::var_os(ORBIT_BIN_ENV);
-    let inherited_path = std::env::var_os("PATH");
+    let inherited_path = child_env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| std::ffi::OsString::from(value))
+        .or_else(|| std::env::var_os("PATH"));
     let home = std::env::var_os("HOME").map(PathBuf::from);
     orbit_tool_env_with(
         configured.as_deref(),

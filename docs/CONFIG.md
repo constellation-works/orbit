@@ -194,7 +194,7 @@ path_mode = "prepend"
 |---|---|---|
 | `workflow.validation_env.login_shell` | `true` | Resolve PATH and toolchain locators from the owner's shell (below). `false` never starts the shell. |
 | `workflow.validation_env.interactive` | `true` | Try `-i -l -c` first, so toolchains exported in rc files are found. `false` probes only `-l -c`. Ignored when `login_shell` is `false`. |
-| `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. |
+| `workflow.validation_env.path` | `[]` | PATH entries to add. A leading `~/` expands to `HOME`. Agent sessions get them too ([below](#agent-sessions-share-the-configured-path)). |
 | `workflow.validation_env.path_mode` | `prepend` | `prepend` puts `path` first; `replace` makes it the whole PATH. |
 
 Required validation commands and `local_shell` steps run in this environment over the [allowlisted agent environment](#executionenv--the-agent-subprocess-environment), so a drain started from a minimal PATH (a service manager, `env -i`, SSH) still finds the toolchain.
@@ -204,6 +204,12 @@ Required validation commands and `local_shell` steps run in this environment ove
 **Recorded.** Each validation log and step output records `validation_env`: the PATH; its `source` (`config` when `path` has entries, else `login_shell` when the probe returned a PATH, else `launcher_fallback`); the shell and any probe error; `probe_mode` (`interactive_login` or `login`, else null); and `fallback_reason` (why interactive startup failed when login-only succeeded, else null). When both probes fail, `login_shell_error` holds both.
 
 **Diagnostics.** `orbit doctor`'s `validation-env` row shows the probe mode, fallback, PATH and the `python3`, `git` and `make` it finds, and warns (advisory) on a fallback or an earlier PATH entry shadowing a different executable (`/usr/bin/python3` before `/opt/homebrew/bin/python3`); duplicates and symlink aliases count once ([health checks](runbooks/health-checks.md#run-orbit-doctor)). While required commands are configured, `orbit run auto`, `orbit run ship`, and MCP `orbit.workflow.auto` (`status`, `start`) and `orbit.workflow.ship` warn when the shell cannot be probed, when resolution is off and `path` is empty, or when the resolved PATH drops login-shell entries (possible under `replace`).
+
+#### Agent sessions share the configured PATH
+
+A reviewer that resolves a different `python3` or `make` than host validation reports checks red that the host then refutes. So every agent session — the implementer's and reviewer's provider CLI, and the commands it runs through `proc.spawn` — starts with `workflow.validation_env.path` ahead of its [allowlisted](#executionenv--the-agent-subprocess-environment) PATH. The entries are prepended under either `path_mode`, since the rest of PATH still has to find the provider CLI. The login-shell probe is not applied to agents; their shells read the same profiles. Settlement does not rerun a disputed check in the reviewer's environment: host validation stays the reference.
+
+A provider that runs commands through a login shell (`zsh -l -c`, Codex's default) reads the profiles again, and on macOS `/etc/zprofile` runs `path_helper`, which moves inherited entries behind `/etc/paths` — `/usr/bin/python3` (3.9) wins over Homebrew's again. Put the toolchain first in `~/.zprofile` too, for example `eval "$(/opt/homebrew/bin/brew shellenv)"`, and compare `zsh -l -c 'command -v python3'` with `orbit doctor`'s `validation-env` row.
 
 #### Required validation
 
@@ -674,7 +680,7 @@ Every agent subprocess (bare, Bubblewrap or `sandbox-exec`) starts from a **clea
 
 | Group | Contents |
 |---|---|
-| Baseline | `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `TZ`, `USER` |
+| Baseline | `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `TZ`, `USER`. `PATH` starts with any [`workflow.validation_env.path`](#agent-sessions-share-the-configured-path) entries. |
 | `pass` | Names listed in `execution.env.pass`. Default: `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`, plus `__CF_USER_TEXT_ENCODING` on macOS. |
 | Provider extras | Variables the selected provider runtime declares it needs. |
 | Orbit envelope | Named `ORBIT_*` variables: run, task and session identity (`ORBIT_RUN_ID`, `ORBIT_TASK_ID`, `ORBIT_SESSION_ID`, …), locators (`ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_REGISTRY_ROOT`, …) and activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, …). Privilege-bearing names (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) are not admitted; an inherited `ORBIT_ROOT` is removed. |
