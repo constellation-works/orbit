@@ -30,6 +30,23 @@ pub(super) enum ApplyTaskOutcome {
     Superseded(Value),
 }
 
+/// Share the exact durable receipt format between replay admission and the
+/// locked persistence check.
+pub(super) fn operation_was_applied(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    operation_id: &str,
+) -> Result<bool, OrbitError> {
+    let receipt = format!("operation_id={operation_id}");
+    let suffix = format!(" ({receipt})");
+    Ok(runtime.get_task_history(task_id)?.iter().any(|event| {
+        event.event == "task_pilot_applied"
+            && event.note.as_deref().is_some_and(|note| {
+                note.ends_with(&suffix) || note.lines().next() == Some(receipt.as_str())
+            })
+    }))
+}
+
 pub(super) fn apply_task(
     runtime: &OrbitRuntime,
     snapshot: &PreparedTaskSnapshot,
@@ -72,18 +89,7 @@ pub(super) fn apply_task(
                 )));
                 return Ok(());
             }
-            let receipt = format!("operation_id={}", task.operation_id);
-            if runtime
-                .get_task_history(&task.task_id)?
-                .iter()
-                .any(|event| {
-                    event.event == "task_pilot_applied"
-                        && event.note.as_deref().is_some_and(|note| {
-                            note.ends_with(&format!(" ({receipt})"))
-                                || note.lines().next() == Some(receipt.as_str())
-                        })
-                })
-            {
+            if operation_was_applied(runtime, &task.task_id, &task.operation_id)? {
                 outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
                     runtime,
                     &task.task_id,
@@ -654,7 +660,8 @@ pub(super) fn superseded_task(
     if ci_sweep && current.status != snapshot.status {
         // CI-sweep authority only treats operator rejection or archival as a
         // benign race. Other status changes continue through admission and
-        // fail its existing proposed-status check.
+        // fail its proposed-status check unless this operation's receipt
+        // proves its own promotion already landed.
         return Ok(None);
     }
     if !ci_sweep

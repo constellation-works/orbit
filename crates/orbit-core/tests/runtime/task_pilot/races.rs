@@ -263,6 +263,84 @@ fn agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot() {
 }
 
 #[test]
+fn promoting_ci_sweep_replay_settles_already_applied_without_writes() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::races::promoting_ci_sweep_replay_settles_already_applied_without_writes",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let task = workspace.task("promoting CI-sweep replay");
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                tags: Some(vec![
+                    "ci-failure-sweep".into(),
+                    "ci-failure:fixture-key".into(),
+                ]),
+                ..Default::default()
+            },
+            "fixture".into(),
+        )
+        .unwrap();
+    let prepared = workspace.prepare(&[&task.id]);
+    let mut input = apply_input(&workspace, &prepared);
+    input["ci_sweep_filing"] = json!({
+        "task_id": task.id,
+        "failure_key": "fixture-key",
+        "tested_commit": workspace.object("HEAD"),
+        "workflow": "ci", "job": "test", "step": "cargo test",
+        "run_urls": ["https://github.com/example/repo/actions/runs/1"],
+    });
+    input["promotion_authorized"] = json!(true);
+    let output = workspace.action("apply_task_pilot_results", input.clone());
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["tasks"][0]["outcome"], "applied", "{output}");
+    assert_eq!(output["ci_sweep_admission"][0]["decision"], "promote");
+    let applied = workspace.runtime.get_task(&task.id).unwrap();
+    assert_eq!(applied.status, TaskStatus::Backlog);
+    assert_eq!(applied.context_files, ["file:README.md"]);
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+
+    // The atomic promotion landed, but the step checkpoint was lost. The
+    // engine retries the identical input against the now-backlog task.
+    let replayed = workspace.action("apply_task_pilot_results", input.clone());
+    assert_eq!(replayed["status"], "succeeded", "{replayed}");
+    assert_eq!(replayed["tasks"][0]["outcome"], "already_applied");
+    assert_eq!(replayed["applied_count"], 1);
+    assert_eq!(replayed["unresolved_count"], 0);
+    assert_eq!(replayed["repair_partitions"], json!([]));
+    assert_eq!(replayed["ci_sweep_admission"], output["ci_sweep_admission"]);
+    assert_eq!(
+        replayed["tasks"][0]["operation_id"],
+        output["tasks"][0]["operation_id"]
+    );
+    assert_eq!(
+        workspace.action("pipeline_success_guard", json!({"result": replayed}))["succeeded"],
+        true
+    );
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), applied);
+    assert_eq!(
+        workspace.runtime.get_task_history(&task.id).unwrap(),
+        history
+    );
+
+    // A different operation cannot borrow the committed promotion's receipt.
+    input["results"][0]["tasks"][0]["assessment_rationale"] =
+        json!("A new assessment of the failure.");
+    let changed = workspace.action("apply_task_pilot_results", input);
+    assert_eq!(changed["status"], "failed", "{changed}");
+    assert_eq!(changed["task_outcomes"][0]["outcome"], "invalid");
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), applied);
+    assert_eq!(
+        workspace.runtime.get_task_history(&task.id).unwrap(),
+        history
+    );
+}
+
+#[test]
 fn superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies() {
     if !super::super::dispatch_admission::isolated(
         "task_pilot::races::superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies",

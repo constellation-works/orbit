@@ -20,8 +20,9 @@ use super::attachment_budget::{
 };
 use super::drain_promotion::{self, DrainAuthority};
 use super::persist::{
-    ApplyTaskOutcome, apply_task, failed_partition, record_applied_assessment, source_superseded,
-    stale_task, superseded_task, task_operation_id, task_outcome,
+    ApplyTaskOutcome, apply_task, failed_partition, operation_was_applied,
+    record_applied_assessment, source_superseded, stale_task, superseded_task, task_operation_id,
+    task_outcome,
 };
 use super::source::SourceSnapshot;
 use super::{
@@ -616,24 +617,50 @@ pub(in super::super) fn apply(
                 }
             }
 
+            let operation_id = task_operation_id(prepared_value, task_id, &assessment);
             let admission = match &authority {
-                PromotionAuthority::CiSweep(filing, authorized) => ci_failure_admission::assess(
-                    action,
-                    task_id,
-                    &current,
-                    &assessment,
-                    &after,
-                    filing,
-                    *authorized,
-                )
-                .map(|outcome| match outcome {
-                    ci_failure_admission::AdmissionOutcome::Decision(decision) => {
-                        CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
+                PromotionAuthority::CiSweep(filing, authorized) => {
+                    let mut admission_task = current.clone();
+                    if snapshot.status == TaskStatus::Proposed
+                        && current.status == TaskStatus::Backlog
+                    {
+                        match operation_was_applied(runtime, task_id, &operation_id) {
+                            Ok(true) => {
+                                // The atomic CI-sweep write itself promotes to
+                                // backlog. Reconstruct admission reporting from
+                                // its original status only for this operation's
+                                // receipt; apply_task rechecks it under task locks.
+                                admission_task.status = snapshot.status;
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                outcomes.push(task_outcome(
+                                    task_id,
+                                    "apply_failed",
+                                    Some(error.to_string()),
+                                ));
+                                continue;
+                            }
+                        }
                     }
-                    ci_failure_admission::AdmissionOutcome::Superseded(outcome) => {
-                        CheckedAdmission::Superseded(outcome)
-                    }
-                }),
+                    ci_failure_admission::assess(
+                        action,
+                        task_id,
+                        &admission_task,
+                        &assessment,
+                        &after,
+                        filing,
+                        *authorized,
+                    )
+                    .map(|outcome| match outcome {
+                        ci_failure_admission::AdmissionOutcome::Decision(decision) => {
+                            CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
+                        }
+                        ci_failure_admission::AdmissionOutcome::Superseded(outcome) => {
+                            CheckedAdmission::Superseded(outcome)
+                        }
+                    })
+                }
                 PromotionAuthority::Drain(drain) => drain_promotion::assess(
                     action,
                     task_id,
@@ -669,7 +696,6 @@ pub(in super::super) fn apply(
                 Some(Admission::Drain(decision)) => drain_promotion::hold_marker(decision),
                 _ => None,
             };
-            let operation_id = task_operation_id(prepared_value, task_id, &assessment);
             let mut validated = ValidatedTask {
                 task_id: task_id.clone(),
                 after,
