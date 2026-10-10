@@ -20,18 +20,34 @@ template:
        repository identifies as generated or historical records. Use repository
        guidance for any additional documentation scope; do not edit unrelated
        files. Keep the paths relative to the repository root.
-    2. For each candidate, read a valid `last_validated: YYYY-MM-DD` value in
-       existing YAML frontmatter when present. Otherwise obtain its last-touched
-       date with `git log -1 --format=%cI -- <path>`. Use the date part of that
-       timestamp as the initial validation age. Report invalid frontmatter
-       values and missing git history rather than treating them as real dates.
-    3. If previous completed doc-duties execution summaries record a later
-       validation date for a candidate without `last_validated`, use the latest
-       recorded date as its age. This lets a no-frontmatter repository rotate
-       after a clean no-diff batch. Otherwise retain the git-derived date.
-    4. Sort candidates by validation age, oldest first, breaking ties by
-       relative path. Take at most six. If no candidates have a usable age,
-       explain why in the execution summary and finish without a diff.
+    2. Read the prior ledgers. List the newest completed instances with
+       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["doc-duties"],"limit":60,"fields":["id"],"model":"<agent-family>"}'`
+       and read each one's ledger with
+       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
+       Skip a task with no ledger (a run from before ledgers existed) and ignore
+       its prose summary; never order by execution-summary text. For each path
+       keep every row, newest `attempted_on` first (ties: the newer task).
+    3. Give each candidate an ordering date, oldest first. Precedence: the
+       latest ledger `attempted_on` for that path (source `ledger`); else a
+       valid `last_validated: YYYY-MM-DD` in existing YAML frontmatter (source
+       `frontmatter`); else the date part of `git log -1 --format=%cI -- <path>`
+       (source `git`). A candidate falls back to frontmatter or git only when
+       no ledger row names it. Report invalid frontmatter values and missing git
+       history rather than treating them as real dates. If no ledger could be
+       read at all (no completed instance, or the artifact tools failed), say so
+       explicitly in the execution summary and the ledger `notes`; do not fall
+       back silently.
+    4. Escalate repeat skips. A candidate whose two most recent ledger rows
+       both have outcome `skipped` or `partial` is not selected. List it in the
+       execution summary as needing its own task (for example section-by-section
+       validation of an oversized document) with both reasons. Optionally file
+       that task: first search `orbit tool run orbit.search --input '{"query":"<the path>","kind":"task","all":true,"model":"<agent-family>"}'`
+       and skip the path when an open task already names it, then
+       `orbit tool run orbit.task.add --input '{"title":"Validate <path> section by section","description":"<why it was skipped, with the ledger reasons>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","type":"chore","tags":["docs","doc-duties-escalation"],"context_files":["file:<path>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+       A later `clean` or `fixed` row for the path ends the escalation.
+    5. Sort the remaining candidates by ordering date, oldest first, breaking
+       ties by relative path. Take at most six. If no candidates have a usable
+       date, explain why in the execution summary and finish without a diff.
 
     ## Validate and record
 
@@ -39,30 +55,54 @@ template:
     commands, configuration, and related documentation. Correct verified drift,
     genuine spelling errors, and broken Markdown or relative links. Preserve
     the author's style and avoid unrelated rewrites. If a claim cannot be
-    checked, leave it unchanged and record the limit.
+    checked, leave it unchanged and record the limit. Give every selected
+    document exactly one outcome:
+
+    - `clean`: fully verified, no change needed.
+    - `fixed`: fully verified, and drift was corrected.
+    - `partial`: some claims verified, others left unchecked.
+    - `skipped`: not verified (for example too large for this run), with a reason.
 
     Update `last_validated` to today's date only when that key already exists
-    and the document was actually verified. Never add YAML frontmatter or a
-    `last_validated` key to a document that lacks it. Record every verified
-    document, including unchanged ones, in this task's durable
-    `execution_summary` with the validation date and supporting checks.
+    and the outcome is `clean` or `fixed`. Never add YAML frontmatter or a
+    `last_validated` key to a document that lacks it, and leave it alone on
+    `partial` and `skipped`.
 
-    The execution summary must list the selected paths in order, each path's
-    ordering date and source (frontmatter, git, or prior summary), changes and
-    verification evidence, and any skipped document or unverified claim. State
-    explicitly when the batch was clean. Do not manufacture an edit to mark a
-    clean run complete; when no document required changes, follow the workspace's
+    ## Attach the ledger
+
+    Write `.orbit/tmp/doc-duties-ledger.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/doc-duties-ledger.json","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
+    Its shape is `{"schema_version":1,"run_date":"YYYY-MM-DD","head":"<full HEAD commit SHA>","notes":"<optional, for example that no prior ledger was readable>","documents":[{"path":"<repo-relative path>","attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<required unless clean or fixed>","ordering_date":"YYYY-MM-DD","ordering_source":"ledger|frontmatter|git"}]}`.
+    Include one row per selected document, in selection order, and attach the
+    ledger even when every document was skipped. `attempted_on` is today's date
+    for every selected document regardless of outcome: it is what moves a
+    skipped document to the back of the queue. Documents held back by the
+    repeat-skip rule are not selected and get no row.
+
+    The execution summary describes the batch for humans: the selected paths in
+    order, each path's ordering date and source, outcome, changes and
+    verification evidence, any unverified claim, any document held back for a
+    dedicated task, and whether prior ledgers were readable. State explicitly
+    when the batch was clean. Do not manufacture an edit to mark a clean run
+    complete; when no document required changes, follow the workspace's
     validated no-diff evidence requirements (attach `no-diff.json` and captured
     validation logs).
   acceptance_criteria:
-  - Up to six least-recently-validated tracked documents were selected by date and stable path order, using git last-touched dates where no validation metadata or prior summary exists.
-  - Each selected document was checked against current evidence; verified drift was corrected, while unverifiable claims were left unchanged and reported.
-  - No frontmatter or last_validated key was added to a document that lacked it; existing last_validated keys were updated only after verification.
-  - The durable execution summary records selected paths, ordering evidence, checks, changes, and skipped claims, including clean no-diff batches with validated no-diff evidence.
+  - Up to six candidates were selected oldest first by latest ledger attempt date, then `last_validated` frontmatter, then git last-touched date, with ties broken by path; a missing ledger is stated explicitly.
+  - Every selected document has an outcome of `clean`, `fixed`, `partial` or `skipped`, and a `skipped` or `partial` document gives a reason.
+  - A document whose two most recent ledger outcomes are skipped or partial was not selected and is reported as needing a dedicated task.
+  - No frontmatter or last_validated key was added to a document that lacked it; existing last_validated keys were updated only for `clean` or `fixed` documents.
+  - A versioned `doc-duties-ledger.json` artifact records one row per selected document, and the execution summary records the batch, checks, changes, and unverified claims, including clean no-diff batches with validated no-diff evidence.
   task_type: chore
   tags:
   - doc-duties
   - docs
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
   # A batch may edit docs/ and root or workspace-specific documentation.
   # Reserve the workspace until the batch's concrete paths are known.
   context_files:

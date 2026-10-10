@@ -253,10 +253,17 @@ plugin being removed.
   records typed coverage evidence. Hands-on QA of recent changes is
   `qa-sweep`; a full pre-release sign-off is `qa-full-sweep` when that
   workspace definition is present.
-- **`doc-duties`** (`low`) — daily. Validates a small batch of the oldest
-  workspace documentation against current behavior, and corrects factual drift
-  and broken links. A batch whose claims are already accurate is a successful
-  no-diff run with validated no-diff evidence. Its template declares `dir:.`
+- **`doc-duties`** (`low`) — daily. Validates a small batch of the
+  least-recently-attempted workspace documentation against current behavior,
+  and corrects factual drift and broken links. Each run attaches a
+  `doc-duties-ledger.json` artifact recording an outcome (`clean`, `fixed`,
+  `partial` or `skipped`) and attempt date per selected document; selection
+  orders by the latest ledger attempt, then `last_validated` frontmatter, then
+  the git last-touched date, so a skipped document rotates to the back. A
+  document whose two latest attempts were `skipped` or `partial` is held back
+  and reported as needing its own task. A batch whose claims
+  are already accurate is a successful no-diff run with validated no-diff
+  evidence. Its template declares `dir:.`
   because a batch may include root and workspace-specific documents, and omits
   `no-diff-expected` so it holds a context lock while correcting drift.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
