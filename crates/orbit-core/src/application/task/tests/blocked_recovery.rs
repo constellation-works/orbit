@@ -692,6 +692,8 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             let guard = plan
                 .take_post_run_guard()
                 .expect("future filename denies need a post-run guard");
+            // Dispatch exempts the checkout's run scratch, never source paths.
+            let scratch = orbit_common::fs::path::orbit_scratch_dir(&prepared.checkout);
             let probe = orbit_exec::probe_bwrap();
             if probe.available {
                 let child =
@@ -707,14 +709,19 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
                 let outcome = orbit_exec::supervise_child(child, Some(30_000), None)
                     .expect("bounded recovery agent step");
                 assert!(outcome.result.success, "agent step: {:?}", outcome.result);
-                guard.verify().expect("allowed source and scratch writes");
+                guard
+                    .verify(Some(&scratch))
+                    .expect("allowed source and scratch writes");
             } else {
                 orbit_exec::report_bwrap_deferral("recovery agent kernel launch", &probe.detail);
             }
             std::fs::write(prepared.checkout.join("new.env"), "forbidden")
                 .expect("simulate an agent write");
             assert!(
-                matches!(guard.verify(), Err(OrbitError::PolicyDenied(_))),
+                matches!(
+                    guard.verify(Some(&scratch)),
+                    Err(OrbitError::PolicyDenied(_))
+                ),
                 "recovery must reject newly created files covered by the effective policy's deny globs"
             );
         }

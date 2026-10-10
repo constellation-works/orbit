@@ -161,8 +161,9 @@ pub fn run_auth_probe(
     })
     .map_err(|SpawnError { message, .. }| DispatchError::CliInvocationPermanent(message))?;
     if let Some(guard) = guard {
+        // The probe is given no scratch directory, so nothing is exempt.
         guard
-            .verify()
+            .verify(None)
             .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     }
     host.refresh_persistence_after_cli_provider()

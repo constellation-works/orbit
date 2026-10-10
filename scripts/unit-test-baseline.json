@@ -563,6 +563,7 @@
         "activity_job/cli_runner/tests/orchestrator_env.rs::inspection_mutation_keeps_provider_output_and_finish_event",
         "activity_job/cli_runner/tests/orchestrator_env.rs::inspection_mutation_still_classifies_primary_checkout_drift",
         "activity_job/cli_runner/tests/orchestrator_env.rs::linux_post_run_guard_keeps_provider_output_and_finish_event",
+        "activity_job/cli_runner/tests/orchestrator_env.rs::linux_post_run_guard_removes_scratch_only_match_and_completes",
         "activity_job/cli_runner/tests/orchestrator_env.rs::persistence_refresh_failure_keeps_provider_output_and_finish_event",
         "activity_job/cli_runner/tests/orchestrator_env.rs::representable_timeout_stamps_a_future_provider_deadline",
         "activity_job/cli_runner/tests/orchestrator_env.rs::run_cli_backend_does_not_forward_benignly_named_ambient_credentials",

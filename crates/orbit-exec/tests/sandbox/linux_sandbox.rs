@@ -9,11 +9,11 @@ use std::process::Stdio;
 use orbit_common::OrbitError;
 use orbit_exec::{
     BUNDLED_BWRAP_PATH, HOST_BWRAP_PATH, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
-    LinuxBwrapMountAuthority, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, WriteAnchorKind,
-    bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,
-    compile_linux_bwrap_argv_with_authority, linux_bwrap_write_grant_diagnostic,
-    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants, probe_bwrap,
-    spawn_under_linux_bwrap,
+    LinuxBwrapMountAuthority, LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval,
+    LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
+    compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
+    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
+    probe_bwrap, spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -1236,7 +1236,9 @@ fn managed_worktree_guard_rejects_new_forbidden_match() {
         .expect("capture")
         .expect("guard required");
     std::fs::write(workspace.join("new.env"), "secret").expect("write forbidden fixture");
-    let error = guard.verify().expect_err("new forbidden match rejected");
+    let error = guard
+        .verify(None)
+        .expect_err("new forbidden match rejected");
     assert!(error.to_string().contains("before commit"));
 }
 
@@ -1323,8 +1325,8 @@ fn assert_absent_deny_enforced(
 
     let write_blocked = !created.exists();
     match guard {
-        Some(guard) => match guard.verify() {
-            Ok(()) => assert!(
+        Some(guard) => match guard.verify(None) {
+            Ok(_) => assert!(
                 write_blocked,
                 "child created {} and the post-run guard accepted it",
                 created.display()
@@ -1720,16 +1722,10 @@ printf 'source edit\n' > "$ALIAS/source.txt"
     fs::write(recovery.join("manifest.json"), "host-updated").unwrap();
 }
 
-/// [ORB-14337] The `.orbit/tmp` write exception does not beat the later secret
-/// globs. A managed run that creates one of those paths still fails the
-/// post-run guard, including rust-docs `macro.env.html`.
-#[test]
-fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
+/// The default policy's shape: `.orbit/tmp` re-allowed, then the secret globs.
+fn scratch_policy_profile(workspace: &std::path::Path) -> ResolvedFsProfile {
     let root = workspace.display().to_string();
-    let resolved = profile(vec![
+    profile(vec![
         format!("{root}/**"),
         format!("!{root}/.orbit/**"),
         format!("{root}/.orbit/tmp/**"),
@@ -1737,71 +1733,193 @@ fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
         format!("!{root}/**/.env.*"),
         format!("!{root}/**/*.env"),
         format!("!{root}/**/*.env.*"),
-    ]);
-    let ordinary = workspace.join(".orbit/tmp/ok.txt");
-    std::fs::write(&ordinary, "ok").expect("ordinary scratch");
-    LinuxBwrapPostRunGuard::capture(&resolved)
+    ])
+}
+
+/// Write `path` from a managed Bubblewrap child, or on the host when this host
+/// cannot create the sandbox, and return the plan's post-run guard.
+fn create_in_managed_child(
+    resolved: &ResolvedFsProfile,
+    workspace: &std::path::Path,
+    path: &std::path::Path,
+    test_name: &str,
+) -> LinuxBwrapPostRunGuard {
+    let parent = path.parent().expect("created path has a parent");
+    let script = format!(
+        "mkdir -p '{parent}' && printf secret > '{path}'",
+        parent = parent.display(),
+        path = path.display()
+    );
+    let mut plan = compile_linux_bwrap_argv(
+        resolved,
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Some(workspace),
+        true,
+    )
+    .expect("managed plan must accept the non-subtree secret globs");
+    let guard = plan
+        .take_post_run_guard()
+        .expect("managed worktree keeps a post-run guard");
+    let probe = probe_bwrap();
+    if probe.available {
+        let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env: &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
+            cwd: Some(workspace),
+            stdin: Stdio::null(),
+            stdout: Stdio::null(),
+            stderr: Stdio::piped(),
+        })
+        .expect("spawn managed child");
+        let _ = child.wait().expect("wait");
+    } else {
+        orbit_exec::report_bwrap_deferral(
+            test_name,
+            &format!("{}; creating the path on the host instead", probe.detail),
+        );
+    }
+    if !path.exists() {
+        std::fs::create_dir_all(parent).expect("parent");
+        std::fs::write(path, "secret").expect("record the created path");
+    }
+    guard
+}
+
+/// A denyModify match the child creates only under run scratch, which commit
+/// never includes, is removed and reported instead of failing the run. The
+/// same match fails the run when the caller names no scratch root.
+#[test]
+fn managed_worktree_guard_removes_scratch_only_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let scratch = workspace.join(".orbit/tmp");
+    let resolved = scratch_policy_profile(&workspace);
+    let created = scratch.join("clock-probe/home/.orbit/clock.env");
+
+    let guard = create_in_managed_child(
+        &resolved,
+        &workspace,
+        &created,
+        "managed_worktree_guard_removes_scratch_only_match",
+    );
+    let error = guard
+        .verify(None)
+        .expect_err("without a scratch root the match fails the run");
+    assert!(error.to_string().contains("before commit"), "{error}");
+    assert!(created.exists(), "a failing guard removes nothing");
+
+    let removed = guard
+        .verify(Some(&scratch))
+        .expect("a scratch-only match does not fail the run");
+    assert_eq!(
+        removed,
+        vec![LinuxBwrapScratchRemoval {
+            path: created.clone(),
+            rule: format!("{}/**/*.env", workspace.display()),
+        }]
+    );
+    assert!(!created.exists(), "the scratch match is removed");
+    assert!(
+        created.parent().expect("parent").is_dir(),
+        "only the matched path is removed"
+    );
+    assert_eq!(
+        guard.verify(Some(&scratch)).expect("verify again"),
+        Vec::new(),
+        "nothing forbidden is left behind"
+    );
+}
+
+/// A committable match fails the run even when scratch also holds one, and the
+/// failing guard removes nothing.
+#[test]
+fn managed_worktree_guard_rejects_committable_match_beside_scratch_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let scratch = workspace.join(".orbit/tmp");
+    let guard = LinuxBwrapPostRunGuard::capture(&scratch_policy_profile(&workspace))
         .expect("capture")
-        .expect("guard")
-        .verify()
-        .expect("a non-secret scratch file stays allowed");
+        .expect("guard");
+    let in_scratch = scratch.join("fixture.env");
+    let committable = workspace.join("src/secrets.env");
+    std::fs::write(&in_scratch, "secret").expect("scratch match");
+    std::fs::create_dir_all(committable.parent().expect("parent")).expect("src");
+    std::fs::write(&committable, "secret").expect("committable match");
+
+    let error = guard
+        .verify(Some(&scratch))
+        .expect_err("a committable match fails the run");
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_))
+            && message.contains("before commit")
+            && message.contains(&committable.display().to_string()),
+        "{message}"
+    );
+    assert!(in_scratch.exists() && committable.exists());
+}
+
+/// [ORB-14337] The `.orbit/tmp` write exception does not beat the later secret
+/// globs. A managed run that creates one of those paths on a committable path
+/// still fails the post-run guard; under scratch, including rust-docs
+/// `macro.env.html`, the match is removed rather than left behind.
+#[test]
+fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let scratch = workspace.join(".orbit/tmp");
+    let resolved = scratch_policy_profile(&workspace);
+    let ordinary = scratch.join("ok.txt");
+    std::fs::write(&ordinary, "ok").expect("ordinary scratch");
+    assert_eq!(
+        LinuxBwrapPostRunGuard::capture(&resolved)
+            .expect("capture")
+            .expect("guard")
+            .verify(Some(&scratch))
+            .expect("verify"),
+        Vec::new(),
+        "a non-secret scratch file stays allowed"
+    );
+    assert!(ordinary.exists());
+
+    let docs = scratch
+        .join("toolchains/1.96.0-x86_64-unknown-linux-gnu/share/doc/rust/html/core/macro.env.html");
+    let removed = create_in_managed_child(
+        &resolved,
+        &workspace,
+        &docs,
+        "managed_worktree_guard_rejects_secret_paths_after_tmp_exception",
+    )
+    .verify(Some(&scratch))
+    .expect("a scratch-only match is removed");
+    assert_eq!(removed.len(), 1, "{removed:?}");
+    assert!(
+        !docs.exists(),
+        "the `*.env.*` rule still applies under scratch"
+    );
 
     let created = [
         workspace.join(".env"),
         workspace.join(".env.local"),
         workspace.join("secrets.env"),
-        workspace.join(".orbit/tmp/toolchains/1.96.0-x86_64-unknown-linux-gnu/share/doc/rust/html/core/macro.env.html"),
     ];
     for path in created {
-        let parent = path.parent().expect("forbidden path has a parent");
-        let script = format!(
-            "mkdir -p '{parent}' && printf secret > '{path}'",
-            parent = parent.display(),
-            path = path.display()
-        );
-        let mut plan = compile_linux_bwrap_argv(
+        let guard = create_in_managed_child(
             &resolved,
-            "/bin/sh",
-            &["-c".to_string(), script],
-            Some(&workspace),
-            true,
-        )
-        .expect("managed plan must accept the non-subtree secret globs");
-        let guard = plan
-            .take_post_run_guard()
-            .expect("managed worktree keeps a post-run guard");
-        let probe = probe_bwrap();
-        if probe.available {
-            let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-                plan: &plan,
-                env: &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
-                cwd: Some(&workspace),
-                stdin: Stdio::null(),
-                stdout: Stdio::null(),
-                stderr: Stdio::piped(),
-            })
-            .expect("spawn managed child");
-            let _ = child.wait().expect("wait");
-        } else {
-            orbit_exec::report_bwrap_deferral(
-                "managed_worktree_guard_rejects_secret_paths_after_tmp_exception",
-                &format!(
-                    "{}; creating the forbidden path on the host instead",
-                    probe.detail
-                ),
-            );
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("parent");
-            }
-            std::fs::write(&path, "secret").expect("host write");
-        }
-        if !path.exists() {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).expect("parent");
-            }
-            std::fs::write(&path, "secret").expect("record the created path");
-        }
-        let error = guard.verify().expect_err("new forbidden match");
+            &workspace,
+            &path,
+            "managed_worktree_guard_rejects_secret_paths_after_tmp_exception",
+        );
+        let error = guard
+            .verify(Some(&scratch))
+            .expect_err("new forbidden match");
         let message = error.to_string();
         assert!(
             message.contains("before commit") && message.contains(&path.display().to_string()),

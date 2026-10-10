@@ -110,10 +110,25 @@ pub struct LinuxBwrapSpawnRequest<'a> {
 /// deny whose root does not exist yet. Managed worktrees are disposable and
 /// single-writer, so Orbit records existing matches before spawn and rejects
 /// any new matches after the child.
+///
+/// The run's scratch directory (`.orbit/tmp`) is never committed, so a new
+/// match there does not fail the run: [`Self::verify`] removes it and reports
+/// it instead. A new match anywhere else still fails the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxBwrapPostRunGuard {
+    profile: String,
     rules: Vec<String>,
     before: BTreeSet<PathBuf>,
+}
+
+/// A denyModify match the child created under the run's scratch directory,
+/// which [`LinuxBwrapPostRunGuard::verify`] removed instead of failing the run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxBwrapScratchRemoval {
+    /// Canonical path of the removed match.
+    pub path: PathBuf,
+    /// The denyModify rule body it matched.
+    pub rule: String,
 }
 
 impl LinuxBwrapPostRunGuard {
@@ -126,7 +141,11 @@ impl LinuxBwrapPostRunGuard {
             return Ok(None);
         }
         let before = expand_rules(&rules)?;
-        Ok(Some(Self { rules, before }))
+        Ok(Some(Self {
+            profile: profile.name.clone(),
+            rules,
+            before,
+        }))
     }
 
     /// The snapshot [`Self::capture`] would take, read off a compile's
@@ -147,18 +166,72 @@ impl LinuxBwrapPostRunGuard {
             .flatten()
             .cloned()
             .collect();
-        Some(Self { rules, before })
+        Some(Self {
+            profile: profile.name.clone(),
+            rules,
+            before,
+        })
     }
 
-    pub fn verify(&self) -> Result<(), OrbitError> {
-        let after = expand_rules(&self.rules)?;
-        let created = after.difference(&self.before).next();
-        if let Some(path) = created {
+    /// Name of the fs profile whose deny rules this guard checks.
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    /// Fail on any denyModify match the child created outside `scratch`;
+    /// remove the ones beneath it and return them.
+    ///
+    /// `scratch` is the run's canonical scratch root, resolved before the
+    /// child started so the child cannot redirect it. A match anywhere else
+    /// fails the run before anything is removed. `None` exempts nothing.
+    pub fn verify(
+        &self,
+        scratch: Option<&Path>,
+    ) -> Result<Vec<LinuxBwrapScratchRemoval>, OrbitError> {
+        let after = expand_each_rule(self.rules.iter().map(String::as_str))?;
+        let mut created = BTreeMap::new();
+        for (rule, paths) in after {
+            for path in paths.difference(&self.before) {
+                created.entry(path.clone()).or_insert(rule);
+            }
+        }
+        let in_scratch =
+            |path: &Path| scratch.is_some_and(|root| path != root && path.starts_with(root));
+        if let Some(path) = created.keys().find(|path| !in_scratch(path)) {
             return Err(OrbitError::PolicyDenied(format!(
                 "linux-bwrap child created a path forbidden by denyModify before commit: {}",
                 path.display()
             )));
         }
-        Ok(())
+        // Sorted, so a matched directory goes before any match beneath it.
+        created
+            .into_iter()
+            .map(|(path, rule)| {
+                remove_scratch_match(&path)?;
+                Ok(LinuxBwrapScratchRemoval {
+                    path,
+                    rule: rule.to_string(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Remove one scratch match without following a symlink. A match already
+/// removed with a matched ancestor directory is done.
+fn remove_scratch_match(path: &Path) -> Result<(), OrbitError> {
+    let removed = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(error) => Err(error),
+    };
+    match removed {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(OrbitError::PolicyDenied(format!(
+                "linux-bwrap child created a path forbidden by denyModify in run scratch, and removing it failed: {}: {error}",
+                path.display()
+            )))
+        }
+        _ => Ok(()),
     }
 }
