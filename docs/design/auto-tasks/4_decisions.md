@@ -2,7 +2,7 @@
 title: Auto-tasks — Decisions
 owner: claude
 last_updated: 2026-09-25
-last_validated: 2026-09-25
+last_validated: 2026-10-10
 status: Accepted
 feature: auto-tasks
 doc_role: decisions

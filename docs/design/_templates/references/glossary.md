@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: <Feature>"
-last_validated: 2026-10-04
+last_validated: 2026-10-10
 ---
 
 # Glossary: <Feature>
