@@ -699,7 +699,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   drops it. The task's next claim is handed the candidate with its pull
   request, continues on the same branch and pushes there under a lease on
   the published head, so its `pr_open` reuses that pull request and the
-  task keeps one open PR. Its `resume_candidate` output names the branch it
+  task keeps one open PR. If the branch advanced or was deleted on the
+  remote since that head, the push fails as `push_lease_lost` and the
+  remote branch is left as it is, even when the base also moved; a person
+  decides what to do with the newer commits. Its `resume_candidate` output names the branch it
   took over as `reused_branch`. A claim on the host that made the candidate
   renames the earlier worktree's branch to `<branch>-superseded-<suffix>`;
   that worktree and its commits are untouched. When the branch cannot be

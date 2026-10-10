@@ -153,6 +153,97 @@ fn an_unreusable_branch_closes_the_earlier_pull_request_for_the_new_one() {
     );
 }
 
+/// The earlier branch gained a commit after the published head, and the base
+/// moved again while the re-claim implemented. `pr_prepare` observes the
+/// advanced remote and `git_rebase` reports a fresh rewrite checkpoint that
+/// names it, which the ordinary push would accept. The adopted lease is on
+/// the published head, so the push refuses and the newer commit stays.
+#[test]
+fn an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase() {
+    isolated(
+        "an_advanced_adopted_branch_is_not_overwritten_after_a_base_rebase",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_and_commit();
+            let concurrent = fx.push_remote_only_commit();
+            fx.advance_base();
+
+            let synced = fx.sync(&host);
+            assert_eq!(synced["rewritten"], true, "{synced}");
+            assert_eq!(synced["remote_sha_before"], concurrent, "{synced}");
+            let refused = action(&host, "git_push", &fx.synced_push_input(&resumed, &synced))
+                .expect_err("the advanced branch is not replaced")
+                .to_string();
+            assert!(refused.contains("push_lease_lost"), "{refused}");
+            assert!(refused.contains(&concurrent), "{refused}");
+            assert!(refused.contains(&fx.earlier_head), "{refused}");
+            assert_eq!(
+                fx.remote_tip(EARLIER),
+                concurrent,
+                "the newer head survives"
+            );
+        },
+    );
+}
+
+/// A branch deleted on the remote since the published head is not recreated
+/// by the resumed candidate.
+#[test]
+fn a_deleted_adopted_branch_is_not_recreated() {
+    isolated("a_deleted_adopted_branch_is_not_recreated", |sandbox| {
+        let fx = Fixture::new(sandbox);
+        let host = Host::new(&fx.repo);
+        let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+        fx.continue_and_commit();
+        git(&fx.repo, &["push", "-q", "origin", "--delete", EARLIER]);
+        fx.advance_base();
+
+        let synced = fx.sync(&host);
+        let refused = action(&host, "git_push", &fx.synced_push_input(&resumed, &synced))
+            .expect_err("the deleted branch is not recreated")
+            .to_string();
+        assert!(refused.contains("push_lease_lost"), "{refused}");
+        assert!(refused.contains("missing"), "{refused}");
+        assert!(refused.contains(&fx.earlier_head), "{refused}");
+        let refs = git(
+            &fx.forge.join("remote.git"),
+            &["for-each-ref", &format!("refs/heads/{EARLIER}")],
+        );
+        assert!(refs.is_empty(), "the branch stays deleted: {refs}");
+    });
+}
+
+/// A remote still at the published head is replaced under the lease on it
+/// even when the base moved, and a retried push finds its own head published.
+#[test]
+fn an_unmoved_adopted_branch_is_replaced_after_a_base_rebase() {
+    isolated(
+        "an_unmoved_adopted_branch_is_replaced_after_a_base_rebase",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = Host::new(&fx.repo);
+            let resumed = action(&host, "candidate_resume", &fx.resume_input()).unwrap();
+            fx.continue_and_commit();
+            fx.advance_base();
+
+            let synced = fx.sync(&host);
+            assert_eq!(synced["rewritten"], true, "{synced}");
+            assert_eq!(synced["remote_sha_before"], fx.earlier_head, "{synced}");
+            let input = fx.synced_push_input(&resumed, &synced);
+            let pushed = action(&host, "git_push", &input).unwrap();
+            assert_eq!(pushed["decision"], "performed_force_with_lease", "{pushed}");
+            let rebased = synced["head_sha"].as_str().unwrap();
+            assert_eq!(fx.remote_tip(EARLIER), rebased);
+
+            let retried = action(&host, "git_push", &input).unwrap();
+            assert_eq!(retried["decision"], "reused_current", "{retried}");
+            assert_eq!(fx.remote_tip(EARLIER), rebased);
+        },
+    );
+}
+
 struct Fixture {
     forge: PathBuf,
     repo: PathBuf,
@@ -284,6 +375,82 @@ impl Fixture {
             "base": BASE,
             "base_ref": BASE,
             "rewrite_performed": false,
+            "candidate_resume": resumed,
+        })
+    }
+
+    /// What the earlier claim's host, or anyone else, pushes onto the
+    /// published branch after the candidate was kept: a commit the re-claim's
+    /// candidate never contained. Returns the branch's new head.
+    fn push_remote_only_commit(&self) -> String {
+        fs::write(self.earlier.join("remote-only.txt"), "remote only\n").unwrap();
+        git(&self.earlier, &["add", "remote-only.txt"]);
+        git(&self.earlier, &["commit", "-q", "-m", "remote only"]);
+        let head = git(&self.earlier, &["rev-parse", "HEAD"]);
+        git(
+            &self.earlier,
+            &["push", "-q", "origin", &format!("HEAD:{EARLIER}")],
+        );
+        assert_eq!(self.remote_tip(EARLIER), head);
+        head
+    }
+
+    /// The base moves while the re-claim implements.
+    fn advance_base(&self) {
+        fs::write(self.repo.join("landed-later.txt"), "landed later\n").unwrap();
+        git(&self.repo, &["add", "landed-later.txt"]);
+        git(&self.repo, &["commit", "-q", "-m", "landed later"]);
+        git(&self.repo, &["push", "-q", "origin", BASE]);
+    }
+
+    /// The claimed pipeline's `prepare_branch` and `sync_base` steps; returns
+    /// the rebase output.
+    fn sync(&self, host: &Host) -> Value {
+        let prepared = action(
+            host,
+            "pr_prepare",
+            &json!({
+                "job_run_id": RUN_ID,
+                "completed_task_ids": [TASK_ID],
+                "workspace_path": self.claim,
+                "base": BASE,
+                "base_sync": "local",
+            }),
+        )
+        .unwrap();
+        assert_eq!(prepared["decision"], "rebase_required", "{prepared}");
+        let mut input = json!({
+            "job_run_id": RUN_ID,
+            "completed_task_ids": [TASK_ID],
+            "workspace_path": self.claim,
+        });
+        for field in [
+            "head",
+            "head_sha",
+            "base",
+            "base_ref",
+            "base_sha",
+            "remote_sha",
+            "commits_behind",
+            "sync_required",
+        ] {
+            input[field] = prepared[field].clone();
+        }
+        action(host, "git_rebase", &input).unwrap()
+    }
+
+    /// The claimed pipeline's `push` step input after `sync_base`.
+    fn synced_push_input(&self, resumed: &Value, synced: &Value) -> Value {
+        json!({
+            "job_run_id": RUN_ID,
+            "completed_task_ids": [TASK_ID],
+            "workspace_path": self.claim,
+            "branch": synced["head"],
+            "base": synced["base"],
+            "base_ref": synced["base_ref"],
+            "rewrite_performed": synced["rewritten"],
+            "rewrite_head_before": synced["head_sha_before"],
+            "expected_remote_sha": synced["remote_sha_before"],
             "candidate_resume": resumed,
         })
     }
