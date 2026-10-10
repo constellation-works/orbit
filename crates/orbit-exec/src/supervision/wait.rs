@@ -259,6 +259,27 @@ pub(crate) fn wait_with_stdout_relay(
     )
 }
 
+/// Like [`wait_with_cancellation`], but intercepts termination signals before
+/// `spawn` runs, so a signal arriving between the child's creation and the
+/// caller's own post-spawn work (which `spawn` may include) cannot take the
+/// previous disposition and orphan the child's process group.
+pub(crate) fn wait_with_spawn_cancellation(
+    spawn: impl FnOnce() -> Result<Child, OrbitError>,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<WaitResult, OrbitError> {
+    wait_cancellable(
+        SupervisedChild::spawn(spawn)?,
+        timeout_ms,
+        false,
+        stdin_payload,
+        output_capture_limit(),
+        None,
+        cancelled,
+    )
+}
+
 pub(crate) fn wait_with_cancellation(
     child: Child,
     timeout_ms: Option<u64>,

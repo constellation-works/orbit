@@ -22,6 +22,8 @@
 //! # Key exports
 //! - [`run_process`] — primary entry point for spawning a subprocess
 //! - [`supervise_child`] — supervise a child spawned through a sandbox wrapper
+//! - [`spawn_supervised_cancellable`] — the same, with signals intercepted
+//!   before the spawn
 //! - [`ExecRequest`] — builder-style description of the process to run
 //! - [`ExecutionResult`] — captured stdout/stderr, exit code, and duration
 //! - [`Sandbox`] / [`NoSandbox`] — sandbox strategy trait and strategy that
@@ -95,7 +97,7 @@ pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
     EnvironmentMode, ExecRequest, StdinMode, run_process, run_process_streaming_stdout,
-    supervise_child, supervise_child_cancellable,
+    spawn_supervised_cancellable, supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
 pub use validation_env::{

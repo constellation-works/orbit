@@ -211,11 +211,13 @@ impl Drop for BackendGuard {
     }
 }
 
+/// A zombie is dead: `kill(pid, 0)` still succeeds for one that a subreaper
+/// has not yet reaped, which would report an exited backend as surviving.
 fn process_is_live(pid: libc::pid_t) -> bool {
     // Safety: signal 0 probes the fixture PID without delivering a signal.
     let rc = unsafe { libc::kill(pid, 0) };
     if rc == 0 {
-        return true;
+        return !process_is_zombie(pid);
     }
     let error = std::io::Error::last_os_error();
     assert_eq!(
@@ -224,6 +226,43 @@ fn process_is_live(pid: libc::pid_t) -> bool {
         "probe PID {pid}: {error}"
     );
     false
+}
+
+/// `/proc/<pid>/stat` is `pid (comm) state ...`; `comm` may hold spaces and
+/// parentheses, so the state follows the last `)`. Where `/proc` is absent
+/// (macOS) or the process vanished, report not-a-zombie and let `kill` decide.
+fn process_is_zombie(pid: libc::pid_t) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    stat.rsplit_once(')')
+        .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+}
+
+/// Negative control for the zombie rule: only a dead-but-unreaped process is
+/// treated as exited, so a backend left running still fails the test.
+#[test]
+fn process_is_live_distinguishes_running_zombie_and_reaped() {
+    let mut child = Command::new("/bin/sleep")
+        .arg("120")
+        .spawn()
+        .expect("spawn sleeper");
+    let pid = child.id() as libc::pid_t;
+    assert!(process_is_live(pid), "a running process must be live");
+
+    // Safety: the fixture sleeper's own PID.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0, "kill sleeper");
+    if Path::new("/proc/self/stat").exists() {
+        // Not yet waited on, so it lingers as a zombie once it dies.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !process_is_zombie(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(process_is_zombie(pid), "killed child must become a zombie");
+        assert!(!process_is_live(pid), "a zombie must be treated as exited");
+    }
+    child.wait().expect("reap sleeper");
+    assert!(!process_is_live(pid), "a reaped process must not be live");
 }
 
 fn wait_for_backend_pid(server: &mut Child, marker: &Path) -> BackendGuard {
