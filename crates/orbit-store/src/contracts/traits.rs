@@ -100,12 +100,12 @@ pub trait TaskStoreBackend: Send + Sync {
     fn resolve_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
-    /// Queue one task-branch CI receipt until the owner's execution claim
-    /// settles. Stores without a coordination journal cannot hold it.
+    /// Retain one task-branch CI receipt, or queue it for a current protecting
+    /// claim. The claim check and decision share the commit boundary.
     fn record_deferred_branch_observation(
         &self,
         _observation: &super::DeferredBranchObservation,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<super::BranchObservationOutcome, OrbitError> {
         Err(OrbitError::Store(
             "deferred branch observations require coordination".into(),
         ))

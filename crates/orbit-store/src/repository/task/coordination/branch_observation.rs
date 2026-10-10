@@ -1,16 +1,17 @@
-//! Task-branch CI observations queued until the owner's claim settles.
+//! Task-branch CI observations retained under the claim commit boundary.
 //!
-//! The sweep must not write a task an execution claim protects. It inserts one
-//! row per receipt here. Settlement of that claim, once the phase no longer
-//! protects the task, writes the same artifact an ordinary retain would have
-//! written and marks the row applied in that commit.
+//! The current claim check and queue-or-retain decision run in one exclusive
+//! section. A protecting claim queues the receipt for settlement. Otherwise
+//! the artifact and applied row commit together, even if settlement finished
+//! after the sweep observed the claim but before it submitted the receipt.
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::TaskArtifact;
 
 use crate::contracts::{
-    ClaimCommitEffects, ClaimEvidence, DEFERRED_BRANCH_OBSERVATION_KIND, DeferredBranchObservation,
+    BranchObservationOutcome, ClaimCommitEffects, ClaimEvidence, DEFERRED_BRANCH_OBSERVATION_KIND,
+    DeferredBranchObservation, TaskCoordinationCommitOutcome, TaskCoordinationCommitParams,
     TaskCoordinationRow,
 };
 use crate::repository::task::v2::normalize_v2_artifact_path;
@@ -18,13 +19,12 @@ use crate::repository::task::v2::normalize_v2_artifact_path;
 use super::TaskCommitBoundary;
 
 impl TaskCommitBoundary {
-    /// Insert one deferred observation. A row for the same receipt is success:
-    /// retries of the sweep must not duplicate it. An applied row whose
-    /// artifact is gone is queued again so the next settlement can rewrite it.
+    /// Queue or retain one observation under the same exclusive boundary as
+    /// claim settlement. Retries retain one artifact and one coordination row.
     pub(crate) fn record_deferred_branch_observation(
         &self,
         observation: &DeferredBranchObservation,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<BranchObservationOutcome, OrbitError> {
         orbit_types::task::validate_orb_task_id(&observation.task_id)?;
         if observation.content.is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -35,14 +35,79 @@ impl TaskCommitBoundary {
         stored.schema_version = 1;
         stored.applied = false;
         stored.artifact_path = normalize_v2_artifact_path(&observation.artifact_path)?;
-        let digest = sha256_hex(stored.content.as_bytes());
-        let row = TaskCoordinationRow {
-            kind: DEFERRED_BRANCH_OBSERVATION_KIND.to_string(),
-            row_id: format!("{}:{digest}", stored.task_id),
-            payload_json: serde_json::to_string(&stored)
-                .map_err(|error| OrbitError::Store(error.to_string()))?,
-        };
-        self.enter_ordinary(|| self.insert_or_revive(&row))
+        self.with_admission(|| {
+            let protecting = self
+                .execution_claims()?
+                .into_iter()
+                .find(|claim| claim.task_id == stored.task_id && claim.phase.protects_footprint());
+            stored.claiming_run_id = protecting
+                .as_ref()
+                .map(|claim| claim.run_context.run_id.clone());
+            let digest = sha256_hex(stored.content.as_bytes());
+            let mut row = TaskCoordinationRow {
+                kind: DEFERRED_BRANCH_OBSERVATION_KIND.to_string(),
+                row_id: format!("{}:{digest}", stored.task_id),
+                payload_json: String::new(),
+            };
+            if let Some(claim) = protecting {
+                row.payload_json = encode_observation(&stored)?;
+                self.insert_or_revive(&row)?;
+                return Ok(BranchObservationOutcome::Deferred {
+                    claiming_run_id: claim.run_context.run_id,
+                });
+            }
+
+            let existing =
+                self.store
+                    .task_coordination_row(&self.workspace_id, &row.kind, &row.row_id)?;
+            let recorded = self.artifact_recorded(&stored.task_id, &stored.artifact_path)?;
+            if recorded
+                && let Some(existing) = &existing
+                && serde_json::from_str::<DeferredBranchObservation>(&existing.payload_json)
+                    .map_err(|error| OrbitError::Store(error.to_string()))?
+                    .applied
+            {
+                return Ok(BranchObservationOutcome::Retained);
+            }
+            stored.applied = true;
+            row.payload_json = encode_observation(&stored)?;
+            let mut params = TaskCoordinationCommitParams {
+                task_id: stored.task_id.clone(),
+                actor: "system:ci_failure_sweep".into(),
+                ..Default::default()
+            };
+            let mut effects = ClaimCommitEffects::default();
+            if let Some(existing) = existing {
+                effects.replacements.push((existing, row));
+            } else {
+                params.rows.push(row);
+            }
+            let evidence = ClaimEvidence {
+                artifacts: if recorded {
+                    Vec::new()
+                } else {
+                    vec![TaskArtifact::from_text(
+                        stored.artifact_path,
+                        stored.content,
+                    )]
+                },
+                ..Default::default()
+            };
+            match self.commit_locked_effects(
+                &params,
+                &mut |_| Ok(params.rows.clone()),
+                &effects,
+                &evidence,
+                None,
+            )? {
+                TaskCoordinationCommitOutcome::Committed(_) => {
+                    Ok(BranchObservationOutcome::Retained)
+                }
+                outcome => Err(OrbitError::Store(format!(
+                    "branch observation retention did not commit: {outcome:?}"
+                ))),
+            }
+        })
     }
 
     /// Copy this task's unapplied observations onto `evidence` and mark those
@@ -104,18 +169,9 @@ impl TaskCommitBoundary {
         Ok(())
     }
 
-    fn insert_or_revive(&self, row: &TaskCoordinationRow) -> Result<(), OrbitError> {
-        match self
-            .store
-            .insert_task_coordination_row(&self.workspace_id, row)
-        {
-            Ok(()) => Ok(()),
-            Err(error) if unique_constraint(&error) => self.revive_if_artifact_missing(row),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn revive_if_artifact_missing(&self, incoming: &TaskCoordinationRow) -> Result<(), OrbitError> {
+    /// Caller holds the exclusive admission section, so no settlement or
+    /// receipt insertion can change this row between its read and write.
+    fn insert_or_revive(&self, incoming: &TaskCoordinationRow) -> Result<(), OrbitError> {
         let Some(existing) = self.store.task_coordination_row(
             &self.workspace_id,
             &incoming.kind,
@@ -134,35 +190,15 @@ impl TaskCommitBoundary {
         {
             return Ok(());
         }
-        let mut revived = observation;
-        revived.applied = false;
-        let payload = serde_json::to_string(&revived)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        if self
-            .store
-            .replace_task_coordination_payload(&self.workspace_id, &existing, &payload)?
-        {
-            return Ok(());
-        }
-        let Some(again) = self.store.task_coordination_row(
+        if self.store.replace_task_coordination_payload(
             &self.workspace_id,
-            &incoming.kind,
-            &incoming.row_id,
-        )?
-        else {
-            return Err(OrbitError::Store(
-                "deferred branch observation disappeared while requeueing".into(),
-            ));
-        };
-        let observation: DeferredBranchObservation = serde_json::from_str(&again.payload_json)
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        if !observation.applied
-            || self.artifact_recorded(&observation.task_id, &observation.artifact_path)?
-        {
+            &existing,
+            &incoming.payload_json,
+        )? {
             Ok(())
         } else {
             Err(OrbitError::Store(
-                "deferred branch observation could not be requeued".into(),
+                "deferred branch observation changed inside the commit boundary".into(),
             ))
         }
     }
@@ -189,6 +225,6 @@ fn row_is_for_task(row_id: &str, task_id: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(':'))
 }
 
-fn unique_constraint(error: &OrbitError) -> bool {
-    error.to_string().contains("UNIQUE constraint failed")
+fn encode_observation(observation: &DeferredBranchObservation) -> Result<String, OrbitError> {
+    serde_json::to_string(observation).map_err(|error| OrbitError::Store(error.to_string()))
 }
