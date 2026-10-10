@@ -299,12 +299,14 @@ Use this for a critical fix on a released `main` that can't wait for the next cy
 
 2. Open a PR against `main` with the smallest possible fix. No refactors.
 3. Cut a patch release on `main` with checklist steps 1–10, using `main` as the branch: `git push origin main && git push origin v<X.Y.Z+1>`. Skip 10b, because the fix is already on `main`.
-4. Back-merge in the same session, so the next promotion doesn't overwrite the fix and `main` is an ancestor of `agent-main` again:
+4. Back-merge in the same session, so the next promotion doesn't overwrite the fix and `main` is an ancestor of `agent-main` again. Fetch and merge the remote `main` revision (`origin/main`), not the local `main` branch. `git fetch` moves remote-tracking refs only, so a hotfix another operator landed on `origin/main` is absent from a local `main` that is still the previous release. Merging that stale branch reports success, pushes, and leaves the hotfix off `agent-main`, so the next promotion stays refused. The ancestor check must exit 0 before the push; it proves every fetched `main` commit reached `agent-main`. Don't force-push.
 
    ```sh
+   git fetch origin
    git checkout agent-main
-   git pull --ff-only origin agent-main
-   git merge --no-ff main
+   git merge --ff-only origin/agent-main
+   git merge --no-ff origin/main
+   git merge-base --is-ancestor origin/main HEAD   # must exit 0 before the push
    git push origin agent-main
    ```
 
