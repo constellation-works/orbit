@@ -21,7 +21,7 @@ concurrency:
 permissions:
   contents: read
 
-# Keep these in sync with the same keys in ci.yml.
+# Keep shared toolchain pins in sync with ci.yml; coverage-only pins live here.
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
@@ -65,12 +65,8 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # On pull_request, use the PR head SHA: not the branch name
-          # GitHub deletes on merge, and not github.sha (the ephemeral
-          # merge commit). On push, use github.sha directly so a run that
-          # sat queued still builds and reports on the commit that
-          # triggered it, not whatever the branch points to once it starts.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Check out the commit that triggered this scheduled or dispatched run.
+          ref: ${{ github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # Rust 1.98.1
