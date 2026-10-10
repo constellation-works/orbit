@@ -1271,11 +1271,11 @@ function buildWorkspaceSelector() {
   });
 
   const note = el("span", {
-    class: "workspace-scope-note",
+    class: "workspace-scope-note is-inactive",
     text: "Workspace filter inactive",
   });
   note.id = "workspace-scope-note";
-  note.hidden = true;
+  note.setAttribute("aria-hidden", "true");
   note.title = "Reliability ignores the selected workspace";
 
   // ORB-10972: the selector moved from the header meta cluster into the rail

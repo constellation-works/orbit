@@ -476,6 +476,7 @@
   padding: 3px 8px;
   white-space: nowrap;
 }
+.workspace-scope-note.is-inactive { visibility: hidden; }
 
 .scope-badge {
   display: inline-flex;
