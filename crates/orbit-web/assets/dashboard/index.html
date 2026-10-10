@@ -155,9 +155,8 @@
           <div class="dock-head">
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
               <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
-              <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log</button>
+              <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
-            <span class="dock-meta"><span class="live-dot"></span><span id="log-count">0</span> lines</span>
           </div>
 
           <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
@@ -187,14 +186,22 @@
           <div class="dock-pane" id="dock-pane-log" role="tabpanel" aria-labelledby="dock-tab-log" data-pane="log">
             <section class="panel" id="log-panel">
               <div class="log-foot log-filters">
-                <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>
-                <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>
-                <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>
-                <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>
-                <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">agent</button>
-                <button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><b>&#8595;</b> follow</button>
-                <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">wrap</button>
-                <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                <div class="log-filter-group" role="group" aria-label="Filter log lines">
+                  <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">All</button>
+                  <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
+                  <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
+                  <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
+                  <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
+                </div>
+                <div class="log-view-group">
+                  <button type="button" class="seg on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
+                  <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">Wrap</button>
+                  <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                </div>
+              </div>
+              <div class="log-caption">
+                <span>Newest first · <span id="log-count">0</span> shown</span>
+                <span class="log-live"><span class="live-dot" aria-hidden="true"></span><span class="log-live-label" id="log-live-label">Live</span></span>
               </div>
               <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
                 <div class="inner" id="logInner"></div>

@@ -50,18 +50,7 @@
 .dock-seg.on { color: var(--fg-strong); background: var(--bg-selected); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .dock-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.dock-meta {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-mute);
-}
 
-#side-dock[data-mode="drain"] .dock-meta { display: none; }
 
 .dock-pane { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 12px; }
 #side-dock[data-mode="drain"] .dock-pane[data-pane="drain"] { display: flex; }
