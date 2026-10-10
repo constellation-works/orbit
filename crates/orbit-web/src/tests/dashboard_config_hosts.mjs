@@ -4,11 +4,18 @@
 // cached refreshes that keep live readings and show CLI additions, the load
 // error banner, inline add, rename, remove and force-remove with keyboard
 // focus handed back as user-interface §6 requires, and a read-only view for a
-// session without the operator capability.
+// session without the operator capability. When a Playwright module is
+// installed, it also opens the shipped stylesheet and measures that the
+// header, the local row and a remote row share column edges.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { dashboardFile } from './dashboard_static.mjs';
 
 const classesOf = node => String(node.className || '').split(/\s+/).filter(Boolean);
 class Node {
@@ -329,3 +336,197 @@ assert.equal(named(body, 'host-rename').length + named(body, 'host-remove').leng
 assert.match(textOf(body, 'host-read-only')[0], /Read-only: operation 'host.edit' requires operator capability/);
 assert.equal(rows().length, 5, 'the hosts stay listed');
 console.log('settings hosts: rows, freshness, load banner, inline add/rename/remove/force with focus, and read-only passed');
+
+// Column edges are a layout fact. The fake document above has no boxes, so
+// this drives the shipped hosts module and stylesheet in Chromium.
+await assertHostColumnsAlign();
+
+function browserModule() {
+  const fromEnv = process.env.PLAYWRIGHT_MODULE || process.env.ORBIT_PLAYWRIGHT_MODULE;
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  const kit = path.join(os.homedir(), '.local/chromium-deps');
+  const candidate = path.join(kit, 'kit/node_modules/playwright/index.mjs');
+  if (!fs.existsSync(candidate)) return null;
+  const lib = path.join(kit, 'root/usr/lib/x86_64-linux-gnu');
+  if (fs.existsSync(lib) && !(process.env.LD_LIBRARY_PATH || '').split(':').includes(lib)) {
+    process.env.LD_LIBRARY_PATH = [lib, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+  }
+  const fonts = path.join(kit, 'fonts.conf');
+  if (!process.env.FONTCONFIG_FILE && fs.existsSync(fonts)) process.env.FONTCONFIG_FILE = fonts;
+  if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(path.join(kit, 'browsers'))) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(kit, 'browsers');
+  }
+  return candidate;
+}
+
+function hostPayload() {
+  const local = {
+    name: 'box-a', machine_id: 'hm_local', ssh: null, task_prefix: 'LB', local: true, legacy: false,
+    reachable: true, error: null, binary_version: '1.4.0', protocol_fingerprint: 'abcdef0123456789',
+    skew: false, skew_fields: [],
+    workspaces: [{ id: 'ws_1', name: 'orbit', role: 'replica', owner_machine_id: 'hm_alpha', status: 'active' }],
+  };
+  const remote = {
+    name: 'dk-server-2', machine_id: 'hm_remote', ssh: 'dk-server-2', task_prefix: 'DK', local: false, legacy: false,
+    reachable: true, error: null, binary_version: '1.4.0', protocol_fingerprint: 'abcdef0123456789',
+    skew: false, skew_fields: [],
+    workspaces: [{ id: 'ws_2', name: 'orbit', role: 'owner', owner_machine_id: 'hm_remote', status: 'active' }],
+  };
+  const down = {
+    ...remote, name: 'beta', machine_id: 'hm_beta', ssh: 'beta', task_prefix: 'BE', reachable: false,
+    error: { code: 'unreachable_destination', message: 'ssh: Could not resolve hostname beta' },
+    binary_version: null, protocol_fingerprint: null, skew_fields: [], workspaces: [],
+  };
+  return {
+    host_file: '/home/op/.orbit/hosts.toml', legacy: false, generation: 1, load_error: null,
+    host_edit: { authorized: true, reason: null },
+    hosts: [local, remote, down],
+  };
+}
+
+function columnBoxes() {
+  const boxes = (grid) => [...grid.children].map((cell) => {
+    const box = cell.getBoundingClientRect();
+    return { left: box.left, width: box.width, right: box.right };
+  });
+  const rowGrid = (id) => document.querySelector(`.host-row[data-key="${id}"] .host-grid`);
+  const header = document.querySelector('.host-head');
+  const local = rowGrid('hm_local');
+  const remote = rowGrid('hm_remote');
+  const down = rowGrid('hm_beta');
+  const error = document.querySelector('.host-row[data-key="hm_beta"] .host-error');
+  const rename = document.querySelector('.host-row[data-key="hm_remote"] .host-rename');
+  const actions = document.querySelector('.host-row[data-key="hm_remote"] .host-actions');
+  return {
+    header: boxes(header),
+    local: boxes(local),
+    remote: boxes(remote),
+    down: boxes(down),
+    localButtons: document.querySelectorAll('.host-row[data-key="hm_local"] .config-action').length,
+    remoteButtons: document.querySelectorAll('.host-row[data-key="hm_remote"] .config-action').length,
+    renameInsideActions: actions.getBoundingClientRect().right + 1 >= rename.getBoundingClientRect().right,
+    errorBelowGrid: error.getBoundingClientRect().top >= down.getBoundingClientRect().bottom - 1,
+    errorText: error.textContent,
+  };
+}
+
+function narrowLayout() {
+  const row = document.querySelector('.host-row[data-key="hm_beta"]');
+  const grid = row.querySelector('.host-grid');
+  const identity = row.querySelector('.host-identity');
+  const reach = row.querySelector('.host-reach');
+  const version = row.querySelector('.host-version');
+  const actions = row.querySelector('.host-actions');
+  const error = row.querySelector('.host-error');
+  const list = document.querySelector('.host-list');
+  const box = (node) => {
+    const rect = node.getBoundingClientRect();
+    return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+  };
+  return {
+    headerDisplay: getComputedStyle(document.querySelector('.host-head')).display,
+    grid: box(grid),
+    identity: box(identity),
+    reach: box(reach),
+    version: box(version),
+    actions: box(actions),
+    error: box(error),
+    errorText: error.textContent,
+    listOverflow: list.scrollWidth - list.clientWidth,
+    remoteButtons: document.querySelectorAll('.host-row[data-key="hm_remote"] .host-rename, .host-row[data-key="hm_remote"] .host-remove').length,
+    rows: document.querySelectorAll('.host-row').length,
+  };
+}
+
+function sameTrack(name, actual, expected) {
+  assert.equal(actual.length, expected.length, `${name} has a different column count`);
+  for (let i = 0; i < expected.length; i++) {
+    assert.ok(Math.abs(actual[i].left - expected[i].left) <= 0.5, `${name} column ${i} left ${actual[i].left} != ${expected[i].left}`);
+    assert.ok(Math.abs(actual[i].width - expected[i].width) <= 0.5, `${name} column ${i} width ${actual[i].width} != ${expected[i].width}`);
+  }
+}
+
+async function assertHostColumnsAlign() {
+  const modulePath = browserModule();
+  if (!modulePath) {
+    if (process.env.ORBIT_REQUIRE_HOSTS_LAYOUT === '1') {
+      throw new Error('hosts column alignment requires Playwright (PLAYWRIGHT_MODULE or the prepared-host kit)');
+    }
+    console.log('settings hosts: column alignment not measured (no Playwright module)');
+    return;
+  }
+  const { chromium } = await import(pathToFileURL(path.resolve(modulePath)).href);
+  const payload = hostPayload();
+  const html = `<!doctype html><html><head><link rel="stylesheet" href="/static/dashboard.css"></head><body>
+    <p id="config-explainer" hidden></p><div id="config-controls" hidden></div><span id="config-count"></span><div id="config-body"></div>
+  </body></html>`;
+  const server = http.createServer((req, res) => {
+    const name = new URL(req.url, 'http://fixture').pathname;
+    if (name === '/hosts-layout') {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(html);
+      return;
+    }
+    const served = dashboardFile(name);
+    if (!served) { res.writeHead(404); res.end(); return; }
+    res.setHeader('content-type', served.type);
+    res.end(served.data);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(String(error)));
+    await page.goto(`http://127.0.0.1:${port}/hosts-layout`);
+    await page.evaluate(async (body) => {
+      window.fetch = async (input) => {
+        const url = new URL(input, location.origin);
+        if (url.pathname === '/api/hosts') {
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('not found', { status: 404 });
+      };
+      const mod = await import('/js/config.js');
+      mod.initConfig();
+      mod.setConfigSubtab('hosts');
+      await mod.fetchAndRenderConfig();
+    }, payload);
+    await page.waitForSelector('.host-row[data-key="hm_remote"] .host-rename');
+    assert.deepEqual(pageErrors, [], `hosts page errors: ${pageErrors.join('\n')}`);
+    const wide = await page.evaluate(columnBoxes);
+    sameTrack('local row', wide.local, wide.header);
+    sameTrack('remote row', wide.remote, wide.header);
+    sameTrack('error row', wide.down, wide.header);
+    for (let i = 1; i < wide.header.length; i++) {
+      assert.ok(wide.header[i].left > wide.header[i - 1].left + 40, `column ${i} collapsed into column ${i - 1}`);
+    }
+    assert.equal(wide.localButtons, 0, 'the local row has no actions');
+    assert.equal(wide.remoteButtons, 2, 'the remote row has Rename and Remove');
+    assert.equal(wide.renameInsideActions, true, 'Rename fits in the shared actions track');
+    assert.equal(wide.errorBelowGrid, true, 'the host-error line sits under the row, not in a column');
+    assert.match(wide.errorText, /unreachable_destination: ssh: Could not resolve hostname beta/);
+
+    await page.setViewportSize({ width: 720, height: 900 });
+    const narrow = await page.evaluate(narrowLayout);
+    assert.equal(narrow.headerDisplay, 'none', 'the stacked layout hides the column header');
+    assert.equal(narrow.rows, 3, 'stacked layout keeps every host row');
+    assert.equal(narrow.remoteButtons, 2, 'Rename and Remove stay available when stacked');
+    assert.ok(narrow.identity.width > narrow.grid.width * 0.8, 'identity spans the stacked row');
+    assert.ok(narrow.grid.right - narrow.identity.right < 20, 'identity reaches the row edge');
+    assert.ok(Math.abs(narrow.reach.top - narrow.version.top) <= 1, 'Reachable and Version share a stacked row');
+    assert.ok(narrow.version.left >= narrow.reach.right - 1, 'Reachable and Version sit side by side');
+    assert.ok(narrow.actions.top >= narrow.identity.bottom - 1, 'actions drop below the identity line');
+    assert.ok(narrow.actions.width > narrow.grid.width * 0.8, 'actions span the stacked row');
+    assert.ok(narrow.error.top >= narrow.grid.bottom - 1, 'the host-error line stays under the stacked cells');
+    assert.ok(narrow.error.height > 0 && narrow.error.width > 0, 'the host-error line is visible');
+    assert.match(narrow.errorText, /unreachable_destination/);
+    assert.ok(narrow.listOverflow <= 1, `host list overflows by ${narrow.listOverflow}px at 720px`);
+    console.log('settings hosts: column edges align across header, local, and remote rows; error line and 720px stack hold');
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+}

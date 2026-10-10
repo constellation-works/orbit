@@ -251,11 +251,20 @@
 .host-fields { display: flex; flex-wrap: wrap; gap: 10px; }
 .host-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; }
 .host-editor .config-row-error { padding: 0; }
-.host-list { border: 1px solid var(--border); border-radius: 2px; background: var(--bg-elev); }
-.host-grid {
-  display: grid; align-items: start; gap: 6px 12px; padding: 8px 12px;
+/* One grid owns the columns. A per-row grid whose last track is `auto` sizes
+   that track to its own actions cell, so a row with Rename/Remove resolves
+   every fr column differently from a row whose actions cell is empty. */
+.host-list {
+  display: grid;
   grid-template-columns: minmax(200px, 2.2fr) minmax(110px, 1fr) minmax(70px, 0.8fr) minmax(90px, 0.8fr) minmax(80px, 0.9fr) minmax(140px, 1.6fr) auto;
+  column-gap: 12px;
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg-elev);
 }
+.host-row, .host-grid {
+  display: grid; grid-template-columns: subgrid; grid-column: 1 / -1;
+}
+.host-grid { align-items: start; padding: 8px 12px; }
+.host-row > .host-error, .host-row > .host-editor { grid-column: 1 / -1; }
 .host-head { border-bottom: 1px solid var(--hair); }
 .host-row + .host-row { border-top: 1px solid var(--hair); }
 .host-row.local { background: var(--bg); }
@@ -278,7 +287,8 @@
 .host-editor .config-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 900px) {
   .host-head { display: none; }
-  .host-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .host-list, .host-row { display: block; }
+  .host-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; }
   .host-identity, .host-actions { grid-column: 1 / -1; }
   .host-actions { justify-content: flex-start; }
 }
