@@ -797,55 +797,6 @@ function renderAuditSummary(data, ctx) {
     )), durations);
   }
 
-  if (data.denials_by_tool || data.denials_by_reason) {
-    const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title section-title", text: "Denials" }));
-    const body = el("div", { class: "card-body" });
-    const sectionLabel = (txt) => {
-      const lbl = el("div", { class: "card-subtitle", text: txt });
-      lbl.style.cssText = "padding: 6px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);";
-      return lbl;
-    };
-    const toolRows = data.denials_by_tool || [];
-    body.appendChild(sectionLabel("By tool"));
-    renderTable(
-      toolRows,
-      [{ key: "tool", label: "tool" }, { key: "count", label: "count", num: true }],
-      filterByTool
-    )(body);
-    const reasonRows = data.denials_by_reason || [];
-    body.appendChild(sectionLabel("By reason"));
-    renderTable(
-      reasonRows,
-      [{ key: "reason", label: "reason" }, { key: "count", label: "count", num: true }],
-      null
-    )(body);
-    card.appendChild(body);
-    addCard("denials", card, [toolRows, reasonRows]);
-  }
-
-  if (data.role_split) {
-    addCard("role-split", createCard("Role split", renderTable(
-      data.role_split,
-      [
-        { key: "label", label: "role", render: (value, _row, td) => {
-          td.title = `Recorded role: ${value}`;
-          return auditActorLabel(value);
-        } },
-        { key: "count", label: "events", num: true, title: "All audit events in the window" },
-        { key: "mcp", label: "mcp", num: true, title: "Tool calls via MCP (subcommand = run-mcp)" },
-        { key: "cli", label: "cli", num: true, title: "Tool calls via CLI (subcommand = run)" },
-        { key: "other", label: "other", num: true, secondary: true, title: "Other CLI subcommands (non-tool, e.g. show/list)" },
-        { key: "no_subcommand", label: "internal", num: true, secondary: true, title: "Internal/system events with no subcommand (e.g. lock reservations)" },
-      ],
-      (item) => {
-        auditFilter.role = auditFilter.role === item.label ? null : item.label;
-        syncAuditControls();
-        window.location.hash = buildAuditHash();
-      }
-    )), data.role_split);
-  }
-
   if (data.mcp_vs_cli_split) {
     addCard("mcp-vs-cli", createCard("MCP vs CLI", renderTable(
       data.mcp_vs_cli_split,

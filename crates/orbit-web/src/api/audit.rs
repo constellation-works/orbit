@@ -17,7 +17,6 @@ use orbit_core::{
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::{Value, json};
 
-use super::denials::{collect_denial_rows, denials_by_reason_summary, denials_by_tool_summary};
 use super::incidents::{ROLLUP_SCAN_LIMIT, agent_family_key, failure_category_summaries};
 use super::jobs::FAILED_RUN_STATES;
 use super::{
@@ -454,10 +453,9 @@ struct AuditSummaryBundle {
     /// successful + unexpected-failed denominator and a sample-size floor.
     tool_call_failure_rate: Value,
     tool_call_failures_by_tool: Vec<Value>,
-    role_split: Vec<Value>,
-    /// Canonical per-actor split [ORB-10888]. Unlike `role_split`, one agent
-    /// appears once regardless of the granularity its label was recorded at,
-    /// and `kind` says whether a row is a real agent at all.
+    /// Canonical per-actor split [ORB-10888]. One agent appears once
+    /// regardless of the granularity its label was recorded at, and `kind`
+    /// says whether a row is a real agent at all.
     actor_split: Vec<Value>,
     /// Tool calls split by how each row's identity was established
     /// [ORB-10890]. Every row carries its own `attribution`, so a consumer
@@ -465,8 +463,6 @@ struct AuditSummaryBundle {
     /// buckets are disjoint, so summing them is the combined denominator.
     attribution_split: Vec<Value>,
     mcp_vs_cli_split: Value,
-    denials_by_tool: Value,
-    denials_by_reason: Value,
 }
 
 /// Stable JSON fields for a computed bundle. `denial_threshold` is request
@@ -516,12 +512,9 @@ fn summary_payload(
         "failure_rate_by_tool": bundle.failure_rate_by_tool,
         "tool_call_failure_rate": bundle.tool_call_failure_rate,
         "tool_call_failures_by_tool": bundle.tool_call_failures_by_tool,
-        "role_split": bundle.role_split,
         "actor_split": bundle.actor_split,
         "attribution_split": bundle.attribution_split,
         "mcp_vs_cli_split": bundle.mcp_vs_cli_split,
-        "denials_by_tool": bundle.denials_by_tool,
-        "denials_by_reason": bundle.denials_by_reason,
     })
 }
 
@@ -629,20 +622,6 @@ fn compute_audit_summary_bundle(
     let (tool_call_failure_rate, tool_call_failures_by_tool) =
         callable_tool_call_failure_stats(&tool_aggs);
 
-    let role_vec: Vec<_> = role_aggs
-        .iter()
-        .map(|r| {
-            json!({
-                "label": r.role,
-                "count": r.total,
-                "mcp": r.mcp,
-                "cli": r.cli,
-                "other": r.other,
-                "no_subcommand": r.no_subcommand,
-            })
-        })
-        .collect();
-
     let actor_vec: Vec<_> = actor_aggs
         .iter()
         .map(|a| {
@@ -683,9 +662,6 @@ fn compute_audit_summary_bundle(
         {"label": "cli", "count": cli_count},
     ]);
 
-    let denial_rows = collect_denial_rows(runtime, Some(since), None, None)?;
-    let denials_by_tool = denials_by_tool_summary(&denial_rows, 8);
-    let denials_by_reason = denials_by_reason_summary(&denial_rows, 8);
     let failure_categories = failure_category_summaries(&incidents);
 
     Ok(AuditSummaryBundle {
@@ -713,12 +689,9 @@ fn compute_audit_summary_bundle(
         failure_rate_by_tool: rate_vec,
         tool_call_failure_rate,
         tool_call_failures_by_tool,
-        role_split: role_vec,
         actor_split: actor_vec,
         attribution_split: attribution_vec,
         mcp_vs_cli_split,
-        denials_by_tool,
-        denials_by_reason,
     })
 }
 

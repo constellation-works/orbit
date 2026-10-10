@@ -27,9 +27,6 @@ const summary = {
     { tool: 'unknown', count: 2207, avg: 564000, p95: 700000 },
     { tool: 'orbit.workflow.run.list', count: 12345, avg: 1240, p95: 5000 },
   ],
-  denials_by_tool: [{ tool: 'orbit.workflow.run.list', count: 123 }],
-  denials_by_reason: [{ reason: 'a long denial reason that must fit inside the summary card', count: 123 }],
-  role_split: [{ label: 'unverified', count: 98765, mcp: 12345, cli: 123, other: 1234, no_subcommand: 123 }],
   mcp_vs_cli_split: [{ label: 'mcp', count: 12345 }],
 };
 const policy = {
@@ -116,6 +113,7 @@ try {
       const box = body.getBoundingClientRect();
       return {
         width: innerWidth, panel: { left: box.left, right: box.right }, scrollLeft: body.scrollLeft,
+        cardKeys: [...document.querySelectorAll('#audit-summary-body .audit-summary-card')].map(card => card.dataset.key),
         eventsPanelBottom: document.getElementById('audit-pane').getBoundingClientRect().bottom,
         summaryPanelBottom: document.getElementById('audit-summary-panel').getBoundingClientRect().bottom,
         statuses: [...body.querySelectorAll('.c-status')].map(node => {
@@ -137,6 +135,9 @@ try {
     });
     assert.equal(layout.scrollLeft, 0);
     assert.equal(layout.statuses.length, events.length);
+    assert.ok(!layout.cardKeys.includes('denials') && !layout.cardKeys.includes('role-split'),
+      `the Denials and Role split cards are gone at ${width}: ${layout.cardKeys}`);
+    assert.ok(layout.cardKeys.includes('mcp-vs-cli'), `MCP vs CLI stays at ${width}: ${layout.cardKeys}`);
     if (width >= 1280) {
       assert.ok(Math.abs(layout.eventsPanelBottom - layout.summaryPanelBottom) <= 2,
         `events and summary panels align at ${width}: ${layout.eventsPanelBottom} vs ${layout.summaryPanelBottom}`);
@@ -149,7 +150,7 @@ try {
         if (cell.omitted) assert.ok(cell.secondary, `only secondary columns omitted: ${JSON.stringify(cell)}`);
         else {
           assert.ok(cell.left >= cell.cardLeft && cell.right <= cell.cardRight + 1, `summary cell fits ${width}: ${JSON.stringify(cell)}`);
-          if (cell.column !== 'tool' && cell.column !== 'label' && cell.column !== 'reason') assert.equal(cell.clipped, false, `numeric value/header visible at ${width}: ${JSON.stringify(cell)}`);
+          if (cell.column !== 'tool' && cell.column !== 'label') assert.equal(cell.clipped, false, `numeric value/header visible at ${width}: ${JSON.stringify(cell)}`);
         }
       }
     }

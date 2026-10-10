@@ -119,6 +119,6 @@ that is the grain the raw role aggregate already splits on.
 The role-grouped aggregate is retained: it is the raw, un-normalized view, and keeping
 both makes the normalization auditable rather than implicit.
 
-The dashboard summary emits `actor_split` beside `role_split`, and `orbit-web`'s
+The dashboard summary emits `actor_split`, and `orbit-web`'s
 `audit_event_to_json` exposes `actor`, `actor_kind`, `actor_vendor`, `actor_family`, and
 `actor_model` next to the untouched `role`.

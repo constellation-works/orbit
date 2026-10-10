@@ -143,6 +143,6 @@ rather than counting as authenticated.
 - `audit_event_to_json` (`orbit audit list --json`, `orbit audit show --json`) exposes
   `self_reported_actor`. The key names the trust level; it is deliberately not called
   `actor`.
-- The dashboard audit summary emits `attribution_split` beside `role_split` and
-  `actor_split`. Each row carries its own `attribution` plus a `verified` boolean, so a
+- The dashboard audit summary emits `attribution_split` beside `actor_split`.
+  Each row carries its own `attribution` plus a `verified` boolean, so a
   chart legend reading only `label` still says which half of the split it is in.
