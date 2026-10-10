@@ -1,8 +1,9 @@
-//! A pilot's typed `required_os` finding holds a backlog task on a host of
-//! another OS across the real drain, ship-selection, readiness and workflow
-//! admission boundaries, until the matching `os:` tag, a re-scope, an
-//! evidenced operator decision or a newer assessment without it clears the
-//! wait.
+//! A pilot's typed `required_os` finding routes an untagged task by the `os:`
+//! tag apply adds, and otherwise holds a backlog task on a host of another OS
+//! across the real drain, ship-selection, readiness and workflow admission
+//! boundaries, until the matching `os:` tag, a re-scope, an evidenced
+//! operator decision or a newer assessment without it clears the wait. A
+//! `required_machine` finding holds every machine but the owner it names.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
@@ -39,6 +40,15 @@ fn backlog_task(workspace: &Workspace, criteria: &[&str], tags: &[&str]) -> Task
 /// is the pilot's typed finding; `None` omits the field, as an older pilot
 /// result does.
 fn apply(workspace: &Workspace, task: &Task, required_os: Option<Value>) -> Value {
+    apply_findings(
+        workspace,
+        task,
+        required_os.map(|required_os| json!({"required_os": required_os})),
+    )
+}
+
+/// [`apply`] with any typed findings, merged into the assessment.
+fn apply_findings(workspace: &Workspace, task: &Task, findings: Option<Value>) -> Value {
     let prepared = workspace.prepare(&[&task.id]);
     let mut assessment = json!({
         "task_id": task.id,
@@ -51,8 +61,11 @@ fn apply(workspace: &Workspace, task: &Task, required_os: Option<Value>) -> Valu
         "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
         "duplicate_of": null, "already_landed": null,
     });
-    if let Some(required_os) = required_os {
-        assessment["required_os"] = required_os;
+    for (field, finding) in findings
+        .iter()
+        .flat_map(|findings| findings.as_object().unwrap())
+    {
+        assessment[field] = finding.clone();
     }
     workspace.action(
         "apply_task_pilot_results",
@@ -67,6 +80,10 @@ fn assess(workspace: &Workspace, task: &Task, required_os: Option<Value>) {
     let applied = apply(workspace, task, required_os);
     assert_eq!(applied["status"], "succeeded", "{applied}");
     assert_eq!(applied["applied_count"], 1, "{applied}");
+}
+
+fn tags(workspace: &Workspace, task: &Task) -> Vec<String> {
+    workspace.runtime.get_task(&task.id).unwrap().tags
 }
 
 fn needs_macos(criterion: usize) -> Value {
@@ -157,10 +174,8 @@ fn resolutions(workspace: &Workspace, task: &Task) -> Vec<String> {
 }
 
 #[test]
-fn a_native_os_finding_holds_another_host_until_the_task_is_tagged() {
-    if !isolated(
-        "task_pilot::native_os::a_native_os_finding_holds_another_host_until_the_task_is_tagged",
-    ) {
+fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
+    if !isolated("task_pilot::native_os::a_native_os_finding_tags_an_untagged_task_for_that_os") {
         return;
     }
     let mut workspace = Workspace::new();
@@ -181,56 +196,38 @@ fn a_native_os_finding_holds_another_host_until_the_task_is_tagged() {
         "{audit}"
     );
     assert_eq!(
-        workspace.runtime.get_task(&task.id).unwrap().tags,
-        vec!["ci".to_string(), "macos".to_string()],
-        "the pilot never edits tags"
-    );
-    assert_native_os_wait(&workspace, &task, 2);
-
-    // A queued run or an explicit ship bypassing selection meets the same
-    // wait at workflow admission.
-    let refused = orbit_engine::RuntimeHost::admit_task_for_workflow(
-        &workspace.runtime,
-        &task.id,
-        "worktree_setup",
-    )
-    .unwrap_err();
-    assert!(
-        refused
-            .to_string()
-            .contains("criterion 2 needs native macos evidence"),
-        "{refused}"
-    );
-    assert_eq!(
-        workspace.runtime.get_task(&task.id).unwrap().status,
-        TaskStatus::Backlog
+        tags(&workspace, &task),
+        ["ci", "macos", "os:macos"],
+        "the finding's OS is added to an untagged task"
     );
 
-    // A macOS host can produce the evidence and starts the task as before.
-    on(&mut workspace, HostOs::Macos);
-    assert_eq!(exclusion(&workspace, &task), None);
-
-    // The matching tag clears the wait: tag routing now sends the task to a
-    // macOS host, and a Linux host refuses it for that reason instead.
-    workspace
-        .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                tags: Some(vec!["ci".into(), "macos".into(), "os:macos".into()]),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
-        .unwrap();
-    assert_eq!(exclusion(&workspace, &task), None);
-    on(&mut workspace, HostOs::Linux);
+    // Tag routing now refuses a Linux host in selection and readiness.
     let (reason, detail) = exclusion(&workspace, &task).unwrap();
     assert_eq!(reason, "host_os_mismatch");
     assert!(
         detail.contains("waits for a macos host (os:macos)"),
         "{detail}"
     );
+
+    // A macOS host can produce the evidence and starts the task.
+    on(&mut workspace, HostOs::Macos);
+    assert_eq!(exclusion(&workspace, &task), None);
+
+    // Removing the tag restores the pilot's wait rather than admitting the
+    // Linux host.
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                tags: Some(vec!["ci".into(), "macos".into()]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    on(&mut workspace, HostOs::Linux);
+    assert_native_os_wait(&workspace, &task, 2);
     assert!(resolutions(&workspace, &task).is_empty());
 }
 
@@ -244,7 +241,9 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
     for clearing in ["approve-anyway", "clear", "rescope", "reassessed"] {
         let mut workspace = Workspace::new();
         on(&mut workspace, HostOs::Linux);
-        let task = backlog_task(&workspace, &[NATIVE_CRITERION], &[]);
+        // The operator routed the task to Linux; the pilot keeps that tag, so
+        // its finding holds the Linux host instead.
+        let task = backlog_task(&workspace, &[NATIVE_CRITERION], &["os:linux"]);
         let decision = format!(
             "task-pilot-admission: {clearing}\nThe operator ran the macOS launch on their own host."
         );
@@ -261,6 +260,7 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
             )
             .unwrap();
         assess(&workspace, &task, Some(needs_macos(1)));
+        assert_eq!(tags(&workspace, &task), ["os:linux"], "{clearing}");
         assert_native_os_wait(&workspace, &task, 1);
         // Agent provenance cannot mint the decision, and a decision without
         // evidence is refused.
@@ -355,10 +355,12 @@ fn tagged_unfounded_and_other_os_tasks_keep_their_admission() {
     let workspace = workspace_on(HostOs::Macos);
     let tagged = backlog_task(&workspace, &[NATIVE_CRITERION], &["os:macos"]);
     assess(&workspace, &tagged, Some(needs_macos(1)));
+    assert_eq!(tags(&workspace, &tagged), ["os:macos"]);
     assert_eq!(exclusion(&workspace, &tagged), None);
 
-    // An OS mentioned only as a mock, a cross-compilation target or another
-    // host's expected refusal is no finding, so the pilot records none.
+    // An OS or host mentioned only as a mock, a cross-compilation target,
+    // another host's expected refusal or prose is no finding, so the pilot
+    // records none and routing is unchanged.
     for criterion in [
         "A mocked macOS platform probe reports the sandbox launch.",
         "`cargo build --target aarch64-apple-darwin` cross-compiles the fixture.",
@@ -368,15 +370,44 @@ fn tagged_unfounded_and_other_os_tasks_keep_their_admission() {
         let task = backlog_task(&workspace, &[criterion], &[]);
         assess(&workspace, &task, None);
         assert_eq!(exclusion(&workspace, &task), None, "{criterion}");
-        assess(&workspace, &task, Some(json!([])));
+        let applied = apply_findings(
+            &workspace,
+            &task,
+            Some(json!({
+                "required_os": [], "required_machine": [],
+                "utility_warnings": [format!("Criterion 1 mentions macOS: {criterion}")],
+            })),
+        );
+        assert_eq!(applied["applied_count"], 1, "{applied}");
+        assert!(tags(&workspace, &task).is_empty(), "{criterion}");
         assert_eq!(exclusion(&workspace, &task), None, "{criterion}");
     }
+
+    // Requirements on several OSes name no single host: no tag is added,
+    // and every host that misses one of them is held.
+    let workspace = workspace_on(HostOs::Linux);
+    let both = backlog_task(
+        &workspace,
+        &["A Linux Bubblewrap launch succeeds.", NATIVE_CRITERION],
+        &[],
+    );
+    assess(
+        &workspace,
+        &both,
+        Some(json!([
+            {"criterion": 1, "os": "linux", "evidence": "A native Bubblewrap launch."},
+            {"criterion": 2, "os": "macos", "evidence": "A native sandbox-exec launch."},
+        ])),
+    );
+    assert!(tags(&workspace, &both).is_empty());
+    assert_native_os_wait(&workspace, &both, 2);
 
     // A task tagged for a different OS is still refused by its tags.
     for finding in [None, Some(needs_macos(1))] {
         let workspace = workspace_on(HostOs::Linux);
         let windows = backlog_task(&workspace, &[NATIVE_CRITERION], &["os:windows"]);
         assess(&workspace, &windows, finding);
+        assert_eq!(tags(&workspace, &windows), ["os:windows"]);
         let (reason, detail) = exclusion(&workspace, &windows).unwrap();
         assert_eq!(reason, "host_os_mismatch");
         assert!(
@@ -416,4 +447,96 @@ fn a_malformed_native_os_finding_is_refused_at_apply() {
         );
     }
     assert_eq!(exclusion(&workspace, &task), None);
+}
+
+#[test]
+fn a_machine_finding_holds_every_machine_but_the_owner() {
+    if !isolated("task_pilot::native_os::a_machine_finding_holds_every_machine_but_the_owner") {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    let task = backlog_task(
+        &workspace,
+        &["Timings against the owner's live task store reach a p95 under 1 s."],
+        &[],
+    );
+    let needs_owner = |machine: &str| {
+        Some(json!({"required_machine": [{
+            "criterion": 1, "machine": machine,
+            "evidence": "Only the owner's live store holds the measured workspace.",
+        }]}))
+    };
+    // The finding must name this owner: a pilot cannot route work to a
+    // machine the owner does not know, and a malformed entry is refused.
+    for (finding, expected) in [
+        (
+            needs_owner("dk-server-9"),
+            "must name this owner, fixture-machine",
+        ),
+        (
+            Some(
+                json!({"required_machine": [{"criterion": 2, "machine": "fixture-machine", "evidence": "e"}]}),
+            ),
+            "criterion must be a 1-based index",
+        ),
+        (
+            Some(
+                json!({"required_machine": [{"criterion": 1, "machine": "fixture-machine", "evidence": ""}]}),
+            ),
+            "evidence must be a non-empty string",
+        ),
+    ] {
+        let applied = apply_findings(&workspace, &task, finding);
+        assert_eq!(applied["applied_count"], 0, "{applied}");
+        assert!(
+            applied.to_string().contains(expected),
+            "{expected}: {applied}"
+        );
+    }
+
+    let applied = apply_findings(&workspace, &task, needs_owner("FIXTURE-MACHINE"));
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit: Value =
+        serde_json::from_str(comments.last().unwrap().message.split_once('\n').unwrap().1).unwrap();
+    assert_eq!(
+        audit["native_os_hold"]["machine"],
+        json!({"criteria": [1], "machine_id": "fixture-machine"}),
+        "{audit}"
+    );
+    assert!(tags(&workspace, &task).is_empty(), "a machine has no tag");
+    // The owner itself may start the task.
+    assert_eq!(exclusion(&workspace, &task), None);
+
+    // Any other machine is held, with the machine named.
+    workspace.runtime = workspace
+        .runtime
+        .clone()
+        .with_automation_machine_identity(Some("other-machine".into()));
+    let (reason, detail) = exclusion(&workspace, &task).expect("another machine is held");
+    assert_eq!(reason, "native_os_required");
+    assert!(
+        detail.starts_with("Machine requirement: criterion 1")
+            && detail.contains("only machine fixture-machine")
+            && detail.contains("machine other-machine cannot satisfy it"),
+        "{detail}"
+    );
+
+    // An evidenced operator decision releases it.
+    workspace
+        .runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some(
+                    "task-pilot-admission: clear\nThe operator recorded the timings on the owner."
+                        .into(),
+                ),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    assert_eq!(exclusion(&workspace, &task), None);
+    assert_eq!(resolutions(&workspace, &task), ["human:fixture"]);
 }

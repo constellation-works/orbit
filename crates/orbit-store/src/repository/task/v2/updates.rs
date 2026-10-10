@@ -45,6 +45,15 @@ impl TaskV2Store {
                 return Ok(AtomicTaskMutationOutcome::Stale);
             }
 
+            let tags = (!fields.add_tags.is_empty())
+                .then(|| {
+                    let mut tags = bundle.envelope.tags.clone();
+                    tags.extend(fields.add_tags.iter().cloned());
+                    let tags = normalize_task_tags(tags);
+                    validate_os_tags(&tags).map(|()| tags)
+                })
+                .transpose()?;
+
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
             for entry in &fields.append_history {
@@ -91,6 +100,9 @@ impl TaskV2Store {
                 now,
             )?;
             bundle.envelope.context_files = fields.context_files.clone();
+            if let Some(tags) = tags {
+                bundle.envelope.tags = tags;
+            }
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
             bundle.envelope.crew = fields.crew.clone();

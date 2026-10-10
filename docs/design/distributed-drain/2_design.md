@@ -130,7 +130,12 @@ tags do not name) is judged against the requesting executor's
 `AdmissionRequest::os`, so pull defers it only from a follower of another OS,
 naming the criterion and the tag in `deferred_conflicts`; the in-section re-check
 applies the same rule. A task whose `os:` tags exclude the executor is left to
-the OS filter below.
+the OS filter below. When the finding names one OS and the task has no `os:`
+tag, the pilot's atomic apply adds that tag, so the OS filter routes it. The
+same hold may carry a machine requirement (`required_machine`: evidence only
+the owner's own store, services or data can produce), judged against the
+requesting identity's machine id: pull defers the task from every other
+machine with a `Machine requirement:` reason.
 
 **Eligibility.** Pull filters on the executor's host OS and its crews. The OS filter
 [ORB-14005]: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision

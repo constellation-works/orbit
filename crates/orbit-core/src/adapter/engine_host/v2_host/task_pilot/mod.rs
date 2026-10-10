@@ -15,6 +15,12 @@
 //! the grant's identity, apply refuses a task whose grant changed since, and
 //! the atomic write compares it again under the task lock. The pilot cannot
 //! drop a granted target: apply keeps any it omitted.
+//!
+//! A typed host finding routes the task in the same commit [ORB-15278]: a
+//! `required_os` finding naming one OS adds its `os:` tag to a task that
+//! carries none (an operator's `os:` tags are never touched), and a
+//! `required_machine` finding is recorded with the native-host hold, so pull
+//! admission refuses every other machine.
 
 mod admission;
 mod apply;
@@ -31,8 +37,8 @@ mod validation_tools;
 pub(super) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    normalize_evidence_gaps, required_os, unauthorized_missing_targets, validate_after_selectors,
-    validate_recommendations,
+    normalize_evidence_gaps, required_machine, required_os, routing_os,
+    unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
 };
 pub(super) use drain_promotion::{
     approval_disqualification, approved_by_drain, held_classification,

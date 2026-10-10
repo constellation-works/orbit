@@ -27,9 +27,9 @@ pub(crate) enum PilotAdmissionHold {
     AlreadyLanded,
     OperatorValidation(OperatorValidationHold),
     HostOperational(HostOperationalHold),
-    /// Reported only while the task's `os:` tags miss a required OS. It holds
-    /// a host by [`NativeOsHold::wait_on`], so a host of that OS may still
-    /// start the task.
+    /// Reported only while the task's `os:` tags miss a required OS or the
+    /// pilot required this owner's machine. It holds a host by
+    /// [`NativeOsHold::wait_on`], so a capable host may still start the task.
     NativeOs(NativeOsHold),
 }
 
@@ -150,23 +150,48 @@ pub(crate) struct NativeOsRequirement {
     pub(crate) os: HostOs,
 }
 
-/// The pilot's typed native-OS finding, persisted with its atomic audit.
+/// Criteria whose evidence only the machine that owns the task store can
+/// produce: its live store, services or data [ORB-15278].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MachineRequirement {
+    /// 1-based, like a [`NativeOsRequirement`].
+    pub(crate) criteria: Vec<usize>,
+    pub(crate) machine_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) machine_name: Option<String>,
+}
+
+/// The pilot's typed native-host finding, persisted with its atomic audit.
 /// It stays current while the acceptance criteria it assessed are unchanged,
 /// so re-scoping a criterion releases it; adding the matching `os:` tag
-/// satisfies it without a decision.
+/// satisfies an OS requirement without a decision. A machine requirement
+/// has no tag: only that machine, a re-scope or a decision satisfies it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeOsHold {
     criteria: String,
     pub(crate) requirements: Vec<NativeOsRequirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) machine: Option<MachineRequirement>,
 }
 
 impl NativeOsHold {
-    pub(crate) fn new(task: &Task, requirements: Vec<NativeOsRequirement>) -> Self {
+    pub(crate) fn new(
+        task: &Task,
+        requirements: Vec<NativeOsRequirement>,
+        machine: Option<MachineRequirement>,
+    ) -> Self {
         Self {
             criteria: criteria_digest(task),
             requirements,
+            machine,
         }
+    }
+
+    /// Whether anything is left for admission to judge under `tags`.
+    fn outstanding(&self, tags: &TaskOsRequirement) -> bool {
+        self.machine.is_some() || self.untagged(tags).next().is_some()
     }
 
     /// Requirements whose OS the task's `os:` tags do not name.
@@ -179,13 +204,40 @@ impl NativeOsHold {
             .filter(|requirement| !tags.any_of.contains(&requirement.os))
     }
 
-    /// Why a host running `host` may not start `task`, or `None` when it may.
-    /// A host the task's own `os:` tags exclude is left to that routing, which
-    /// names its own wait (`host_os_mismatch`).
-    pub(crate) fn wait_on(&self, task: &Task, host: Option<HostOs>) -> Option<String> {
+    /// Why a host running `host` as machine `machine_id` may not start
+    /// `task`, or `None` when it may. A host the task's own `os:` tags
+    /// exclude is left to that routing, which names its own wait
+    /// (`host_os_mismatch`).
+    pub(crate) fn wait_on(
+        &self,
+        task: &Task,
+        host: Option<HostOs>,
+        machine_id: Option<&str>,
+    ) -> Option<String> {
         let tags = TaskOsRequirement::from_tags(&task.tags);
         if !tags.satisfied_by(host) {
             return None;
+        }
+        if let Some(machine) = &self.machine
+            && machine_id != Some(machine.machine_id.as_str())
+        {
+            let criteria = machine
+                .criteria
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let name = machine
+                .machine_name
+                .as_deref()
+                .unwrap_or(&machine.machine_id);
+            let caller = machine_id.map_or_else(
+                || "a host with no machine identity".to_string(),
+                |id| format!("machine {id}"),
+            );
+            return Some(format!(
+                "Machine requirement: criterion {criteria} needs evidence only machine {name} can produce, so {caller} cannot satisfy it. Run it on {name}, re-scope the criterion, or record an operator decision with evidence using `task-pilot-admission: clear` or `approve-anyway` as the comment's first line. A newer assessment supersedes the decision."
+            ));
         }
         let unmet = self
             .untagged(&tags)
@@ -460,8 +512,7 @@ impl OrbitRuntime {
                             OrbitError::Execution(format!("decode native OS hold: {error}"))
                         })?;
                     let tags = TaskOsRequirement::from_tags(&task.tags);
-                    let current = hold.criteria == criteria_digest(task)
-                        && hold.untagged(&tags).next().is_some();
+                    let current = hold.criteria == criteria_digest(task) && hold.outstanding(&tags);
                     (current
                         && !operator_resolved(
                             &history()?,

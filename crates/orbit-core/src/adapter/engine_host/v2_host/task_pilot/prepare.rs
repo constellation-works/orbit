@@ -404,6 +404,8 @@ pub(in super::super) fn prepare(
         "source_age": source.as_ref().map(|source| source.age(&workspace_root)),
         "mode": mode,
         "workspace_path": workspace_root,
+        // The only machine a `required_machine` finding may name.
+        "owner_machine": runtime.automation_execution_location(),
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
             json!({
                 "base_branch": requested_base_branch(runtime, input),
