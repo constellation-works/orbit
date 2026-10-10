@@ -51,7 +51,9 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 
 ## Growth ratchet
 
-`scripts/unit-test-inventory.py` counts the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. `make ci-fast` fails when a crate's count rises above [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json). The change that adds unit tests must raise the baseline too, so the growth appears as a reviewed diff. Run `scripts/unit-test-inventory.py` for the current counts, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to record them.
+`scripts/unit-test-inventory.py` inventories the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json) records sorted admitted identities as `<path relative to src>::<function name>` per crate (schema version 2). Repeated names in separate inline modules in one file retain their multiplicity. `make ci-fast` fails when a present test is not named in the baseline, even when the crate's total count stays the same. The change that adds or renames unit tests must update the baseline too, so each admission appears as a reviewed diff. Concurrent admissions then either merge with both identities recorded or conflict textually and require reconciliation; identical count bumps can no longer silently lose an admission.
+
+Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes without evaluating `cfg` or expanding macros, as in the original retirement measure.
 
 Admitted unit tests:
 
