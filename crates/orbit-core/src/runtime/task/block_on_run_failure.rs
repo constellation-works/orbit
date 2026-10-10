@@ -27,6 +27,11 @@
 //! that excludes the failing crews until a backoff passes, and admission
 //! draws another crew or defers (see `provider_hold`).
 //!
+//! A run whose agent an Orbit upgrade refused mid-step (`[upgrade_pending]`)
+//! did not judge the work either. Its failure handoff kept the candidate, so
+//! its tasks go back to the backlog (`upgrade_pending_requeued`), and the
+//! next run resumes that candidate once the upgrade settles.
+//!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
 //! `in_progress`). The update comes from the engine's
@@ -68,7 +73,8 @@ use orbit_engine::{
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, HeldFailure, JobRun, JobRunState,
-    ProviderFailureClass, is_baseline_red_failure,
+    ProviderFailureClass, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
+    is_upgrade_pending,
 };
 
 use crate::OrbitRuntime;
@@ -327,6 +333,9 @@ impl OrbitRuntime {
         let provider_failure = (state == JobRunState::Failed && hold.is_none())
             .then(|| ProviderFailureClass::of(error_code.as_deref(), error_message.as_deref()))
             .flatten();
+        // Nor does a run whose agent an Orbit upgrade refused mid-step.
+        let upgrade_pending = state == JobRunState::Failed
+            && is_upgrade_pending(error_code.as_deref(), error_message.as_deref());
         let task_cancellation_policy = if state == JobRunState::Cancelled {
             self.read_run_state(run_id)?
                 .and_then(|state| state.task_cancellation_policy)
@@ -435,6 +444,23 @@ impl OrbitRuntime {
                         })
                     {
                         return Ok(());
+                    }
+                    if upgrade_pending && hold.is_none() && provider_failure.is_none() {
+                        return self.apply_task_automation_update(
+                            &task.id,
+                            TaskAutomationUpdate {
+                                status: Some(TaskStatus::Backlog),
+                                status_event: Some(UPGRADE_PENDING_REQUEUED_EVENT.to_string()),
+                                status_note: Some(format!(
+                                    "workflow run stopped by an Orbit upgrade: job={}, \
+                                     run_id={run_id}; an upgrade refused the step's agent, so \
+                                     the task is back in the backlog and its next run resumes \
+                                     the held candidate once the upgrade settles",
+                                    run.job_id
+                                )),
+                                ..TaskAutomationUpdate::default()
+                            },
+                        );
                     }
                     let update = if state == JobRunState::Cancelled
                         && let Some(policy) = task_cancellation_policy

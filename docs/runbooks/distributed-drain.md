@@ -629,7 +629,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   on the base exactly as on the candidate; the owner holds the task until the
   base passes), `transient` (validation could not reach the network after its
   reruns, the forge kept refusing the leaf's push past its retry window
-  (`[forge_unavailable]`), or the leaf's worker died) and `base_conflict` (the committed
+  (`[forge_unavailable]`), an Orbit upgrade refused the leaf's agent mid-step
+  (`[upgrade_pending]`, see [in-flight agent steps during a binary swap](upgrades.md#in-flight-agent-steps-during-a-binary-swap)),
+  or the leaf's worker died) and `base_conflict` (the committed
   candidate could not be synchronized onto a base that moved). The failure
   breaker does not count a release. When the forge refuses a claimed PR
   leaf's push for a server-side reason (`Internal Server Error`, `Service

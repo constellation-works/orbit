@@ -104,9 +104,11 @@ pub(super) fn run_step_with_retry(
                 }
                 // [ORB-14269] An implementer blocker is not a flaky attempt.
                 // Another try would spend another provider invocation on a
-                // stop the agent already declared.
+                // stop the agent already declared. Nor is an upgrade refusal:
+                // the next attempt meets the same installed `orbit`.
                 if outcome.message.as_deref().is_some_and(|message| {
                     orbit_types::workflow::is_task_blocked_by_agent(None, Some(message))
+                        || orbit_types::workflow::is_upgrade_pending(None, Some(message))
                 }) {
                     return recover_or_return_original(
                         step,

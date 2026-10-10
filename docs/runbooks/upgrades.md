@@ -199,6 +199,41 @@ Quiesce those through their owners (or let long steps finish) and retry. An **ol
 binary never displaces newer processes: it is refused as incompatible, and a
 read-only command whose readers would break is refused the same way.
 
+#### In-flight agent steps during a binary swap
+
+A pipeline worker yields only at a step boundary, so an agent step that is running
+when `~/.orbit/bin/orbit` is replaced keeps going. The agent's own `orbit` commands
+resolve to the installed path and so to the **new** binary. A command inside an
+Orbit-managed activity never records a pending switch or waits behind one, because
+the worker it runs under can yield only when the step ends. Whenever an upgrade
+holds admission (a newer generation it would switch to, a pending switch, an update
+or takeover), the command is refused at once with a typed refusal:
+
+```text
+upgrade admission refused: [upgrade_pending] a generation switch is pending: …; …
+This command runs inside an Orbit-managed activity, which never starts or waits on a
+generation switch. Stop the step and report blocker kind `upgrade_pending` …
+```
+
+The step then ends on `upgrade_pending`, not as a task blocker. That happens when the
+agent reports a blocker whose kind names an upgrade refusal (`upgrade_pending`,
+`upgrade_admission_refused`, `orbit.generation_switch_pending` and the like; any agent
+step, reviewers included), or when step recovery declares one. It is not retried, and
+neither step recovery nor final recovery runs. The run settles like a step-boundary
+interrupt:
+
+- **Claimed leaf:** the claim is released as `failure=transient` with the candidate
+  on the release. The task returns to the owner's backlog, and its next claim resumes
+  the candidate. As with any transient release, the leaf's crew sits out the rest of
+  that drain's window.
+- **Owner `task_pr_pipeline` run:** the failure handoff commits what the agent left,
+  carries the candidate to its durable ref and opens no PR. Run finalization returns
+  the task to the backlog (`upgrade_pending_requeued`), and the next run resumes the
+  candidate once the upgrade settles.
+
+The task is never `blocked`. To avoid stopping a step at all, let long steps finish
+before installing, or install while no drain is live.
+
 Ordinary startups whose identities the recorded envelope already admits join under
 **shared** admission, so any number of
 concurrent commands, workers and clients start side by side. Only a join that must

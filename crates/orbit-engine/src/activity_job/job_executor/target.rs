@@ -236,6 +236,12 @@ fn reject_malformed_implementer_findings(
 /// blocker stays the dispatch's own outcome. The step id is `implement_one`
 /// in the shipped pipelines; `activity_name` covers a resolved
 /// `agent_implement` target whose id differs.
+///
+/// A blocker of the [upgrade-pending](orbit_types::workflow::AgentBlockerClass::UpgradePending)
+/// class fails any agent step, a reviewer's too, under
+/// [`UPGRADE_PENDING_ERROR_CODE`](orbit_types::workflow::UPGRADE_PENDING_ERROR_CODE):
+/// every `orbit` command the agent runs is refused until the upgrade
+/// settles, so nothing the step reports can be trusted.
 fn apply_implementer_blocker(
     step: &JobV2Step,
     target: &TargetStep,
@@ -243,18 +249,14 @@ fn apply_implementer_blocker(
     message: Option<String>,
     output: &Value,
 ) -> (bool, Option<String>) {
-    if !is_implementer_step(step, target) {
-        return (success, message);
-    }
     let Some(blocker) = orbit_types::workflow::agent_blocker_from_output(output) else {
         return (success, message);
     };
-    (
-        false,
-        Some(orbit_types::workflow::task_blocked_by_agent_message(
-            &blocker,
-        )),
-    )
+    let upgrade = blocker.class() == orbit_types::workflow::AgentBlockerClass::UpgradePending;
+    if !upgrade && !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    (false, Some(blocker.step_failure_message()))
 }
 
 fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {

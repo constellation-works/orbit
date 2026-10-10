@@ -514,6 +514,7 @@ fn clock_tick(install: &Install) -> GenerationGuard {
         role: ParticipantRole::Clock,
         access: Access::Write,
         handover: None,
+        in_activity: false,
     };
     GenerationGuard::join(
         &install.home.join(".orbit"),
@@ -605,6 +606,7 @@ fn idle_session(install: &Install) -> GenerationGuard {
         role: ParticipantRole::McpServe,
         access: Access::Write,
         handover: Some(RESUME_MCP_STDIO),
+        in_activity: false,
     };
     GenerationGuard::join(
         &install.home.join(".orbit"),

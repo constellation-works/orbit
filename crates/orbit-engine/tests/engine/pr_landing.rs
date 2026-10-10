@@ -1787,6 +1787,71 @@ fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write() {
     );
 }
 
+/// An Orbit upgrade refused a reviewer's own `orbit` commands mid-step, and
+/// step recovery declared it. The host is mid-upgrade; the candidate was not
+/// judged. The handoff keeps it as a provider failure does: what the agent
+/// left is committed and carried to its durable ref, no PR is opened, the
+/// task is not blocked, and `candidate_resume` resumes the decision. Run
+/// finalization returns the task to the backlog.
+#[test]
+fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
+    isolated(
+        "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let head_before = fx.head();
+            let remote_before = fx.remote_tip(BRANCH);
+            fs::write(fx.repo.join("src/wip.txt"), "reviewer fix in progress\n").unwrap();
+            let blocker = orbit_types::workflow::AgentBlocker {
+                kind: "orbit.generation_switch_pending".to_string(),
+                evidence: "upgrade admission refused: cannot record the pending generation \
+                           switch: Operation not permitted (os error 1)"
+                    .to_string(),
+            };
+            let message = format!(
+                "{}\noriginal error before recovery: the review report was never recorded",
+                blocker.step_failure_message()
+            );
+
+            let handoff = action(
+                &host,
+                "pr_failure_handoff",
+                &json!({
+                    "failed_step_id": "review",
+                    "error_code": "upgrade_pending",
+                    "error_message": message,
+                    "run_id": RUN_ID,
+                    "job_input": {"task_ids": [TASK_ID]},
+                    "pipeline": {
+                        "worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                    },
+                }),
+            )
+            .expect("hand off the upgrade refusal");
+
+            assert_eq!(handoff["decision"], "held_upgrade_pending");
+            assert_eq!(handoff["blocker_kind"], "orbit.generation_switch_pending");
+            assert_eq!(handoff["pr_created"], false);
+            assert_eq!(handoff["candidate_preserved"], true);
+            assert_ne!(fx.head(), head_before, "the reviewer's edit is committed");
+            assert_eq!(handoff["head_sha"], fx.head());
+            assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+            assert_eq!(
+                fx.durable_candidate(&handoff),
+                fx.head(),
+                "the next run, on any host, can fetch the candidate"
+            );
+            assert_eq!(
+                host.status(TASK_ID),
+                TaskStatus::InProgress,
+                "the task is not blocked; run finalization requeues it"
+            );
+        },
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A red base and network flakes [ORB-14258]
 // ---------------------------------------------------------------------------

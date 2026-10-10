@@ -64,6 +64,7 @@ fn an_update_waits_for_a_participant_paused_mid_release() {
             role: ParticipantRole::Clock,
             access: Access::Write,
             handover: None,
+            in_activity: false,
         },
         Duration::ZERO,
         || Ok(1),

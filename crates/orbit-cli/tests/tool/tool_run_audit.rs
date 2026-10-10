@@ -310,6 +310,7 @@ fn read_only_tool_run_persists_audit_while_joining_a_foreign_generation() {
             role: ParticipantRole::Dashboard,
             access: Access::Write,
             handover: None,
+            in_activity: false,
         },
         std::time::Duration::ZERO,
         || Ok(identity.store_schema.version),

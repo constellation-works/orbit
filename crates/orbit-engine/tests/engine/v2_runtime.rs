@@ -1239,6 +1239,108 @@ fn an_implementer_blocker_ends_implement_one_without_recovery() {
     );
 }
 
+/// An Orbit upgrade refused the agent's own `orbit` mid-step. Every spelling
+/// agents gave that refusal ends the step like a blocker, with no retry, step
+/// recovery or final recovery, but under `upgrade_pending` rather than
+/// `task_blocked_by_agent`. The failure activity receives that code, so the
+/// handoff keeps the candidate without blocking the task, and a claimed
+/// leaf's settlement reads it as transient.
+#[test]
+fn an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending() {
+    for kind in [
+        "upgrade_admission_refused",
+        "orbit_upgrade_admission_refused",
+        "orbit.generation_switch_pending",
+        "upgrade_pending",
+    ] {
+        let host = ScriptedHost {
+            implement_output: json!({
+                "blocker": {
+                    "kind": kind,
+                    "evidence": "upgrade admission refused: cannot record the pending generation \
+                                 switch: Operation not permitted (os error 1)",
+                },
+            }),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, events) = run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+
+        assert!(!outcome.success, "{kind}: {outcome:?}");
+        let message = outcome.message.expect("the job records the refusal");
+        assert!(
+            orbit_types::workflow::is_upgrade_pending(None, Some(&message))
+                && !orbit_types::workflow::is_task_blocked_by_agent(None, Some(&message))
+                && message.contains(&format!("kind={kind}")),
+            "{kind}: the outcome is an upgrade refusal, not a task blocker: {message}"
+        );
+        assert_eq!(
+            orbit_types::workflow::ClaimFailureClass::of_step_failure(None, Some(&message)),
+            Some(orbit_types::workflow::ClaimFailureClass::Transient),
+            "{kind}: a claimed leaf settles it as transient"
+        );
+        assert_eq!(
+            host.actions(),
+            vec!["implement".to_string(), "preserve_candidate".to_string()],
+            "{kind}: no retry, recovery, commit or final look"
+        );
+        let preserve = host
+            .calls
+            .lock()
+            .expect("call log")
+            .iter()
+            .find(|(action, _)| action == "preserve_candidate")
+            .expect("failure activity ran")
+            .1
+            .clone();
+        assert_eq!(preserve["error_code"], "upgrade_pending", "{kind}");
+        assert!(
+            !events.iter().any(|event| matches!(
+                event.kind,
+                V2AuditEventKind::StepRetry { .. } | V2AuditEventKind::StepRecoveryAttempted { .. }
+            )),
+            "{kind}: an upgrade refusal does not retry or enter step recovery: {events:?}"
+        );
+    }
+}
+
+/// A reviewer meets the same refusal as the implementer, so an upgrade
+/// refusal ends any agent step. A task blocker stays the implementer's: on
+/// another step it is not a stop.
+#[test]
+fn an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers() {
+    for (kind, stops) in [("conflict", false), ("upgrade_admission_refused", true)] {
+        let host = ScriptedHost {
+            implement_output: json!({
+                "blocker": { "kind": kind, "evidence": "every orbit command was refused" },
+            }),
+            calls: Mutex::new(Vec::new()),
+        };
+        let mut job = job_asset(json!([{
+            "id": "review",
+            "recovery_activity": "step_recovery",
+            "retry": { "max_attempts": 3, "initial_backoff_ms": 1, "backoff_cap_ms": 1 },
+            "spec": { "type": "deterministic", "action": "implement", "config": {} },
+        }]));
+        resolve_job_catalog_refs_for_execution(&mut job, &blocker_catalog())
+            .expect("resolve recovery");
+        let audit = tempfile::tempdir().expect("audit tempdir");
+        let (writer, _, _) = build_writer_and_sinks(audit.path(), "review-refused");
+        let outcome =
+            execute_job_with_resume(&job, json!({}), "review-refused", writer, &host, None)
+                .expect("the review step runs to an outcome");
+        assert_eq!(outcome.success, !stops, "{kind}: {outcome:?}");
+        assert_eq!(host.actions(), vec!["implement".to_string()], "{kind}");
+        if stops {
+            assert!(
+                outcome.message.as_deref().is_some_and(|message| {
+                    orbit_types::workflow::is_upgrade_pending(None, Some(message))
+                }),
+                "{kind}: {outcome:?}"
+            );
+        }
+    }
+}
+
 /// A blocker shape that is not `{kind, evidence}` stays ordinary success, and
 /// a resolved `agent_implement` target honors a well-formed blocker even when
 /// the step id is not `implement_one`.

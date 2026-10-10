@@ -10,9 +10,11 @@ mod root_cause;
 mod state;
 
 pub use agent_blocker::{
-    AgentBlocker, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
-    TASK_BLOCKED_BY_AGENT_MARKER, agent_blocker_from_output, is_task_blocked_by_agent,
-    task_blocked_by_agent_kind, task_blocked_by_agent_message,
+    AgentBlocker, AgentBlockerClass, TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT,
+    TASK_BLOCKED_BY_AGENT_MARKER, UPGRADE_PENDING_ERROR_CODE, UPGRADE_PENDING_MARKER,
+    UPGRADE_PENDING_REQUEUED_EVENT, agent_blocker_from_output, is_task_blocked_by_agent,
+    is_upgrade_pending, task_blocked_by_agent_kind, task_blocked_by_agent_message,
+    upgrade_pending_kind,
 };
 pub use baseline::{
     BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold,

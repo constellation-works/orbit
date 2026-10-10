@@ -28,6 +28,11 @@ pub(super) const BREAKING_WAITING: &str = "a breaking migration is waiting";
 /// An older binary met newer live participants it cannot run beside.
 pub(super) const INCOMPATIBLE: &str = "is incompatible with the live Orbit processes";
 
+/// Remedy for a command inside a managed activity that meets an upgrade.
+const IN_ACTIVITY: &str = "This command runs inside an Orbit-managed activity, which never \
+     starts or waits on a generation switch. Stop the step and report blocker kind \
+     `upgrade_pending`: the run keeps its candidate and continues after the upgrade";
+
 /// Remedy when admission was only busy with other ordinary startups.
 const CONTENDED: &str = "Retry the command; nothing is upgrading. If startups on this host \
      routinely take this long, raise the admission wait";
@@ -38,6 +43,14 @@ pub(crate) fn refusal(detail: impl std::fmt::Display) -> OrbitError {
 
 pub(super) fn unwritable(detail: impl std::fmt::Display) -> OrbitError {
     refused(detail, UNWRITABLE)
+}
+
+/// A command inside a managed activity met an upgrade it may not wait for.
+pub(super) fn upgrade_pending(detail: impl std::fmt::Display) -> OrbitError {
+    refused(
+        format!("{} {detail}", orbit_types::workflow::UPGRADE_PENDING_MARKER),
+        IN_ACTIVITY,
+    )
 }
 
 fn refused(detail: impl std::fmt::Display, remedy: &str) -> OrbitError {
