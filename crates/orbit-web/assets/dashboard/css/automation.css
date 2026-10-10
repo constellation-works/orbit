@@ -257,7 +257,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-running-title strong { color: var(--fg); font-size: 12px; font-weight: 600; }
 .operation-running-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
 .operation-running-card {
-  display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; overflow-wrap: anywhere; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev);
 }
 .operation-running-head { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
