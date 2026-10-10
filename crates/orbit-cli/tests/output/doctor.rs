@@ -780,6 +780,40 @@ fn doctor_cli_table_adds_every_non_ok_finding_and_plain_alias_keeps_values() {
 
 /// `orbit doctor` runs the scan a sandboxed leaf meets, so an operator learns
 /// of a refusal, and of its fix, before a drain claims work.
+/// `orbit doctor` names the worker CPU ceiling, or says there is none, so an
+/// operator can tell whether one leaf can still take every core [ORB-15196].
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_reports_the_worker_cpu_quota() {
+    let fixture = WorkCheckout::new();
+    let unset = rows(&doctor(&fixture, &[]));
+    let unset = row(&unset, "worker-containment");
+    assert_eq!(unset["status"], "info", "{unset}");
+    assert!(
+        unset["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("CPUQuota is not set")),
+        "{unset}"
+    );
+
+    let global = fixture.home.join(".orbit");
+    fs::create_dir_all(&global).expect("global root");
+    fs::write(
+        global.join("config.toml"),
+        "[machine]\nworker_cpu_quota = 300\n",
+    )
+    .expect("global config");
+    let set = rows(&doctor(&fixture, &[]));
+    let set = row(&set, "worker-containment");
+    assert_eq!(set["status"], "ok", "{set}");
+    assert!(
+        set["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("CPUQuota=300%")),
+        "{set}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_reports_git_protection_refusals_with_their_fix() {

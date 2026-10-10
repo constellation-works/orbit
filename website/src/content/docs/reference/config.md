@@ -288,6 +288,7 @@ crew or the workspace default.
 | `machine.worker_memory_high` | string · **Default:** `40%`<br>Global only. Worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. |
 | `machine.worker_memory_max` | string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. |
 | `machine.worker_tasks_max` | integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=`. |
+| `machine.worker_cpu_quota` | integer · **Default:** unset<br>Global only. Worker scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` or unset sets no CPU limit. Linux only. |
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `ci_failure.operator_suppression_hours` | integer · **Default:** `6`<br>Hours an archived/rejected CI sweep finding without `covered_by` holds its exact failure key (0–720). Explicit task/PR covers hold while open or until a failing checkout contains the landed fix; operator holds report their owner and reason. |
 | `automation.stall_window_minutes` | integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |

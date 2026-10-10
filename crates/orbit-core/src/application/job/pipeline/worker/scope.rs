@@ -16,6 +16,11 @@
 //! reads the scope's `memory.events` / `pids.events` counters to tell a
 //! resource-limit failure apart from any other one.
 //!
+//! `machine.worker_cpu_quota` (percent of one core, off at 0) adds `CPUQuota=`
+//! so one leaf cannot take every core. systemd applies it only where the user
+//! manager delegates the cpu controller; elsewhere the property is accepted
+//! and not enforced.
+//!
 //! By default, disabled or unavailable containment (containers, sandboxes
 //! without a user bus) launches workers uncontained with one warning per
 //! process. Platforms without systemd (macOS) launch uncontained silently:
@@ -56,6 +61,8 @@ pub(crate) struct WorkerLimits {
     memory_high: MemoryLimit,
     memory_max: MemoryLimit,
     tasks_max: u32,
+    /// Percentage of one core; `None` sets no CPU limit.
+    cpu_quota_percent: Option<u32>,
 }
 
 impl WorkerLimits {
@@ -66,17 +73,26 @@ impl WorkerLimits {
             memory_high: settings.memory_high,
             memory_max: settings.memory_max,
             tasks_max: settings.tasks_max,
+            cpu_quota_percent: (settings.cpu_quota_percent > 0)
+                .then_some(settings.cpu_quota_percent),
         })
     }
 
     /// The unit properties, in `systemd-run --property=` form.
-    fn properties(&self) -> [String; 4] {
-        [
+    fn properties(&self) -> Vec<String> {
+        let mut properties = vec![
             format!("MemoryHigh={}", self.memory_high.systemd_value()),
             format!("MemoryMax={}", self.memory_max.systemd_value()),
             format!("TasksMax={}", self.tasks_max),
             "OOMPolicy=continue".to_string(),
-        ]
+        ];
+        // Without a ceiling, a stress loop in one leaf takes every core and
+        // starves the other leaves and the drain's own admission control
+        // (2026-10-10 load average 89.7 on 32 cores).
+        if let Some(percent) = self.cpu_quota_percent {
+            properties.push(format!("CPUQuota={percent}%"));
+        }
+        properties
     }
 }
 
