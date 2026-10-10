@@ -164,10 +164,23 @@ spec:
        base tip itself. Do not fetch, and do not refuse because the base
        advanced.
     2. Resolve every supplied conflicting path using the task description,
-       acceptance criteria, candidate changes, and both sides of the conflict
-       as the stopped rebase presents them (the `target_base_sha` side is the
-       upstream side). Preserve the candidate intent and the target-base
-       changes. Read the current `origin/<base>` tip for the same paths (for
+       acceptance criteria, approved comments, candidate changes, and both
+       sides of the conflict as the stopped rebase presents them (the
+       `target_base_sha` side is the upstream side). Preserve the candidate
+       intent and the target-base changes, and separate them as follows:
+       - An explicitly authorized behavior change in the task (its description
+         or acceptance criteria, or a comment from a human author or approver)
+         is the intended outcome. Where base documentation, tests, or wording
+         describe the superseded behavior, rewrite them to match the requested
+         change. Older base text is not a reason to keep the old contract.
+       - Advisory text is not authorization. Task-pilot assessments, review
+         findings, and similar notes can inform the resolution, but they
+         neither require nor forbid a behavior change the task does not itself
+         request.
+       - Independent upstream behavior in the same hunks, such as a distinct
+         reservation or checkpoint rule the task does not address, is kept
+         alongside the requested change. Do not drop it with the old contract.
+       Read the current `origin/<base>` tip for the same paths (for
        example `git show origin/<base>:<path>`) so the resolution stays
        compatible with where the host will land the candidate, but do not
        pre-apply that newer base content: the host rebases the continued
@@ -203,9 +216,14 @@ spec:
        step verifies the host-owned rewrite, uses the existing remote lease,
        and reuses the same PR.
     5. Return success once every supplied conflict path is resolved. Return
-       failed only on a step 1 stop condition, or when the conflict is
-       genuinely ambiguous or the resolution is exhausted; then preserve the
-       current evidence and say which. The job's existing failure handoff will
+       failed only on a step 1 stop condition, when the conflict is genuinely
+       ambiguous, or when the resolution is exhausted; then preserve the
+       current evidence and say which. The conflict is genuinely ambiguous only
+       when the task's own authorized text contradicts itself, or a later
+       authorized comment withdrew or replaced the rule the conflict turns on.
+       A disagreement between an authorized change and older base docs,
+       advisory pilot or review text, or independent upstream behavior is
+       not ambiguous: resolve it under step 2. The job's existing failure handoff will
        abort the stopped rebase, reuse the same candidate branch/PR, and block
        the task with the original evidence.
 
