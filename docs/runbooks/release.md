@@ -135,9 +135,9 @@ an empty date remains optional.
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
    remediation by the `qa-sweep` auto-task. Then
    follow [RELEASING.md §10b](../../RELEASING.md#10b-promote-to-main) to
-   promote `agent-main` to `main`, and
-   [§10c](../../RELEASING.md#10c-post-merge-back-merge-to-agent-main) to
-   back-merge in the same session.
+   fast-forward `main` to the release commit, and
+   [§10c](../../RELEASING.md#10c-confirm-main-and-agent-main-agree) to
+   confirm the branches agree in the same session.
 
 9. **Publish npm manually** from the merged commit:
 
