@@ -53,7 +53,12 @@
 //! The claimed implementer always runs, because the handoff carries its
 //! summary: a clean apply is `resumed_repaired` with trigger `continuation`
 //! (or `review` when the before-PR review refused it), and the leaf's own
-//! validation judges the result. [ORB-15308] When the earlier claim pushed
+//! validation judges the result. [ORB-15314] When that claim's leaf was
+//! stopped inside a review, the candidate also names the reviewer's kept
+//! partial-repair commit on its head: that commit is squash-merged in the
+//! head's place once it is proven to be that run's repair on that head, and
+//! the trigger is `review`, with the attempt's findings for the implementer.
+//! [ORB-15308] When the earlier claim pushed
 //! that candidate and opened a pull request for it, the leaf also continues
 //! on its branch, so it republishes through the same pull request (see
 //! `adopt`); when it cannot, its `pr_open` closes that pull request instead.
@@ -87,6 +92,7 @@ mod lookup;
 
 pub(in crate::executor::automation) use lookup::candidate_resume;
 
+use orbit_store::contracts::InterruptedReview;
 use serde_json::Value;
 
 /// `pr_failure_handoff` decisions that leave a candidate on a branch.
@@ -175,6 +181,9 @@ struct Candidate {
     published: bool,
     /// [ORB-15308] The pull request a claim's leaf opened for it.
     pull_request: Option<String>,
+    /// [ORB-15314] The review its leaf was stopped inside, whose reviewer's
+    /// uncommitted repair was kept as a commit on top of `head_sha`.
+    interrupted_review: Option<InterruptedReview>,
 }
 
 impl Candidate {

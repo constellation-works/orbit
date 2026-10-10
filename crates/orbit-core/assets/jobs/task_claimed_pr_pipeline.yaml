@@ -39,6 +39,14 @@
 # `refs/orbit/candidates/<task>/<run>` on `origin`, so a claim on any host can
 # fetch it. One it could not carry resumes only on this host; the owner gives
 # a claim elsewhere none and records why in the task's history.
+# ORB-15314: a leaf cancelled or interrupted while a reviewer is working runs
+# no `failure_activity`. Before the run is finalized, the host that stopped it
+# commits the reviewer's uncommitted edits as one marked partial-repair commit
+# on the candidate head, kept at `refs/orbit/candidates/<task>/<run>-review`
+# (pushed to `origin` on a cancel) without moving the branch. The release
+# keeps the candidate and names that ref, the owner adds the attempt's
+# findings, and the next claim's `resume_candidate` applies the repair and
+# hands the implementer the findings to repair from.
 #
 # ORB-13908: when the claim captured the owner's `review.before_pr`, the leaf
 # runs the same before-PR gate as `task_pr_pipeline` between base

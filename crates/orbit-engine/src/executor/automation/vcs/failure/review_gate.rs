@@ -12,6 +12,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::freshness::remote_branch_sha;
 use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
+use super::super::review_gate::{PARTIAL_REPAIR_RUN_TRAILER, PARTIAL_REPAIR_SUBJECT};
 use super::conflict::pipeline_checkpoint_string;
 use super::preserve::recorded_spec_digest;
 use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
@@ -19,12 +20,6 @@ use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
 /// A fresh run resets its review ledger; bound automatic continuations across
 /// those lineages by the preserved tree instead of the rewritten commit.
 const REVIEW_TIMEOUT_MAX_REQUEUES: usize = 1;
-
-/// Subject of the commit that preserves a timed-out reviewer's uncommitted edits.
-const PARTIAL_REPAIR_SUBJECT: &str = "review: partial reviewer repairs preserved";
-
-/// Trailer that marks a partial-repair commit as the gate's own.
-const PARTIAL_REPAIR_RUN_TRAILER: &str = "Orbit-Review-Run:";
 
 /// Preserve a candidate the before-PR review gate refused to publish.
 ///

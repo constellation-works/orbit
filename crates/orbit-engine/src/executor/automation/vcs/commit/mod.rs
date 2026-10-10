@@ -2,6 +2,7 @@ mod actions;
 mod already_landed;
 mod author;
 mod checkpoint;
+mod detached;
 mod diagnostics;
 mod git_ops;
 mod message;
@@ -21,6 +22,7 @@ pub(super) use checkpoint::{
     claimed_clean_base_checkpoint, verified_clean_tree_checkpoint, verify_clean_tree_handoff,
     verify_clean_tree_handoff_at_revision,
 };
+pub(super) use detached::commit_worktree_detached;
 pub(crate) use recovery::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };

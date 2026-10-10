@@ -451,6 +451,7 @@ impl OrbitRuntime {
         let settling = self
             .record_forced_leaf_release(
                 record,
+                leaf,
                 &format!("{cause}; its leaf {} was stopped", leaf.run_id),
             )
             .map_err(|error| {

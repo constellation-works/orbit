@@ -152,6 +152,18 @@ Scope limits:
   `pr_open` closes the earlier pull request with a comment naming the new
   one; `superseded_pull_request.decision` `close_failed` leaves the earlier
   pull request for the operator to close.
+- A claimed leaf cancelled or interrupted while its reviewer is working
+  (a forced drain cancel included) keeps its candidate and the reviewer's
+  uncommitted repair. The host that stopped it commits that repair as a
+  marked partial-repair commit on the candidate head, kept at
+  `refs/orbit/candidates/<task>/<run>-review`, and the release names that
+  ref. The owner adds the attempt's report findings. The next claim
+  applies the repair with the candidate and runs the implementer with
+  trigger `review` and `repair.interrupted_review`: the findings, plus
+  whether the repair applied. It continues an earlier pull request as
+  above. An owner's own run stopped mid-review keeps the same commit and
+  ref, with a task comment naming them. Its next run does not apply it
+  automatically; see [recovery.md](recovery.md#salvage-an-incomplete-candidate).
 - A failure after the PR opened (completion, CI on the published PR) leaves
   the task in `review` with its PR, not a preserved candidate.
 

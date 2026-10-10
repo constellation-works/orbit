@@ -71,6 +71,8 @@ mod desktop_completion;
 mod failure_class;
 #[cfg(unix)]
 mod forge_hold;
+#[cfg(unix)]
+mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
 mod no_diff;

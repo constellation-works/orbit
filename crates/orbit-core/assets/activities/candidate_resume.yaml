@@ -46,6 +46,17 @@ spec:
     is `resumed_repaired` with trigger `continuation` (`review` when the
     before-PR review refused it): the claimed implementer always runs and
     the leaf's own validation judges the result.
+    When the candidate's leaf was cancelled or interrupted inside a review
+    step, `candidate` also names that review (`interrupted_review`): the
+    step, the attempt, the attempt's verdict and findings, and the
+    candidate ref the reviewer's uncommitted repair was kept under, a
+    single reviewer-authored partial-repair commit on the candidate head.
+    That commit is resolved here, else fetched from `origin`, and applied
+    in place of the head when it is that run's repair on that head; it is
+    never validated here. Any non-conflict outcome then has trigger
+    `review`, and `repair.interrupted_review` gives the implementer the
+    findings and whether the repair was applied (`repair_applied`, or why
+    not in `repair_refused`).
     When that candidate's branch was pushed and its claim opened a pull
     request (`published`, `pull_request`), a resumed candidate also renames
     this checkout's branch to the candidate's, so the leaf's push replaces
@@ -104,7 +115,8 @@ spec:
           Claimed mode only: the preserved candidate's `branch` and
           `head_sha`, with `source_run_id`, `failed_step_id` and, when its
           leaf carried it to `origin`, `durable_ref`; `published` and
-          `pull_request` when its leaf pushed the branch and opened one.
+          `pull_request` when its leaf pushed the branch and opened one;
+          `interrupted_review` when its leaf was stopped inside a review.
       claim_repair:
         type: [object, "null"]
         description: >
@@ -137,7 +149,10 @@ spec:
         description: >
           What the implementer repairs: `trigger` (`implementation`, `conflict`,
           `validation`, `review`, `continuation` or `landing`) and its `output`, plus `failed_step_id`,
-          `conflicting_paths` or the failing `command`.
+          `conflicting_paths` or the failing `command`. A candidate stopped
+          inside a review adds `interrupted_review`: `step_id`,
+          `attempt_id`, `verdict`, `findings`, `repair_ref`,
+          `repair_commit`, `repair_applied` and `repair_refused`.
       source_run_id:
         type: [string, "null"]
       source_machine_id:

@@ -23,9 +23,22 @@ use super::git::{
     git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
 };
 pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
+pub use super::interrupted_review::{
+    INTERRUPTED_REVIEW_KEY, PreservedReviewRepair, ReviewInFlight, carry_interrupted_review,
+    interrupted_review_ref, preserve_interrupted_review, review_in_flight,
+};
 
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";
+
+/// Subject of the commit that preserves a stopped reviewer's uncommitted
+/// edits.
+pub(in crate::executor::automation::vcs) const PARTIAL_REPAIR_SUBJECT: &str =
+    "review: partial reviewer repairs preserved";
+
+/// Trailer that marks a partial-repair commit as the gate's own.
+pub(in crate::executor::automation::vcs) const PARTIAL_REPAIR_RUN_TRAILER: &str =
+    "Orbit-Review-Run:";
 
 /// The catalog activity a before-PR reviewer runs as.
 pub const REVIEWER_ACTIVITY: &str = "agent_review_repair";

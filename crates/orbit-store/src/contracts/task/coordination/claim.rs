@@ -239,6 +239,44 @@ pub struct ClaimCandidateRef {
     /// durable ref; the candidate stays on the host that made it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carry_failure: Option<String>,
+    /// [ORB-15314] The review the leaf was inside when it was cancelled or
+    /// interrupted, with where its reviewer's uncommitted repairs were kept
+    /// and the findings its report held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupted_review: Option<InterruptedReview>,
+}
+
+/// [ORB-15314] A review a leaf was cancelled or interrupted inside, before
+/// it settled.
+///
+/// The executor commits the reviewer's uncommitted edits as one marked commit
+/// on top of the reviewed head and keeps it at `repair_ref`: a ref on
+/// `origin` when it could push it, and always in its own repository. A
+/// release recorded before the leaf stopped names the ref the stop will
+/// write, so `repair_commit` is absent; the resume resolves the ref and
+/// checks the commit before it applies it. Without a `repair_ref` the
+/// reviewer left nothing uncommitted, or it could not be kept. The owner
+/// adds the verdict and findings from its copy of the attempt's report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterruptedReview {
+    /// The review step that was running (`review`, `landing_review`, ...).
+    pub step_id: String,
+    /// The review attempt that was admitted.
+    pub attempt_id: String,
+    /// Where the marked repair commit is kept
+    /// (`refs/orbit/candidates/<task>/<run>-review`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_ref: Option<String>,
+    /// The marked repair commit, when the settlement was recorded after it
+    /// was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_commit: Option<String>,
+    /// The verdict of the attempt's latest report on the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<orbit_types::workflow::ReviewVerdict>,
+    /// The findings of that report, with their severity and disposition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<orbit_types::workflow::ReviewFinding>,
 }
 
 impl ClaimCandidateRef {

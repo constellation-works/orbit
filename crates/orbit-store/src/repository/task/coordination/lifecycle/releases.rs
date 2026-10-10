@@ -65,9 +65,10 @@ impl TaskCommitBoundary {
                 published: true,
                 durable_ref: None,
                 carry_failure: None,
+                interrupted_review: None,
             })
         });
-        let Some(candidate) = evidence
+        let Some(mut candidate) = evidence
             .failure
             .as_ref()
             .and_then(|failure| failure.candidate.clone())
@@ -75,11 +76,49 @@ impl TaskCommitBoundary {
         else {
             return Ok(None);
         };
+        if let Some(review) = candidate.interrupted_review.as_mut() {
+            self.attach_interrupted_report(task_id, review)?;
+        }
         Ok(Some(PreservedClaimCandidate {
             candidate,
             task_spec_digest: self.full_task(task_id)?.spec_digest(),
             recorded_at: Utc::now().to_rfc3339(),
         }))
+    }
+
+    /// [ORB-15314] Copy the verdict and findings of the interrupted attempt's
+    /// latest report, which the reviewer persisted on this task as it worked,
+    /// onto the kept candidate, so the task's next run receives them. A
+    /// report of another attempt, or one that does not parse, adds nothing.
+    fn attach_interrupted_report(
+        &self,
+        task_id: &str,
+        review: &mut InterruptedReview,
+    ) -> Result<(), OrbitError> {
+        let bundle = self.bundle_store.read_bundle(task_id)?;
+        let Some(file) = bundle.artifact_manifest.and_then(|manifest| {
+            manifest
+                .files
+                .into_iter()
+                .find(|file| file.path == orbit_types::workflow::REVIEW_REPORT_ARTIFACT)
+        }) else {
+            return Ok(());
+        };
+        let bundle_dir = self.bundle_store.bundle_path(task_id)?;
+        let Some(path) =
+            crate::repository::task::v2::resolve_v2_artifact_file_path(&bundle_dir, &file.blob)?
+        else {
+            return Ok(());
+        };
+        let content = std::fs::read(&path).map_err(|err| OrbitError::Io(err.to_string()))?;
+        let Ok(report) = orbit_types::workflow::ReviewReport::parse(&content) else {
+            return Ok(());
+        };
+        if report.attempt_id == review.attempt_id {
+            review.verdict = Some(report.verdict);
+            review.findings = report.findings;
+        }
+        Ok(())
     }
 
     /// What the owner hands a run of `task` executing on `machine_id` — a
@@ -332,6 +371,7 @@ fn held_candidate_offer(
             published: false,
             durable_ref: held.durable_ref,
             carry_failure: held.carry_failure,
+            interrupted_review: None,
         },
         fresh,
     })

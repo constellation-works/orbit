@@ -191,6 +191,12 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
         claim,
         published: preserved.get("published").and_then(Value::as_bool) == Some(true),
         pull_request: input_string_field(preserved, "pull_request"),
+        // A record that does not parse leaves the candidate to resume
+        // without its review's repair.
+        interrupted_review: preserved
+            .get("interrupted_review")
+            .filter(|review| !review.is_null())
+            .and_then(|review| serde_json::from_value(review.clone()).ok()),
     })
 }
 
@@ -250,6 +256,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         claim: None,
         published: false,
         pull_request: None,
+        interrupted_review: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
     refuse_stale(host, task, candidate, Some(recorded.as_deref()))
@@ -309,6 +316,7 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         claim: None,
         published: false,
         pull_request: None,
+        interrupted_review: None,
     };
     // A hold from before spec provenance was released by a receipt that
     // checked the task's whole meaning; the fresh review reads the task as
@@ -494,8 +502,9 @@ fn claim_repair_resume(
         claim: None,
         published: false,
         pull_request: None,
+        interrupted_review: None,
     };
-    let outcome = match apply(&candidate, workspace_path, base_sha)? {
+    let outcome = match apply(&candidate, &candidate.head_sha, workspace_path, base_sha)? {
         Applied::Refused(reason) => {
             return Err(OrbitError::Execution(format!(
                 "candidate_resume: repair candidate {} could not be restored: {reason}",
