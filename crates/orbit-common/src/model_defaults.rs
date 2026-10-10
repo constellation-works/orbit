@@ -102,9 +102,3 @@ pub const PI_DEFAULT_MODEL: &str = "sonnet";
 /// and looks the vendor up in its provider catalog, so a bare model id does
 /// not resolve. [ORB-11295]
 pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
-
-/// Cheap Claude model used by the orbit-agent HTTP examples.
-///
-/// Version pinned like [`ANTHROPIC_HTTP_DEFAULT_MODEL`] because the examples
-/// hit the Anthropic Messages API directly, which rejects bare aliases.
-pub const ANTHROPIC_EXAMPLE_MODEL: &str = "claude-haiku-4-5-20251001";

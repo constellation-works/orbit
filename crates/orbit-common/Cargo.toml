@@ -12,7 +12,6 @@ stability = "stable"
 workspace = true
 
 [features]
-clap = ["orbit-types/clap"]
 # Shared SQLite connection defaults (utility::sqlite). Optional so that
 # non-SQLite consumers (orbit-policy, orbit-exec, ...) do not pull rusqlite.
 sqlite = ["dep:rusqlite"]

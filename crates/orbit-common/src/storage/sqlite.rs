@@ -438,15 +438,6 @@ pub struct PragmaOutcome {
     pub write_denied: bool,
 }
 
-impl PragmaOutcome {
-    /// True when the connection ended up in WAL mode. In-memory databases
-    /// report `memory` and return false; callers that require WAL can turn
-    /// that into a hard error.
-    pub fn wal_active(&self) -> bool {
-        self.journal_mode.eq_ignore_ascii_case("wal")
-    }
-}
-
 /// Apply the Orbit-wide SQLite connection defaults:
 ///
 /// - `journal_mode=WAL` — best-effort: when the database file is read-only

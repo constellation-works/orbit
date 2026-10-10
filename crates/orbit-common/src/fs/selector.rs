@@ -378,38 +378,6 @@ impl OverlapScope {
     }
 }
 
-/// Return the number of shared path segments between two selector anchors.
-pub fn shared_anchor_prefix_depth(left: &str, right: &str) -> usize {
-    let Ok(left) = anchor_path(left) else {
-        return 0;
-    };
-    let Ok(right) = anchor_path(right) else {
-        return 0;
-    };
-    let left = normalize_path_text(&left.to_string_lossy()).ok();
-    let right = normalize_path_text(&right.to_string_lossy()).ok();
-    let (Some(left), Some(right)) = (left, right) else {
-        return 0;
-    };
-
-    let mut depth = 0usize;
-    for (left_part, right_part) in left
-        .split('/')
-        .filter(|part| !part.is_empty() && *part != ".")
-        .zip(
-            right
-                .split('/')
-                .filter(|part| !part.is_empty() && *part != "."),
-        )
-    {
-        if left_part != right_part {
-            break;
-        }
-        depth += 1;
-    }
-    depth
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParsedScopeKind {
     Dir,

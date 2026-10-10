@@ -118,10 +118,6 @@ pub fn bulk_write_temp_dir() -> std::path::PathBuf {
     default
 }
 
-/// The identity pair consulted when a command carries no explicit
-/// `--agent`/`--model` and no input attribution.
-pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL", "ORBIT_ACTOR"];
-
 /// The variables an `orbit-engine` managed run exports into every spawned
 /// activity (see `orbit-engine/src/context/env.rs`): job/task/session
 /// identity plus the "this is a managed run" marker. A test that asserts

@@ -5,10 +5,9 @@
 //! the write is a no-op. Intended for audit payload storage where
 //! events reference blobs by hash rather than path.
 //!
-//! Redaction runs at write time via [`redact_all`] plus an optional
-//! caller-supplied [`PatternRedactor`]; the stored bytes are already safe, so
-//! read-side tooling does not need to re-apply it. Blob hashes are computed
-//! from those post-redaction bytes.
+//! Redaction runs at write time via [`redact_all`]; the stored bytes are
+//! already safe, so read-side tooling does not need to re-apply it. Blob hashes
+//! are computed from those post-redaction bytes.
 //!
 //! A store with a pending-publication root ([`BlobStore::with_pending_root`])
 //! takes part in the audit blob sweep's protocol ([`super::blob_sweep`]): each
@@ -23,12 +22,11 @@ use std::time::SystemTime;
 
 use super::blob_sweep;
 use crate::fs::io::{atomic_write_private_bytes, create_private_dir_all};
-use crate::security::redaction::{PatternRedactor, redact_all};
+use crate::security::redaction::redact_all;
 use crate::security::release::sha256_hex;
 
 pub struct BlobStore {
     root: PathBuf,
-    extra_redactor: PatternRedactor,
     pending_root: Option<PathBuf>,
 }
 
@@ -36,7 +34,6 @@ impl BlobStore {
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         Self {
             root: root.into(),
-            extra_redactor: PatternRedactor::empty(),
             pending_root: None,
         }
     }
@@ -45,14 +42,6 @@ impl BlobStore {
     /// write, until [`BlobStore::clear_published`] retires it.
     pub fn with_pending_root(mut self, pending_root: impl Into<PathBuf>) -> Self {
         self.pending_root = Some(pending_root.into());
-        self
-    }
-
-    /// Add caller-specific pattern redaction on top of the mandatory
-    /// `redact_all()` pass. This cannot weaken the default env-value and HTTP
-    /// pattern redaction applied by [`BlobStore::write`].
-    pub fn with_redaction(mut self, redactor: PatternRedactor) -> Self {
-        self.extra_redactor = redactor;
         self
     }
 
@@ -88,18 +77,13 @@ impl BlobStore {
     }
 
     /// Return the bytes that would be persisted for `content` after the
-    /// mandatory env/pattern redaction and any extra caller redactor.
+    /// mandatory env/pattern redaction.
     pub fn redact_for_storage(&self, content: &[u8]) -> Vec<u8> {
         match std::str::from_utf8(content) {
-            Ok(text) => self
-                .extra_redactor
-                .apply_str(&redact_all(text))
-                .into_bytes(),
+            Ok(text) => redact_all(text).into_bytes(),
             Err(_) => {
                 let lossy_text = String::from_utf8_lossy(content);
-                self.extra_redactor
-                    .apply_str(&redact_all(&lossy_text))
-                    .into_bytes()
+                redact_all(&lossy_text).into_bytes()
             }
         }
     }

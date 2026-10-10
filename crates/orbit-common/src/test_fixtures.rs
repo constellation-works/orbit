@@ -17,17 +17,5 @@
 //! Always available so integration tests in sibling crates can share the same
 //! constants without changing `orbit-common`'s feature set.
 
-/// Frozen Claude model literal for attribution/input test fixtures.
-pub const TEST_CLAUDE_MODEL: &str = "claude-opus-4-7";
-
-/// Frozen weak-Claude model literal for attribution/input test fixtures.
-pub const TEST_CLAUDE_WEAK_MODEL: &str = "claude-sonnet-4-6";
-
 /// Frozen codex model literal for attribution/input test fixtures.
 pub const TEST_CODEX_MODEL: &str = "gpt-5.5";
-
-/// Frozen gemini model literal for attribution/input test fixtures.
-pub const TEST_GEMINI_MODEL: &str = "gemini-3.1-pro";
-
-/// Frozen grok model literal for attribution/input test fixtures.
-pub const TEST_GROK_MODEL: &str = "grok-4";
