@@ -274,7 +274,12 @@ their owner and that cancelling one fails its claim. See
 ## Runs and errors
 
 **Runs** lists job runs for the selected workspace. Filter by **All**,
-**Live**, or **Failed**. Click a run for its metadata, steps, events, child
+**Live**, or **Failed**, narrow the list with a task id or job id, and use
+the same time window as the rest of the dashboard. The address keeps
+`run_state`, `task_id`, `job_id`, and `window`, so a shared link reopens the
+same list. A task id such as `ORB-15159` keeps that task's runs; any other
+id keeps one job. **Window all** lists every matching run with no time bound.
+Click a run for its metadata, steps, events, child
 runs, and a timing chart when one is recorded. A failed, timed-out, or
 interrupted run opens on the step it stopped at and the error it recorded.
 
@@ -300,8 +305,8 @@ These counts answer different questions:
 
 | Where | Counts |
 |---|---|
-| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the selected window. |
-| Runs **Failed** filter | Runs in the `Failed` state, with no time window. |
+| **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
+| Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
 | **Audit** rail count | Audited events in the selected window. |
 | **Health → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 

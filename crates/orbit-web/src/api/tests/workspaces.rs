@@ -205,6 +205,7 @@ fn aggregate_job_runs_page_is_bounded_and_observational() {
     ) {
         return;
     }
+    use super::super::jobs::JobRunScope;
     use super::super::workspaces::{AllJobRunsState, all_job_runs_json};
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -244,7 +245,7 @@ fn aggregate_job_runs_page_is_bounded_and_observational() {
         }
     }
 
-    let page = |state_filter| all_job_runs_json(&state, 50, state_filter);
+    let page = |state_filter| all_job_runs_json(&state, 50, state_filter, &JobRunScope::default());
     // Warm: every workspace runtime is open and the store pages are cached.
     let warm = page(AllJobRunsState::All);
     assert_eq!(warm["items"].as_array().expect("items").len(), 50);
