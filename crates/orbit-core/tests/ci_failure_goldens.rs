@@ -878,6 +878,37 @@ fn ci_equal_test_signatures_share_one_task_across_job_and_step_wrappers() {
 }
 
 #[test]
+fn ci_main_thread_panic_does_not_match_agent_main_task() {
+    if !isolated("ci_main_thread_panic_does_not_match_agent_main_task") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+
+    let (_root, runtime, commits) = operator_fixture("");
+    let unrelated = runtime
+        .add_task(TaskAddParams {
+            title: "Review agent-main delivery workflow".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let output = file(
+        &runtime,
+        vec![failure(
+            "thread 'main' panicked at build.rs:3:5:",
+            0,
+            &commits[0],
+        )],
+    );
+
+    assert_eq!(output["filed_count"], 1, "{output}");
+    assert_eq!(output["skipped_existing"], json!([]), "{output}");
+    assert_ne!(
+        output["filed"][0]["task_id"], unrelated.id,
+        "a generic panic thread must not make an unrelated agent-main task cover the failure"
+    );
+}
+
+#[test]
 fn ci_failure_fixture_goldens() {
     if !isolated("ci_failure_fixture_goldens") {
         return;

@@ -211,6 +211,7 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
         if let Some(rest) = line.strip_prefix("thread '")
             && let Some((name, suffix)) = rest.split_once("' panicked")
             && !name.trim().is_empty()
+            && !matches!(name.trim(), "main" | "<unnamed>")
             && !suffix.trim().is_empty()
         {
             names.insert(name.trim().to_string());
@@ -218,6 +219,7 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
         if let Some(rest) = line.strip_prefix("thread \"")
             && let Some((name, suffix)) = rest.split_once("\" panicked")
             && !name.trim().is_empty()
+            && !matches!(name.trim(), "main" | "<unnamed>")
             && !suffix.trim().is_empty()
         {
             names.insert(name.trim().to_string());
