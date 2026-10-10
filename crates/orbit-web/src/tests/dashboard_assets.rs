@@ -158,7 +158,7 @@ fn tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view() {
         .expect("node is required to execute the dashboard asset behavior fixture");
     assert!(
         result.status.success(),
-        "dashboard tasks rail count behavior failed:\n{}\n{}",
+        "dashboard tasks rail count and drain wait behavior failed:\n{}\n{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );

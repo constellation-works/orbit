@@ -4,6 +4,7 @@
 import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
+import { backlogGroupHint, drainWaitFor, drainWaitSignature, onDrainReadinessChange } from './drain-waits.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -99,7 +100,6 @@ const GROUP_HINTS = {
   review: "Review the pull request, then approve to close",
   blocked: "Waiting on something the run cannot resolve",
   "in-progress": "Running now",
-  backlog: "Approved and eligible for Ship or a drain window",
 };
 
 function taskList(context) {
@@ -782,6 +782,16 @@ function buildReadinessBadge(task) {
     text: `${blocking ? "not ready" : "advisory"} · ${gaps.length}`,
     title: gaps.map((gap) => `${gap.severity}: ${gap.message}`).join("\n"),
   })];
+}
+
+// The row chip for a backlog task the drain readiness snapshot reports as
+// waiting: who or what holds it, with every detail the snapshot carries in the
+// tooltip. Absent when the snapshot has no wait for the task.
+function buildDrainWaitBadge(task) {
+  if (task.status !== "backlog") return [];
+  const wait = drainWaitFor(task.id);
+  if (!wait) return [];
+  return [el("span", { class: "readiness-badge drain-wait-badge mono", text: wait.text, title: wait.title })];
 }
 
 // The detail's Readiness block: each gap with its severity and its fix.
@@ -3152,25 +3162,26 @@ export function renderTasks(tasks, context) {
   );
   for (const status of ordered) {
     const group = groups.get(status);
+    const hint = status === "backlog" ? backlogGroupHint(group) : GROUP_HINTS[status];
     const header = el("div", { class: "group-header" }, [
       el("span", { class: "group-dot" }),
       el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
       el("span", { class: "group-count", text: `${group.length}` }),
-      ...(GROUP_HINTS[status] ? [el("span", { class: "group-hint", text: GROUP_HINTS[status] })] : []),
+      ...(hint ? [el("span", { class: "group-hint", text: hint })] : []),
     ]);
     header.dataset.status = status;
     header.dataset.key = `header-${status}`;
-    header.dataset.hash = `${status}-${group.length}`;
+    header.dataset.hash = `${status}-${group.length}-${hint || ""}`;
     nodes.push(header);
     for (const t of group) {
       const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
         const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
-        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t)];
+        const titleBadges = [...buildOsBadges(t), ...buildReadinessBadge(t), ...buildDrainWaitBadge(t)];
         // The title is the row's disclosure: the row holds the copy-id button,
         // the selects and the quick action, so it cannot be a button itself.
         const titleCell = (aggregate && t.workspace_name) || titleBadges.length > 0

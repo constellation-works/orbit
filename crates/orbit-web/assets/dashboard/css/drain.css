@@ -126,6 +126,9 @@
 .drain-blocked-state.running { color: var(--state-running); }
 .drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); font-size: 11px; }
 .drain-blocked-more { color: var(--fg-dim); font-size: 11px; }
+.drain-blocked-more-toggle { padding: 0; border: 0; background: none; color: var(--fg-dim); font: inherit; cursor: pointer; }
+.drain-blocked-more-toggle:hover { color: var(--fg); text-decoration: underline; }
+.drain-blocked-more-toggle:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
 .drain-muted { color: var(--fg-dim); }
 .drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }
 

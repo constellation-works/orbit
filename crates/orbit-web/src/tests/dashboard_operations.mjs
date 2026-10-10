@@ -209,7 +209,20 @@ assert(drainBody.querySelector('.drain-stop-note:not([hidden])')?.textContent.tr
 readinessTasks.push(...[10, 11, 12].map(n => ({ task_id: `ORB-${n}`, status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] })));
 await fetchAndRenderOperations();
 assert(poolCount('locks') === '5' && drainText().includes('+2 more'), 'blocked list is capped at three lines');
+// "+N more" is a keyboard-reachable button that opens the rest in place and closes again.
+const moreToggle = () => drainBody.querySelector('.drain-blocked-more-toggle');
+assert(moreToggle().type === 'button' && moreToggle().getAttribute('aria-expanded') === 'false', 'the remainder control is a collapsed button');
+assert(moreToggle().dataset.drainFocus, 'the card can hand focus back to the control after a repaint');
+const waitingRows = () => descendants(drainBody).filter(node => String(node.className || '') === 'drain-blocked-row').length;
+assert(waitingRows() === 3, 'three waiting rows show before expanding');
+moreToggle().click();
+assert(waitingRows() === 5 && drainText().includes('ORB-12 waits on ORB-30'), `expanding shows every waiting task: ${drainText()}`);
+assert(moreToggle().textContent === 'Show fewer' && moreToggle().getAttribute('aria-expanded') === 'true', 'the open control offers to collapse');
+moreToggle().click();
+assert(waitingRows() === 3 && moreToggle().textContent === '+2 more', 'collapsing restores the cap');
 readinessTasks.splice(-3);
+await fetchAndRenderOperations();
+assert(!moreToggle(), 'no remainder control once everything fits');
 
 // A task whose `os:` tags this host cannot run names the host it waits for,
 // apart from the lock-blocked list, so the drain does not read as idle.

@@ -299,3 +299,57 @@ common.setRegisteredHosts(hostRows('owner', 'hm_local'));
 paint(emptyPage, []);
 assert.equal(emptyText(), 'No tasks available.', 'a non-replica workspace keeps the plain empty state');
 assert.equal(byId['tasks-body'].querySelector('.empty-state button'), null);
+
+// ORB-15213: a backlog row says why the drain is not starting it, and the group
+// hint counts what is eligible versus waiting, from the same readiness snapshot
+// the Drain card renders. Rows without a wait stay as they were.
+const drainWaits = modules.get('drain-waits.js').namespace;
+const backlogContext = { ...taskContext, getActiveStatuses: () => new Set(['backlog']), statusOrder: ['backlog'] };
+const backlog = [31, 32, 33, 34, 35].map(index => task(index, { status: 'backlog' }));
+const paintBacklog = () => {
+  served = { total: backlog.length, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = backlog;
+  renderTasks(backlog, backlogContext);
+};
+const backlogBody = byId['tasks-body'];
+const rowFor = id => backlogBody.querySelectorAll('.row').find(row => row.dataset.key === `task-${id}`);
+const waitBadgeOf = id => rowFor(id).querySelector('.drain-wait-badge');
+const groupHintText = () => backlogBody.querySelector('.group-header .group-hint').textContent;
+const repaints = [];
+const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
+
+paintBacklog();
+assert.ok(!groupHintText().includes('eligible'), `without a snapshot the hint claims no eligibility: ${groupHintText()}`);
+assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'no snapshot, no wait badges');
+
+const snapshot = {
+  tasks: [
+    { task_id: 'ORB-31', status: 'backlog', eligible: true, reason: 'ready' },
+    { task_id: 'ORB-32', status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:docs/CONFIG.md', locking_task_id: 'ORB-77' }] },
+    { task_id: 'ORB-33', status: 'backlog', eligible: false, reason: 'host_os_mismatch', detail: 'waits for a macos host (os:macos)' },
+    { task_id: 'ORB-34', status: 'backlog', eligible: false, reason: 'resource_throttled', detail: 'cpu 91% over 80%' },
+    { task_id: 'ORB-99', status: 'backlog', eligible: false, reason: 'context_lock_conflict' },
+  ],
+};
+drainWaits.setDrainReadiness(snapshot);
+assert.equal(repaints.length, 1, 'a new snapshot repaints the list once');
+assert.equal(waitBadgeOf('ORB-31'), null, 'an eligible task shows no wait');
+assert.equal(waitBadgeOf('ORB-32').textContent, 'waits on ORB-77 · lock', 'a lock wait names the holder');
+assert.ok(waitBadgeOf('ORB-32').title.includes('Lock: file:docs/CONFIG.md') && waitBadgeOf('ORB-32').title.includes('context_lock_conflict'), `the lock detail is in the tooltip: ${waitBadgeOf('ORB-32').title}`);
+assert.equal(waitBadgeOf('ORB-33').textContent, 'needs macos host', 'a host wait names the OS');
+assert.ok(waitBadgeOf('ORB-33').title.includes('waits for a macos host (os:macos)'), 'the host detail is in the tooltip');
+assert.equal(waitBadgeOf('ORB-34').textContent, 'throttled', 'a throttle wait says so');
+assert.equal(waitBadgeOf('ORB-35'), null, 'a task the snapshot does not mention shows no wait');
+assert.equal(groupHintText(), '5 approved · 1 eligible now, 1 waiting on locks, 1 waiting on capacity, 1 waiting, other, 1 not in the drain snapshot');
+
+// The same snapshot again changes nothing, so the 30 s poll does not repaint.
+drainWaits.setDrainReadiness(JSON.parse(JSON.stringify(snapshot)));
+assert.equal(repaints.length, 1, 'an unchanged snapshot does not repaint');
+
+// A snapshot belongs to one workspace: leaving it drops every wait.
+common.setWorkspace('ws_other');
+assert.equal(repaints.length, 2, 'leaving the workspace repaints');
+assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'another workspace wears none of the previous waits');
+assert.ok(!groupHintText().includes('eligible'), 'and the hint stops counting');
+stopListening();
+common.setWorkspace('ws_orbit');
