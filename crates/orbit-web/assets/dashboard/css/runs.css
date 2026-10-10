@@ -314,7 +314,7 @@
     left: 0;
     box-sizing: border-box;
   }
-  .runs-toolbar { width: 100cqw; }
+  .runs-toolbar { width: calc(100cqw - 32px); }
   .runs-source-warning,
   .runs-scope-note,
   .runs-limit-note { width: 100cqw; }

@@ -777,6 +777,7 @@ async function assertTopbarSingleRow(page) {
 // still scroll (Metrics, Scoreboard) keep their first column pinned and show a
 // scroll edge. Fixtures stay in this function so it owns its fetch.
 async function assertNarrowTableLayouts(page) {
+  const runsLayoutMeasurements = [];
   await page.evaluate(async () => {
     const now = Date.now();
     const iso = (minutes) => new Date(now - minutes * 60000).toISOString();
@@ -849,7 +850,37 @@ async function assertNarrowTableLayouts(page) {
   await page.locator('#runs-body .runs-filter-button').first().click();
   await page.waitForFunction(() => document.querySelectorAll('#runs-body .runs-row[data-key^="run-"]').length === 3);
   if (await scrolls('runs-body') || await pageOverflow()) throw new Error('Runs must not scroll sideways at 375px');
-  await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
+  const phoneToolbar = await page.evaluate(() => {
+    const wrap = document.getElementById('runs-body');
+    const toolbar = wrap.querySelector('.runs-toolbar');
+    const rect = toolbar.getBoundingClientRect();
+    const style = getComputedStyle(toolbar);
+    const wrapRect = wrap.getBoundingClientRect();
+    return {
+      viewportWidth: window.innerWidth,
+      bodyClientWidth: wrap.clientWidth,
+      bodyScrollWidth: wrap.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      toolbarWidth: rect.width,
+      marginLeft: parseFloat(style.marginLeft),
+      marginRight: parseFloat(style.marginRight),
+      toolbarLeft: rect.left,
+      toolbarRight: rect.right,
+      bodyLeft: wrapRect.left + wrap.clientLeft,
+      bodyRight: wrapRect.left + wrap.clientLeft + wrap.clientWidth,
+      toolbarScrollWidth: toolbar.scrollWidth,
+      toolbarClientWidth: toolbar.clientWidth,
+    };
+  });
+  if (Math.abs(phoneToolbar.toolbarWidth + phoneToolbar.marginLeft + phoneToolbar.marginRight - phoneToolbar.bodyClientWidth) > 1) {
+    throw new Error(`Runs toolbar width and margins exceed the 375px body: ${JSON.stringify(phoneToolbar)}`);
+  }
+  if (phoneToolbar.toolbarLeft < phoneToolbar.bodyLeft - 1 || phoneToolbar.toolbarRight > phoneToolbar.bodyRight + 1) {
+    throw new Error(`Runs toolbar falls outside the 375px body: ${JSON.stringify(phoneToolbar)}`);
+  }
+  runsLayoutMeasurements.push(phoneToolbar);
+  await assertVisible(['.runs-scope-note', '.runs-filter', '.runs-filter-button.active', '.runs-query', '.runs-window', '.runs-row[data-key^="run-"] .state', '.runs-row[data-key^="run-"] .id', '.runs-row[data-key^="run-"] .when'], '#runs-body', 'Runs', 375);
   await page.screenshot({ path: path.join(evidence, 'runs-375.png'), fullPage: true });
 
   for (const width of [601, 700, 768]) {
@@ -861,21 +892,44 @@ async function assertNarrowTableLayouts(page) {
       wrap.scrollLeft = wrap.scrollWidth;
       const wrapRect = wrap.getBoundingClientRect();
       const rect = cell.getBoundingClientRect();
+      const toolbar = wrap.querySelector('.runs-toolbar');
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const toolbarStyle = getComputedStyle(toolbar);
       const topmost = document.elementFromPoint(rect.left + 4, (rect.top + rect.bottom) / 2);
       return {
+        viewportWidth: window.innerWidth,
         scrolls: wrap.scrollWidth > wrap.clientWidth + 1,
         scrolled: wrap.scrollLeft > 0,
         stays: Math.abs(rect.left - wrapRect.left) < 1.5,
         painted: cell.contains(topmost),
         edge: getComputedStyle(wrap).backgroundImage.includes('gradient'),
+        bodyClientWidth: wrap.clientWidth,
+        bodyScrollWidth: wrap.scrollWidth,
+        pageClientWidth: document.documentElement.clientWidth,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        toolbarWidth: toolbarRect.width,
+        marginLeft: parseFloat(toolbarStyle.marginLeft),
+        marginRight: parseFloat(toolbarStyle.marginRight),
+        toolbarLeft: toolbarRect.left,
+        toolbarRight: toolbarRect.right,
+        bodyLeft: wrapRect.left + wrap.clientLeft,
+        bodyRight: wrapRect.left + wrap.clientLeft + wrap.clientWidth,
+        toolbarScrollWidth: toolbar.scrollWidth,
+        toolbarClientWidth: toolbar.clientWidth,
       };
     });
     if (!pinned.scrolls) throw new Error(`Runs must still scroll sideways at ${width}px for this check to mean anything`);
     if (!(pinned.scrolled && pinned.stays && pinned.painted && pinned.edge)) {
       throw new Error(`Runs first column or scroll edge missing at ${width}px: ${JSON.stringify(pinned)}`);
     }
+    if (Math.abs(pinned.toolbarLeft - pinned.bodyLeft) > 1.5 || pinned.toolbarRight > pinned.bodyRight + 1.5 || pinned.toolbarScrollWidth > pinned.toolbarClientWidth + 1) {
+      throw new Error(`Runs toolbar is not pinned within its body at ${width}px: ${JSON.stringify(pinned)}`);
+    }
+    await assertVisible(['.runs-filter', '.runs-filter-button.active', '.runs-query', '.runs-window'], '#runs-body', 'Runs toolbar', width);
+    runsLayoutMeasurements.push(pinned);
     await page.screenshot({ path: path.join(evidence, `runs-${width}.png`), fullPage: true });
   }
+  fs.writeFileSync(path.join(evidence, 'runs-layout-measurements.json'), `${JSON.stringify({ viewports: runsLayoutMeasurements }, null, 2)}\n`);
   for (const width of [769, 900, 1024, 1100]) {
     await page.setViewportSize({ width, height: 900 });
     const reachable = await page.evaluate(() => {
