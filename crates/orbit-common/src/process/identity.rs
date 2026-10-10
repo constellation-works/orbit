@@ -95,13 +95,14 @@ pub enum PidNamespaceScope {
     /// Observer and writer share a PID namespace: PIDs mean the same thing on
     /// both sides, so liveness probes are authoritative.
     Same,
-    /// Observer is in a different PID namespace than the writer. The recorded
+    /// Observer is in a different PID namespace than the writer, or on a host
+    /// without PID namespaces reading a token that records one. The recorded
     /// PID names a different process here, or none at all; no probe run from
     /// this side can say anything about the recorded process.
     Foreign,
     /// One side did not record a namespace (v1/legacy token, no token, or a
-    /// host that cannot report one). Probes are treated as authoritative, as
-    /// they were before [ORB-10594].
+    /// Linux host that cannot report one). Probes are treated as
+    /// authoritative, as they were before [ORB-10594].
     Unknown,
 }
 
@@ -132,10 +133,16 @@ pub fn current_pid_namespace() -> Option<&'static str> {
 
 /// Classify the observer against the namespace recorded in `persisted`.
 ///
-/// Deliberately conservative in one direction only: a missing namespace on
-/// either side yields [`PidNamespaceScope::Unknown`], never `Foreign`. Treating
-/// "unknown" as foreign would disable genuine-orphan detection outright for
-/// any deployment whose workers legitimately run inside a container.
+/// Deliberately conservative in one direction only: on Linux a missing
+/// namespace on either side yields [`PidNamespaceScope::Unknown`], never
+/// `Foreign`. Treating "unknown" as foreign would disable genuine-orphan
+/// detection outright for any deployment whose workers legitimately run inside
+/// a container.
+///
+/// A host without PID namespaces is the exception: it cannot share the Linux
+/// namespace a token records, so such a token is `Foreign` there. Reading it as
+/// `Unknown` would compare a Linux start time against whatever local process
+/// holds the number and report a live remote worker `Exited`.
 pub fn pid_namespace_scope(persisted: Option<&str>) -> PidNamespaceScope {
     match (
         persisted.and_then(token_pid_namespace),
@@ -143,6 +150,7 @@ pub fn pid_namespace_scope(persisted: Option<&str>) -> PidNamespaceScope {
     ) {
         (Some(recorded), Some(current)) if recorded == current => PidNamespaceScope::Same,
         (Some(_), Some(_)) => PidNamespaceScope::Foreign,
+        (Some(_), None) if cfg!(not(target_os = "linux")) => PidNamespaceScope::Foreign,
         _ => PidNamespaceScope::Unknown,
     }
 }

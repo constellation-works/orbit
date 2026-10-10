@@ -770,7 +770,7 @@ Make namespace scope a property of the *decision*, not of the entry point.
 
 1. The process-start identity token is versioned up to `ps-lstart-utc-v2:pidns=<inode>:<lstart>`, recording the PID namespace (`/proc/self/ns/pid`) of the process that wrote it. v1 tokens are still read and still verify against a v2 probe on their process-start value, so an in-flight run claimed by an older binary is not invalidated by the upgrade.
 2. Owner classification compares the observer's namespace against the recorded one *before* any probe runs. A mismatch yields a new terminal-safe classification, `OwnerIdentity::ForeignPidNamespace`, which joins `ProbeUnavailable` in the never-stale set and is tagged `reason=foreign_pid_namespace` in diagnostics. Cancellation refuses to signal across the boundary for the same reason.
-3. A missing namespace on either side yields `Unknown`, which behaves exactly as before. This is deliberately asymmetric: the guard never converts "unknown" into "foreign".
+3. On Linux, a missing namespace on either side yields `Unknown`, which behaves exactly as before. This is deliberately asymmetric: the guard never converts "unknown" into "foreign". A host without PID namespaces (macOS) is the exception: it cannot share the namespace a token records, so it reads such a token as foreign rather than comparing a Linux start time against whichever local process holds the PID.
 4. An orphaned run's `finished_at` is derived from the last event in its own audit trail (clamped to `[started_at, now]`) rather than the moment of detection.
 
 ORB-10557's env gate is left in place: it is a cheap first line of defense for the common case, and this ADR does not depend on it.
