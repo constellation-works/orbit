@@ -104,16 +104,17 @@ impl crate::OrbitRuntime {
             boundary.lookup_admission(&identity, &request.request_id)?,
             AdmissionLookup::NotFound
         ) {
-            let owner = self.owner_ship_contract();
+            let owner = self.owner_ship_contract_for(Some(&identity.location().machine_id));
             if request.ship != owner {
                 return Err(OrbitError::InvalidInput(format!(
                     "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
-                     '{}', review.before_pr {}, completion '{}'; re-read the probe before \
-                     sending a new request",
+                     '{}', review.before_pr {}, review.before_landing {}, completion '{}' for this \
+                     machine; re-read the probe before sending a new request",
                     owner.mode,
                     owner.base_branch,
                     owner.landing_branch,
                     super::contract::on_off(owner.before_pr),
+                    super::contract::on_off(owner.before_landing),
                     owner.completion
                 )));
             }

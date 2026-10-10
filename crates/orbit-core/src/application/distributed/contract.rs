@@ -109,23 +109,33 @@ impl crate::OrbitRuntime {
             })
     }
 
-    pub(super) fn distributed_owner_machine_id(&self) -> Option<String> {
+    pub(crate) fn distributed_owner_machine_id(&self) -> Option<String> {
         self.workspace_owner_machine_id()
             .map(ToOwned::to_owned)
             .or_else(|| self.automation_machine_identity().map(ToOwned::to_owned))
     }
 
-    /// Ship configuration as the owner would resolve it at admission.
+    /// Ship configuration as the owner resolves it for its own deliveries.
+    pub(crate) fn owner_ship_contract(&self) -> AdmissionShipContract {
+        self.owner_ship_contract_for(None)
+    }
+
+    /// Ship configuration as the owner would resolve it at admission for a
+    /// claim executed on `executor`.
     ///
     /// With `review.before_pr` or `review.before_landing` on it also
     /// captures the review contract a claimed leaf's gate and the owner's
-    /// acceptance are held to [ORB-13895] [ORB-14849]. It carries no capture time, so a follower that echoes
+    /// acceptance are held to [ORB-13895] [ORB-14849]. A machine listed in
+    /// `review.before_landing_hosts` gets before-landing review although the
+    /// owner's own switch is off [ORB-15192]; the label is the session's
+    /// caller-chosen machine id, so the list is policy, not a security
+    /// boundary. It carries no capture time, so a follower that echoes
     /// the probed contract still matches the owner's current resolution.
-    pub(super) fn owner_ship_contract(&self) -> AdmissionShipContract {
+    pub(super) fn owner_ship_contract_for(&self, executor: Option<&str>) -> AdmissionShipContract {
         let base_branch = self.workspace_base_branch().to_string();
         let policy = self.operation_policy();
         let before_pr = self.local_review_before_pr();
-        let before_landing = policy.review_before_landing.value;
+        let before_landing = policy.reviews_before_landing_for(executor);
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()
@@ -180,9 +190,14 @@ impl crate::OrbitRuntime {
                 .as_deref()
                 .map_or_else(|| "(unset)".to_string(), |crew| format!("`{crew}`"));
             diagnostics.push(if ship.before_landing {
+                let switch = if self.operation_policy().review_before_landing.value {
+                    "has review.before_landing on"
+                } else {
+                    "lists this machine in review.before_landing_hosts"
+                };
                 format!(
-                    "owner has review.before_landing on; each claimed leaf reviews its open pull \
-                     request with crew {crew} before it hands off"
+                    "owner {switch}; each claimed leaf reviews its open pull request with crew \
+                     {crew} before it hands off"
                 )
             } else {
                 format!(

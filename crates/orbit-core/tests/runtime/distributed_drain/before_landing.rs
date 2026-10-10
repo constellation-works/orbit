@@ -156,3 +156,120 @@ fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
         "the reviewing leaf keeps its slot beside its replacement"
     );
 }
+
+/// [ORB-15192] An owner whose own deliveries do not review before landing
+/// still captures before-landing review, with its review crew, for the claims
+/// of a machine `review.before_landing_hosts` lists. The probe answers per
+/// caller machine, so any other label is offered no review, and the owner's
+/// own delivery captures none.
+#[test]
+fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
+    if !isolated(
+        module_path!(),
+        "before_landing_hosts_capture_landing_review_only_for_listed_machines",
+    ) {
+        return;
+    }
+    let leaf = ReviewedLeaf::admit_from(
+        &format!(
+            "[review]\nbefore_landing_hosts = [\"{FOLLOWER}\"]\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+        ),
+        "",
+    );
+    let owner = &leaf.pair.wire.owner;
+
+    let listed = probe_as(owner, FOLLOWER);
+    assert_eq!(listed["admits"], true, "{listed}");
+    assert_eq!(listed["ship"]["before_landing"], true, "{listed}");
+    assert_eq!(listed["ship"]["before_pr"], false, "{listed}");
+    assert_eq!(listed["ship"]["review"]["crew"], REVIEW_CREW, "{listed}");
+    assert_eq!(listed["review"]["before_landing"]["enabled"], false);
+    assert_eq!(
+        listed["review"]["before_landing"]["hosts"],
+        json!([FOLLOWER])
+    );
+    for other in ["hm_other", OWNER] {
+        let probe = probe_as(owner, other);
+        assert_ne!(probe["ship"]["before_landing"], true, "{other}: {probe}");
+        assert!(probe["ship"]["review"].is_null(), "{other}: {probe}");
+    }
+
+    // The listed follower's pull carried the probed contract, and its
+    // claimed leaf gates landing on a review.
+    let pulls = leaf.pair.wire.calls("orbit.task.pull");
+    assert_eq!(pulls[0]["ship"]["before_landing"], true, "{}", pulls[0]);
+    let input = leaf
+        .pair
+        .follower_jobs
+        .get_job_run(&leaf.leaf)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    let admission = ReviewAdmission::from_run_input(&input)
+        .unwrap()
+        .expect("the leaf carries the claim's review admission");
+    assert!(admission.gates_landing() && !admission.gates_pr());
+
+    // The owner's own PR delivery never reads the host list. Its run is only
+    // submitted: the catalog job stands in for the shipped pipeline, and the
+    // admission is captured at submission.
+    let jobs = owner.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::write(
+        jobs.join("task_pr_pipeline.yaml"),
+        json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                "id": "review_gate_admit",
+                "spec": {"type": "deterministic", "action": "review_gate_admit", "config": {}},
+            }]},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let task = backlog_task(owner, &leaf.pair.owner_repo, "src/own.rs", None);
+    let own = owner
+        .submit_pipeline_run(
+            "task_pr_pipeline",
+            json!({"task_ids": [task]}),
+            None,
+            Some("test"),
+        )
+        .expect("the owner submits its own delivery");
+    let input = owner
+        .get_job_run(&own.run_id)
+        .unwrap()
+        .unwrap()
+        .input
+        .unwrap();
+    let admission = ReviewAdmission::from_run_input(&input)
+        .unwrap()
+        .expect("the owner's delivery captures a review admission");
+    assert_eq!(admission.timing, ReviewTiming::None, "{input}");
+}
+
+/// The owner's probe as `machine`'s trusted SSH session asks it.
+fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
+    owner
+        .run_tool_with_context_and_role(
+            "orbit.drain.probe",
+            json!({
+                "caller_version": orbit_core::application::distributed::owner_binary_version(),
+                "caller_schema": orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    caller_machine_id: Some(machine.to_string()),
+                    process_machine_id: Some(OWNER.to_string()),
+                    transport: Some(McpTransport::SshMcp),
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )
+        .expect("probe")
+}

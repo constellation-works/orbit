@@ -735,7 +735,10 @@ and PR identity, source branch, published candidate head SHA, validated base SHA
 and landing branch, execution summary and validation artifact references.
 
 - The owner captures its `review.before_pr` and `review.before_landing` contract at admission;
-  config load refuses both on at once [ORB-14849]. When either is on, the owner admits only
+  config load refuses both on at once [ORB-14849]. With both off, `review.before_landing_hosts`
+  turns before-landing on for the claims of the executor machines it lists, so the owner's own
+  deliveries can skip it while a follower's claims review before landing [ORB-15192]; it is
+  refused beside `review.before_pr`. When either is on, the owner admits only
   PR-mode executors that declare `review_gate`; the executor's captured `caller_before_pr` is
   diagnostic. Local ship mode is refused because it has no claimed leaf on which to run the gate.
   Before-PR review runs on the leaf before the PR opens. Before-landing review runs on the leaf

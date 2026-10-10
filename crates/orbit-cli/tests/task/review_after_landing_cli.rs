@@ -942,6 +942,39 @@ fn doctor_and_readiness_hold_a_local_workspace_when_before_pr_is_on() {
     );
 }
 
+/// [ORB-15192] An owner that lists follower machines in
+/// `review.before_landing_hosts` keeps its own before-landing review off, and
+/// `orbit config show` and `orbit doctor` name the machines whose claims it
+/// turns that review on for.
+#[test]
+fn before_landing_hosts_are_shown_beside_the_switch_they_extend() {
+    const TEST: &str =
+        "review_after_landing_cli::before_landing_hosts_are_shown_beside_the_switch_they_extend";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    set_policy(&fixture, "workflow.resource_throttle.enabled", "false");
+    enable_review_crew(&fixture);
+    set_policy(&fixture, "operation.review_crew", REVIEW_CREW);
+    set_policy(&fixture, "review.before_landing_hosts", "[\"hm_mac\"]");
+
+    let config = fixture.json(&["config", "show", "--json"]);
+    let before_landing = &config["review"]["before_landing"];
+    assert_eq!(before_landing["enabled"], false, "{config}");
+    assert_eq!(before_landing["hosts"], json!(["hm_mac"]), "{config}");
+    assert_eq!(before_landing["hosts_source"], "global", "{config}");
+    let (row, _) = doctor_row(&fixture);
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("on for claims from hm_mac (review.before_landing_hosts, global)"),
+        "{row}"
+    );
+}
+
 /// [ORB-14849] `orbit config show` and `orbit doctor` print the
 /// before-landing switch with its source, an edit that would turn on both
 /// review layers before landing is refused naming both keys, and a local-only

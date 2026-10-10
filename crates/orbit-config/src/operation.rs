@@ -6,7 +6,11 @@
 //! (default off) [ORB-14849]. Both are bounded by `review.minutes` per
 //! candidate, and `operation.review_crew` names the crew of automatic review.
 //! There is one review layer before landing, so a resolution with both
-//! switches on fails to load and names both keys. After-landing review has
+//! switches on fails to load and names both keys.
+//! `review.before_landing_hosts` lets an owner whose own deliveries do not
+//! review before landing still capture before-landing review for the claims
+//! of the machines it lists [ORB-15192]; it is refused beside
+//! `review.before_pr` for the same reason. After-landing review has
 //! no key here at all: its only switch is the `delivery-code-review`
 //! auto-task's own `enabled` flag, which Core reads.
 //!
@@ -30,6 +34,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::identity::validate_machine_id;
 use orbit_types::policy::compile_glob_regex;
 use orbit_types::task::validate_relative_artifact_path;
 use orbit_types::workflow::{
@@ -47,7 +52,9 @@ use crate::registry::{deprecated_key_note, read_optional, removed_key_note};
 /// [ORB-11333]; version 3 replaced the review policy enum with
 /// `review.before_pr` and dropped the reviewer-start budget [ORB-13992];
 /// version 4 added `review.host_evidence`; version 5 added
-/// `review.before_landing` [ORB-14849].
+/// `review.before_landing` [ORB-14849]. `review.before_landing_hosts`
+/// [ORB-15192] did not bump it: a captured admission never carries the list,
+/// only the timing it resolved for the claim's executor.
 pub const OPERATION_POLICY_VERSION: u32 = 5;
 
 const MAX_REVIEW_MINUTES: u32 = 1_440;
@@ -56,6 +63,9 @@ const MAX_REVIEW_MINUTES: u32 = 1_440;
 pub const REVIEW_BEFORE_PR_KEY: &str = "review.before_pr";
 /// The before-landing switch: review the open pull request before it lands.
 pub const REVIEW_BEFORE_LANDING_KEY: &str = "review.before_landing";
+/// Machines whose claimed leaves review before landing even while the
+/// owner's own `review.before_landing` is off.
+pub const REVIEW_BEFORE_LANDING_HOSTS_KEY: &str = "review.before_landing_hosts";
 /// The before-PR review's time limit.
 pub const REVIEW_MINUTES_KEY: &str = "review.minutes";
 /// The retired review timing enum, translated on load.
@@ -75,6 +85,7 @@ pub const REVIEW_HOST_EVIDENCE_KEY: &str = "review.host_evidence";
 const REVIEW_KEYS: &[&str] = &[
     REVIEW_BEFORE_PR_KEY,
     REVIEW_BEFORE_LANDING_KEY,
+    REVIEW_BEFORE_LANDING_HOSTS_KEY,
     REVIEW_MINUTES_KEY,
     REVIEW_BASELINE_COMMANDS_KEY,
     REVIEW_HOST_EVIDENCE_KEY,
@@ -205,6 +216,9 @@ pub struct OperationLayer {
     pub review_before_pr: Option<bool>,
     /// Explicit `review.before_landing`.
     pub review_before_landing: Option<bool>,
+    /// Explicit `review.before_landing_hosts`; an empty list clears the
+    /// machines an earlier layer listed.
+    pub review_before_landing_hosts: Option<Vec<String>>,
     /// Explicit `review.minutes`, or the legacy `operation.review_minutes`.
     pub review_minutes: Option<u32>,
     /// Explicit review crew.
@@ -232,6 +246,11 @@ impl OperationLayer {
         Ok(Self {
             review_before_pr: read_optional(document, REVIEW_BEFORE_PR_KEY, config_path)?,
             review_before_landing: read_optional(document, REVIEW_BEFORE_LANDING_KEY, config_path)?,
+            review_before_landing_hosts: before_landing_hosts(read_optional(
+                document,
+                REVIEW_BEFORE_LANDING_HOSTS_KEY,
+                config_path,
+            )?)?,
             review_minutes: review_minutes(read_optional(
                 document,
                 REVIEW_MINUTES_KEY,
@@ -304,6 +323,11 @@ pub struct OperationPolicy {
     /// it lands. Never on together with `review_before_pr`.
     #[serde(default = "before_landing_off")]
     pub review_before_landing: OperationField<bool>,
+    /// Machines whose claimed leaves review their open pull request before
+    /// it lands although `review_before_landing` is off on this owner. Never
+    /// non-empty together with `review_before_pr`.
+    #[serde(default = "no_before_landing_hosts")]
+    pub review_before_landing_hosts: OperationField<Vec<String>>,
     /// Reviewer runtime minutes for one candidate's before-PR or
     /// before-landing review.
     pub review_minutes: OperationField<u32>,
@@ -334,6 +358,7 @@ impl OperationPolicy {
             version: OPERATION_POLICY_VERSION,
             review_before_pr: OperationField::built_in(false),
             review_before_landing: before_landing_off(),
+            review_before_landing_hosts: no_before_landing_hosts(),
             review_minutes: OperationField::built_in(DEFAULT_REVIEW_MINUTES),
             review_crew: OperationField::built_in(None),
             review_host_evidence: no_host_evidence(),
@@ -351,7 +376,9 @@ impl OperationPolicy {
     }
 
     /// Refuse a resolution that turns on both review layers before landing,
-    /// naming both keys and the layer that set each [ORB-14849].
+    /// naming both keys and the layer that set each [ORB-14849]. Listing
+    /// before-landing hosts beside `review.before_pr` is the same conflict
+    /// for those hosts' claims [ORB-15192].
     pub fn ensure_one_review_layer(&self) -> Result<(), OrbitError> {
         if self.review_before_pr.value && self.review_before_landing.value {
             return Err(OrbitError::InvalidInput(format!(
@@ -361,7 +388,31 @@ impl OperationPolicy {
                 self.review_before_landing.source.label(),
             )));
         }
+        if self.review_before_pr.value && !self.review_before_landing_hosts.value.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "{REVIEW_BEFORE_PR_KEY} ({}) is on and {REVIEW_BEFORE_LANDING_HOSTS_KEY} ({}) \
+                 lists machines; there is one review layer before landing, so turn \
+                 {REVIEW_BEFORE_PR_KEY} off or empty the list",
+                self.review_before_pr.source.label(),
+                self.review_before_landing_hosts.source.label(),
+            )));
+        }
         Ok(())
+    }
+
+    /// Whether a delivery executed on `executor` reviews its open pull
+    /// request before it lands: always with `review.before_landing` on, and
+    /// for a listed machine while `review.before_pr` is off. `None` is the
+    /// owner's own delivery, which the host list never reaches.
+    pub fn reviews_before_landing_for(&self, executor: Option<&str>) -> bool {
+        self.review_before_landing.value
+            || (!self.review_before_pr.value
+                && executor.is_some_and(|executor| {
+                    self.review_before_landing_hosts
+                        .value
+                        .iter()
+                        .any(|host| host == executor)
+                }))
     }
 
     fn apply_layer(&mut self, source: OperationLayerSource, layer: &OperationLayer) {
@@ -369,6 +420,8 @@ impl OperationPolicy {
             .set(layer.review_before_pr.as_ref(), source);
         self.review_before_landing
             .set(layer.review_before_landing.as_ref(), source);
+        self.review_before_landing_hosts
+            .set(layer.review_before_landing_hosts.as_ref(), source);
         self.review_minutes
             .set(layer.review_minutes.as_ref(), source);
         if let Some(crew) = &layer.review_crew {
@@ -402,6 +455,33 @@ fn no_host_evidence() -> OperationField<Vec<HostEvidenceRule>> {
 
 fn before_landing_off() -> OperationField<bool> {
     OperationField::built_in(false)
+}
+
+fn no_before_landing_hosts() -> OperationField<Vec<String>> {
+    OperationField::built_in(Vec::new())
+}
+
+/// Trim, validate and dedupe the listed machine ids. A label that could never
+/// match a machine fails the load rather than silently selecting nobody.
+pub(crate) fn before_landing_hosts(
+    raw: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, OrbitError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let mut hosts = Vec::with_capacity(raw.len());
+    for (index, host) in raw.iter().enumerate() {
+        let host = host.trim();
+        validate_machine_id(host).map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "{REVIEW_BEFORE_LANDING_HOSTS_KEY}[{index}] `{host}` is not a machine id: {error}"
+            ))
+        })?;
+        if !hosts.iter().any(|known| known == host) {
+            hosts.push(host.to_string());
+        }
+    }
+    Ok(Some(hosts))
 }
 
 /// Refuse a rule Orbit could never fulfil, so a misconfiguration fails at

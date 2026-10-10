@@ -518,9 +518,13 @@ pub(super) fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> Workspa
 
 /// Every automatic-review switch in one row [ORB-13992]: before-PR review
 /// (`review.before_pr`, its minutes and crew), before-landing review
-/// (`review.before_landing`, sharing them) and after-landing review (the
-/// `delivery-code-review` auto-task, with when its next batch is due), each
-/// with its source. A switch that is on but cannot run here reviews nothing
+/// (`review.before_landing`, sharing them, and the machines
+/// `review.before_landing_hosts` turns it on for [ORB-15192]) and
+/// after-landing review (the `delivery-code-review` auto-task, with when its
+/// next batch is due), each with its source. A host list that names this
+/// owner, whose own deliveries never read it, or repeats an enabled
+/// `review.before_landing` is a warning; one whose claims would be refused is
+/// an error. A switch that is on but cannot run here reviews nothing
 /// while every other surface looks healthy, so that is an error, not a
 /// warning: before-PR or before-landing review on a local-only ship
 /// workspace [ORB-14168], either without a resolvable crew, or an after-landing
@@ -568,14 +572,28 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
                 .to_string(),
         );
     }
+    // With the switch off, before-landing problems are about the listed
+    // hosts' claims, not this workspace's deliveries.
+    let hosts_only = !switches.before_landing.enabled && !switches.before_landing.hosts.is_empty();
+    if hosts_only && switches.before_landing_unhealthy() {
+        remediation.push(
+            "`review.before_landing_hosts` lists machines whose claims this owner would refuse. \
+             Fix each problem named above (ship through the PR route, set \
+             `operation.review_crew`), or remove `review.before_landing_hosts` from \
+             `config.toml`."
+                .to_string(),
+        );
+    }
     let crew_unusable = |problems: usize, local_route: bool| problems > usize::from(local_route);
     if crew_unusable(
         switches.before_pr.problems.len(),
         switches.before_pr.local_route_incompatible,
-    ) || crew_unusable(
-        switches.before_landing.problems.len(),
-        switches.before_landing.local_route_incompatible,
-    ) {
+    ) || (!hosts_only
+        && crew_unusable(
+            switches.before_landing.problems.len(),
+            switches.before_landing.local_route_incompatible,
+        ))
+    {
         let (layer, key) = if switches.before_landing.enabled {
             ("Before-landing", "review.before_landing")
         } else {
@@ -600,16 +618,23 @@ pub(super) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResu
             consumer = health.consumer
         ));
     }
+    let warnings = &switches.before_landing.warnings;
+    if !warnings.is_empty() {
+        remediation.push(format!(
+            "{}. Edit `review.before_landing_hosts` to list only follower machines.",
+            warnings.join("; ")
+        ));
+    }
     if remediation.is_empty() {
         return check(CHECK, WorkspaceDoctorStatus::Ok, message);
     }
+    let status = if remediation.len() == usize::from(!warnings.is_empty()) {
+        WorkspaceDoctorStatus::Warning
+    } else {
+        WorkspaceDoctorStatus::Error
+    };
     remediation.push("Then rerun `orbit doctor`.".to_string());
-    actionable_check(
-        CHECK,
-        WorkspaceDoctorStatus::Error,
-        message,
-        remediation.join(" "),
-    )
+    actionable_check(CHECK, status, message, remediation.join(" "))
 }
 
 /// Task relation/dependency targets that no longer resolve to a registered

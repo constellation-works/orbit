@@ -80,8 +80,14 @@ managed agent context. Owner-local drains use trusted local
 runtime identity and the same logical admission contract. With the owner's `review.before_pr` on,
 admission refuses, before creating a claim, an executor that does not declare `review_gate` and a
 local ship mode, where no gate runs; the executor's own `caller_before_pr` never refuses
-[ORB-13908]. After-landing review (the owner's `delivery-code-review` auto-task) never affects
-admission [ORB-13992]. The read-only preflight response is
+[ORB-13908]. The owner resolves its ship contract per executor: with `review.before_landing` off
+and `review.before_pr` off, an executor whose trusted session machine id is listed in the owner's
+`review.before_landing_hosts` gets `before_landing` on and the owner's `review` contract, every
+other executor and the owner's own deliveries get neither [ORB-15192]. The probe resolves it for
+the probing session's machine and pull admission for the pulling session's machine, so a
+follower that echoes its probed contract matches. The label is caller-chosen, so the list is
+policy, not a security boundary. After-landing review (the owner's `delivery-code-review`
+auto-task) never affects admission [ORB-13992]. The read-only preflight response is
 defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 
 ## Input
@@ -280,7 +286,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, completion policy, optional durable authorization reference and, only when `before_pr` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, and `baseline_commands` when the owner lists any) |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, only when `before_pr` or `before_landing` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, and `baseline_commands` when the owner lists any) |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -314,7 +320,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `before_pr_unsupported` | Owner has `review.before_pr` on and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
-| `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now; replays keep their stored contract |
+| `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now for the calling machine; replays keep their stored contract |
 | `stale_claim` | Bind or settle names a claim this owner workspace does not hold |
 
 An atomic commit failure returns no successful admission response; the caller retries the same

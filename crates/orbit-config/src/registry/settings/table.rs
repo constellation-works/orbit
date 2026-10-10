@@ -266,6 +266,12 @@ define_config_settings! {
         section: ConfigSection::Review, order: 15,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
+    review_before_landing_hosts: Vec<String> => Vec<String> {
+        key: "review.before_landing_hosts", value_type: "array<string>",
+        description: "Owner policy: machine ids (hm_...) whose claimed leaves review their open PR before it lands, as review.before_landing does, while this owner's own deliveries keep review.before_landing off. The probe and pull admission resolve it for the caller's machine label and the claim captures the result. Ignored for machines already covered by review.before_landing = true; loading fails while review.before_pr is on and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty.",
+        section: ConfigSection::Review, order: 16,
+        resolve: |raw: Option<Vec<String>>| operation::before_landing_hosts(raw).map(Option::unwrap_or_default),
+    },
     review_minutes: u32 => u32 {
         key: "review.minutes", value_type: "integer",
         description: "Reviewer runtime minutes for one candidate's before-PR or before-landing review, its fix commit and final validation included. Each candidate gets one review: retries and interruptions share these minutes, and once they are spent the review is not restarted; a changed candidate, such as a completion rebase, is a new review (1..=1440, default 30).",
