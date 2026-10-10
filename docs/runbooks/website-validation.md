@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379"]
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Validate Website Changes in a Job-Run Sandbox

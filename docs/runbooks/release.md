@@ -4,7 +4,7 @@ summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub art
 tags: [operations, release, plugins, npm, signing]
 paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh", "scripts/cursor-marketplace-followup.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-09-27
+last_validated: 2026-10-09
 ---
 
 # Release Orbit
@@ -124,8 +124,14 @@ an empty date remains optional.
    - build four platform CLI tarballs;
    - generate and sign the combined checksum manifest, then create the GitHub
      Release;
+   - build the static bundled Bubblewrap that the release publishes for Linux
+     hosts whose own `bwrap` is missing or lacks `--bind-fd` (see
+     [linux-sandbox.md](linux-sandbox.md));
    - update the Homebrew tap;
-   - smoke the tagged shell installer and search help on macOS and Ubuntu.
+   - smoke the tagged shell installer and search help on macOS and Ubuntu;
+   - smoke the bundled-Bubblewrap fallback on Ubuntu 22.04;
+   - post the Cursor marketplace follow-up reminder, which never blocks the
+     release (see [Cursor marketplace listing](#cursor-marketplace-listing)).
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
