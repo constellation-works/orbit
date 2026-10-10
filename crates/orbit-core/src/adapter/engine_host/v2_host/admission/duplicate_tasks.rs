@@ -380,7 +380,7 @@ fn covering_owner_from_comments(rejected_id: &str, comments: &[TaskComment]) -> 
     owner
 }
 
-// pub(super) widened for sibling-layout tests in admission/tests/duplicate_tasks.rs
+// Private to this module; exercised through the crate-root runtime tests.
 fn covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
     let lowered = message.to_ascii_lowercase();
     let mut owner = None;
@@ -462,9 +462,12 @@ fn rejected_owner_fingerprint_matches(
     comments: &[TaskComment],
     fingerprint: &CoverageFingerprint,
 ) -> bool {
-    let searchable = searchable_task_text(task, comments);
+    // Exact tokens, not `canonical_text`: a rule id or path that differs only
+    // by `-`, `_`, `.` or case is a different finding, and the rejected-owner
+    // contract files it again.
+    let searchable = exact_tokens(&searchable_task_raw_text(task, comments));
     if fingerprint.colocated_fields.is_empty() {
-        return fingerprint_matches(&searchable, fingerprint);
+        return exact_anchors_match(&searchable, fingerprint.anchors.iter());
     }
     // A binding that names an anchor this fingerprint does not carry cannot
     // be checked, so it must not suppress.
@@ -480,15 +483,58 @@ fn rejected_owner_fingerprint_matches(
         .anchors
         .iter()
         .partition(|anchor| fingerprint.colocated_fields.contains(&anchor.field));
-    if !anchors_match(&searchable, rest.iter().copied()) {
+    if !exact_anchors_match(&searchable, rest.iter().copied()) {
         return false;
     }
     match per_alert_ledger_bullets(&task.description) {
         Some(bullets) => bullets
             .iter()
-            .any(|bullet| anchors_match(&canonical_text(bullet), colocated.iter().copied())),
-        None => anchors_match(&searchable, colocated.iter().copied()),
+            .any(|bullet| exact_anchors_match(&exact_tokens(bullet), colocated.iter().copied())),
+        None => exact_anchors_match(&searchable, colocated.iter().copied()),
     }
+}
+
+/// Words the sweep writer emits as fixed labels. Their case is prose, so they
+/// compare case-insensitively; every other token keeps its exact case.
+const EXACT_LABEL_WORDS: [&str; 5] = ["alert", "rule", "location", "line", "lines"];
+
+/// Split text on whitespace and Markdown framing (backticks, `:`, `#`, `*`,
+/// commas, semicolons, brackets, pipes) only. Unlike `canonical_text`,
+/// `-`, `_`, `.`, `/` and case stay part of a token, so `foo-bar` and
+/// `foo_bar` are different tokens.
+fn exact_tokens(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '`' | ':' | '#' | '*' | ',' | ';' | '(' | ')' | '[' | ']' | '|'
+                )
+        })
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            if EXACT_LABEL_WORDS
+                .iter()
+                .any(|label| token.eq_ignore_ascii_case(label))
+            {
+                token.to_ascii_lowercase()
+            } else {
+                token.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Every anchor must appear as a contiguous run of whole exact tokens, so
+/// `line 12` cannot match `line 120` nor a rule match its `-v2` sibling.
+fn exact_anchors_match<'a>(
+    tokens: &[String],
+    anchors: impl IntoIterator<Item = &'a CoverageAnchor>,
+) -> bool {
+    anchors.into_iter().all(|anchor| {
+        let needle = exact_tokens(&anchor.value);
+        !needle.is_empty() && tokens.windows(needle.len()).any(|window| window == needle)
+    })
 }
 
 /// Bullets under the per-alert ledger, or `None` when the description has no
@@ -528,6 +574,10 @@ fn anchors_match<'a>(
 }
 
 fn searchable_task_text(task: &Task, comments: &[TaskComment]) -> String {
+    canonical_text(&searchable_task_raw_text(task, comments))
+}
+
+fn searchable_task_raw_text(task: &Task, comments: &[TaskComment]) -> String {
     let mut text = String::new();
     for value in std::iter::once(task.title.as_str())
         .chain(std::iter::once(task.description.as_str()))
@@ -547,14 +597,14 @@ fn searchable_task_text(task: &Task, comments: &[TaskComment]) -> String {
         text.push(' ');
         text.push_str(value);
     }
-    canonical_text(&text)
+    text
 }
 
 /// Lowercase text into a token sequence with a leading and trailing space.
 /// Searching canonical anchors in canonical task text therefore preserves
 /// token boundaries (`time` cannot match `runtime`) while tolerating normal
 /// prose and Markdown punctuation differences.
-// pub(super) widened for sibling-layout tests in admission/tests/duplicate_tasks.rs
+// Private to this module; exercised through the crate-root runtime tests.
 fn canonical_text(value: &str) -> String {
     let mut out = String::with_capacity(value.len().saturating_add(2));
     out.push(' ');

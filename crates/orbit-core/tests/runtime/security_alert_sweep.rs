@@ -435,6 +435,51 @@ fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
     }
 }
 
+/// Rejection binds the alert's exact rule and path. A path or rule that differs
+/// only by punctuation or case is a different finding and files again, while a
+/// longer rule or line number sharing the recorded prefix does not inherit the
+/// suppression either.
+#[test]
+fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
+    if !isolated(
+        "security_alert_sweep::rejected_owner_distinguishes_punctuation_only_path_and_rule_changes",
+    ) {
+        return;
+    }
+    let rule = "rust/cleartext-logging";
+    let path = "crates/foo-bar/src/lib.rs";
+
+    let (_root, runtime) = fixture(None, None);
+    let first = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+    runtime
+        .reject_task(&owner, "false positive".to_string(), None)
+        .unwrap();
+
+    let unchanged = file(&runtime, code_snapshot(484, rule, path), None);
+    assert_eq!(unchanged["filed_count"], 0, "{unchanged}");
+    assert_rejected_owner(&unchanged, 484, &owner);
+
+    for changed in [
+        code_snapshot(484, rule, "crates/foo_bar/src/lib.rs"),
+        code_snapshot(484, "rust/cleartext_logging", path),
+        code_snapshot(484, "Rust/Cleartext-Logging", path),
+        code_snapshot(484, "rust/cleartext-logging-v2", path),
+        code_alerts_snapshot(vec![code_alert(484, rule, path, 120)]),
+    ] {
+        let (_root, runtime) = fixture(None, None);
+        let first = file(&runtime, code_snapshot(484, rule, path), None);
+        let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+        runtime
+            .reject_task(&owner, "false positive".to_string(), None)
+            .unwrap();
+        let refiled = file(&runtime, changed, None);
+        assert_eq!(refiled["filed_count"], 1, "{refiled}");
+        assert_eq!(refiled["skipped_existing"], json!([]));
+    }
+}
+
 /// A rejected group records one ledger bullet per alert. Moving one alert onto
 /// a sibling's old location must file that alert again; the unchanged sibling
 /// stays suppressed by the same rejected task.
