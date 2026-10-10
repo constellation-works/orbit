@@ -404,7 +404,11 @@ function mergeAuditHead(path, head, pageable) {
   let keptTail = false;
   if (pageable && sameScope && prior.length > rows.length && rows.length > 0) {
     const headOldest = rows[rows.length - 1].id;
-    if (rows.length < AUDIT_LIMIT || headOldest <= prior[0].id) {
+    // A short head only proves it reaches the tail when the server reports the
+    // window exhausted (no cursor). A capped short head resumes below its oldest
+    // row, so it reaches the tail only by overlapping it.
+    const exhausted = rows.length < AUDIT_LIMIT && !head.nextBefore;
+    if (exhausted || headOldest <= prior[0].id) {
       const tail = prior.filter(ev => ev.id < headOldest);
       if (tail.length > 0) {
         rows = rows.concat(tail);

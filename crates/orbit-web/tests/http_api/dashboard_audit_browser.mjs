@@ -42,6 +42,9 @@ const policy = {
 // When set, /api/audit pages through it like the real endpoint: newest first,
 // `before` keyset cursor, `x-audit-next-before` while a full page may have more.
 let pagedEvents = null;
+// When set, the newest page (no `before`) answers with these rows and cursor
+// even though it is short: a capped scan that stopped before the window ended.
+let cappedHead = null;
 const auditRequests = [];
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
@@ -54,9 +57,11 @@ const server = http.createServer((req, res) => {
       .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status'))
       .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
       .slice(0, limit);
+    const capped = before === null && cappedHead;
+    const cursor = capped ? cappedHead.cursor : rows.length >= limit ? String(rows.at(-1).id) : null;
     res.setHeader('content-type', 'application/json');
-    if (rows.length >= limit) res.setHeader('x-audit-next-before', String(rows.at(-1).id));
-    res.end(JSON.stringify(rows));
+    if (cursor) res.setHeader('x-audit-next-before', cursor);
+    res.end(JSON.stringify(capped ? cappedHead.rows : rows));
     return;
   }
   if (url.pathname.startsWith('/api/')) {
@@ -234,6 +239,27 @@ try {
   assert.equal(olderRequest.get('status'), 'success', 'paging keeps the status filter');
   assert.equal(olderRequest.get('hide_unverified'), 'true', 'paging keeps the probe filter');
   assert.equal(await page.locator('.audit-row .audit-status:not(.success)').count(), 0, 'every page honours the status filter');
+  // A short capped head whose oldest match is newer than the loaded rows leaves
+  // a gap. The old tail must not be spliced on, and Load older must resume from
+  // the head's own cursor so the match inside the gap (event 9000) is reached.
+  const gapRow = (id) => ({ ...events[1], id, execution_id: `gap-${id}`, status: 'success', role: 'codex' });
+  pagedEvents = [9000, ...Array.from({ length: 100 }, (_, index) => 100 - index)].map(gapRow);
+  const rowTitles = () => page.locator('.audit-row').evaluateAll(rows => rows.map(row => row.title));
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=success'));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  cappedHead = { rows: [20000, 19000].map(gapRow), cursor: '10001' };
+  auditRequests.length = 0;
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  cappedHead = null;
+  assert.deepEqual(await rowTitles(), ['event 20000', 'event 19000'], 'a short capped head drops the disconnected older rows');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelector('.audit-row[title="event 9000"]') !== null);
+  assert.equal(auditRequests.at(-1).get('before'), '10001', 'Load older resumes from the head cursor');
+  assert.equal((await rowTitles())[2], 'event 9000', 'the gap match follows the new head');
   pagedEvents = null;
   await page.evaluate(async () => {
     auditFixture.applyAuditHashQuery(new URLSearchParams(''));
