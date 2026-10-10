@@ -135,7 +135,8 @@ an empty date remains optional.
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
    remediation by the `qa-sweep` auto-task. Then
    follow [RELEASING.md §10b](../../RELEASING.md#10b-promote-to-main) to
-   fast-forward `main` to the release commit, and
+   fast-forward `main` to the tagged release commit (not the
+   moving `agent-main` tip), and
    [§10c](../../RELEASING.md#10c-confirm-main-and-agent-main-agree) to
    confirm the branches agree in the same session.
 
