@@ -9,6 +9,72 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
+#[test]
+fn run_event_tail_pages_include_the_end_and_preserve_legacy_reads() {
+    isolated(
+        "runs::run_event_tail_pages_include_the_end_and_preserve_legacy_reads",
+        || {
+            let fixture = Fixture::new();
+            let run = fixture.seed_run("jrun-events", "fixture", JobRunState::Cancelled);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let start = "2026-10-10T06:58:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            for index in 0..252 {
+                let kind = match index {
+                    248 => "run_cancelled",
+                    249 => "run_finished",
+                    _ => "activity_started",
+                };
+                // Other-workspace and other-source rows must not affect the count.
+                let ts = start + chrono::Duration::seconds(index);
+                fixture.runtime.insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
+                    workspace_id: if index == 250 { "other-workspace".into() } else { workspace.clone() },
+                    event_id: format!("event-{index}"),
+                    source: if index == 251 { "other-source" } else { "v2_envelope" }.into(),
+                    schema_version: 1,
+                    event_type: kind.into(),
+                    ts,
+                    run_id: run.run_id.clone(),
+                    agent_identity: "fixture".into(),
+                    parent_event_id: None,
+                    workspace_path: None,
+                    payload_json: json!({"event_id": format!("event-{index}"), "body_kind": kind, "ts": ts.to_rfc3339()}).to_string(),
+                }).unwrap();
+            }
+            let server = fixture.server(false);
+            let path = format!("/api/runs/{}/events", run.run_id);
+            let latest = json_ok(server.get(&format!("{path}?tail=true&limit=100")));
+            assert_eq!(latest["total"], 250);
+            assert_eq!(latest["offset"], 0);
+            assert_eq!(latest["events"].as_array().unwrap().len(), 100);
+            assert_eq!(latest["events"][0]["event_id"], "event-150");
+            assert_eq!(latest["events"][98]["body_kind"], "run_cancelled");
+            assert_eq!(latest["events"][99]["body_kind"], "run_finished");
+            let earlier = json_ok(server.get(&format!("{path}?tail=true&limit=100&offset=100")));
+            assert_eq!(earlier["events"][0]["event_id"], "event-50");
+            assert_eq!(earlier["events"][99]["event_id"], "event-149");
+            let first = json_ok(server.get(&format!("{path}?tail=true&limit=100&offset=200")));
+            assert_eq!(first["events"].as_array().unwrap().len(), 50);
+            assert_eq!(first["events"][0]["event_id"], "event-0");
+            let beyond = json_ok(server.get(&format!("{path}?tail=true&limit=100&offset=999")));
+            assert_eq!(beyond["events"], json!([]));
+            assert_eq!(beyond["total"], 250);
+            let legacy = json_ok(server.get(&format!("{path}?limit=100")));
+            assert_eq!(legacy.as_array().unwrap().len(), 100);
+            assert_eq!(legacy[0]["event_id"], "event-0");
+            let filtered = json_ok(server.get(&format!("{path}?kind=run_finished")));
+            assert_eq!(filtered[0]["event_id"], "event-249");
+            assert_eq!(
+                server
+                    .get(&format!("{path}?tail=true&kind=run_finished"))
+                    .status(),
+                reqwest::StatusCode::BAD_REQUEST
+            );
+        },
+    );
+}
+
 fn operations(trace: &[Value], name: &str) -> usize {
     trace
         .iter()
