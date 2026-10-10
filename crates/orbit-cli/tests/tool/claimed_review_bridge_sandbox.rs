@@ -33,7 +33,9 @@ use std::time::Duration;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::plugin::sandbox_mask::prepare_plugin_mask;
-use orbit_core::test_support::{ReviewInvocationRecord, ReviewReserveRequest};
+use orbit_core::test_support::{
+    ReviewInvocationRecord, ReviewReserveRequest, route_worker_host_tool,
+};
 use orbit_engine::{PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
 use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::plugin::BrokeredCaller;
@@ -431,18 +433,20 @@ fn sandbox_fixture() {
         .expect("reviewer started");
 
     // The manifest the gate pins on the owner, through the claim, first for
-    // another attempt: the reviewer must refuse it as stale.
+    // another attempt: the reviewer must refuse it as stale. The gate's
+    // records cross on the host channel, as in production: the owner refuses
+    // the reserved review names from the agent route.
     let scratch = follower.work.join(".orbit/tmp");
     fs::create_dir_all(&scratch).expect("scratch");
     let attach = |path: &str, bytes: &[u8]| {
-        let source = scratch.join(path.replace('/', "-"));
-        fs::write(&source, bytes).expect("artifact source");
-        runner
-            .run_tool(
-                "orbit.task.artifact.put",
-                json!({"id": task, "path": path, "source_path": source}),
-            )
-            .unwrap_or_else(|error| panic!("attach {path} on the owner: {error}"));
+        route_worker_host_tool(
+            &runner,
+            "orbit.task.artifact.put",
+            json!({"id": task, "artifacts": [{
+                "path": path, "content": bytes, "media_type": "application/json",
+            }]}),
+        )
+        .unwrap_or_else(|error| panic!("attach {path} on the owner: {error}"));
     };
     let pin_manifest = |attempt: &str| -> Vec<u8> {
         let bytes = serde_json::to_vec_pretty(&manifest(&task, attempt, &candidate)).unwrap();
