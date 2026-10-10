@@ -258,7 +258,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     // Commands may have changed task artifacts too; recheck the checkpoint.
     verify_leaf(host, context, workspace, &evidence)?;
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
-    let mut output = passed_output(context, &candidate, &references, results, validation_env)?;
+    let mut output = passed_output(&candidate, &references, results, validation_env)?;
     output["no_diff_evidence"] =
         serde_json::to_value(evidence).map_err(|error| OrbitError::Execution(error.to_string()))?;
     Ok(output)

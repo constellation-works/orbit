@@ -427,6 +427,13 @@ pub trait RuntimeHost: Send + Sync {
         Vec::new()
     }
 
+    /// The owner's review gates (`review.baseline_commands`). With the
+    /// required commands they are the gates whose Bubblewrap deferrals an
+    /// implementer may hand off for a native replay [ORB-15287].
+    fn review_baseline_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
     /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and

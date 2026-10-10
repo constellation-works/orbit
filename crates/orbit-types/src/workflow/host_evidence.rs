@@ -266,14 +266,22 @@ fn plain_char(c: char) -> bool {
 const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
     "sandbox_apply: Operation not permitted",
     "sandbox-exec cannot apply a profile",
-    "No permissions to create a new namespace",
+    BUBBLEWRAP_NAMESPACE_REFUSAL,
 ];
+
+/// What Bubblewrap prints when an enclosing sandbox refuses the nested user
+/// namespace it needs, as inside an agent lane on Linux.
+pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create a new namespace";
 
 /// The line prefix a test prints when it returns without exercising its
 /// sandbox-confined path because this host cannot apply the sandbox
 /// [ORB-14334]. A reviewer records each such line in the validation
 /// record's `deferred`.
 pub const HOST_TEST_DEFERRED_PREFIX: &str = "DEFERRED:";
+
+/// The deferral a Bubblewrap-gated test prints, followed by the test's name
+/// and the refusal: `DEFERRED: bubblewrap unavailable: <test>: <detail>`.
+pub const BUBBLEWRAP_DEFERRAL_PREFIX: &str = "DEFERRED: bubblewrap unavailable:";
 
 /// Line prefixes a test prints when it returns without exercising its path.
 const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:", "skipping "];

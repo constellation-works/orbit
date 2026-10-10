@@ -17,6 +17,9 @@
 //! A conditional merge request lands a real squash commit on the remote base.
 //! The substitute enforces only the head-SHA condition, never branch
 //! protection, so the engine is the only gate between a red check and a merge.
+//! The deferred-sandbox fixtures [ORB-15287] run the shipped pipeline's
+//! implementation and validation steps as one job graph instead, so the
+//! implement step boundary and the replay are exercised together.
 //!
 //! `PATH`, `$HOME` and Git configuration are process-global, so each test body
 //! re-runs in an isolated copy of this binary. That child has disposable
@@ -35,25 +38,30 @@ use chrono::Utc;
 use orbit_common::{
     NotFoundKind, OrbitError, RecoverableVcsConflict, process::run_bounded_capped, test_env,
 };
+use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
     BaselineHoldStatus, ClaimExecutionContext, DispatchError, RebaseRecoveryAttemptScope,
     ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
-    TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action, review_gate,
+    TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
     TaskComment, TaskPriority, TaskStatus, TaskType, push_external_ref_if_missing,
 };
+use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ClaimFailureClass, PipelineState, ReviewTiming,
-    ReviewVerdict, is_baseline_red_failure,
+    BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
+    DEFERRED_SANDBOX_ARTIFACT, JobV2StepBody, PipelineState, ReviewTiming, ReviewVerdict,
+    is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::git_fixture;
+use super::v2_runtime::{build_writer_and_sinks, job_asset, workspace_root};
 
 /// Names the test whose body this process runs as the isolated child.
 const CHILD_ENV: &str = "ORBIT_PR_LANDING_CHILD";
@@ -1765,6 +1773,448 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
             assert_eq!(validated["decision"], "passed");
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// Deferred sandbox handoff [ORB-15287]
+// ---------------------------------------------------------------------------
+
+/// An implementer whose affected-test gate passed with only Bubblewrap
+/// deferrals hands the gate off instead of failing [ORB-15287]. The implement
+/// step accepts the record before commit and keeps it on the task, and owner
+/// validation replays the gate outside any agent sandbox before delivery: on
+/// this run, and on a resumed candidate whose run skips the implementer. A
+/// replay that defers again is the validation environment's failure, a gate
+/// that reports no executed tests (a lint or golden gate) replays nothing and
+/// is refused, and a replay red on the base too is held as `baseline_red`. A
+/// later implementation that deferred nothing clears the obligation.
+#[test]
+fn a_bubblewrap_deferral_is_replayed_natively_before_delivery() {
+    isolated(
+        "a_bubblewrap_deferral_is_replayed_natively_before_delivery",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let gate = Gate::new(sandbox);
+            host.require_commands(&["true"]);
+            host.baseline_commands(&[&gate.command()]);
+            let handoff = json!({
+                "summary": "done",
+                "deferred_sandbox_validation": deferral(&fx, &gate.command()),
+            });
+
+            run_implementation(&fx, &host, Some(handoff))
+                .expect("the handoff delivers once the gate passes natively");
+            let kept = host.validation_log(TASK_ID, DEFERRED_SANDBOX_ARTIFACT);
+            assert_eq!(kept["run_id"], RUN_ID);
+            assert_eq!(kept["deferred"]["command"], gate.command().as_str());
+            assert_eq!(gate.runs(), 1, "the owner ran the deferred gate itself");
+            let replay = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
+            assert_eq!(replay["command"], gate.command().as_str());
+            assert_eq!(replay["deferred_sandbox_replay"], true);
+            assert_eq!(replay["exit_code"], 0);
+            assert_eq!(replay["summary"]["tests_run"], 3);
+
+            run_implementation(&fx, &host, None)
+                .expect("a resumed candidate replays the kept gate without its implementer");
+            assert_eq!(gate.runs(), 2);
+
+            gate.defers();
+            let held = run_implementation(&fx, &host, None)
+                .expect_err("a replay that defers again is not a pass");
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&held))
+                    && held.contains("deferred a sandbox-confined path"),
+                "the host that cannot run it holds the candidate: {held}"
+            );
+
+            gate.executes_nothing();
+            let refused = run_implementation(&fx, &host, None)
+                .expect_err("a gate that reports no executed tests replays nothing");
+            assert!(refused.contains("replayed nothing"), "{refused}");
+
+            gate.fails();
+            let red = run_implementation(&fx, &host, None)
+                .expect_err("a replay red on the base too is not a pass");
+            assert!(is_baseline_red_failure(None, Some(&red)), "{red}");
+
+            gate.executes();
+            let runs = gate.runs();
+            run_implementation(&fx, &host, Some(json!({ "summary": "done" })))
+                .expect("an implementation that deferred nothing delivers");
+            assert_eq!(gate.runs(), runs, "nothing is left to replay");
+            assert_eq!(
+                host.validation_log(TASK_ID, DEFERRED_SANDBOX_ARTIFACT)["deferred"],
+                Value::Null
+            );
+        },
+    );
+}
+
+/// Every record that is not exactly the Bubblewrap case fails the implement
+/// step before commit [ORB-15287]: nothing is validated, replayed or kept,
+/// and the failure names what is wrong with the record.
+#[test]
+fn a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step() {
+    isolated(
+        "a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let gate = Gate::new(sandbox);
+            let valid = deferral(&fx, &gate.command());
+            let with = |field: &str, value: Value| {
+                let mut record = valid.clone();
+                record[field] = value;
+                record
+            };
+            let alongside = |line: &str| json!([bwrap_notice(), line]);
+            let probe = |exit_code: i32, output: &str| json!({ "command": BUBBLEWRAP_NAMESPACE_PROBE, "exit_code": exit_code, "output": output });
+            let cases = [
+                (
+                    "a SKIP line",
+                    with(
+                        "notices",
+                        alongside("SKIP: shell_child: sandbox unavailable"),
+                    ),
+                    "is not a Bubblewrap deferral",
+                ),
+                (
+                    "a non-Bubblewrap notice",
+                    with(
+                        "notices",
+                        json!(["DEFERRED: landlock unavailable: confined_child: unsupported"]),
+                    ),
+                    "is not a Bubblewrap deferral",
+                ),
+                (
+                    "a Seatbelt denial",
+                    with(
+                        "notices",
+                        alongside("SKIP: seatbelt_child: sandbox_apply: Operation not permitted"),
+                    ),
+                    "is not a Bubblewrap deferral",
+                ),
+                (
+                    "no notice",
+                    with("notices", json!([])),
+                    "lists no deferral notice",
+                ),
+                (
+                    "zero tests",
+                    with("tests_run", json!(0)),
+                    "executed no tests",
+                ),
+                (
+                    "the wrong base",
+                    with("base", json!(fx.candidate)),
+                    "not the pinned delivery base",
+                ),
+                (
+                    "a nonzero exit",
+                    with("exit_code", json!(101)),
+                    "exited 101",
+                ),
+                (
+                    "a probe that succeeded",
+                    with("probe", probe(0, "")),
+                    "no failing namespace probe",
+                ),
+                (
+                    "a probe that never reached the kernel",
+                    with("probe", probe(127, "sh: bwrap: not found")),
+                    "no failing namespace probe",
+                ),
+                (
+                    "a command no host replays",
+                    with("command", json!("scripts/codeql-rust-local.sh")),
+                    "not one of the owner's validation gates",
+                ),
+                (
+                    "a host-required criterion",
+                    with("command", json!("cargo test -p orbit-cli --test mcp")),
+                    "not one of the owner's validation gates",
+                ),
+                (
+                    "a record that claims a pass",
+                    with("passed", json!(true)),
+                    "is not a",
+                ),
+            ];
+            for (case, record, reason) in cases {
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                host.require_commands(&["true"]);
+                host.baseline_commands(&[&gate.command()]);
+                let handoff = json!({ "summary": "done", "deferred_sandbox_validation": record });
+                let refusal = run_implementation(&fx, &host, Some(handoff)).expect_err(case);
+                assert!(
+                    refusal.contains("`deferred_sandbox_validation`") && refusal.contains(reason),
+                    "{case}: {refusal}"
+                );
+                assert!(
+                    !host.has_artifact(TASK_ID, &format!("validation/{RUN_ID}/0.json")),
+                    "{case}: no validation ran"
+                );
+                assert!(
+                    !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
+                    "{case}: nothing is kept"
+                );
+            }
+            assert_eq!(gate.runs(), 0, "no refused record reaches a replay");
+        },
+    );
+}
+
+/// A claimed leaf always runs its implementer, so its validation replays the
+/// gate from this attempt's output before publication, and the pin expects
+/// the replay among the results [ORB-15287]. A replay that defers again is
+/// the validation environment's failure, and a record whose command this
+/// host does not name as a gate is refused.
+#[test]
+fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
+    isolated(
+        "a_claimed_leaf_replays_its_implementers_deferral_before_publication",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            let gate = Gate::new(sandbox);
+            host.require_commands(&["true"]);
+            host.baseline_commands(&[&gate.command()]);
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+                "implementation": {
+                    "deferred_sandbox_validation": deferral(&fx, &gate.command()),
+                },
+            });
+
+            let pending =
+                action(&host, "claim_validate", &input).expect("replay before publication");
+            assert_eq!(pending["commands"], json!(["true", gate.command()]));
+            assert_eq!(pending["replayed"], json!([gate.command()]));
+            assert_eq!(gate.runs(), 1);
+
+            input["pull_request"] = json!(PR_NUMBER);
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input)
+                .expect("the pin accepts the replay beside the required commands");
+            assert_eq!(pinned["validation"].as_array().unwrap().len(), 2);
+            assert_eq!(gate.runs(), 1, "the pin runs nothing");
+
+            let fields = input.as_object_mut().unwrap();
+            fields.remove("pull_request");
+            fields.remove("prevalidated");
+            gate.defers();
+            let held = action(&host, "claim_validate", &input)
+                .expect_err("a replay that defers again is not a pass")
+                .to_string();
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&held)),
+                "{held}"
+            );
+
+            input["implementation"]["deferred_sandbox_validation"]["command"] =
+                json!("make goldens");
+            let refused = action(&host, "claim_validate", &input)
+                .expect_err("only this host's gates replay")
+                .to_string();
+            assert!(
+                refused.contains("not one of this host's validation gates"),
+                "{refused}"
+            );
+        },
+    );
+}
+
+/// The handed-off gate, run by path so a test can change what it does between
+/// runs while its command, and so the kept record, stays the same. Each run
+/// appends a line to `runs`.
+struct Gate {
+    script: PathBuf,
+    runs: PathBuf,
+}
+
+impl Gate {
+    fn new(sandbox: &Path) -> Self {
+        let gate = Self {
+            script: sandbox.join("affected-gate.sh"),
+            runs: sandbox.join("affected-gate.runs"),
+        };
+        gate.executes();
+        gate
+    }
+
+    /// The gate as the owner's configuration names it.
+    fn command(&self) -> String {
+        format!("sh '{}'", self.script.display())
+    }
+
+    fn set(&self, body: &str) {
+        fs::write(
+            &self.script,
+            format!("echo ran >> '{}'\n{body}\n", self.runs.display()),
+        )
+        .unwrap();
+    }
+
+    /// Runs its tests and reports them, as `make ci-test-affected` does.
+    fn executes(&self) {
+        self.set(&reported_tests(3));
+    }
+
+    /// Defers its Bubblewrap tests again: this host cannot create the
+    /// namespaces either.
+    fn defers(&self) {
+        self.set(&format!(
+            "echo '{}' >&2\n{}",
+            bwrap_notice(),
+            reported_tests(3)
+        ));
+    }
+
+    /// Passes without reporting an executed test, as a lint gate does.
+    fn executes_nothing(&self) {
+        self.set("echo lint-ok");
+    }
+
+    /// Fails wherever it runs, the base included.
+    fn fails(&self) {
+        self.set("echo 'gate is red' >&2\nexit 3");
+    }
+
+    fn runs(&self) -> usize {
+        fs::read_to_string(&self.runs).map_or(0, |runs| runs.lines().count())
+    }
+}
+
+/// Shell that writes the validation summary of a run that executed `tests`.
+fn reported_tests(tests: u64) -> String {
+    format!(
+        "printf '{{\"schema_version\":1,\"selection\":{{\"packages\":[\"fixture\"]}},\
+         \"tests_run\":{tests}}}' > \"$ORBIT_VALIDATION_SUMMARY\""
+    )
+}
+
+fn bwrap_notice() -> String {
+    orbit_exec::bwrap_deferral_notice(
+        "spawn_under_linux_bwrap",
+        "bwrap: No permissions to create a new namespace",
+    )
+}
+
+/// An implementer's record of a passing gate whose only gap is a Bubblewrap
+/// deferral, backed by a failing namespace probe in the same lane.
+fn deferral(fx: &Fixture, command: &str) -> Value {
+    json!({
+        "command": command,
+        "exit_code": 0,
+        "tests_run": 2164,
+        "base": fx.base_sha,
+        "notices": [bwrap_notice()],
+        "probe": {
+            "command": BUBBLEWRAP_NAMESPACE_PROBE,
+            "exit_code": 1,
+            "output": "bwrap: No permissions to create a new namespace",
+        },
+    })
+}
+
+/// Run the shipped PR pipeline's `implement_bundle` and `validate` steps once,
+/// between scripted worktree, resume, commit and base-sync steps.
+/// `implementation` is the implementer's output, or `None` for a resumed
+/// candidate, whose run skips the implementer. Validation is the engine's own
+/// `candidate_validate`. Step recovery is left out, so a refused step ends the
+/// run with its message.
+fn run_implementation(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    implementation: Option<Value>,
+) -> Result<(), String> {
+    host.script(
+        "test_stub_worktree",
+        json!({ "job_run_id": RUN_ID, "workspace_path": fx.repo, "base_sha": fx.base_sha }),
+    );
+    host.script(
+        "test_stub_resume_candidate",
+        json!({ "implement": implementation.is_some(), "repair": null }),
+    );
+    host.script("test_stub_implement", implementation.unwrap_or(Value::Null));
+    host.script(
+        "test_stub_commit",
+        json!({ "skipped_no_diff_expected": false }),
+    );
+    host.script(
+        "test_stub_sync_base",
+        json!({ "base_sha": fx.base_sha, "base_ref": BASE }),
+    );
+
+    let shipped = fs::read_to_string(
+        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+    )
+    .unwrap();
+    let shipped = load_job_asset(&shipped).unwrap().spec;
+    let step = |id: &str| {
+        let mut step = shipped
+            .steps
+            .iter()
+            .find(|step| step.id == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("the shipped PR pipeline has `{id}`"));
+        step.recovery_activity = None;
+        if let JobV2StepBody::Loop { loop_ } = &mut step.body {
+            for nested in &mut loop_.steps {
+                nested.recovery_activity = None;
+            }
+        }
+        step
+    };
+    let stub = |id: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": format!("test_stub_{id}"), "config": {} },
+        })
+    };
+    let mut job = job_asset(json!([stub("worktree"), stub("resume_candidate")]));
+    job.steps.push(step("implement_bundle"));
+    job.steps
+        .extend(job_asset(json!([stub("commit"), stub("sync_base")])).steps);
+    job.steps.push(step("validate"));
+    let mut catalog = V2ActivityCatalog::new();
+    for (name, action) in [
+        ("agent_implement", "test_stub_implement"),
+        ("candidate_validate", "candidate_validate"),
+    ] {
+        catalog.insert(
+            name.to_string(),
+            ActivityV2 {
+                description: format!("`{name}` in the deferral graph"),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+                    action: action.to_string(),
+                    config: Value::Null,
+                }),
+            },
+        );
+    }
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+    let audit = tempfile::tempdir().unwrap();
+    let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
+    match execute_job_with_resume(
+        &job,
+        json!({ "task_ids": [TASK_ID] }),
+        RUN_ID,
+        writer,
+        host,
+        None,
+    ) {
+        Ok(outcome) if outcome.success => Ok(()),
+        Ok(outcome) => Err(outcome.message.unwrap_or_default()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// An implementer blocker arrives before commit, so the worktree may be dirty.
@@ -3928,6 +4378,11 @@ struct DeliveryHost {
     completion_notes: Mutex<Vec<String>>,
     landings: Mutex<Vec<ReviewLandingRequest>>,
     required_commands: Mutex<Vec<String>>,
+    /// `review.baseline_commands`, as the owner's configuration names them.
+    baseline_commands: Mutex<Vec<String>>,
+    /// Outputs of the actions a job graph scripts, by action; every other
+    /// action is the engine's own.
+    scripted: Mutex<BTreeMap<String, Value>>,
     /// Attached task artifacts, by task id and path.
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     /// Trusted system artifacts, by task id and path.
@@ -3967,6 +4422,8 @@ impl DeliveryHost {
             completion_notes: Mutex::default(),
             landings: Mutex::default(),
             required_commands: Mutex::default(),
+            baseline_commands: Mutex::default(),
+            scripted: Mutex::default(),
             artifacts: Mutex::default(),
             artifact_creators: Mutex::default(),
             releases: Mutex::default(),
@@ -3989,6 +4446,25 @@ impl DeliveryHost {
     fn require_commands(&self, commands: &[&str]) {
         *self.required_commands.lock().unwrap() =
             commands.iter().map(ToString::to_string).collect();
+    }
+
+    fn baseline_commands(&self, commands: &[&str]) {
+        *self.baseline_commands.lock().unwrap() =
+            commands.iter().map(ToString::to_string).collect();
+    }
+
+    fn script(&self, action: &str, output: Value) {
+        self.scripted
+            .lock()
+            .unwrap()
+            .insert(action.to_string(), output);
+    }
+
+    fn has_artifact(&self, task_id: &str, path: &str) -> bool {
+        self.artifacts
+            .lock()
+            .unwrap()
+            .contains_key(&(task_id.to_string(), path.to_string()))
     }
 
     fn validation_log(&self, task_id: &str, path: &str) -> Value {
@@ -4289,6 +4765,28 @@ impl RuntimeHost for DeliveryHost {
 
     fn required_validation_commands(&self) -> Vec<String> {
         self.required_commands.lock().unwrap().clone()
+    }
+
+    fn review_baseline_commands(&self) -> Vec<String> {
+        self.baseline_commands.lock().unwrap().clone()
+    }
+
+    /// A job graph's scripted steps; every other action is the engine's own.
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        if let Some(output) = self.scripted.lock().unwrap().get(action).cloned() {
+            return Ok(output);
+        }
+        execute_deterministic_action(self, action, config, input, false, &HashMap::new(), None)
+            .map_err(|error| DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            })
     }
 
     /// One owner-local claim on the fixture's candidate branch, requiring

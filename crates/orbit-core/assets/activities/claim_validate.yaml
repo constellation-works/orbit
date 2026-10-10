@@ -26,6 +26,10 @@ spec:
     claimed `no-diff-expected` skip naming this run and base, takes the
     NoDiff route: recheck it, run required commands on the clean base,
     and pin the checkpoint for owner revalidation without publication.
+    A gate the implementer handed off with Bubblewrap deferrals
+    (`implementation.deferred_sandbox_validation`) runs after the required
+    commands and must report executed tests; one that still defers is the
+    validation environment's failure.
   input_schema_json:
     type: object
     required: [workspace_path]
@@ -68,6 +72,12 @@ spec:
         type: [object, "null"]
       revalidate:
         type: boolean
+      # This attempt's implementer output. A `deferred_sandbox_validation`
+      # it carries adds that gate after the required commands, run here
+      # outside the agent sandbox; it must report executed tests, and the
+      # pre-publication output names it in `replayed`.
+      implementation:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required: [candidate, validation]
@@ -109,6 +119,13 @@ spec:
           `config` or `launcher_fallback`), PATH and the login-shell outcome.
       commands:
         type: array
+        items:
+          type: string
+      replayed:
+        type: array
+        description: >
+          Gates run for the implementer's deferred sandbox validation, when
+          publication is pending.
         items:
           type: string
       tested_head:

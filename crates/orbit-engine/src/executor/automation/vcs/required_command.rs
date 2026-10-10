@@ -27,7 +27,9 @@
 //! not apply the sandbox. Both validation steps run on the owner, outside any
 //! agent sandbox, so a deferral there means the path was never executed
 //! before delivery. [`RequiredCommandRun::deferral_failure`] refuses that
-//! pass as the validation environment's failure.
+//! pass as the validation environment's failure. A command replayed for an
+//! implementer's Bubblewrap deferral must also report executed tests
+//! ([`RequiredCommandRun::replay_failure`]) [ORB-15287].
 //!
 //! A command may also say what it ran [ORB-15131]. Every run gets
 //! [`VALIDATION_SUMMARY_ENV`], naming a fresh file outside the checkout; a
@@ -187,6 +189,26 @@ impl RequiredCommandRun {
              then resume the run.",
             self.command
         )))
+    }
+
+    /// The refusal for a replayed deferral [ORB-15287] whose native run did
+    /// not report executing a test, so it replayed nothing: the command is
+    /// not an affected-test gate, or it selected nothing on this candidate.
+    pub(super) fn replay_failure(&self, candidate: &str) -> Option<OrbitError> {
+        let executed = self.summary.as_ref().and_then(|summary| summary.tests_run);
+        (executed.unwrap_or(0) == 0).then(|| {
+            OrbitError::PolicyDenied(format!(
+                "required validation '{}' was handed off to replay the Bubblewrap tests an \
+                 agent sandbox deferred, but its native run on candidate {candidate} reported \
+                 {} through `{VALIDATION_SUMMARY_ENV}`, so it replayed nothing. Only an \
+                 affected-test gate that reports what it executed can carry a deferral.",
+                self.command,
+                executed.map_or_else(
+                    || "no executed-test count".to_string(),
+                    |_| { "0 executed tests".to_string() }
+                )
+            ))
+        })
     }
 
     /// How the environment was resolved, as recorded on logs and step output.

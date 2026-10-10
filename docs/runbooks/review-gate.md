@@ -247,17 +247,21 @@ pass without executing their confined path. The reviewer copies each notice
 into the record's `deferred`, and such a pass never counts as running that
 path: settlement reads it as `not_run` (`validation_incomplete`).
 
-The same holds earlier, for the implementer [ORB-15287]. A required
-affected-test gate that exits 0 with only `DEFERRED:` notices, a failing
-nested-namespace probe in the same run and executed tests does not fail the
-implementation step: the implementer hands off, recording the command, the
-count and text of each notice and the probe output as `not_run` coverage. The
-owner's `candidate_validate` (and a claim's `claim_validate`) then runs the
-command outside the agent sandbox and refuses an exit-0 pass that still prints
-a `DEFERRED:` line as a `validation_environment` failure, so the path runs
-natively before delivery or the candidate is held. Real failures, `SKIP:` or
-`skipping` notices, empty gates, notices with no failing probe and the other
-required commands are not deferrable
+The same holds earlier, for the implementer [ORB-15287]. An affected-test
+gate that exits 0 with only `DEFERRED: bubblewrap unavailable:` notices does
+not fail the implementation step. The implementer returns a
+`deferred_sandbox_validation` record (the gate's command, exit code, executed
+tests, pinned base, notices and a failing
+`bwrap --unshare-user --ro-bind / / -- /bin/true` probe), and the implement
+step refuses any record that is not exactly that case before commit. The gate
+must be one of the owner's `workflow.required_validation_commands` or
+`review.baseline_commands`. The owner's `candidate_validate` (and a claim's
+`claim_validate`) then runs the gate after the required commands, outside the
+agent sandbox. A pass that still prints a `DEFERRED:` line is a
+`validation_environment` failure, and a run that reports no executed tests is
+refused, so the path runs natively before delivery or the candidate is held.
+Real failures, `SKIP:` or `skipping` notices, empty gates, notices with no
+failing probe and the other required commands are not deferrable
 ([development guide](../DEVELOPMENT.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as

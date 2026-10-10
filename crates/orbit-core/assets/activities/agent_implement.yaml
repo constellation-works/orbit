@@ -33,6 +33,10 @@ spec:
       # and `failed_step_id`, `conflicting_paths` or the failing `command`.
       resume_candidate:
         type: [object, "null"]
+      # The pinned delivery base: the commit the worktree started on. A
+      # deferred sandbox validation names it as its `base`.
+      base_sha:
+        type: [string, "null"]
   output_schema_json:
     type: object
     properties:
@@ -82,6 +86,38 @@ spec:
               type: string
             source_path:
               type: string
+      # A required affected-test gate whose only gap is Bubblewrap
+      # deferrals (item 7). The step boundary refuses any other record before
+      # commit; the owner's validation replays `command` outside the agent
+      # sandbox before delivery.
+      deferred_sandbox_validation:
+        type: [object, "null"]
+        required: [command, exit_code, tests_run, base, notices, probe]
+        additionalProperties: false
+        properties:
+          command:
+            type: string
+          exit_code:
+            type: integer
+          tests_run:
+            type: integer
+          base:
+            type: string
+          notices:
+            type: array
+            items:
+              type: string
+          probe:
+            type: object
+            required: [command, exit_code, output]
+            additionalProperties: false
+            properties:
+              command:
+                type: string
+              exit_code:
+                type: integer
+              output:
+                type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -263,22 +299,29 @@ spec:
        exact command, denial, and uncertainty. Return success only for a
        complete deliverable when workspace policy permits deferring the
        check; otherwise report the validation blocker.
-       One deferral is sanctioned: a required affected-test gate that exits
-       0 but prints `DEFERRED:` notices for sandbox-confined fixtures, because
-       the agent sandbox refuses the nested sandbox they need. The owner's
-       candidate validation reruns every required command outside the agent
-       sandbox and refuses a pass that still deferred, so do not fail the step
-       for it; hand off when ALL hold: the gate exited 0 and executed tests on
-       the pinned base; every notice is a `DEFERRED:` line; and, in this run,
-       a nested-sandbox probe failed with the sandbox's own refusal. Record in
-       the execution summary the exact command, the count and text of each
-       notice, and the probe command and output, and mark that coverage
-       `not_run`, never as a completed pass. Nothing else is deferrable:
-       a nonzero exit, a `SKIP:` or `skipping` notice, a gate that ran no
-       tests or selected nothing, a notice with no failing probe, a Seatbelt
-       `sandbox_apply` denial, a host-required criterion, a `baseline_red`
-       command, and every other required command (formatting, lint, goldens,
-       static-analysis extraction) keep their ordinary handling above.
+       One deferral is sanctioned: on Linux, a required
+       affected-test gate that exits 0 but prints
+       `DEFERRED: bubblewrap unavailable:` notices for tests whose nested
+       user namespaces the agent sandbox refuses. Do not fail the step for
+       it; return `deferred_sandbox_validation` instead, which Orbit checks
+       before commit and replays outside the agent sandbox before delivery. It
+       holds `command` (the gate exactly as the owner's
+       `workflow.required_validation_commands` or `review.baseline_commands`
+       names it, without the base pin), `exit_code` (0), `tests_run` (the
+       tests the gate executed, at least 1), `base` (`input.base_sha`, which
+       you pin as the comparison base), `notices` (every skip or deferral
+       line the gate printed, each a Bubblewrap `DEFERRED:` line), and
+       `probe` (`bwrap --unshare-user --ro-bind / / -- /bin/true` run in
+       this lane: its exit code and output, which must show
+       `No permissions to create a new namespace`). Orbit refuses any other
+       record and fails the step. Record the same facts in the execution
+       summary and mark that coverage `not_run`, never a completed pass.
+       Nothing else is deferrable: a nonzero exit, a `SKIP:` or `skipping`
+       notice, a gate that ran no tests or selected nothing, a notice with
+       no failing probe, a Seatbelt `sandbox_apply` denial, a host-required
+       criterion, a `baseline_red` command, and every other required
+       command (formatting, lint, goldens, static-analysis extraction) keep
+       their ordinary handling above.
        Run only gates named by workspace policy. When a gate fails outside the
        delivery scope, reproduce it once on the unmodified baseline (the same
        command at the base commit or with your diff reverted). A failure there

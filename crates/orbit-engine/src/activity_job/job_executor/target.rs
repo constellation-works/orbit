@@ -97,6 +97,15 @@ pub(super) fn run_target(
     );
     let (success, message) =
         reject_malformed_implementer_findings(step, t, success, message, &dispatch.output);
+    let (success, message) = accept_implementer_deferral(
+        step,
+        t,
+        ctx,
+        &dispatched_input,
+        success,
+        message,
+        &dispatch.output,
+    );
     Ok(StepOutcome {
         success,
         output: dispatch.output,
@@ -226,6 +235,33 @@ fn reject_malformed_implementer_findings(
             )),
         ),
         None => (success, message),
+    }
+}
+
+/// Fail an implementer step whose `deferred_sandbox_validation` is not the
+/// sanctioned Bubblewrap case, and keep an owner run's accepted record for
+/// the native replay before delivery [ORB-15287]. Like malformed findings,
+/// it fails here, before anything is committed.
+fn accept_implementer_deferral(
+    step: &JobV2Step,
+    target: &TargetStep,
+    ctx: &ExecCtx<'_>,
+    input: &Value,
+    success: bool,
+    message: Option<String>,
+    output: &Value,
+) -> (bool, Option<String>) {
+    if !success || !is_implementer_step(step, target) {
+        return (success, message);
+    }
+    match crate::executor::automation::vcs::accept_implementer_deferral(
+        ctx.host,
+        &ctx.run_id,
+        input,
+        output,
+    ) {
+        Ok(()) => (success, message),
+        Err(refusal) => (false, Some(refusal)),
     }
 }
 

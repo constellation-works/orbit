@@ -64,8 +64,9 @@ pub use final_recovery::{
     MAX_DECISION_TEXT_CHARS,
 };
 pub use host_evidence::{
-    EvidenceHostOs, HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord,
-    HostEvidenceRefusal, HostSandboxCommand, judge_host_test_output,
+    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, EvidenceHostOs,
+    HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord, HostEvidenceRefusal,
+    HostSandboxCommand, judge_host_test_output,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
@@ -107,15 +108,16 @@ pub use routine::{
 };
 pub use run::{
     ActivityCrewDraw, ActivityCrewPoolMember, AgentBlocker, AgentBlockerClass,
-    BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold,
-    CANDIDATE_HELD_EVENT, CANDIDATE_HELD_MARKER, CHILD_CANCELLED_ERROR_CODE, ClaimFailureClass,
-    CommitObservation, CommitObservationStatus, CrewExclusion, CrewExclusionSource,
-    DeliveryEvidenceGap, DeliveryEvidenceProvenance, DrainAdmissionPass, DrainAdmissionsStop,
-    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWorkerLimit,
-    FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER,
-    FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
+    BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER,
+    BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, CANDIDATE_HELD_EVENT, CANDIDATE_HELD_MARKER,
+    CHILD_CANCELLED_ERROR_CODE, ClaimFailureClass, CommitObservation, CommitObservationStatus,
+    CrewExclusion, CrewExclusionSource, DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact,
+    DeferredSandboxValidation, DeliveryEvidenceGap, DeliveryEvidenceProvenance, DrainAdmissionPass,
+    DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainWaitingTask,
+    DrainWorkerLimit, FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT,
+    FORGE_UNAVAILABLE_MARKER, FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
     FinalRecoveryObservedTask, FinalRecoveryRepairCommit, ForgeUnavailableHold, HeldCandidate,
-    HeldFailure, LandingMethod, LandingObservation, LandingObservationStatus,
+    HeldFailure, LandingMethod, LandingObservation, LandingObservationStatus, NamespaceProbe,
     OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER,
     PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER, PROVIDER_FAILURE_HOLD_EVENT,
     PROVIDER_FAILURE_HOLD_MARKER, PROVIDER_LIMIT_ERROR_CODE, PROVIDER_LIMIT_MARKER,
@@ -128,8 +130,8 @@ pub use run::{
     TASK_BLOCKED_BY_AGENT_MARKER, TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER,
     TaskCancellationPolicy, UPGRADE_PENDING_ERROR_CODE, UPGRADE_PENDING_MARKER,
     UPGRADE_PENDING_REQUEUED_EVENT, VALIDATION_ENVIRONMENT_ERROR_CODE,
-    VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output, failed_provider,
-    is_baseline_red_failure, is_forge_unavailable, is_owner_route_unavailable,
+    VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output, deferred_sandbox_validation,
+    failed_provider, is_baseline_red_failure, is_forge_unavailable, is_owner_route_unavailable,
     is_provider_capacity_exhausted, is_provider_failure, is_provider_limit, is_provider_refusal,
     is_provider_unavailable, is_task_blocked_by_agent, is_upgrade_pending,
     is_validation_environment_failure, normalize_unfiled_findings, provider_failure_text,

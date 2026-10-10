@@ -513,6 +513,10 @@ impl RuntimeHost for OrbitRuntime {
         self.workflow_required_validation_commands().to_vec()
     }
 
+    fn review_baseline_commands(&self) -> Vec<String> {
+        OrbitRuntime::review_baseline_commands(self).to_vec()
+    }
+
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
         let mut config = std::collections::HashMap::new();
         let policy = self.codex_execution_policy();

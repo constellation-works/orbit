@@ -65,8 +65,8 @@ pub fn probe_bwrap() -> BwrapProbeOutcome {
 /// deferred never counts as executing the path.
 pub fn bwrap_deferral_notice(test: &str, detail: &str) -> String {
     format!(
-        "{} bubblewrap unavailable: {test}: {}",
-        orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX,
+        "{} {test}: {}",
+        orbit_types::workflow::BUBBLEWRAP_DEFERRAL_PREFIX,
         detail.split_whitespace().collect::<Vec<_>>().join(" ")
     )
 }
