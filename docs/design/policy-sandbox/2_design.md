@@ -371,11 +371,18 @@ Seatbelt matches pathnames and checks a rename against the moved entry only,
 never its descendants, so a checkout renamed aside would carry its `.git`
 pointer out of the deny. The SBPL compiler therefore also emits a terminal
 `deny file-write*` `literal` clause for each existing writable ancestor entry
-of every `modify` deny: beneath a positive `modify` rule or strictly beneath a
-host scratch root. The active worktree, recovery checkout and registered
-checkout can be neither renamed nor replaced, while new names beneath them stay
-writable. A glob deny such as `**/.env` pins only the directory above its first
-wildcard, so a subdirectory holding a match can still be moved out of its reach.
+of every `modify` or `read` deny: beneath a positive `modify` rule or strictly
+beneath a host scratch root. The active worktree, recovery checkout and
+registered checkout can be neither renamed nor replaced, while new names beneath
+them stay writable. A glob deny such as `**/.env` compiles to a regex that
+reaches any depth below the directory above its first wildcard, so the compiler
+also walks the writable part of that directory once per profile, finds each
+existing match, and pins the match's writable ancestors up to it. A
+subdirectory holding a `.env` therefore cannot be moved to host scratch and
+back. A `modify` glob skips ancestors its own regex already denies; a `read`
+glob pins them, since a read deny does not stop a rename. Matches created after
+compile get no pins, and a read-denied match is not pinned itself, so a path
+denied for reads but not writes can still be renamed out of its deny.
 
 On Linux, the private `/tmp` mount hides host scratch, including metadata for a
 primary repository located there. For linked checkouts the compiler resolves the
