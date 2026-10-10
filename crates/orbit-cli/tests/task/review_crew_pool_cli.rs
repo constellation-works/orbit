@@ -19,15 +19,22 @@ use crate::review_after_landing_cli::{
 /// The two pool members, on different providers.
 const POOL: &str = r#"["sol", "grok"]"#;
 
-/// A fresh workspace reviewing after landing through [`POOL`], with a
+/// A single weighted member: a pool of one crew with a positive weight.
+const WEIGHTED_SINGLETON: &str = r#"["sol:3"]"#;
+
+/// A fresh workspace reviewing after landing through `pool`, with a
 /// usage-limit reading on `limited_provider` when one is named; the review
 /// task minted for a delivery `implementer` landed.
-fn minted_review(implementer: &str, limited_provider: Option<&str>) -> (Fixture, Value) {
+fn minted_review(
+    pool: &str,
+    implementer: &str,
+    limited_provider: Option<&str>,
+) -> (Fixture, Value) {
     let fixture = Fixture::new();
     enable_review_crew(&fixture);
     set_policy(&fixture, "crews.sol.enabled", "true");
     set_policy(&fixture, "crews.grok.enabled", "true");
-    set_policy(&fixture, "operation.review_crew", POOL);
+    set_policy(&fixture, "operation.review_crew", pool);
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
     commit(&fixture, "baseline\n");
     retarget(&fixture, &trigger());
@@ -82,7 +89,7 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
     }
 
     for (implementer, reviewer) in [("sol", "grok"), ("grok", "sol")] {
-        let (_, task) = minted_review(implementer, None);
+        let (_, task) = minted_review(POOL, implementer, None);
         assert_eq!(
             task["crew"], reviewer,
             "work {implementer} implemented is reviewed by {reviewer}: {task}"
@@ -92,7 +99,7 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
 
     // The independent crew's provider is at its limit, so the pool falls
     // back to the other member rather than holding the review.
-    let (fixture, task) = minted_review("sol", Some("grok"));
+    let (fixture, task) = minted_review(POOL, "sol", Some("grok"));
     assert_eq!(task["crew"], "sol", "a limited crew is skipped: {task}");
 
     let config = fixture.json(&["config", "show", "--json"]);
@@ -114,4 +121,29 @@ fn each_batch_is_reviewed_by_a_pool_crew_that_did_not_implement_it() {
     assert_eq!(row["status"], "ok", "{row}");
     let message = row["message"].as_str().unwrap();
     assert!(message.contains("grok") && message.contains("sol"), "{row}");
+}
+
+#[test]
+fn a_single_weighted_pool_member_is_the_review_crew_by_name() {
+    const TEST: &str =
+        "review_crew_pool_cli::a_single_weighted_pool_member_is_the_review_crew_by_name";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    // The weight is pool bookkeeping, not part of the crew's name: the batch
+    // is minted with crew `sol`, and it is not a crew named `sol:3`.
+    let (fixture, task) = minted_review(WEIGHTED_SINGLETON, "sol", None);
+    assert_eq!(
+        task["crew"], "sol",
+        "the weight is not the crew name: {task}"
+    );
+    assert_eq!(task["crew_source"], "operation.review_crew", "{task}");
+
+    let config = fixture.json(&["config", "show", "--json"]);
+    let health = &config["review"]["after_landing"]["health"];
+    assert_eq!(health["crew"], "sol", "{config}");
+    assert!(health["crew_error"].is_null(), "{config}");
+    let (row, _) = doctor_row(&fixture);
+    assert_eq!(row["status"], "ok", "{row}");
 }

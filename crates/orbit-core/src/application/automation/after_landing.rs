@@ -77,19 +77,32 @@ fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> 
     runtime.operation_policy().review_crew.value.clone()
 }
 
+/// The crew a one-member `operation.review_crew` names, parsed from its
+/// `name[:weight]` entry the way a pool's members are, so `sol:3` is `sol`.
+fn singleton_review_crew(
+    runtime: &OrbitRuntime,
+    pool: &[String],
+) -> Result<Option<String>, OrbitError> {
+    Ok(configured_pool_members(runtime, pool)?
+        .into_iter()
+        .next()
+        .map(|member| member.name))
+}
+
 /// The crew the review task minted for `attempt` carries, or `None` to keep
-/// the template's. A single `operation.review_crew` is carried as written; a
-/// pool draws one member, preferring one that implemented none of the
-/// batch's deliveries [ORB-15195]. The draw is seeded by the attempt's
+/// the template's. A single `operation.review_crew` member is carried by its
+/// parsed name; a pool draws one member, preferring one that implemented none
+/// of the batch's deliveries [ORB-15195]. The draw is seeded by the attempt's
 /// action key, so a retried mint carries the same crew.
 pub(super) fn minted_review_crew(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
 ) -> Result<Option<String>, OrbitError> {
-    match review_crew_pool(runtime, definition).as_slice() {
+    let pool = review_crew_pool(runtime, definition);
+    match pool.as_slice() {
         [] => Ok(None),
-        [only] => Ok(Some(only.clone())),
+        [_] => singleton_review_crew(runtime, &pool),
         _ => {
             let implementers = delivery_implementers(runtime, &attempt.batch.deliveries);
             Ok(runtime
@@ -443,7 +456,15 @@ pub fn after_landing_health(
         }
         health.crew_pool = pool;
     } else {
-        health.crew = pool.into_iter().next().or(definition.template.crew.clone());
+        match singleton_review_crew(runtime, &pool) {
+            Ok(crew) => health.crew = crew.or(definition.template.crew.clone()),
+            Err(error) => {
+                health.crew_error = Some(error.to_string());
+                health
+                    .problems
+                    .push(format!("no crew of the review pool resolves: {error}"));
+            }
+        }
         if let Some(crew) = &health.crew
             && let Err(error) = runtime.resolve_crew_for_task(Some(crew), None)
         {
