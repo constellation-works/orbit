@@ -132,5 +132,25 @@ A good task states:
 - how to observe success
 - which files or selectors matter, when known
 
+## Review layers
+
+Orbit can review a delivery at three points. Before-PR and before-landing
+review are alternatives: `review.before_pr` and `review.before_landing` cannot
+both be `true`. After-landing review is a separate switch and can be enabled
+alongside either one. The two config switches default to `false`; the
+after-landing auto-task ships disabled.
+
+| Layer | When it runs | What it can change | How to enable it | What it blocks |
+|---|---|---|---|---|
+| Before-PR | Before Orbit opens the pull request. | The reviewer can fix the candidate before the PR exists. | Set `review.before_pr = true` with `orbit config set review.before_pr true`. | PR creation waits for review and fixes. It requires the PR delivery route. |
+| Before-landing | After Orbit opens the pull request, while hosted CI runs. | The reviewer can fix the PR head; Orbit validates and pushes the fix onto the open PR. | Set `review.before_landing = true` with `orbit config set review.before_landing true`. | Merge waits for an approved, settled head. Any other outcome leaves the PR open and the task in `review`. |
+| After-landing | In batches after deliveries land. | The review task records confirmed findings as follow-up bug tasks; it does not change an already-landed delivery. | Run `orbit auto-task toggle delivery-code-review on`. | It does not block a delivery from landing. A batch remains owed until it has valid review evidence. |
+
+The dashboard's Config tab shows all three switches and their source. For the
+same effective state, use `orbit config show` or `orbit doctor`; the first two
+reviews show their time limit, and after-landing shows when its next batch is
+due. After-landing review is independent of the choice between before-PR and
+before-landing review.
+
 Write testable acceptance criteria. Prefer "command X exits successfully" or
 "file Y contains Z" over "the behavior feels better."
