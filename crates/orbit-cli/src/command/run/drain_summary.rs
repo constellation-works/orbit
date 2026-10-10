@@ -59,10 +59,12 @@ pub(super) struct FailedLeaf {
 /// Backlog tasks the drain's last admission pass left unstarted.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct WaitingBacklog {
-    /// Admissible tasks not admitted in the last pass: no slot, or a lock
-    /// conflict. `None` when the drain recorded no pass.
+    /// Admissible tasks not admitted in the last pass. Local passes include
+    /// deferred tasks here; pull passes keep the owner's queue depth separate
+    /// from deferred tasks. `None` when the drain recorded no pass.
     pub(super) queued: Option<u64>,
-    /// The subset of `queued` a lock conflict kept out, with the blocking tasks.
+    /// Tasks deferred by a lock conflict or owner hold, with the blocking
+    /// tasks. They overlap `queued` for local passes, but not pull passes.
     pub(super) deferred: Vec<WaitingTask>,
     /// The full count behind `deferred`, which a pull drain bounds. Records
     /// that predate it read 0, so use [`Self::deferred_count`].
@@ -76,6 +78,8 @@ pub(super) struct WaitingBacklog {
     /// When the owner gave the answer the lists above report, for a pull
     /// drain; unset for a local one, which classifies afresh each pass.
     pub(super) waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether deferred tasks are included in `queued` (local pass semantics).
+    pub(super) deferred_in_queued: bool,
     /// Tasks kept off this host by reason code, whole (pull drains).
     pub(super) by_reason: BTreeMap<String, u64>,
     /// Consecutive owner answers that kept tasks off this host and claimed
@@ -233,6 +237,18 @@ impl WaitingBacklog {
         self.deferred_total.max(self.deferred.len() as u64)
     }
 
+    /// The CLI lists deferred tasks separately, so subtract them from a local
+    /// pass's inclusive queued count. Pull passes already keep the two counts
+    /// disjoint.
+    fn queued_for_header(&self) -> u64 {
+        let queued = self.queued.unwrap_or(0);
+        if self.deferred_in_queued {
+            queued.saturating_sub(self.deferred_count())
+        } else {
+            queued
+        }
+    }
+
     /// The `Still waiting:` block, and for a pull drain that has found nothing
     /// claimable here several passes running, the `idle:` line that says why.
     fn lines(&self) -> Vec<String> {
@@ -252,7 +268,7 @@ impl WaitingBacklog {
         let mut lines = vec![format!(
             "{} {} admissible, {} deferred and {} excluded backlog task(s) were never started at the last pass{answered}",
             bold("Still waiting:"),
-            self.queued.unwrap_or(0),
+            self.queued_for_header(),
             self.deferred_count(),
             self.excluded_total,
         )];
@@ -392,7 +408,7 @@ pub(super) fn pass_throttle_line(pass: &DrainAdmissionPass) -> Option<String> {
 /// its own: they come from the owner's last answer, as the drain recorded it
 /// [ORB-14475].
 pub(super) fn pass_waiting_lines(pass: &DrainAdmissionPass) -> Vec<String> {
-    waiting_backlog(pass).lines()
+    waiting_backlog(pass, false).lines()
 }
 
 fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
@@ -500,11 +516,11 @@ fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
     state
         .drain_last_pass
         .as_ref()
-        .map(waiting_backlog)
+        .map(|pass| waiting_backlog(pass, true))
         .unwrap_or_default()
 }
 
-fn waiting_backlog(pass: &DrainAdmissionPass) -> WaitingBacklog {
+fn waiting_backlog(pass: &DrainAdmissionPass, deferred_in_queued: bool) -> WaitingBacklog {
     let tasks = |tasks: &[DrainWaitingTask]| -> Vec<WaitingTask> {
         tasks
             .iter()
@@ -525,6 +541,7 @@ fn waiting_backlog(pass: &DrainAdmissionPass) -> WaitingBacklog {
         resource_throttle: pass.resource_throttle.clone(),
         recorded_at: Some(pass.recorded_at),
         waiting_recorded_at: pass.waiting_recorded_at,
+        deferred_in_queued,
         by_reason: pass.waiting_by_reason.clone(),
         idle_passes: pass.consecutive_idle_passes,
     }
