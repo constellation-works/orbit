@@ -689,7 +689,31 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   owner-local run (tagging it `os:linux` after a follower's review failure,
   say) keeps its candidate too: the owner's own `task_pr_pipeline` continues
   the candidate the failed claim kept, and its `resume_candidate` output
-  names the follower's run with `source_machine_id`. Every fresh start that
+  names the follower's run with `source_machine_id`.
+
+  To requeue a claim stranded before landing — it pushed its candidate and
+  opened its pull request, then failed in its before-landing review or a
+  later step, so the owner blocked the task — run
+  `orbit task update <task> --status backlog` once the cause is fixed. The
+  move keeps the candidate; only `--discard-candidate` or a spec change
+  drops it. The task's next claim is handed the candidate with its pull
+  request, continues on the same branch and pushes there under a lease on
+  the published head, so its `pr_open` reuses that pull request and the
+  task keeps one open PR. Its `resume_candidate` output names the branch it
+  took over as `reused_branch`. A claim on the host that made the candidate
+  renames the earlier worktree's branch to `<branch>-superseded-<suffix>`;
+  that worktree and its commits are untouched. When the branch cannot be
+  reused — a local copy at another commit, a branch never pushed at the kept
+  head, a candidate this host could not restore — `branch_reuse_refused` says
+  why, the leaf publishes on its own branch, and its `pr_open` closes the
+  earlier pull request with a comment naming the new one. Check
+  `superseded_pull_request` in that step's output (`orbit run show
+  <leaf-run> --json`): `close_failed` means the earlier pull request is
+  still open, so close it by hand. To start over instead, add
+  `--discard-candidate`; the earlier pull request then stays open until the
+  task reaches done, rejected or archived, which closes it.
+
+  Every fresh start that
   sets a kept candidate aside is in the owner's task history as a
   `candidate_resume` event whose note begins `fresh:` and names the reason
   (`not_durable`, `spec_changed` or `discarded`; `reason_code` `not_durable`,

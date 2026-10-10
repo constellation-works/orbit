@@ -14,6 +14,7 @@ use crate::executor::automation::input::{
 };
 
 use super::super::operations::valid_candidate_ref;
+use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, outcome_name, output, record, resume, tail};
 use super::{
     Candidate, ClaimSource, ForeignRun, Fresh, Outcome, PRESERVING_DECISIONS, Preserved,
@@ -132,7 +133,40 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
         source_run_id = %candidate.run_id,
         "claimed candidate resume"
     );
-    Ok(output(&outcome, Some(&candidate), base_sha))
+    let mut resumed = output(&outcome, Some(&candidate), base_sha);
+    let Some(pull_request) = &candidate.pull_request else {
+        return Ok(resumed);
+    };
+    // [ORB-15308] The earlier claim opened a pull request for this
+    // candidate. Continue on its branch so this leaf's push and `pr_open`
+    // land on that pull request; otherwise `pr_open` closes it once this
+    // leaf's own is open.
+    resumed["prior_pull_request"] = json!(pull_request);
+    let adoption = match outcome {
+        Outcome::Fresh(_) => Adoption::Refused("the candidate was not resumed".to_string()),
+        _ if !candidate.published => Adoption::Refused(format!(
+            "branch '{}' was not pushed at {}",
+            candidate.branch, candidate.head_sha
+        )),
+        _ => adopt_published_branch(workspace_path, task_id, &candidate)?,
+    };
+    match adoption {
+        Adoption::Adopted => {
+            resumed["reused_branch"] = json!(candidate.branch);
+            resumed["reused_head_sha"] = json!(candidate.head_sha);
+        }
+        Adoption::Refused(reason) => {
+            tracing::warn!(
+                task_id,
+                pull_request = %pull_request,
+                branch = %candidate.branch,
+                reason = %reason,
+                "claimed leaf cannot continue its candidate's pull request; it will supersede it"
+            );
+            resumed["branch_reuse_refused"] = json!(reason);
+        }
+    }
+    Ok(resumed)
 }
 
 /// The candidate a claim's leaf committed, from its kept reference (a
@@ -155,6 +189,8 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
         failed_step_id,
         held: false,
         claim,
+        published: preserved.get("published").and_then(Value::as_bool) == Some(true),
+        pull_request: input_string_field(preserved, "pull_request"),
     })
 }
 
@@ -212,6 +248,8 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         needs_review_repair: evidence["decision"] == "blocked_review_gate",
         held: false,
         claim: None,
+        published: false,
+        pull_request: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
     refuse_stale(host, task, candidate, Some(recorded.as_deref()))
@@ -269,6 +307,8 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         needs_review_repair: false,
         held: true,
         claim: None,
+        published: false,
+        pull_request: None,
     };
     // A hold from before spec provenance was released by a receipt that
     // checked the task's whole meaning; the fresh review reads the task as
@@ -452,6 +492,8 @@ fn claim_repair_resume(
         needs_review_repair: false,
         held: false,
         claim: None,
+        published: false,
+        pull_request: None,
     };
     let outcome = match apply(&candidate, workspace_path, base_sha)? {
         Applied::Refused(reason) => {

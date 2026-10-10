@@ -144,6 +144,14 @@ Scope limits:
   stopped owner landing instead supplies `landing` or `conflict` context.
   The handoff needs this attempt's implementation output; validation judges
   the resulting candidate. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md).
+- A claim blocked after its push and `pr_open` (a before-landing review
+  failure, say) keeps its candidate with that pull request when it is moved
+  back to `backlog`. The next claim continues the same branch and reuses
+  the pull request (`reused_branch` in `resume_candidate`'s output). When it
+  cannot (`branch_reuse_refused`), it publishes on its own branch and its
+  `pr_open` closes the earlier pull request with a comment naming the new
+  one; `superseded_pull_request.decision` `close_failed` leaves the earlier
+  pull request for the operator to close.
 - A failure after the PR opened (completion, CI on the published PR) leaves
   the task in `review` with its PR, not a preserved candidate.
 

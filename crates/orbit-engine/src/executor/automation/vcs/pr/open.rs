@@ -23,7 +23,11 @@ pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let context = load_handoff_context(host, input, "pr_open")?;
     match open_or_reuse_pr(host, input, &context) {
-        Ok(output) => Ok(output),
+        Ok(mut output) => {
+            output["superseded_pull_request"] =
+                supersede_prior_pull_request(host, &context.workspace_path, input, &output);
+            Ok(output)
+        }
         Err(failure) => {
             let (phase, error) = *failure;
             record_failed_handoff(host, &context, input, phase, &error)?;
@@ -186,6 +190,94 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             Err(error) => return Err(Box::new((FailedHandoffPhase::PrLookup, error))),
         }
     }
+}
+
+/// [ORB-15308] Close the pull request an earlier claim opened for the
+/// candidate this run resumed (`candidate_resume`'s `prior_pull_request`, on
+/// its `source_branch`) when this run published through another one, with a
+/// comment naming it, so the task never has two open pull requests. A pull request that is no longer
+/// open, or whose head is not that branch, is left alone. The PR this run
+/// opened stands either way: a failed close is reported in the output and
+/// logged, never a step failure. `Null` when there was no earlier pull
+/// request or this run reused it.
+fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &std::path::Path,
+    input: &Value,
+    opened: &Value,
+) -> Value {
+    let resumed = input.get("candidate_resume").unwrap_or(&Value::Null);
+    let Some(prior) = input_string_field(resumed, "prior_pull_request") else {
+        return Value::Null;
+    };
+    let number = opened["pr_number"].as_str().unwrap_or_default();
+    if prior == number {
+        return Value::Null;
+    }
+    let outcome = |decision: &str, detail: String| json!({"number": prior, "decision": decision, "detail": detail});
+    let prior_branch = input_string_field(resumed, "source_branch").unwrap_or_default();
+    let status = match host.run_private_vcs_operation(
+        operations::PR_STATUS,
+        json!({"pr": prior, "workspace_path": workspace_path}),
+    ) {
+        Ok(status) => status,
+        Err(error) => return close_failed(&prior, number, error),
+    };
+    let pull_request = &status["pull_request"];
+    let state = pull_request["state"].as_str().unwrap_or_default();
+    let head = pull_request["headRefName"].as_str().unwrap_or_default();
+    if !state.eq_ignore_ascii_case("open") {
+        return outcome("not_open", format!("pull request #{prior} is {state}"));
+    }
+    if prior_branch.is_empty() || head != prior_branch {
+        return outcome(
+            "other_branch",
+            format!(
+                "pull request #{prior} is on '{head}', not the resumed candidate's branch \
+                 '{prior_branch}'"
+            ),
+        );
+    }
+    let new_pr = opened["pr_url"]
+        .as_str()
+        .map_or_else(|| format!("#{number}"), |url| format!("#{number} ({url})"));
+    let comment = format!(
+        "Superseded by {new_pr}.\n\nThe task's next run continued this pull request's \
+         candidate but could not publish it on `{prior_branch}`, so it published on `{}` \
+         instead. Orbit closed this pull request so the task has one open pull request. The \
+         branch is kept.",
+        opened["head"].as_str().unwrap_or_default()
+    );
+    match host.run_private_vcs_operation(
+        operations::PR_CLOSE,
+        json!({"pr": prior, "comment": comment, "workspace_path": workspace_path}),
+    ) {
+        Ok(_) => {
+            tracing::info!(
+                superseded = %prior,
+                pr = number,
+                "closed the pull request this run superseded"
+            );
+            outcome("closed", format!("superseded by {new_pr}"))
+        }
+        Err(error) => close_failed(&prior, number, error),
+    }
+}
+
+fn close_failed(prior: &str, number: &str, error: OrbitError) -> Value {
+    tracing::warn!(
+        superseded = %prior,
+        pr = number,
+        error = %error,
+        "could not close the pull request this run superseded; two pull requests are open"
+    );
+    json!({
+        "number": prior,
+        "decision": "close_failed",
+        "detail": format!(
+            "pull request #{prior} is still open beside #{number}; close it by hand: {error}"
+        ),
+    })
 }
 
 /// Create or reuse a PR for an already-pushed recovery branch without the

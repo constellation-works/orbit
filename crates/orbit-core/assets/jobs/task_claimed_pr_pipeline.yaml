@@ -23,6 +23,12 @@
 # failure settlement, and the owner keeps it. The task's next claim carries it
 # as `resume_candidate`; the `resume_candidate` step applies it onto the new
 # base so the implementer continues it rather than starting over.
+# ORB-15308: when that candidate was published with a pull request, the
+# `resume_candidate` step also renames this leaf's branch to the candidate's,
+# so `push` replaces the published head under a lease on it and `pr_open`
+# reuses the same pull request. When it cannot (a local branch at another
+# commit, an unpublished candidate), the leaf publishes on its own branch and
+# `pr_open` closes the earlier pull request with a comment naming the new one.
 # ORB-14634: a push the forge keeps refusing does not release the claim. The
 # leaf keeps it and retries the same reviewed head in place for a bounded
 # window, so the forge's recovery continues to `pr_open` without implementing
@@ -138,7 +144,9 @@ spec:
     # implementer as a `conflict` or `landing` repair; the leaf then commits,
     # rebases, revalidates and hands off again under the same task. The
     # implementer always runs: the handoff carries its summary, and
-    # `validate` judges the result.
+    # `validate` judges the result. [ORB-15308] A resumed candidate the
+    # earlier claim published with a pull request moves this leaf onto its
+    # branch (`reused_branch`), or says why not (`branch_reuse_refused`).
     - id: resume_candidate
       target: activity:candidate_resume
       default_input:
@@ -312,6 +320,10 @@ spec:
         rewrite_performed: "{{ steps.sync_base.output.rewritten }}"
         rewrite_head_before: "{{ steps.sync_base.output.head_sha_before }}"
         expected_remote_sha: "{{ steps.sync_base.output.remote_sha_before }}"
+        # [ORB-15308] Its `reused_head_sha` is the earlier claim's published
+        # head, when `resume_candidate` continued on its branch: this push
+        # replaces exactly that head under a lease.
+        candidate_resume: "{{ steps.resume_candidate.output }}"
         # [ORB-14634] A forge outage holds the claim rather than releasing it:
         # past the usual six backed-off attempts the push keeps retrying the
         # same head every five minutes for up to two hours after the forge
@@ -344,6 +356,10 @@ spec:
         review_fixes: "{{ steps.review_gate_settle.output.review_fixes }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
+        # [ORB-15308] Its `prior_pull_request` is the one the earlier claim
+        # opened for the resumed candidate: reused when this leaf continued
+        # on its branch, else closed with a comment naming this leaf's.
+        candidate_resume: "{{ steps.resume_candidate.output }}"
         # Same attempt-scoped delivery gate as `commit`.
         implementation: "{{ steps.implement_one.output }}"
 

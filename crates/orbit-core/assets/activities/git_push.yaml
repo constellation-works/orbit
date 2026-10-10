@@ -40,6 +40,13 @@ spec:
       # conditional on it, else the step fails as `push_lease_lost`.
       lease_remote_sha:
         type: string
+      # A claimed leaf's `candidate_resume` output. When its
+      # `reused_head_sha` names the published head of the candidate whose
+      # branch this run adopted, a local branch that diverged from exactly
+      # that remote head replaces it under a lease; any other remote head is
+      # refused as usual. Absent or without that field, nothing changes.
+      candidate_resume:
+        type: [object, "null"]
       # Transient push retry budget. Absent means the production default:
       # 6 attempts, backoff from 10 s doubling to a 160 s cap.
       forge_retry:
