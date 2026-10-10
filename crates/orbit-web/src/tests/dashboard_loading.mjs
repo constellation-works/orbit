@@ -31,6 +31,7 @@ const terminalRuns = ['success', 'failed', 'timeout', 'cancelled', 'interrupted'
 }));
 const pendingReads = [];
 const errorsRetentionStart = new Date(Date.now() - 30 * 3600000).toISOString();
+const longErrorMessage = `build failed: dependency unavailable. ${'details '.repeat(40)}`;
 const list = items => ({ items, total: items.length, limit: 50, truncated: false });
 function fixture(url) {
   const workspace = url.searchParams.get('workspace');
@@ -87,12 +88,12 @@ function fixture(url) {
     };
     case '/api/diagnostics/errors': {
       const selectedWindow = url.searchParams.get('since');
-      healthQueries.push({ path: url.pathname, window: selectedWindow });
+      healthQueries.push({ path: url.pathname, window: selectedWindow, limit: Number(url.searchParams.get('limit')) });
       const since = new Date(Date.now() - (selectedWindow === '7d' ? 7 * 24 : 24) * 3600000).toISOString();
       // Retained logs reach back 30h: the whole 24h window, but not 7d.
       const coverage_since = selectedWindow === '7d' ? errorsRetentionStart : since;
       return { since, coverage_since, items: healthFixture ? [
-        { event_id: 'process', message: 'build failed: dependency unavailable', source: 'process', target: 'orbit.job.step_finished', recovered: true },
+        { event_id: 'process', message: longErrorMessage, source: 'process', job_run: 'jrun-health-fixture', workspace_id: workspace || 'one', step: 'failed-step', target: 'orbit.job.step_finished', recovered: true },
         { event_id: 'retry', message: 'error=apply_patch verification failed: Failed to find expected lines in /home/operator/project/.orbit/state/worktrees/orbit-jrun-fixture/src/lib.rs', source: 'agent-stderr', target: 'codex_core::tools::router' },
         { event_id: 'timeout', message: 'failed to refresh available models: request timed out', source: 'agent-stderr', target: 'codex_models_manager::manager' },
         { event_id: 'other', message: 'unexpected tool crash', source: 'agent-stderr', target: 'codex_core::tools::router' },
@@ -113,6 +114,19 @@ function fixture(url) {
         message: `failure ${index}`,
         event_count: 1,
         last_ts: new Date(Date.now() - index * 1000).toISOString(),
+        events: index === 1 ? [{
+          id: 100,
+          execution_id: 'execution-fixture',
+          ts: new Date().toISOString(),
+          status: 'failed',
+          actor: 'agent',
+          surface: 'fixture.surface',
+          tool: 'fixture-tool',
+          run_id: 'jrun-incident-fixture',
+          task_id: 'ORB-123',
+          workspace_id: workspace || 'one',
+          message: 'incident evidence fixture',
+        }] : undefined,
       }));
       const selected = incidents.filter(incident => !selectedClass || incident.class === selectedClass);
       const shown = selected.slice(0, limit);
@@ -170,7 +184,7 @@ globalThis.fetch = async (path, options = {}) => {
 };
 await import('./app.js');
 await settle();
-const { persistScopeToUrl, setWorkspace, setWindow, formatDateTime } = await import('./js/common.js');
+const { persistScopeToUrl, setWorkspace, setWindow, getHost, getWorkspace, formatDateTime } = await import('./js/common.js');
 const { navigateToRun, setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
@@ -378,7 +392,11 @@ for (const origin of ['detail', 'row']) {
   const openDetail = async () => {
     if (!detailShip()) {
       click(node('tasks-body').querySelector(`[data-key="task-${shipFixture.id}"] > .title`));
-      await settle();
+      // Task disclosure may use a view transition; wait for the rendered
+      // detail instead of assuming five microtasks outlast its animation.
+      for (let attempt = 0; attempt < 50 && !detailShip(); attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
     }
   };
   const bothEnabled = () => rowShip() && detailShip() && !rowShip().disabled && !detailShip().disabled;
@@ -494,6 +512,34 @@ for (const selectedWindow of ['24h', '7d']) {
     `errors header names its coverage start only when retention starts after the ${selectedWindow} window: ${text('diag-count')}`);
   check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
   check(node('diag-body').querySelector('.c-recovered').textContent === 'recovered — run succeeded', 'historical step failure shows the later run recovery');
+  check(!node('diag-body').querySelector('.c-provider'), 'all-empty provider column is removed from the Errors table');
+  const messageDisclosure = node('diag-body').querySelector('.diagnostics-errors-main .c-message details.error-message');
+  check(messageDisclosure && !messageDisclosure.open && messageDisclosure.querySelector('summary'), 'error message starts as a two-line expandable disclosure');
+  const errorsMain = node('diag-body').querySelector('.diagnostics-errors-main');
+  const errorsBounds = errorsMain.getBoundingClientRect();
+  const panelBounds = node('diag-body').getBoundingClientRect();
+  const previewStyle = getComputedStyle(messageDisclosure.querySelector('.error-message-preview'));
+  check(errorsBounds.left >= panelBounds.left - 1 && errorsBounds.right <= panelBounds.right + 1
+    && getComputedStyle(errorsMain).overflowX === 'auto'
+    && previewStyle.webkitLineClamp === '2', 'at 1440x900 the Errors table stays in its panel and the message preview wraps to two lines');
+  messageDisclosure.open = true;
+  check(messageDisclosure.querySelector('.error-message-full').textContent === longErrorMessage, 'expanding an error message reveals its full text');
+  const errorRunLink = node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a');
+  const errorRunUrl = new URL(errorRunLink.href);
+  const currentDashboardUrl = new URL(window.location.href);
+  check(errorRunUrl.hash === '#runs/jrun-health-fixture'
+    && errorRunUrl.searchParams.get('workspace') === getWorkspace()
+    && errorRunUrl.searchParams.get('host') === getHost(), 'Errors run link opens its run with the current host and workspace');
+  if (selectedWindow === '7d') {
+    const loadMore = node('diag-count').querySelector('.diagnostics-load-more');
+    check(loadMore, 'coverage truncation exposes a Load more errors control');
+    const loadMoreUrl = new URL(loadMore.href);
+    check(loadMore && loadMoreUrl.searchParams.get('diag') === '100'
+      && loadMoreUrl.searchParams.get('workspace') === currentDashboardUrl.searchParams.get('workspace')
+      && loadMoreUrl.searchParams.get('host') === currentDashboardUrl.searchParams.get('host'), 'older-errors control increases the cap and preserves dashboard scope');
+    click(loadMore); await settle();
+    check(healthQueries.at(-1).limit === 100 && new URL(window.location.href).searchParams.get('diag') === '100', 'loading older errors refetches the selected window at the higher cap');
+  }
   const internal = node('diag-body').querySelector('details.agent-diagnostics');
   check(internal && (selectedWindow !== '24h' || !internal.open), 'recoverable agent diagnostics start collapsed');
   const mainRows = [...node('diag-body').querySelectorAll('.diagnostics-errors-main tbody > tr')]
@@ -501,10 +547,15 @@ for (const selectedWindow of ['24h', '7d']) {
   check(mainRows.length === 2 && mainRows.every(message => !/verification failed|request timed out/.test(message)), 'real codex patch and model-timeout rows leave the main table');
   check(internal.querySelectorAll('tbody > tr').length === 2, 'both recognised codex shapes collapse under agent diagnostics');
   internal.open = true;
-  const shortened = internal.querySelector('.c-message');
-  check(shortened.textContent.includes('[worktree]/src/lib.rs') && !shortened.textContent.includes('/home/operator'), 'worktree prefix shortened in message');
-  check(shortened.title.includes('/home/operator'), 'full failure text remains available');
+  const shortened = internal.querySelector('.error-message-preview');
+  const internalMessage = internal.querySelector('.c-message');
+  check(shortened.textContent.includes('[worktree]/src/lib.rs') && !shortened.textContent.includes('/home/operator'), 'worktree prefix shortened in the message preview');
+  internalMessage.querySelector('details.error-message').open = true;
+  check(internalMessage.querySelector('.error-message-full').textContent.includes('/home/operator')
+    && internalMessage.title.includes('/home/operator'), 'expanded diagnostic retains the full failure text');
 }
+click(node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a')); await settle();
+check(window.location.hash === '#runs/jrun-health-fixture', 'Errors run link navigates to the run detail route');
 setActiveTab('diagnostics/metrics'); await settle();
 check(node('diag-body').querySelector('.c-token_usage').textContent === '1,379,713', 'tokens use thousands grouping');
 setActiveTab('diagnostics/incidents'); await settle();
@@ -537,6 +588,20 @@ checkIncidentSelection('expected');
 click(node('diag-body').querySelector('[data-class="unexpected"]')); await settle();
 check(incidentRows().length === 4 && incidentRows().every(row => row.classList.contains('unexpected')), 'one click restores older unexpected failures');
 checkIncidentSelection('unexpected');
+click(incidentRows()[0].querySelector('.incident-head')); await settle();
+const evidenceRow = node('diag-body').querySelector('.incident-evidence tbody tr');
+const evidenceRunLink = evidenceRow.querySelector('td:nth-child(8) a');
+const evidenceTaskLink = evidenceRow.querySelector('td:nth-child(9) a');
+const evidenceRunUrl = new URL(evidenceRunLink.href);
+const evidenceTaskUrl = new URL(evidenceTaskLink.href);
+check(evidenceRunUrl.hash === '#runs/jrun-incident-fixture'
+  && evidenceTaskUrl.hash === '#tasks?status=all&q=ORB-123'
+  && evidenceRunUrl.searchParams.get('workspace') === getWorkspace()
+  && evidenceTaskUrl.searchParams.get('workspace') === getWorkspace()
+  && evidenceRunUrl.searchParams.get('host') === getHost()
+  && evidenceTaskUrl.searchParams.get('host') === getHost(), 'incident evidence links open the run and task while retaining host and workspace');
+click(evidenceTaskLink); await settle();
+check(document.querySelector('.tab-pane.active')?.dataset.tab === 'tasks', 'incident evidence task link opens the Tasks view');
 healthFixture = false;
 setWindow('24h');
 setActiveTab('diagnostics/metrics'); await settle();

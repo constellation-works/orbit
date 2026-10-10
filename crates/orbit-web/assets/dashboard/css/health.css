@@ -169,6 +169,27 @@ td .rel-rate { font-size: 12px; }
 .incident-evidence td { font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
 .incident-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
+/* Errors stay within their panel while the message can use the available row
+   width. The disclosure keeps a readable two-line preview and retains the
+   complete diagnostic when expanded. */
+.diagnostics-errors-main { width: 100%; min-width: 0; overflow-x: auto; }
+.diagnostics-errors-main table.diag-table { width: 100%; min-width: 100%; table-layout: auto; }
+.diagnostics-errors-main td.c-message {
+  width: 36%; min-width: 18rem; max-width: none; overflow: visible;
+  overflow-wrap: anywhere; text-overflow: clip; white-space: normal;
+}
+.diagnostics-errors-main .error-message { min-width: 0; }
+.diagnostics-errors-main .error-message summary { cursor: pointer; }
+.diagnostics-errors-main .error-message-preview {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; white-space: normal; overflow-wrap: anywhere;
+}
+.diagnostics-errors-main .error-message[open] .error-message-preview { display: none; }
+.diagnostics-errors-main .error-message-full {
+  margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg);
+}
+.diagnostics-load-more { color: var(--accent-hover); white-space: nowrap; }
+
 /* Narrow viewports: the incident summary and its expansion have to stay
    scannable without clipping between 480 and 720px. */
 @media (max-width: 720px) {
@@ -212,6 +233,7 @@ td .rel-rate { font-size: 12px; }
   table.diag-table td.c-target { grid-area: target; overflow-wrap: anywhere; color: var(--fg-dim); }
   table.diag-table td.c-recovered { grid-area: recovery; }
   table.diag-table td.c-message { grid-area: message; font-size: 12px; }
+  .diagnostics-errors-main td.c-message { width: auto; min-width: 0; }
 }
 
 .incident-class-chip { background: transparent; cursor: pointer; }

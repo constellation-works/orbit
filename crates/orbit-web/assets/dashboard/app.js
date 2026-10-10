@@ -68,6 +68,7 @@ const DEFAULT_JOB_RUN_LIMIT = 25;
 const JOB_RUN_STEP = 25;
 let jobRunLimit = positiveIntParam("runs", DEFAULT_JOB_RUN_LIMIT);
 const DIAG_LIMIT = positiveIntParam("diag", 50);
+let errorDiagLimit = DIAG_LIMIT;
 const FRICTION_LIMIT = positiveIntParam("frictions", 100);
 
 const FRICTION_STATUSES = ["open", "triaged", "resolved"];
@@ -159,6 +160,13 @@ function diagnosticsContext() {
     getLastDiagnostics: () => lastDiagnostics,
     getActiveDiagSubtab: () => activeDiagSubtab,
     refreshDiagnostics: () => refreshDashboard(),
+    loadMoreErrors: (limit) => {
+      errorDiagLimit = Math.min(Number(limit) || errorDiagLimit, 200);
+      const url = new URL(window.location.href);
+      url.searchParams.set("diag", String(errorDiagLimit));
+      history.replaceState(null, "", url);
+      refreshDashboard();
+    },
     fmtRelative,
     fmtDuration,
     // ORB-10871: incident expansion states exact first/last timestamps, not
@@ -1416,9 +1424,10 @@ function activeRefreshJobs() {
       const selectedWindow = getWindow();
       const incidentClass = getIncidentClass();
       const classQuery = incidentClass === "all" ? "" : `&class=${encodeURIComponent(incidentClass)}`;
+      const limit = subtab === "errors" ? errorDiagLimit : DIAG_LIMIT;
       const path = subtab === "incidents"
         ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}${classQuery}&limit=${DIAG_LIMIT}`
-        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${DIAG_LIMIT}`;
+        : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
       add(subpanel("diag-subtabs", subtab), requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
         lastDiagnostics[subtab] = payload;
         if (activeDiagSubtab === subtab && getWindow() === selectedWindow
