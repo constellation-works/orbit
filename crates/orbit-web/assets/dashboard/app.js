@@ -1842,3 +1842,8 @@ syncWindowSelectors();
 iT();
 
 initLogTail();
+// The status bar's Open log shows the full tail: Tasks, with the dock on Log.
+document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
+  setDockMode("log");
+  sAT("tasks");
+});

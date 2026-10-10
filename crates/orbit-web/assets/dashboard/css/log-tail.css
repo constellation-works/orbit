@@ -8,17 +8,25 @@
    the collapsed log panel used to do. */
 .log-statusbar {
   flex: 0 0 auto;
-  height: 30px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-elev);
+  height: 34px;
+  border-top: 1px solid #1f242b;
+  background: var(--bg-chrome);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   padding: 0 20px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
+  color: var(--fg-dim);
   min-width: 0;
 }
+/* Open log jumps to the full tail in the Tasks dock. */
+.log-statusbar .sb-open {
+  flex: none; margin-left: auto; padding: 0; border: 0; background: transparent;
+  color: var(--accent); font-family: var(--font-sans); font-size: 12.5px; cursor: pointer;
+}
+.log-statusbar .sb-open:hover { text-decoration: underline; }
+.log-statusbar .sb-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
 /* ORB-10972: the live dot is used in the dock header and the status bar
    now, so it needs a rule of its own rather than one scoped to the log
@@ -33,8 +41,8 @@
   animation: livePulse 2.4s ease-in-out infinite;
 }
 .log-statusbar .live-dot { flex: 0 0 auto; }
-.log-statusbar .sb-label,
-.log-statusbar .sb-t { color: var(--fg-mute); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.log-statusbar .sb-label { color: var(--fg-soft); flex: 0 0 auto; }
+.log-statusbar .sb-t { color: var(--fg-dim); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 .log-statusbar .sb-ag { color: var(--fg-dim); flex: 0 0 auto; }
 .log-statusbar .sb-m {
   color: var(--fg-dim);

@@ -1553,7 +1553,7 @@ function autoDrainTimeLeft(endsAt) {
   return minutes < 60 ? `${minutes}m left` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m left`;
 }
 
-function updateDrainIndicators(phase, label) {
+function updateDrainIndicators(phase, label, running = 0) {
   const aggregate = isAggregateView();
   const indicatorPhase = aggregate ? "per-workspace" : phase;
   const indicatorLabel = aggregate ? "Per-workspace drain status" : label;
@@ -1574,6 +1574,9 @@ function updateDrainIndicators(phase, label) {
       : `${label}. Open Drain card`);
     const text = global.querySelector?.('.global-drain-label');
     if (text) text.textContent = indicatorLabel;
+    // How many of this window's tasks still run, beside the phase.
+    const count = global.querySelector?.('.global-drain-running');
+    if (count) count.textContent = !aggregate && phase !== "idle" && phase !== "pulling" && running > 0 ? `· ${running} running` : "";
     if (!global.dataset.wired) {
       global.addEventListener("click", () => setActiveTab("auto-drain"));
       global.dataset.wired = "true";

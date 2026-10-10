@@ -594,6 +594,10 @@
    often narrower than that while the window is wide. */
 #tasks-panel { container: tasks-panel / inline-size; }
 @container tasks-panel (max-width: 620px) {
+  /* The search takes the full width under the title, and the closed
+     statuses wrap under the open ones without a divider. */
+  .panel > header.tasks-head .task-search-wrap { flex: 1 1 100%; margin-left: 0; min-width: 0; }
+  #task-filter .chip-divider { display: none; }
   .row,
   .row.run-layout {
     /* Line 1 is the ID and the title; line 2 the crew, the run and the
