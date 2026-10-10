@@ -9,13 +9,26 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
+use orbit_engine::{
+    DispatchError, DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::ExecutorDef;
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
 
 const ENVELOPE: &str =
     r#"{"schemaVersion":1,"status":"success","result":{"edited":true},"error":null}"#;
+
+/// Synthetic worker credential. The macOS guard refuses `claude` unless
+/// `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is on the provider
+/// environment; this fixture value is not a real token [ORB-15154].
+const FIXTURE_CLAUDE_WORKER_TOKEN: &str = "fixture-claude-worker-token";
+
+/// Built-in pass names plus the synthetic credential. `execution.env.pass`
+/// replaces the default list, so the fixture restates every built-in name.
+const FIXTURE_PASS_CONFIG: &str = r#"[execution.env]
+pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING", "CLAUDE_CODE_OAUTH_TOKEN"]
+"#;
 
 /// Final `result` document of a turn that ended with the envelope in
 /// `structured_output`, as `claude -p --json-schema` writes it.
@@ -55,6 +68,29 @@ fn claude_resource() -> ExecutorResource {
 }
 
 fn dispatch(program: &Path) -> DispatchOutcome {
+    dispatch_admitting(program, true).expect("dispatch Claude CLI backend")
+}
+
+/// `admit_token` puts a synthetic credential on the provider environment.
+/// Without it, macOS `OrbitRuntime` refuses before the binary starts.
+fn dispatch_admitting(program: &Path, admit_token: bool) -> Result<DispatchOutcome, DispatchError> {
+    let root = tempfile::tempdir().expect("runtime root");
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo").join(".orbit");
+    std::fs::create_dir_all(&global).expect("global root");
+    std::fs::create_dir_all(&workspace).expect("workspace root");
+    if admit_token {
+        std::fs::write(global.join("config.toml"), FIXTURE_PASS_CONFIG).expect("fixture config");
+    }
+    let _credential = orbit_common::test_env::scoped([
+        (
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            admit_token.then_some(FIXTURE_CLAUDE_WORKER_TOKEN),
+        ),
+        ("ANTHROPIC_API_KEY", None),
+    ]);
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+
     let resource = claude_resource();
     assert_eq!(resource.schema_version, EXECUTOR_RESOURCE_SCHEMA_VERSION);
     let mut def = ExecutorDef::from_resource_spec(
@@ -65,7 +101,6 @@ fn dispatch(program: &Path) -> DispatchOutcome {
     );
     def.command = Some(program.to_string_lossy().into_owned());
     def.sandbox = None;
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
     runtime
         .upsert_executor_def(&def)
         .expect("seed Claude executor");
@@ -90,7 +125,6 @@ fn dispatch(program: &Path) -> DispatchOutcome {
         run_id: "claude-fake",
         host: Some(&runtime),
     })
-    .expect("dispatch Claude CLI backend")
 }
 
 fn spec() -> AgentLoopSpec {
@@ -145,5 +179,28 @@ fn exit_zero_prose_only_wakeup_result_fails_the_completion_guard() {
     assert_eq!(
         outcome.output["completion_envelope_satisfied"],
         serde_json::Value::Bool(false)
+    );
+}
+
+/// macOS `OrbitRuntime` still refuses provider `claude` when neither worker
+/// credential reached the child. The guard keys on the provider, so this is
+/// the same refusal a real `claude` binary hits, and the binary must not start.
+#[cfg(target_os = "macos")]
+#[test]
+fn orbit_runtime_refuses_claude_without_a_worker_credential_before_launch() {
+    let dir = tempfile::tempdir().expect("fake claude tempdir");
+    let marker = dir.path().join("launched");
+    let body = format!("touch '{}'\n{}", marker.display(), envelope_turn());
+    let program = fake_claude(dir.path(), &body);
+    let error = dispatch_admitting(&program, false)
+        .expect_err("claude without a worker credential must be refused");
+    let message = error.to_string();
+    assert!(
+        message.contains("CLAUDE_CODE_OAUTH_TOKEN") && message.contains("ANTHROPIC_API_KEY"),
+        "the refusal names both credentials: {message}"
+    );
+    assert!(
+        !marker.exists(),
+        "the provider binary must not start without a worker credential"
     );
 }
