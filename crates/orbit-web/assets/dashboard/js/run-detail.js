@@ -535,8 +535,8 @@ function runExecutionLocation(run) {
   return { known: true, machine_id: location.machine_id, machine_name: location.machine_name || null };
 }
 
-// [ORB-10971] The child Runs this run dispatched, from the durable dispatch
-// checkpoint the API projects as `run.child_dispatches`.
+// Child lineage comes from the durable dispatch checkpoint; state and timing
+// come from the live child run joined into the same detail response.
 //
 // This is the answer to "the parent has been sitting on a dispatch step for an
 // hour — did it actually submit anything?", so it is rendered from the moment
@@ -546,11 +546,27 @@ function buildChildDispatches(run) {
   const dispatches = Array.isArray(run.child_dispatches) ? run.child_dispatches : [];
   if (dispatches.length === 0) return null;
 
-  const rows = dispatches.map((d) => {
-    const parts = [`job ${d.job_name || "?"}`, `phase ${d.phase || "?"}`];
+  const outcomes = [
+    ["running", "running"], ["pending", "pending"], ["retrying", "retrying"],
+    ["failed", "failed"], ["timeout", "timed out"], ["interrupted", "interrupted"],
+    ["held", "held"], ["success", "succeeded"], ["cancelled", "cancelled"],
+    ["skipped", "skipped"], ["unknown", "unknown"],
+  ];
+  const stateOf = (dispatch) => outcomes.some(([state]) => state === dispatch.state) ? dispatch.state : "unknown";
+  const counts = new Map(outcomes.map(([state]) => [state, 0]));
+  for (const dispatch of dispatches) {
+    const state = stateOf(dispatch);
+    counts.set(state, counts.get(state) + 1);
+  }
+  const tally = outcomes.filter(([state]) => counts.get(state) > 0)
+    .map(([state, label]) => `${counts.get(state)} ${label}`).join(", ");
+  const rank = (dispatch) => outcomes.findIndex(([state]) => state === stateOf(dispatch));
+  const rows = [...dispatches].sort((a, b) => rank(a) - rank(b)).map((d) => {
+    const state = stateOf(d);
+    const parts = [`job ${d.job_name || "?"}`, `dispatch ${d.phase || "?"}`];
     if (d.parent_step_id) parts.push(`step ${d.parent_step_id}`);
     if (d.queued) parts.push("queued");
-    if (d.child_status) parts.push(`status ${d.child_status}`);
+    if (d.child_status) parts.push(`checkpoint status ${d.child_status}`);
     if (d.cancellation) parts.push(`cancel ${d.cancellation.policy}/${d.cancellation.outcome}`);
 
     const link = el("button", {
@@ -561,10 +577,13 @@ function buildChildDispatches(run) {
     link.addEventListener("click", () => navigateToRun(d.child_run_id));
 
     const row = el("div", { class: "child-dispatch-row" }, [
+      stateCell(state),
       link,
       runTaskLinks({ ...d, workspace_id: run.workspace_id }),
+      el("span", { class: "duration", text: recordDurationText(d) }),
       el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
     ]);
+    row.dataset.state = state;
     if (d.error) {
       row.appendChild(el("span", { class: "child-dispatch-error", text: d.error }));
     }
@@ -573,6 +592,7 @@ function buildChildDispatches(run) {
 
   return el("div", { class: "child-dispatch-panel" }, [
     el("div", { class: "label", text: `child runs (${dispatches.length})` }),
+    el("div", { class: "child-dispatch-summary", text: `${dispatches.length} admitted: ${tally}` }),
     ...rows,
   ]);
 }
