@@ -240,6 +240,21 @@ where
             retryable_errors,
         ));
     }
+    // A landing failure collection could not evidence across its retry window
+    // gets an owner now, whatever else this snapshot still defers.
+    let evidence_incomplete = super::escalation::file_landing_evidence_incomplete(
+        evidence,
+        lookup,
+        &audit,
+        &mut add_task,
+    )?;
+    let mut audit = audit;
+    audit["evidence_incomplete_task_ids"] = json!(
+        evidence_incomplete
+            .iter()
+            .filter_map(|entry| entry.get("task_id").cloned())
+            .collect::<Vec<_>>()
+    );
     let (complete, mut deferred) = split_deferred_failures(&failures, &run_errors, schema_version);
     let (complete, already_repaired) = exclude_already_repaired(complete, evidence);
     let audit = repaired_audit(audit, &already_repaired);
@@ -340,7 +355,10 @@ where
             ));
         }
         return Ok(json!({
-            "outcome": if attributed.is_empty() && excluded_branch_failures.is_empty() {
+            "outcome": if attributed.is_empty()
+                && excluded_branch_failures.is_empty()
+                && evidence_incomplete.is_empty()
+            {
                 OUTCOME_NO_CURRENT_FAILURE
             } else {
                 OUTCOME_CURRENT_FAILURES
@@ -355,6 +373,7 @@ where
             "withheld": [],
             "skipped_over_cap": [],
             "deferred": [],
+            "evidence_incomplete": evidence_incomplete,
             "inconclusive": inconclusive,
             "already_repaired": already_repaired,
             "pending_supersession": pending_supersession,
@@ -672,6 +691,7 @@ where
         "excluded_branch_failures": excluded_branch_failures,
         "skipped_over_cap": skipped_over_cap,
         "deferred": deferred,
+        "evidence_incomplete": evidence_incomplete,
         "inconclusive": inconclusive,
         "already_repaired": already_repaired,
         "pending_supersession": pending_supersession,

@@ -18,8 +18,14 @@ them. Review the parsed JSON diff before accepting an update. Outputs snapshot
 parser results and retained evidence, not task descriptions or prompt prose.
 
 The separate core integration binary drives `OrbitRuntime::run_deterministic`
-with `file_ci_failure_tasks`, then reads the filed task. Every scenario has an
-isolated store; reruns within a scenario verify persisted deduplication.
+with `file_ci_failure_tasks`, then reads the filed task. A case with
+`"collect": true` instead serves each log, built from string and
+`{"text", "repeat"}` parts, through a substitute `gh` as one agent-main job's
+`--log-failed` output, runs host collection (`collect_ci_evidence`) over a
+local bare `origin`, then files that snapshot; its golden also records the
+diagnostic collection bound. `sweep.rs` holds that harness, the multi-sweep
+escalation test and the retired-ref investigation budget test. Every scenario
+has an isolated store; reruns within a scenario verify persisted deduplication.
 `first_batch` submits distinct diagnostics together, as the original tests did,
 so pre-existing owner similarity cannot suppress the second diagnostic. It
 re-executes in a child with cleared authority, disposable HOME and a 120-second

@@ -9,6 +9,12 @@
 //! the failure lists. An error that names no run (a repository, listing or
 //! origin read) never degrades: losing that read means the sweep did not look.
 //!
+//! A landing-branch failure is also counted by identity — branch, workflow
+//! and job name — because a red integration branch gets a new run on every
+//! push, and a gap keyed by run would start over each time. Collection uses
+//! that streak to escalate a landing failure that stays unfileable instead of
+//! deferring it forever.
+//!
 //! The counts live in one small file under the workspace data root. Each
 //! distinct sweep is one sighting; an error absent from a sweep starts over.
 
@@ -21,10 +27,12 @@ use serde_json::{Value, json};
 /// the sweep.
 pub(super) const PERSISTENT_AFTER_SWEEPS: u64 = 3;
 
-/// Consecutive-sighting counts keyed by `run_id/job_id/operation`.
+/// Consecutive-sighting counts keyed by `run_id/job_id/operation`, and
+/// unfileable landing-failure streaks keyed by failure identity.
 #[derive(Debug, Default)]
 pub(super) struct RetryableHistory {
     counts: BTreeMap<String, SweepCount>,
+    landing_gaps: BTreeMap<String, SweepCount>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,12 +63,7 @@ impl RetryableHistory {
                 observed.retryable.push(error);
                 continue;
             };
-            let prior = previous.get(&key);
-            let sweeps = match prior {
-                Some(count) if count.last_sweep_id == sweep_id => count.consecutive_sweeps,
-                Some(count) => count.consecutive_sweeps + 1,
-                None => 1,
-            };
+            let sweeps = next_count(previous.get(&key), sweep_id);
             if seen.insert(key.clone()) {
                 self.counts.insert(
                     key,
@@ -82,44 +85,89 @@ impl RetryableHistory {
         observed
     }
 
-    fn from_json(value: &Value) -> Self {
-        let counts = value
-            .get("counts")
-            .and_then(Value::as_object)
-            .map(|counts| {
-                counts
-                    .iter()
-                    .filter_map(|(key, count)| {
-                        Some((
-                            key.clone(),
-                            SweepCount {
-                                consecutive_sweeps: count.get("consecutive_sweeps")?.as_u64()?,
-                                last_sweep_id: count.get("last_sweep_id")?.as_str()?.to_string(),
-                            },
-                        ))
-                    })
-                    .collect()
+    /// Record which landing-failure identities this sweep could not file and
+    /// return how many consecutive sweeps each has stayed that way. An
+    /// identity absent from this sweep starts over.
+    pub(super) fn observe_landing_gaps(
+        &mut self,
+        identities: &BTreeSet<String>,
+        sweep_id: &str,
+    ) -> BTreeMap<String, u64> {
+        let previous = std::mem::take(&mut self.landing_gaps);
+        identities
+            .iter()
+            .map(|identity| {
+                let sweeps = next_count(previous.get(identity), sweep_id);
+                self.landing_gaps.insert(
+                    identity.clone(),
+                    SweepCount {
+                        consecutive_sweeps: sweeps,
+                        last_sweep_id: sweep_id.to_string(),
+                    },
+                );
+                (identity.clone(), sweeps)
             })
-            .unwrap_or_default();
-        Self { counts }
+            .collect()
+    }
+
+    fn from_json(value: &Value) -> Self {
+        Self {
+            counts: counts_from_json(value.get("counts")),
+            landing_gaps: counts_from_json(value.get("landing_gaps")),
+        }
     }
 
     fn to_json(&self) -> Value {
-        let counts = self
-            .counts
-            .iter()
-            .map(|(key, count)| {
-                (
-                    key.clone(),
-                    json!({
-                        "consecutive_sweeps": count.consecutive_sweeps,
-                        "last_sweep_id": count.last_sweep_id,
-                    }),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        json!({"schema_version": 2, "counts": counts})
+        json!({
+            "schema_version": 2,
+            "counts": counts_to_json(&self.counts),
+            "landing_gaps": counts_to_json(&self.landing_gaps),
+        })
     }
+}
+
+/// Repeated activity calls for one sweep count once.
+fn next_count(prior: Option<&SweepCount>, sweep_id: &str) -> u64 {
+    match prior {
+        Some(count) if count.last_sweep_id == sweep_id => count.consecutive_sweeps,
+        Some(count) => count.consecutive_sweeps + 1,
+        None => 1,
+    }
+}
+
+fn counts_from_json(counts: Option<&Value>) -> BTreeMap<String, SweepCount> {
+    counts
+        .and_then(Value::as_object)
+        .map(|counts| {
+            counts
+                .iter()
+                .filter_map(|(key, count)| {
+                    Some((
+                        key.clone(),
+                        SweepCount {
+                            consecutive_sweeps: count.get("consecutive_sweeps")?.as_u64()?,
+                            last_sweep_id: count.get("last_sweep_id")?.as_str()?.to_string(),
+                        },
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn counts_to_json(counts: &BTreeMap<String, SweepCount>) -> BTreeMap<String, Value> {
+    counts
+        .iter()
+        .map(|(key, count)| {
+            (
+                key.clone(),
+                json!({
+                    "consecutive_sweeps": count.consecutive_sweeps,
+                    "last_sweep_id": count.last_sweep_id,
+                }),
+            )
+        })
+        .collect()
 }
 
 /// The run, job and operation an error is about, or `None` for one that

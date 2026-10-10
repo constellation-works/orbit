@@ -72,6 +72,13 @@
 # - A run-scoped retryable error with the same run, job and operation on three
 #   consecutive sweeps degrades to `persistent_retryable_errors`, a reported
 #   note that no longer fails the sweep. Errors naming no run never degrade.
+#   Retry escalates on landing branches: a branch and workflow that stays
+#   unfileable for three consecutive sweeps, even as each push brings a new
+#   run, is filed as a proposed "CI red, evidence incomplete" task with the
+#   run URLs and gaps instead of degrading to a note. It is not piloted.
+# - gh can label every line of a failed job `UNKNOWN STEP`. The one
+#   nonzero-exit command of such a log is still bound to the job's one failed
+#   step, so the sweep files from it rather than deferring it as truncated.
 # - Checkout identity is read from the runner-log stream before the bounded
 #   excerpt is formed. The extractor scans no more than 8 MiB per log and
 #   marks the identity incomplete if that hard limit is reached; it never

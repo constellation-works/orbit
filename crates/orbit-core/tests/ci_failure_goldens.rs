@@ -12,6 +12,10 @@ use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+#[path = "ci_failure_goldens/sweep.rs"]
+mod sweep;
+
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ci_failure_goldens")
 }
@@ -908,9 +912,137 @@ fn ci_main_thread_panic_does_not_match_agent_main_task() {
     );
 }
 
+/// Hand-built collection rows: the log is the snapshot's excerpt.
+fn filed_golden(case: &Value) -> Value {
+    let root = TempDir::new().unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let mut results = Vec::new();
+    let logs = case["logs"].as_array().unwrap();
+    let first_batch = case["first_batch"].as_u64().unwrap_or(1) as usize;
+    let split = first_batch.min(logs.len());
+    let groups = std::iter::once(&logs[..split]).chain(logs[split..].chunks(1));
+    let mut run_index = 0;
+    for (group_index, logs) in groups.enumerate() {
+        let checkout = if group_index == 0 {
+            "3".repeat(40)
+        } else {
+            "4".repeat(40)
+        };
+        let runs = logs
+            .iter()
+            .map(|log| {
+                let run = failure(log.as_str().unwrap(), run_index, &checkout);
+                run_index += 1;
+                run
+            })
+            .collect();
+        let output = file(&runtime, runs);
+        results.push(filed_result(&runtime, &output));
+    }
+    json!(results)
+}
+
+/// Each log is served by a substitute `gh` as one failed job's `--log-failed`
+/// output and goes through host collection before filing, so the golden
+/// records the diagnostic collection bound as well as what was filed.
+#[cfg(unix)]
+fn collected_golden(case: &Value) -> Value {
+    let mut workspace = sweep::Workspace::new();
+    let mut results = Vec::new();
+    for (index, parts) in case["logs"].as_array().unwrap().iter().enumerate() {
+        let log = expand_parts(parts);
+        let run_id = 7_000 + index as u64;
+        workspace.push_red_run(run_id, 9_000 + index as u64, &log);
+        let (evidence, filed) = workspace.sweep();
+        let output = filed.unwrap_or_else(|error| panic!("file CI failure: {error}"));
+        let finding = evidence["current_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|failure| failure["run_id"] == json!(run_id))
+            .unwrap_or_else(|| panic!("run {run_id} is current: {:#}", evidence["summary"]));
+        let unit = &finding["diagnostic_unit"];
+        let mut result = filed_result(&workspace.runtime, &output);
+        result["collected"] = json!({
+            "source_bytes": log.len(),
+            "log_truncated": finding["log_truncated"],
+            "retryable_errors": evidence["retryable_errors"],
+            "diagnostic_kind": unit["kind"],
+            "diagnostic_step": unit["step"],
+            "step_attribution": unit["step_attribution"],
+            "failure_anchor_count": unit["failure_anchor_count"],
+        });
+        results.push(result);
+    }
+    json!(results)
+}
+
+/// Concatenate fixture parts: strings and `{"text", "repeat"}` segments.
+fn expand_parts(parts: &Value) -> String {
+    parts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| match part {
+            Value::String(text) => text.clone(),
+            segment => segment["text"]
+                .as_str()
+                .unwrap()
+                .repeat(segment["repeat"].as_u64().unwrap() as usize),
+        })
+        .collect()
+}
+
+fn filed_result(runtime: &OrbitRuntime, output: &Value) -> Value {
+    let mut tasks = Vec::new();
+    for entry in output["filed"].as_array().unwrap() {
+        let task = runtime
+            .get_task(entry["task_id"].as_str().unwrap())
+            .unwrap();
+        let signature = task
+            .description
+            .lines()
+            .find(|line| line.starts_with("- Normalized error signature"))
+            .unwrap();
+        let section = task
+            .description
+            .split("## Failed-step log excerpt\n")
+            .nth(1)
+            .unwrap()
+            .split("\n## ")
+            .next()
+            .unwrap();
+        let (excerpt, after_excerpt) = section
+            .split_once("```\n")
+            .unwrap()
+            .1
+            .split_once("\n```")
+            .unwrap();
+        tasks.push(json!({
+            "failure_key": entry["failure_key"],
+            "signature": signature.split_once('`').unwrap().1.rsplit_once('`').unwrap().0,
+            "step_fallback": signature.contains("step-name fallback"),
+            "excerpt": excerpt,
+            "excerpt_has_note": after_excerpt.trim_start().starts_with('_'),
+        }));
+    }
+    let skipped: Vec<_> = output["skipped_existing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["failure_key"].clone())
+        .collect();
+    json!({"filed_count": output["filed_count"], "tasks": tasks, "skipped_keys": skipped})
+}
+
 #[test]
+#[cfg(unix)]
 fn ci_failure_fixture_goldens() {
-    if !isolated("ci_failure_fixture_goldens") {
+    if !sweep::isolated_with_fake_gh("ci_failure_fixture_goldens") {
         return;
     }
     let cases: Vec<Value> =
@@ -925,75 +1057,12 @@ fn ci_failure_fixture_goldens() {
     };
     let mut rendered = serde_json::Map::new();
     for case in cases {
-        let root = TempDir::new().unwrap();
-        let global = root.path().join("home/.orbit");
-        let workspace = root.path().join("repo/.orbit");
-        std::fs::create_dir_all(&global).unwrap();
-        std::fs::create_dir_all(&workspace).unwrap();
-        let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-        let mut results = Vec::new();
-        let logs = case["logs"].as_array().unwrap();
-        let first_batch = case["first_batch"].as_u64().unwrap_or(1) as usize;
-        let split = first_batch.min(logs.len());
-        let groups = std::iter::once(&logs[..split]).chain(logs[split..].chunks(1));
-        let mut run_index = 0;
-        for (group_index, logs) in groups.enumerate() {
-            let checkout = if group_index == 0 {
-                "3".repeat(40)
-            } else {
-                "4".repeat(40)
-            };
-            let runs = logs
-                .iter()
-                .map(|log| {
-                    let run = failure(log.as_str().unwrap(), run_index, &checkout);
-                    run_index += 1;
-                    run
-                })
-                .collect();
-            let output = file(&runtime, runs);
-            let mut tasks = Vec::new();
-            for entry in output["filed"].as_array().unwrap() {
-                let task = runtime
-                    .get_task(entry["task_id"].as_str().unwrap())
-                    .unwrap();
-                let signature = task
-                    .description
-                    .lines()
-                    .find(|line| line.starts_with("- Normalized error signature"))
-                    .unwrap();
-                let section = task
-                    .description
-                    .split("## Failed-step log excerpt\n")
-                    .nth(1)
-                    .unwrap()
-                    .split("\n## ")
-                    .next()
-                    .unwrap();
-                let (excerpt, after_excerpt) = section
-                    .split_once("```\n")
-                    .unwrap()
-                    .1
-                    .split_once("\n```")
-                    .unwrap();
-                tasks.push(json!({
-                    "failure_key": entry["failure_key"],
-                    "signature": signature.split_once('`').unwrap().1.rsplit_once('`').unwrap().0,
-                    "step_fallback": signature.contains("step-name fallback"),
-                    "excerpt": excerpt,
-                    "excerpt_has_note": after_excerpt.trim_start().starts_with('_'),
-                }));
-            }
-            let skipped: Vec<_> = output["skipped_existing"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|entry| entry["failure_key"].clone())
-                .collect();
-            results.push(json!({"filed_count": output["filed_count"], "tasks": tasks, "skipped_keys": skipped}));
-        }
+        let actual = if case["collect"] == true {
+            collected_golden(&case)
+        } else {
+            filed_golden(&case)
+        };
         let name = case["name"].as_str().unwrap();
-        let actual = json!(results);
         if !update {
             assert_eq!(
                 actual, expected[name],

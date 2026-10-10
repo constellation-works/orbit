@@ -139,5 +139,36 @@
       "build\tRun CI\t2026-09-07T07:24:42.8592482Z ##[group]Run cargo test\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z failures:\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z     ✗\nbuild\tRun CI\t2026-09-07T07:24:42.8592482Z ##[error]Process completed with exit code 1.\n"
     ],
     "first_batch": 2
+  },
+  {
+    "name": "unknown_step_labelled_job_log_binds_its_one_failed_step",
+    "collect": true,
+    "logs": [
+      [
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[group]Run actions/checkout@v4\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z HEAD is now at {checkout} Merge ORB-15161 into agent-main\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[endgroup]\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[group]Run cargo nextest run --workspace --profile ci\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z cargo nextest run --workspace --profile ci\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[endgroup]\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z     Starting 6001 tests across 41 binaries\n",
+        {
+          "text": "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z         PASS [   0.012s] orbit-core::runtime tests::a_passing_case_with_a_long_enough_name\n",
+          "repeat": 6000
+        },
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z         FAIL [   0.104s] orbit-engine::engine transport::nextest_forces_plain_output\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z thread 'transport::nextest_forces_plain_output' panicked at crates/orbit-engine/tests/engine/transport.rs:41:5:\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z assertion `left == right` failed\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z   left: \"\\u{1b}[32mPASS\"\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z  right: \"PASS\"\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z      Summary [ 412.003s] 6001 tests run: 6000 passed, 1 failed, 0 skipped\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z         FAIL [   0.104s] orbit-engine::engine transport::nextest_forces_plain_output\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z error: test run failed\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z ##[error]Process completed with exit code 100.\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z Post job cleanup.\n",
+        "Check / Clippy / Test\tUNKNOWN STEP\t2026-10-10T06:37:01.0000000Z [command]/usr/bin/git version\n"
+      ]
+    ]
   }
 ]

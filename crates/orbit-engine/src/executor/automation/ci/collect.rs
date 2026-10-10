@@ -28,7 +28,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
-use super::history::RetryableHistory;
+use super::history::{Observed, PERSISTENT_AFTER_SWEEPS, RetryableHistory};
 use super::investigate::{
     inconclusive_cancellation_findings, investigate, mark_concurrency_cancellations,
 };
@@ -39,7 +39,7 @@ use super::partition::{
 };
 use super::pending::{Supersession, hold_for_in_flight_descendants};
 use super::query::{CiQueries, RemoteBranchHeads};
-use super::refs::{RefKind, derive_refs, head_json, probe_branches};
+use super::refs::{RefKind, ScannedRef, derive_refs, head_json, probe_branches};
 use super::{
     OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_CURRENT_FAILURES, OUTCOME_NO_CURRENT_FAILURE,
     OUTCOME_RETRYABLE_ERROR, bounded_u64,
@@ -199,6 +199,7 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
         // reads exactly like "nothing is failing", and that conclusion
         // requires queries this host could not run.
         history.observe(Vec::new(), sweep_id);
+        history.observe_landing_gaps(&std::collections::BTreeSet::new(), sweep_id);
         return Ok(json!({
             "schema_version": CI_EVIDENCE_SCHEMA_VERSION,
             "collected": false,
@@ -434,10 +435,12 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
     }
     current = supersede_older_when_cancelled_run_is_actionable(remaining, &mut stale);
     let observed = history.observe(retryable_errors, sweep_id);
-    let retryable_errors = observed.retryable;
-    let persistent_errors = observed.persistent;
+    let (retryable_errors, persistent_errors) =
+        escalate_landing_gaps(&refs, &current, observed, history, sweep_id);
     let (mut current, persistently_incomplete) =
         split_persistently_incomplete(current, &persistent_errors, &retryable_errors);
+    let landing_evidence_incomplete =
+        landing_evidence_incomplete(&refs, &persistently_incomplete, &persistent_errors);
     sort_current_failures(&mut current);
     sort_current_failures(&mut inconclusive);
     let discovered = current.len();
@@ -501,6 +504,14 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
             persistently_incomplete.len(),
         ));
     }
+    if !landing_evidence_incomplete.is_empty() {
+        notes.push(format!(
+            "{} landing-branch failure(s) stayed unfileable for {PERSISTENT_AFTER_SWEEPS} or more \
+             consecutive sweeps; they are listed in landing_evidence_incomplete so filing \
+             escalates them to a task instead of deferring them again",
+            landing_evidence_incomplete.len(),
+        ));
+    }
     if superseded_cancellations > 0 {
         notes.push(format!(
             "{superseded_cancellations} cancelled run(s) had no failed steps and a newer run of \
@@ -532,6 +543,8 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
         "retryable_errors": retryable_error_count,
         "persistent_retryable_errors": persistent_errors.len(),
         "persistently_incomplete_run_ids": persistently_incomplete.iter()
+            .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
+        "landing_evidence_incomplete_run_ids": landing_evidence_incomplete.iter()
             .filter_map(|failure| failure.get("run_id").cloned()).collect::<Vec<_>>(),
     });
     let truncation = json!({
@@ -567,7 +580,10 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
         "collected": true,
         "outcome_hint": if retryable_error_count > 0 {
             OUTCOME_RETRYABLE_ERROR
-        } else if current.is_empty() && branch_failures.is_empty() {
+        } else if current.is_empty()
+            && branch_failures.is_empty()
+            && landing_evidence_incomplete.is_empty()
+        {
             OUTCOME_NO_CURRENT_FAILURE
         } else {
             OUTCOME_CURRENT_FAILURES
@@ -586,6 +602,7 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
         "retryable_errors": retryable_errors,
         "persistent_retryable_errors": persistent_errors,
         "persistently_incomplete": persistently_incomplete,
+        "landing_evidence_incomplete": landing_evidence_incomplete,
         "summary": summary,
         "truncation": truncation,
         "collected_at": now.to_rfc3339(),
@@ -603,18 +620,118 @@ fn split_persistently_incomplete(
     if persistent.is_empty() {
         return (findings, Vec::new());
     }
-    let covers = |error: &Value, finding: &Value| {
-        error.get("run_id").filter(|value| !value.is_null()) == finding.get("run_id")
-            && error
-                .get("job_id")
-                .filter(|value| !value.is_null())
-                .is_none_or(|job_id| finding.get("job_id") == Some(job_id))
-    };
     findings.into_iter().partition(|finding| {
         finding.get("investigated").and_then(Value::as_bool) == Some(true)
-            || !persistent.iter().any(|error| covers(error, finding))
-            || retryable.iter().any(|error| covers(error, finding))
+            || !persistent.iter().any(|error| error_covers(error, finding))
+            || retryable.iter().any(|error| error_covers(error, finding))
     })
+}
+
+/// Whether a run-scoped error is about this finding: its run, and its job
+/// when the error names one.
+fn error_covers(error: &Value, finding: &Value) -> bool {
+    error.get("run_id").filter(|value| !value.is_null()) == finding.get("run_id")
+        && error
+            .get("job_id")
+            .filter(|value| !value.is_null())
+            .is_none_or(|job_id| finding.get("job_id") == Some(job_id))
+}
+
+/// Branch and workflow: what stays red on a landing branch while each push
+/// replaces the run it is observed on.
+fn landing_identity(finding: &Value) -> String {
+    format!(
+        "{}\n{}",
+        run_branch(finding),
+        finding
+            .get("workflow")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    )
+}
+
+/// Retry has to escalate. A landing-branch failure whose evidence gaps are
+/// keyed by run never becomes persistent while every push starts a new red
+/// run, so it would be deferred, and fail the sweep, indefinitely. Once its
+/// branch and workflow have stayed unfileable for
+/// [`PERSISTENT_AFTER_SWEEPS`] consecutive sweeps, its gaps are reported as
+/// persistent, which moves it to `persistently_incomplete` and on to
+/// `landing_evidence_incomplete` for filing to escalate.
+fn escalate_landing_gaps(
+    refs: &[ScannedRef],
+    findings: &[Value],
+    observed: Observed,
+    history: &mut RetryableHistory,
+    sweep_id: &str,
+) -> (Vec<Value>, Vec<Value>) {
+    let Observed {
+        mut retryable,
+        mut persistent,
+    } = observed;
+    let unfileable = findings
+        .iter()
+        .filter(|finding| {
+            finding.get("investigated").and_then(Value::as_bool) != Some(true)
+                && is_landing_failure(refs, finding)
+                && retryable
+                    .iter()
+                    .chain(&persistent)
+                    .any(|error| error_covers(error, finding))
+        })
+        .collect::<Vec<_>>();
+    let identities = unfileable
+        .iter()
+        .map(|finding| landing_identity(finding))
+        .collect();
+    let streaks = history.observe_landing_gaps(&identities, sweep_id);
+    for finding in unfileable {
+        let Some(&sweeps) = streaks
+            .get(&landing_identity(finding))
+            .filter(|sweeps| **sweeps >= PERSISTENT_AFTER_SWEEPS)
+        else {
+            continue;
+        };
+        let (escalated, kept): (Vec<_>, Vec<_>) = retryable
+            .into_iter()
+            .partition(|error| error_covers(error, finding));
+        retryable = kept;
+        for mut error in escalated {
+            error["retryable"] = json!(false);
+            error["persistent"] = json!(true);
+            error["consecutive_sweeps"] = json!(sweeps);
+            persistent.push(error);
+        }
+    }
+    (retryable, persistent)
+}
+
+/// The persistently incomplete findings on a landing branch, each with the
+/// gaps that kept it unfileable and for how many sweeps.
+fn landing_evidence_incomplete(
+    refs: &[ScannedRef],
+    persistently_incomplete: &[Value],
+    persistent: &[Value],
+) -> Vec<Value> {
+    persistently_incomplete
+        .iter()
+        .filter(|finding| is_landing_failure(refs, finding))
+        .map(|finding| {
+            let gaps = persistent
+                .iter()
+                .filter(|error| error_covers(error, finding))
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut entry = finding.clone();
+            entry["consecutive_sweeps"] = json!(
+                gaps.iter()
+                    .filter_map(|error| error["consecutive_sweeps"].as_u64())
+                    .max()
+                    .unwrap_or(PERSISTENT_AFTER_SWEEPS)
+            );
+            entry["evidence_gaps"] = json!(gaps);
+            entry
+        })
+        .collect()
 }
 
 /// Which candidates this sweep spends its investigation budget on.

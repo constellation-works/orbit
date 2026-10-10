@@ -103,7 +103,15 @@ spec:
     `retryable_error` payload, as does a snapshot in which nothing was complete
     enough to file. Errors collection already reported as persistent
     (`persistent_retryable_errors`) never block filing; the audit carries
-    their count and details. A current failure is never converted to
+    their count and details. Retry escalates: each branch and workflow in the
+    snapshot's `landing_evidence_incomplete` is filed as one proposed
+    `[ci-failure-sweep] CI red on <branch>, evidence incomplete` bug task
+    tagged `ci-evidence-incomplete`, carrying the run URLs, the evidence gaps
+    and any partial log excerpt, unless a still-open sweep task already
+    carries that identity's `ci-failure:<key>` tag. It is filed even when the
+    rest of the snapshot fails retryable, is never a pilot candidate, and is
+    reported in `evidence_incomplete` (`filed` or `existing`) and
+    `audit.evidence_incomplete_task_ids`. A current failure is never converted to
     `no_current_failure` merely because its handoff failed. Every
     successful output includes an `audit` object with counts and identities for
     latest runs, current and investigated failures, created tasks, existing
@@ -267,6 +275,14 @@ spec:
               type: array
               items:
                 type: string
+      evidence_incomplete:
+        type: array
+        description: >
+          Landing-branch failures collection could not evidence across its
+          retry window, one entry per branch and workflow with `outcome`
+          `filed` or `existing`, `task_id`, `failure_key`, run IDs and URLs.
+        items:
+          type: object
       deferred:
         type: array
         description: >
