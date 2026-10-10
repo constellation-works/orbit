@@ -133,6 +133,26 @@ tr.audit-detail-row td {
 }
 .policy-count-note p { margin: 0 0 6px; }
 .policy-count-note p:last-child { margin-bottom: 0; color: var(--fg-dim); }
+.policy-count-note .policy-count-headline {
+  margin-bottom: 0;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.policy-count-details {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+  font: 12px/1.5 var(--font-sans);
+}
+.policy-count-details summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+.policy-count-explanation { padding-top: 8px; }
+.policy-count-explanation p { margin: 0 0 6px; }
+.policy-count-explanation p:last-child { margin-bottom: 0; }
 @media (max-width: 1100px) {
   .policy-grid { grid-template-columns: 1fr; }
 }

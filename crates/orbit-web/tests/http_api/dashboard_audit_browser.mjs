@@ -64,7 +64,7 @@ let page;
 const measurements = [];
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#audit`);
@@ -133,7 +133,7 @@ try {
     measurements.push(layout);
     await page.screenshot({ path: path.join(evidence, `events-${width}.png`), fullPage: true, animations: 'disabled' });
   }
-  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   const shortEventCount = events.length;
   events = [...events, ...Array.from({ length: 60 }, (_, index) => ({
     ...events[index % shortEventCount], id: index + shortEventCount + 1,
@@ -174,24 +174,47 @@ try {
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
   assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 8);
-  assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /^4\b.*3\b.*1\b/);
-  assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^8\b.*4\b/);
-  assert.equal(await page.locator('.policy-count-note').isVisible(), true);
+  const policyBadgeCount = Number(await page.locator('#audit-count').textContent());
+  const policyHeadline = await page.locator('.policy-count-headline').textContent();
+  assert.match(policyHeadline, new RegExp(`^${policyBadgeCount} policy denials\\b`));
+  assert.equal(policyBadgeCount, 4);
+  assert.equal(await page.locator('#audit-title').textContent(), 'Policy denials');
+  const countDetails = page.locator('.policy-count-details');
+  assert.equal(await countDetails.locator('summary').textContent(), 'How this is counted');
+  assert.equal(await countDetails.evaluate(details => details.open), false, 'count provenance is collapsed by default');
+  assert.equal(await countDetails.locator('.policy-count-explanation').isVisible(), false);
+  assert.match(await countDetails.locator('.policy-count-explanation').textContent(), /8 denial evidence rows/);
+  assert.match(await countDetails.locator('.policy-count-explanation').textContent(), /1000 rows per source/);
+  const recentTableLayout = await page.locator('.policy-recent-table').evaluate(table => {
+    const card = table.closest('.policy-section');
+    const tableBox = table.getBoundingClientRect();
+    const cardBox = card.getBoundingClientRect();
+    return {
+      tableLeft: tableBox.left, tableRight: tableBox.right,
+      cardLeft: cardBox.left, cardRight: cardBox.right,
+      cardClientWidth: card.clientWidth, cardScrollWidth: card.scrollWidth,
+    };
+  });
+  assert.ok(recentTableLayout.tableLeft >= recentTableLayout.cardLeft, `recent table starts inside its card: ${JSON.stringify(recentTableLayout)}`);
+  assert.ok(recentTableLayout.tableRight <= recentTableLayout.cardRight + 1, `recent table ends inside its card at 1440x900: ${JSON.stringify(recentTableLayout)}`);
+  assert.ok(recentTableLayout.cardScrollWidth <= recentTableLayout.cardClientWidth + 1, `recent table does not overflow its card at 1440x900: ${JSON.stringify(recentTableLayout)}`);
   await page.screenshot({ path: path.join(evidence, 'policy-1440.png'), fullPage: true, animations: 'disabled' });
   await page.evaluate(async () => {
     auditFixture.applyAuditHashQuery(new URLSearchParams('kind=fs'));
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
-  assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /^4\b/);
-  assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^2\b/);
+  assert.equal(Number(await page.locator('#audit-count').textContent()), 4, 'kind filters only restrict evidence, not canonical denials');
+  assert.match(await page.locator('.policy-count-headline').textContent(), /^4 policy denials\b/);
+  assert.match(await page.locator('.policy-count-explanation').textContent(), /2 denial evidence rows after the active filters/);
+  assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 2);
   await page.evaluate(async () => {
     auditFixture.applyAuditHashQuery(new URLSearchParams('role=absent&since=7d'));
     await auditFixture.fetchAndRenderPolicy(auditContext);
   });
   assert.equal(await page.locator('.policy-recent-table').count(), 0);
-  assert.match(await page.locator('.policy-count-note p').nth(0).textContent(), /7d.*3\b.*1\b/);
-  assert.match(await page.locator('.policy-count-note p').nth(1).textContent(), /^0\b/);
-  assert.equal(await page.locator('.policy-count-note').isVisible(), true);
+  assert.match(await page.locator('.policy-count-headline').textContent(), /^4 policy denials in 7d\b/);
+  assert.match(await page.locator('#audit-policy-body .empty-state').textContent(), /No denial evidence matches the active filters/);
+  assert.equal(await page.locator('.policy-count-details').evaluate(details => details.open), false);
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, policy: { canonical: 4, evidence: 8, additional: 4 }, errors }, null, 2));
   console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, policy counts/filters/windows and keyboard expansion passed');

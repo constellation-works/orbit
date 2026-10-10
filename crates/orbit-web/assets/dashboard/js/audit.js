@@ -741,63 +741,81 @@ onWorkspaceChange(() => {
 function renderPolicy(data, ctx) {
   const body = $("audit-policy-body");
   if (!body) return;
-  $("audit-count").textContent = `${data && data.total ? data.total : 0}`;
+  const decisions = data && data.policy_decisions;
+  const canonicalTotal = Number.isFinite(decisions && decisions.total)
+    ? decisions.total
+    : Number(data && data.total) || 0;
+  $("audit-count").textContent = `${canonicalTotal}`;
 
   const sections = [];
-  if (data && data.policy_decisions) {
-    const decisions = data.policy_decisions;
+  let countExplanation = null;
+  if (decisions) {
     const filtered = auditFilter.policyKind || auditFilter.profile || auditFilter.role;
     const window = effectiveAuditWindow() || "24h";
     const scope = window === getWindow()
       ? ""
-      : `; this view has its own window, the rest of the dashboard uses ${getWindow()}`;
+      : ` This Policy view uses its own ${window} window; the rest of the dashboard uses ${getWindow()}.`;
     const note = el("div", { class: "policy-count-note" });
     const extra = !filtered && data.total < data.evidence_scan_limit && data.total >= decisions.total
-      ? ` (${data.total - decisions.total} additional evidence rows beyond the canonical decisions)`
+      ? `, including ${data.total - decisions.total} additional evidence ${data.total - decisions.total === 1 ? "row" : "rows"} beyond the canonical decisions`
       : "";
     note.appendChild(el("p", {
-      text: `${decisions.total} canonical policy decisions in ${window} (${decisions.sql} invocation decisions + ${decisions.v2} envelope decisions)${scope}.`,
-    }));
-    note.appendChild(el("p", {
-      text: `${data.total} denial evidence rows${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
-    }));
-    note.appendChild(el("p", {
-      class: "muted",
-      text: `Recent Denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
+      class: "policy-count-headline",
+      text: `${canonicalTotal} policy denials in ${window}.`,
     }));
     sections.push(note);
+
+    countExplanation = el("details", { class: "policy-count-details" });
+    countExplanation.appendChild(el("summary", { text: "How this is counted" }));
+    const explanation = el("div", { class: "policy-count-explanation" });
+    explanation.appendChild(el("p", {
+      text: `${decisions.total} canonical decisions: ${decisions.sql} invocation decisions and ${decisions.v2} envelope decisions.${scope}`,
+    }));
+    explanation.appendChild(el("p", {
+      text: `${data.total} denial evidence ${data.total === 1 ? "row" : "rows"}${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
+    }));
+    explanation.appendChild(el("p", {
+      text: `Recent denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
+    }));
+    countExplanation.appendChild(explanation);
   }
 
+  const recentRows = data && data.recent_denials || [];
   if (!data || (data.total || 0) === 0) {
+    const emptyText = canonicalTotal === 0
+      ? `No policy denials in the last ${effectiveAuditWindow() || "24h"}.`
+      : "No denial evidence matches the active filters.";
     sections.push(el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: `No denials in the last ${effectiveAuditWindow() || "24h"}.` }),
+      el("div", { class: "text", text: emptyText }),
     ]));
-    syncNodes(body, sections);
-    return;
+  } else {
+    const recent = buildRecentDenials(recentRows, ctx);
+    if (recent) sections.push(recent);
   }
+  if (countExplanation) sections.push(countExplanation);
 
-  const recent = buildRecentDenials(data.recent_denials || [], ctx);
-  const causes = buildTopCauses(data.top_causes || [], ctx);
-  if (recent) sections.push(recent);
-  if (causes) sections.push(causes);
+  if (data && (data.total || 0) > 0) {
+    const causes = buildTopCauses(data.top_causes || [], ctx);
+    if (causes) sections.push(causes);
 
-  const grid = el("div", { class: "policy-grid" });
-  for (const tbl of POLICY_TABLES) {
-    const cell = el("div", { class: "policy-cell" });
-    cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
-    const rawRows = (data[tbl.id] || []).slice();
-    const sortMode = policySort[tbl.id] || "count";
-    rawRows.sort((a, b) => {
-      if (sortMode === "name") {
-        return String(a[tbl.nameField] || "").localeCompare(String(b[tbl.nameField] || ""));
-      }
-      return (b.count || 0) - (a.count || 0);
-    });
-    cell.appendChild(buildPolicyTable(tbl, rawRows, sortMode, ctx));
-    grid.appendChild(cell);
+    const grid = el("div", { class: "policy-grid" });
+    for (const tbl of POLICY_TABLES) {
+      const cell = el("div", { class: "policy-cell" });
+      cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
+      const rawRows = (data[tbl.id] || []).slice();
+      const sortMode = policySort[tbl.id] || "count";
+      rawRows.sort((a, b) => {
+        if (sortMode === "name") {
+          return String(a[tbl.nameField] || "").localeCompare(String(b[tbl.nameField] || ""));
+        }
+        return (b.count || 0) - (a.count || 0);
+      });
+      cell.appendChild(buildPolicyTable(tbl, rawRows, sortMode, ctx));
+      grid.appendChild(cell);
+    }
+    sections.push(grid);
   }
-  sections.push(grid);
   syncNodes(body, sections);
 }
 
