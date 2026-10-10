@@ -283,6 +283,8 @@ Bump the pinned toolchain in one PR: the toolchain file and those CI steps toget
 
 Windows is supported through [WSL2](runbooks/windows-wsl2.md). Native Windows is compile-checked only: `.github/workflows/ci-windows.yml` runs `cargo check --workspace --locked --all-targets --target x86_64-pc-windows-msvc`, so test targets must compile there, but no test runs. The check is advisory, not required.
 
+The `x86_64-pc-windows-msvc` Rust target is a host prerequisite. An operator must install it outside the managed executor sandbox with `rustup target add x86_64-pc-windows-msvc`; once installed, the compile check only needs a writable Cargo target directory. A managed lane must not write to `~/.rustup` or install a global toolchain. If the target is absent, record the Windows cross-check as not run and give the reason, inspect the relevant source and platform-specific code paths, and rely on the PR's Windows Compile Check job for the cross-target result.
+
 - Code using Unix-only APIs (`libc`, `std::os::fd`, `std::os::unix`) sits behind `#[cfg(unix)]`; its `#[cfg(not(unix))]` counterpart returns an explicit unsupported error or `Unknown` and never invents Windows semantics.
 - Tests that need those APIs or drive a `#!/bin/sh` fake are gated `#[cfg(unix)]` at the narrowest level (test, module, or `#![cfg(unix)]` for a POSIX-only file). Gate them; never delete them.
 
