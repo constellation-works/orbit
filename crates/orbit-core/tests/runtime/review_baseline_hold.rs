@@ -171,6 +171,7 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
             base_sha: base_sha.clone(),
             command: CHECK.into(),
             run_id: run_id.clone(),
+            selection: None,
         }
     );
     let settled = certificate(&fixture);
@@ -407,6 +408,7 @@ pub(super) fn held_on_red_base() -> (Fixture, BaselineRedHold) {
         base_sha: git(&fixture.repo, &["rev-parse", "main"]),
         command: CHECK.into(),
         run_id: run_id.clone(),
+        selection: None,
     };
     let handoff = execute_deterministic_action(
         &fixture.runtime,
@@ -615,5 +617,109 @@ fn a_baseline_claim_on_another_base_is_refused() {
         }),
         "{:?}",
         settled.escalation
+    );
+}
+
+/// A check that, like `make ci-test-affected`, selects what to test from the
+/// candidate's diff against `main` and reports its selection and executed-test
+/// count in `ORBIT_VALIDATION_SUMMARY` [ORB-15131]. On `main` itself the diff
+/// is empty, so it tests nothing and passes. With `honours_selection` it
+/// tests the selection `ORBIT_VALIDATION_SELECTION` hands it instead. A run
+/// that tests `suite` fails `suite::broken` wherever `fails_where` matches
+/// `candidate.txt` (`.` matches everywhere).
+fn affected_check(honours_selection: bool, fails_where: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         if [ -n \"$ORBIT_VALIDATION_SELECTION\" ] && {honours}; then selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+         elif git diff --quiet main -- candidate.txt; then selection='{{\"packages\":[]}}'\n\
+         else selection='{{\"packages\":[\"suite\"]}}'; fi\n\
+         case \"$selection\" in *suite*) tests=1 ;; *) tests=0 ;; esac\n\
+         printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":%s}}' \"$selection\" \"$tests\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         [ \"$tests\" = 0 ] && exit 0\n\
+         if grep -q '{fails_where}' candidate.txt; then echo 'test suite::broken ... FAILED'; exit 1; fi\n\
+         exit 0\n",
+        honours = if honours_selection { "true" } else { "false" },
+    )
+}
+
+/// [ORB-15131] A diff-selecting check that tests nothing on the base cannot
+/// refute a reviewer's red-base claim: its base run is not comparable, and
+/// the review settles `incomplete` naming that, not `baseline_claim_refused`.
+/// Handed the candidate's selection, a base that genuinely passes it does
+/// refute the claim.
+#[test]
+fn a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim",
+    ) {
+        return;
+    }
+    // The base selects nothing of its own and passes without a test.
+    let mut empty = fixture(&affected_check(false, "after"), "after\n");
+    let failure = settle_claim(&mut empty, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&empty);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(settled.baseline_red.is_empty());
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_not_comparable")
+            && !escalation.contains("baseline_claim_refused"),
+        "the diagnostic names the non-comparable base run: {escalation}"
+    );
+
+    // The base tests the candidate's selection and passes it: refuted.
+    let mut refuted = fixture(&affected_check(true, "after"), "after\n");
+    let failure = settle_claim(&mut refuted, CHECK, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&refuted);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused")
+            && escalation.contains("passes")
+            && !escalation.contains("baseline_not_comparable"),
+        "{escalation}"
+    );
+}
+
+/// [ORB-15131] A hold confirmed for a diff-selecting check records the
+/// candidate's selection, and a moved base lifts it only when that selection
+/// passes there: a tip that tests nothing of its own keeps the task held.
+#[test]
+fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(&affected_check(true, "."), "after\n");
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+    let hold = BaselineRedHold::from_text(&failure).expect("the claim is confirmed and held");
+    assert_eq!(hold.selection, Some(json!({"packages": ["suite"]})));
+
+    let move_base = |check: &str, message: &str| {
+        git(&fixture.repo, &["checkout", "--quiet", "main"]);
+        std::fs::write(fixture.repo.join("check.sh"), check).unwrap();
+        git(&fixture.repo, &["commit", "--quiet", "-am", message]);
+        git(&fixture.repo, &["checkout", "--quiet", "candidate"]);
+    };
+    move_base(
+        &affected_check(false, "."),
+        "base stops honouring the selection",
+    );
+    match orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold) {
+        orbit_engine::BaselineHoldStatus::Holding(reason) => {
+            assert!(reason.contains("not comparable"), "{reason}");
+        }
+        lifted => panic!("a tip that tests nothing lifted the hold: {lifted:?}"),
+    }
+    move_base(&affected_check(true, "never"), "base passes the selection");
+    assert!(
+        matches!(
+            orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+            orbit_engine::BaselineHoldStatus::Lifted(_)
+        ),
+        "a tip that passes the held selection lifts the hold"
     );
 }

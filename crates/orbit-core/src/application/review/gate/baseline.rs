@@ -31,6 +31,10 @@
 //!   stands and the review blocks as before.
 //! - A claim the host contradicts or cannot check is refused, and the review
 //!   settles `incomplete`.
+//! - A claim whose base run is not comparable with the candidate's — it
+//!   tested another selection, or passed without executing a counted test
+//!   [ORB-15131] — is neither refuted nor confirmed: the review settles
+//!   `incomplete` under `baseline_not_comparable`.
 
 use orbit_automation::review::{
     ValidationContext, in_scope, same_host_command, validation_evidence,
@@ -118,6 +122,7 @@ impl Judgement {
                         base_sha: base.commit.clone(),
                         command: command.clone(),
                         run_id: context.run_id.clone(),
+                        selection: check.selection.clone(),
                     });
                     confirmed.push(record.clone());
                     ("confirmed", json!({ "failures": failures }))
@@ -130,6 +135,14 @@ impl Judgement {
                     ));
                     held = false;
                     ("exceeded", json!({ "failures": failures }))
+                }
+                BaseFailureVerdict::NotComparable(reason) => {
+                    self.downgrade(&format!(
+                        "baseline_not_comparable: `{}`: {reason}",
+                        record.command
+                    ));
+                    held = false;
+                    ("not_comparable", json!({ "reason": reason }))
                 }
                 BaseFailureVerdict::Contradicted(reason)
                 | BaseFailureVerdict::Inconclusive(reason) => {

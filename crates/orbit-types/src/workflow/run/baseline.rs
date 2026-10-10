@@ -49,6 +49,12 @@ pub struct BaselineRedHold {
     /// The run that observed the failure.
     #[serde(default)]
     pub run_id: String,
+    /// What the failing run reported testing, for a command that selects its
+    /// own tests [ORB-15131]. A moved base is checked on this selection, so a
+    /// tip that would select nothing of its own cannot lift the hold. Absent
+    /// for a command that reports no selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<serde_json::Value>,
 }
 
 impl BaselineRedHold {

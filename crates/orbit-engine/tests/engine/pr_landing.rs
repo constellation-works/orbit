@@ -1844,6 +1844,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
                     base_sha: fx.base_sha.clone(),
                     command: RED_LINT.to_string(),
                     run_id: RUN_ID.to_string(),
+                    selection: None,
                 }
             );
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
@@ -1931,6 +1932,7 @@ fn a_red_base_during_pr_revalidation_holds_the_task() {
                 base_sha: fx.base_sha.clone(),
                 command: RED_LINT.to_string(),
                 run_id: RUN_ID.to_string(),
+                selection: None,
             };
             let diagnostic = hold.text("the rebased candidate shares the base failure");
 

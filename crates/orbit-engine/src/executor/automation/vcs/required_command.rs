@@ -21,6 +21,14 @@
 //! Captured output keeps a head and a tail of each stream. A long stdout
 //! cannot drop the stderr failure before that classification, and the end of
 //! the recorded text still holds it.
+//!
+//! A command may also say what it ran [ORB-15131]. Every run gets
+//! [`VALIDATION_SUMMARY_ENV`], naming a fresh file outside the checkout; a
+//! command that writes a [`ValidationSummary`] there reports the selection it
+//! tested and how many tests executed. A run given a selection gets it in
+//! [`VALIDATION_SELECTION_ENV`] and must test exactly that, so a base rerun
+//! of a diff-selecting command (`make ci-test-affected`) tests what the
+//! candidate run tested rather than the base's own, empty, diff.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -33,9 +41,16 @@ use orbit_exec::{
 };
 use orbit_types::workflow::VALIDATION_ENVIRONMENT_MARKER;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
+
+/// The file a required command may write its [`ValidationSummary`] to.
+pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
+/// A selection, as a candidate run's summary reported it, that the command
+/// must test instead of choosing its own.
+pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";
 
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
@@ -62,6 +77,46 @@ pub(super) struct RequiredCommandRun {
     /// The line showing the failure was the network's, when it still was
     /// after every rerun.
     pub(super) network_evidence: Option<String>,
+    /// What the command reported it ran, when it reports that.
+    pub(super) summary: Option<ValidationSummary>,
+}
+
+/// What a command reported about its own run in [`VALIDATION_SUMMARY_ENV`]:
+/// `{"schema_version": 1, "selection": ..., "tests_run": n | null}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationSummary {
+    /// What the command chose to test, in its own terms. Only compared for
+    /// equality and handed back through [`VALIDATION_SELECTION_ENV`].
+    pub selection: Value,
+    /// Tests executed, or `None` when the command could not count them.
+    pub tests_run: Option<u64>,
+}
+
+impl ValidationSummary {
+    fn read(path: &Path) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Recorded {
+            schema_version: u32,
+            selection: Value,
+            tests_run: Option<u64>,
+        }
+        let bytes = std::fs::read(path).ok()?;
+        match serde_json::from_slice::<Recorded>(&bytes) {
+            Ok(recorded) if recorded.schema_version == 1 && !recorded.selection.is_null() => {
+                Some(Self {
+                    selection: recorded.selection,
+                    tests_run: recorded.tests_run,
+                })
+            }
+            Ok(_) | Err(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "ignoring a required validation summary that is not schema version 1"
+                );
+                None
+            }
+        }
+    }
 }
 
 /// Evidence that a failed command lacked a tool, not a passing candidate.
@@ -121,6 +176,11 @@ impl RequiredCommandRun {
             .as_ref()
             .and_then(|missing| missing.tool.as_deref())
     }
+
+    /// The selection the command reported testing, for a base rerun.
+    pub(super) fn selection(&self) -> Option<&Value> {
+        self.summary.as_ref().map(|summary| &summary.selection)
+    }
 }
 
 /// The recorded shape of a resolved validation environment: its source, PATH
@@ -142,11 +202,13 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
     })
 }
 
-/// Run one required command in `workspace_path`.
+/// Run one required command in `workspace_path`, handing it `selection`
+/// to test when one is given.
 pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     command: &str,
+    selection: Option<&Value>,
 ) -> Result<RequiredCommandRun, OrbitError> {
     let command = command.trim();
     if command.is_empty() {
@@ -159,6 +221,27 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         .path()
         .unwrap_or("<unset; /bin/sh uses its default search path>")
         .to_string();
+    // Outside the checkout, which must stay clean while the suite runs.
+    let summary_dir = tempfile::Builder::new()
+        .prefix("orbit-validation-")
+        .tempdir()
+        .map_err(|error| {
+            OrbitError::Execution(format!("create the validation summary directory: {error}"))
+        })?;
+    let summary_path = summary_dir.path().join("summary.json");
+    let mut env = environment
+        .env
+        .iter()
+        .filter(|(key, _)| key != VALIDATION_SUMMARY_ENV && key != VALIDATION_SELECTION_ENV)
+        .cloned()
+        .collect::<Vec<_>>();
+    env.push((
+        VALIDATION_SUMMARY_ENV.to_string(),
+        summary_path.to_string_lossy().into_owned(),
+    ));
+    if let Some(selection) = selection {
+        env.push((VALIDATION_SELECTION_ENV.to_string(), selection.to_string()));
+    }
     let outcome = run_process(
         &ExecRequest {
             program: "/bin/sh".to_string(),
@@ -166,11 +249,12 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             current_dir: Some(workspace_path.to_string_lossy().into_owned()),
             timeout_ms: Some(VALIDATION_TIMEOUT_MS),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(environment.env.clone()),
+            environment_mode: EnvironmentMode::ClearAndSet(env),
             debug: false,
         },
         &NoSandbox,
     )?;
+    let summary = ValidationSummary::read(&summary_path);
     let mut output = capture(&outcome.stdout, &outcome.stderr);
     let passed = outcome.success && !outcome.timed_out;
     let missing_tool = (!passed && !outcome.timed_out)
@@ -193,6 +277,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         missing_tool,
         network_retries: 0,
         network_evidence: None,
+        summary,
     })
 }
 

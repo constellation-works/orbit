@@ -119,14 +119,14 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     let mut passed = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in commands.iter().enumerate() {
-        let run = run_validation_command(host, &workspace_path, command)?;
+        let run = run_validation_command(host, &workspace_path, command, None)?;
         validation_env = run.environment_record();
         // [ORB-14258] A failure that is not a missing tool is rerun on the
         // synchronized base, so a red base is told apart from the candidate.
         let baseline: Option<BaselineCheck> = base_sha
             .as_deref()
             .filter(|_| !run.passed && run.missing_tool.is_none())
-            .map(|base| compare_with_base(host, &workspace_path, base, command));
+            .map(|base| compare_with_base(host, &workspace_path, base, command, run.selection()));
         let log_path = format!("validation/{run_id}/{index}.json");
         let baseline_path = baseline
             .as_ref()
@@ -149,6 +149,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "failure_kind": if red { json!("baseline_red") } else { run.failure_kind() },
             "missing_tool": run.missing_tool_name(),
             "network_retries": run.network_retries,
+            "summary": run.summary,
             "baseline": baseline
                 .as_ref()
                 .map(|check| check.record(baseline_path.as_deref())),
@@ -178,6 +179,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     base_sha: check.base_sha.clone(),
                     command: run.command.clone(),
                     run_id: run_id.clone(),
+                    selection: run.selection().cloned(),
                 };
                 return Err(baseline_red_failure(&hold, &run, &candidate, &evidence));
             }

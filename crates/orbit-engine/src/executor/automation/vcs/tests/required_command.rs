@@ -232,7 +232,7 @@ fn captured_body(output: &str) -> &str {
 }
 
 fn run_in(dir: &Path, command: &str) -> RequiredCommandRun {
-    run_required_command(&CaptureHost, dir, command).expect(command)
+    run_required_command(&CaptureHost, dir, command, None).expect(command)
 }
 
 fn write_streams(dir: &TempDir, stdout: &str, stderr: &str) {

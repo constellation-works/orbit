@@ -195,7 +195,7 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
         })));
     }
     for command in host.required_validation_commands() {
-        let run = run_validation_command(host, workspace_path, &command)?;
+        let run = run_validation_command(host, workspace_path, &command, None)?;
         if run.passed {
             continue;
         }
@@ -209,7 +209,9 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
         // [ORB-14258] A base that fails the same way leaves nothing for the
         // implementer to repair; the delivery's own validation holds the
         // task again, from the shared base result.
-        if compare_with_base(host, workspace_path, base_sha, &command).reproduces(&run) {
+        if compare_with_base(host, workspace_path, base_sha, &command, run.selection())
+            .reproduces(&run)
+        {
             return Ok(Outcome::Unjudged(format!(
                 "required validation '{}' fails on base {base_sha} exactly as on the candidate",
                 run.command

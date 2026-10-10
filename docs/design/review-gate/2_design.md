@@ -572,7 +572,11 @@ task under `baseline_red_hold` until the base passes. The certificate's
 verdict stays what the reviewer reported and is never coverage. A candidate
 that adds failures keeps its verdict (`baseline_exceeded`), and a claim the
 host contradicts or cannot check settles `incomplete`
-(`baseline_claim_refused`). Both block as before.
+(`baseline_claim_refused`). A base run that is not comparable with the
+candidate's (it tested another selection, or passed without executing a
+counted test) neither refutes nor confirms the claim and settles
+`incomplete` (`baseline_not_comparable`) [ORB-15131]. All three block as
+before.
 
 Listing a command in `review.baseline_commands` also makes it binding
 [ORB-14684]. A failed record of a trusted command (a captured
