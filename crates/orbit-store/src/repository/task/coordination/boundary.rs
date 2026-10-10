@@ -22,12 +22,18 @@ use std::time::Duration;
 /// acquisition deadline.
 const SECTION_HOLD_WARN_AFTER: Duration = Duration::from_secs(2);
 
-/// Diagnostic policy for the host and partition locks. Shared holders record
-/// themselves, so a waiter blocked by ordinary sections can name them.
+/// Lock policy for the host and partition locks. Shared holders record
+/// themselves, so a waiter blocked by ordinary sections can name them, and a
+/// queued admission or recovery holds back ordinary sections that arrive
+/// after it. Without that priority an exclusive waiter got the partition only
+/// at an instant when no ordinary section held it, and under drain load
+/// admissions waited past the 3 s warning behind a stream of overlapping
+/// readers (ORB-15107).
 fn boundary_lock_options() -> FileLockOptions {
     FileLockOptions {
         record_shared_holders: true,
         warn_held_after: Some(SECTION_HOLD_WARN_AFTER),
+        prefer_exclusive_waiters: true,
         ..FileLockOptions::default()
     }
 }
@@ -63,9 +69,18 @@ impl Section {
 fn shared_section<T>(
     target: &Path,
     section: Section,
-    options: FileLockOptions,
+    mut options: FileLockOptions,
     op: impl FnOnce() -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
+    // A section nested inside another partition's section already holds that
+    // partition, which a writer queued here may be waiting behind indirectly:
+    // queueing this read behind that writer could close a cycle that plain
+    // shared locks never had. Only an outermost section yields to a writer.
+    // The depth counts partition sections only, so the host lock every
+    // section takes first does not exempt its partition read.
+    if BoundaryDepth::any() {
+        options.prefer_exclusive_waiters = false;
+    }
     with_shared_file_lock_options(target, &section.label(), options, op)
 }
 

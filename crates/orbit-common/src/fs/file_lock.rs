@@ -31,6 +31,11 @@ const UNCLAIMED_LOCK_GRACE: Duration = Duration::from_secs(2);
 /// dot-prefixed infrastructure beside it.
 const SHARED_HOLDER_INFIX: &str = ".holder-";
 
+/// Suffix after the lock file's name that names its turnstile:
+/// `<lock>.turnstile`. Dot-prefixed beside a dot-prefixed lock for the same
+/// reason as the shared holders' records.
+const TURNSTILE_SUFFIX: &str = ".turnstile";
+
 /// Most shared holders one diagnostic line names before summarizing the rest.
 const MAX_NAMED_SHARED_HOLDERS: usize = 8;
 
@@ -52,6 +57,20 @@ pub struct FileLockOptions {
     /// Log the label and held duration when a holder releases the lock after
     /// holding it at least this long.
     pub warn_held_after: Option<Duration>,
+    /// Give a waiting exclusive acquirer priority over shared acquirers that
+    /// arrive after it. A refused exclusive acquirer holds the lock's
+    /// turnstile (`<lock>.turnstile`) until it takes the lock, and a shared
+    /// acquirer passes through the turnstile before trying the lock, so once
+    /// a writer queues, new readers wait behind it while the readers already
+    /// inside drain. Without it a writer succeeds only at an instant when no
+    /// reader holds the lock, and readers that keep overlapping starve it to
+    /// its deadline.
+    ///
+    /// Every acquirer of the lock must agree on this. A shared acquirer that
+    /// already holds a lock the queued writer's blockers may wait on must
+    /// not pass the turnstile, or the two waits close a cycle; such a nested
+    /// acquisition turns this off.
+    pub prefer_exclusive_waiters: bool,
 }
 
 impl Default for FileLockOptions {
@@ -61,6 +80,7 @@ impl Default for FileLockOptions {
             warn_after: DEFAULT_FILE_LOCK_WARN_AFTER,
             record_shared_holders: false,
             warn_held_after: None,
+            prefer_exclusive_waiters: false,
         }
     }
 }
@@ -484,8 +504,17 @@ fn acquire_file_lock(
     options: FileLockOptions,
     exclusive: bool,
 ) -> io::Result<FileLockGuard> {
-    let started = Instant::now();
-    let mut warned = false;
+    let mut wait = ContentionWait::new(lock_path, label, options);
+    let turnstile_path = options
+        .prefer_exclusive_waiters
+        .then(|| turnstile_path(lock_path))
+        .flatten();
+    if !exclusive && let Some(turnstile) = &turnstile_path {
+        pass_turnstile(turnstile, lock_path, &mut wait)?;
+    }
+    // Held by this exclusive acquirer from its first refusal until it takes
+    // the lock, so readers arriving meanwhile queue behind it.
+    let mut queued: Option<FileLockGuard> = None;
 
     loop {
         let acquisition = if exclusive {
@@ -495,6 +524,7 @@ fn acquire_file_lock(
         };
         match acquisition {
             Ok(()) => {
+                drop(queued);
                 let shared_record = if exclusive {
                     write_file_lock_holder(&lock_file, label);
                     None
@@ -517,22 +547,13 @@ fn acquire_file_lock(
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                let elapsed = started.elapsed();
-                if elapsed >= options.timeout {
-                    let timeout = FileLockTimeout {
-                        lock_path: lock_path.to_path_buf(),
-                        label: label.to_string(),
-                        timeout_ms: duration_millis(options.timeout),
-                        holder: read_file_lock_holder(lock_path),
-                        shared_holders: read_shared_file_lock_holders(lock_path),
-                    };
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, timeout));
+                if exclusive
+                    && queued.is_none()
+                    && let Some(turnstile) = &turnstile_path
+                {
+                    queued = try_hold_turnstile(turnstile, label);
                 }
-                if !warned && elapsed >= options.warn_after {
-                    warned = true;
-                    warn_for_contention(lock_path, label, elapsed);
-                }
-                std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(options.timeout - elapsed));
+                wait.refused(|| describe_file_lock_holders(lock_path))?;
             }
             Err(error) => {
                 return Err(classify_or_wrap_lock_io(lock_path, error, |error| {
@@ -541,6 +562,116 @@ fn acquire_file_lock(
             }
         }
     }
+}
+
+/// One acquisition's deadline, contention warning and retry pacing, shared by
+/// its turnstile and lock waits so the two together stay within one deadline.
+struct ContentionWait<'a> {
+    lock_path: &'a Path,
+    label: &'a str,
+    options: FileLockOptions,
+    started: Instant,
+    warned: bool,
+}
+
+impl<'a> ContentionWait<'a> {
+    fn new(lock_path: &'a Path, label: &'a str, options: FileLockOptions) -> Self {
+        Self {
+            lock_path,
+            label,
+            options,
+            started: Instant::now(),
+            warned: false,
+        }
+    }
+
+    /// Account for one refusal: time out past the deadline, warn once past
+    /// the warning threshold naming `holder()`, otherwise sleep before the
+    /// next attempt.
+    fn refused(&mut self, holder: impl FnOnce() -> String) -> io::Result<()> {
+        let elapsed = self.started.elapsed();
+        if elapsed >= self.options.timeout {
+            let timeout = FileLockTimeout {
+                lock_path: self.lock_path.to_path_buf(),
+                label: self.label.to_string(),
+                timeout_ms: duration_millis(self.options.timeout),
+                holder: read_file_lock_holder(self.lock_path),
+                shared_holders: read_shared_file_lock_holders(self.lock_path),
+            };
+            return Err(io::Error::new(io::ErrorKind::TimedOut, timeout));
+        }
+        if !self.warned && elapsed >= self.options.warn_after {
+            self.warned = true;
+            warn_for_contention(self.lock_path, self.label, elapsed, &holder());
+        }
+        std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(self.options.timeout - elapsed));
+        Ok(())
+    }
+}
+
+fn turnstile_path(lock_path: &Path) -> Option<PathBuf> {
+    let name = lock_path.file_name()?.to_str()?;
+    Some(lock_path.with_file_name(format!("{name}{TURNSTILE_SUFFIX}")))
+}
+
+/// Wait until no exclusive acquirer is queued at `turnstile`, then pass
+/// straight through: the shared hold is dropped before the lock is tried, so
+/// readers never hold the turnstile while they wait or work.
+///
+/// The turnstile only orders acquirers; the lock itself still excludes. So a
+/// reader never creates it — a missing turnstile means no writer has queued,
+/// and a read must not leave a file behind — and one it cannot open or lock
+/// is passed rather than failing the read.
+fn pass_turnstile(
+    turnstile: &Path,
+    lock_path: &Path,
+    wait: &mut ContentionWait<'_>,
+) -> io::Result<()> {
+    let Ok(gate) = super::open_read_only_no_follow(turnstile) else {
+        return Ok(());
+    };
+    loop {
+        match FileExt::try_lock_shared(&gate) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait.refused(|| describe_queued_exclusive_waiter(turnstile, lock_path))?;
+            }
+            Ok(()) | Err(_) => return Ok(()),
+        }
+    }
+}
+
+/// Queue at `turnstile` if no other exclusive acquirer already holds it.
+/// The holder record names this waiter to the readers it holds back. A
+/// turnstile that cannot be created or locked leaves the waiter unqueued:
+/// it still takes the lock, only without priority.
+fn try_hold_turnstile(turnstile: &Path, label: &str) -> Option<FileLockGuard> {
+    let gate = open_lock_file(turnstile, label).ok()?;
+    FileExt::try_lock_exclusive(&gate).ok()?;
+    write_file_lock_holder(&gate, label);
+    Some(FileLockGuard {
+        file: gate,
+        clear_holder_on_drop: true,
+        shared_record: None,
+        hold: None,
+    })
+}
+
+/// Name the exclusive acquirer a reader is queued behind, and whoever that
+/// acquirer is itself waiting on.
+fn describe_queued_exclusive_waiter(turnstile: &Path, lock_path: &Path) -> String {
+    let waiter = read_file_lock_holder(turnstile).map_or_else(
+        || "unknown".to_string(),
+        |holder| {
+            format!(
+                "pid {} since {} ({})",
+                holder.pid, holder.acquired_at, holder.label
+            )
+        },
+    );
+    format!(
+        "queued exclusive waiter: {waiter}; waiting on {}",
+        describe_file_lock_holders(lock_path)
+    )
 }
 
 /// Name whoever holds `lock_path` for a contention diagnostic: the exclusive
@@ -580,8 +711,7 @@ fn describe_shared_holders(holders: &[FileLockHolderInfo]) -> String {
     described
 }
 
-fn warn_for_contention(lock_path: &Path, label: &str, elapsed: Duration) {
-    let holder = describe_file_lock_holders(lock_path);
+fn warn_for_contention(lock_path: &Path, label: &str, elapsed: Duration, holder: &str) {
     crate::tracing::warn!(
         target: "orbit.common.fs.file_lock",
         lock_path = %lock_path.display(),

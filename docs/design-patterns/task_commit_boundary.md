@@ -34,6 +34,16 @@ boundary **before** any bundle lock, including `with_task_write_lock`, so the tw
 always acquired in the same order; the shared helper's per-thread re-entrance makes a nested
 task lock inside an admission section run under the outer acquisition rather than deadlock.
 
+Both boundary locks prefer a waiting exclusive acquirer. An admission, recovery or
+cross-partition admission refused by shared holders queues at the lock's turnstile
+(`<lock>.turnstile`) until it takes the lock. An ordinary section passes through that turnstile
+before trying the lock, so it waits behind a queued writer while the sections already inside
+drain. Without that priority, a writer got the lock only at an instant when no reader held it,
+so a stream of overlapping ordinary sections held admissions past the 3 s warning (ORB-15107).
+A section nested inside another partition's section skips the turnstile. It already holds a
+partition that the queued writer may be waiting behind indirectly, and waiting behind that
+writer could close a cycle. A re-entrant acquisition never reaches either lock.
+
 **One durable commit decision.** A journal row in the host store database:
 
 | Step | What happens | What a crash here means |

@@ -114,6 +114,7 @@ impl Owner {
             warn_after: Duration::from_millis(20),
             record_shared_holders: true,
             warn_held_after: None,
+            prefer_exclusive_waiters: true,
         })
     }
 
