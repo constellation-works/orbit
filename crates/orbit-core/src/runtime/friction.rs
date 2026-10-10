@@ -86,9 +86,12 @@ impl OrbitRuntime {
     /// The target resolves through the same catalog `--workspace` selectors
     /// use, and both sides must accept coordination writes here: a replica
     /// checkout of the owning workspace cannot receive the record any more
-    /// than it could receive a task. Every refusal the move can make is
-    /// checked before the edits land, so a refused move leaves the record as
-    /// it was.
+    /// than it could receive a task. Every refusal the store can decide
+    /// without its write lock (same-workspace target, malformed id,
+    /// unreadable target taxonomy, tags the target rejects) is checked before
+    /// the edits land, so those refusals leave the record as it was. The
+    /// edits and the move are still two commits: a failure only visible under
+    /// the write lock, such as a concurrent resolve, can land between them.
     pub(crate) fn rehome_friction(
         &self,
         id: &str,
@@ -112,6 +115,7 @@ impl OrbitRuntime {
                     "friction {id} is already resolved; there is nothing to re-home"
                 )));
             }
+            store.preflight_rehome(id, &params, &edits)?;
             store.update(id, edits)?;
         }
         store.rehome(id, params)

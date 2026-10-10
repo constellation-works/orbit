@@ -436,6 +436,15 @@ pub trait FrictionStoreBackend: Send + Sync {
         id: &str,
         params: FrictionUpdateParams,
     ) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Raise, without writing, every refusal [`Self::rehome`] can make that
+    /// does not need the write lock, as it would after `edits` land. Lets a
+    /// caller that applies `edits` first learn that the move will be refused.
+    fn preflight_rehome(
+        &self,
+        id: &str,
+        params: &FrictionRehomeParams,
+        edits: &FrictionUpdateParams,
+    ) -> Result<(), OrbitError>;
     /// Move `id` into its owning workspace on this host and resolve the
     /// source with a pointer to the new record, atomically.
     fn rehome(
