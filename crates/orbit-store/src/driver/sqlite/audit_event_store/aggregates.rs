@@ -393,6 +393,9 @@ impl Store {
     ) -> Result<Vec<AuditRoleAggregate>, OrbitError> {
         let conn = self.read()?;
 
+        // `+role` keeps the planner off `idx_audit_events_role`: walking it to
+        // skip the GROUP BY sort visits every row of the table, where the
+        // timestamp index reads only the window.
         let sql = "SELECT role, \
                    COUNT(*), \
                    COALESCE(SUM(CASE WHEN subcommand = 'run-mcp' THEN 1 ELSE 0 END), 0), \
@@ -400,7 +403,7 @@ impl Store {
                    COALESCE(SUM(CASE WHEN subcommand IS NOT NULL AND subcommand NOT IN ('run-mcp', 'run') THEN 1 ELSE 0 END), 0), \
                    COALESCE(SUM(CASE WHEN subcommand IS NULL THEN 1 ELSE 0 END), 0) \
                    FROM audit_events WHERE timestamp >= ?1 \
-                   GROUP BY role ORDER BY COUNT(*) DESC, role ASC";
+                   GROUP BY +role ORDER BY COUNT(*) DESC, role ASC";
 
         let mut stmt = conn
             .prepare(sql)

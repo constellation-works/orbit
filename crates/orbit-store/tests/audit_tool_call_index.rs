@@ -33,7 +33,8 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
     let conn = Connection::open(&path).unwrap();
     // Recreate schema v36 so the next open applies the index migration at v37,
     // the job-state migration at v38, the run recency indexes at v39, the
-    // provider limit table at v40 and its reading columns at v41.
+    // provider limit table at v40, its reading columns at v41 and the v2
+    // event-type index at v43.
     // Compatibility is rewritten by the opener.
     conn.execute_batch(
         "DROP INDEX idx_audit_events_command_subcommand_timestamp;
@@ -42,9 +43,11 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
         DROP INDEX idx_job_runs_ws_recency;
         DROP INDEX idx_job_runs_ws_state_recency;
         DROP TABLE provider_limit_observations;
+        DROP INDEX idx_v2_audit_events_ws_event_type_ts;
+        CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
         DELETE FROM schema_meta
             WHERE key IN ('migration.v0037', 'migration.v0038', 'migration.v0039',
-                'migration.v0040', 'migration.v0041', 'migration.v0042');
+                'migration.v0040', 'migration.v0041', 'migration.v0042', 'migration.v0043');
         INSERT INTO audit_events (execution_id, timestamp, command, role, status,
             exit_code, duration_ms, working_directory, pid)
         VALUES ('preserved', '2026-10-01T00:00:00Z', 'tool', 'codex', 'failure', 1, 1, '.', 1);",
@@ -62,6 +65,21 @@ fn existing_store_gains_tool_call_index_without_rewriting_audit_rows() {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(columns, ["command", "subcommand", "timestamp"]);
+        let v2_indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index'
+                 AND name LIKE 'idx_v2_audit_events_ws_event_type%' ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            v2_indexes,
+            ["idx_v2_audit_events_ws_event_type_ts"],
+            "the windowed event-type index replaces its two-column prefix"
+        );
         let row: (String, String) = conn
             .query_row("SELECT execution_id, status FROM audit_events", [], |row| {
                 Ok((row.get(0)?, row.get(1)?))

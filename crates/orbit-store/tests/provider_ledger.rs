@@ -185,7 +185,9 @@ fn an_existing_store_gains_the_provider_column_additively() {
     // Recreate schema v41, with a row the older binary wrote.
     conn.execute_batch(
         "ALTER TABLE invocations DROP COLUMN provider;
-        DELETE FROM schema_meta WHERE key = 'migration.v0042';
+        DROP INDEX idx_v2_audit_events_ws_event_type_ts;
+        CREATE INDEX idx_v2_audit_events_ws_event_type ON v2_audit_events(workspace_id, event_type);
+        DELETE FROM schema_meta WHERE key IN ('migration.v0042', 'migration.v0043');
         INSERT INTO invocations (ts, job_run_id, activity_id, agent, input_tokens, output_tokens)
         VALUES (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), 'run', 'act', 'grok', 40, 2);",
     )
