@@ -1,10 +1,10 @@
 //! Priority-aware surface reservations for lock-blocked work.
 //!
-//! Dispatch order (critical, corrective, priority, age) only ranks the tasks
-//! that are eligible at a pass. A high-priority task that needs several locks
-//! is excluded until all of them are free, so each time one frees a smaller,
-//! lower-ranked task overlapping just that lock takes it, and the
-//! high-priority task never sees all of its locks free at once.
+//! Dispatch order (critical, corrective or expiring, priority, expiry, age)
+//! only ranks the tasks that are eligible at a pass. A high-priority task that
+//! needs several locks is excluded until all of them are free. Each time one
+//! frees, a smaller, lower-ranked task overlapping just that lock takes it,
+//! and the high-priority task never sees all of its locks free at once.
 //!
 //! A reservation closes that race. A critical or high-priority task held back
 //! only by locks other tasks hold reserves its own surface for the pass: a
@@ -23,7 +23,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use orbit_types::task::{Task, TaskPriority, automatic_dispatch_cmp};
+use chrono::{DateTime, Utc};
+use orbit_types::task::{Task, TaskPriority, automatic_dispatch_cmp_with_expiry};
 
 use super::backlog_exclusion::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
@@ -55,10 +56,12 @@ pub(super) fn reserving_detail() -> String {
 ///
 /// `reserving` is the lock-blocked tasks that reserve this pass, already
 /// bounded by the caller. A task is withheld only by a reserving task that
-/// sorts ahead of it in dispatch order.
+/// sorts ahead of it in dispatch order, using the same frozen-batch expiry
+/// snapshot as the backlog sort.
 pub(super) fn withhold_reserved_surfaces<'a>(
     backlog: Vec<&'a Task>,
     reserving: &[&Task],
+    expiring_batches: &BTreeMap<String, DateTime<Utc>>,
     workspace_root: &Path,
     excluded: &mut Vec<BacklogTaskExclusion>,
 ) -> Vec<&'a Task> {
@@ -85,7 +88,15 @@ pub(super) fn withhold_reserved_surfaces<'a>(
                 .filter(|overlap| {
                     reserving_by_id
                         .get(overlap.locking_task_id.as_str())
-                        .is_some_and(|reserver| automatic_dispatch_cmp(reserver, task).is_lt())
+                        .is_some_and(|reserver| {
+                            automatic_dispatch_cmp_with_expiry(
+                                reserver,
+                                expiring_batches.contains_key(&reserver.id),
+                                task,
+                                expiring_batches.contains_key(&task.id),
+                            )
+                            .is_lt()
+                        })
                 })
                 .collect();
         if conflicts.is_empty() {

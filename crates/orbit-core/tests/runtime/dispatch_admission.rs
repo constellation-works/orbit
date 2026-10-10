@@ -2164,6 +2164,112 @@ fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
     );
 }
 
+/// A surface reservation follows frozen-batch expiry in the queue's order:
+/// expiry can promote ordinary work ahead of higher-priority work, or break a
+/// same-priority tie with older corrective work [ORB-15110].
+#[test]
+fn surface_reservations_follow_frozen_batch_expiry_order() {
+    if !isolated("surface_reservations_follow_frozen_batch_expiry_order") {
+        return;
+    }
+    for (reserver_type, expiring_priority) in [
+        (TaskType::Feature, TaskPriority::Medium),
+        (TaskType::Bug, TaskPriority::High),
+    ] {
+        let (_root, runtime, repo) = runtime();
+        let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
+        write_files(&repo, &["held.rs", "foo/expiring.rs", "foo/ordinary.rs"]);
+        let holder = seed(
+            &runtime,
+            Seed {
+                title: "lock holder",
+                status: TaskStatus::InProgress,
+                context_files: Some(&["held.rs"]),
+                ..Seed::default()
+            },
+        );
+        let reserver = seed(
+            &runtime,
+            Seed {
+                title: "older high-priority reserver",
+                priority: TaskPriority::High,
+                task_type: reserver_type,
+                context_files: Some(&["held.rs", "dir:foo"]),
+                ..Seed::default()
+            },
+        );
+        let expiring = seed(
+            &runtime,
+            Seed {
+                title: "expiring overlapping work",
+                priority: expiring_priority,
+                task_type: TaskType::Feature,
+                context_files: Some(&["foo/expiring.rs"]),
+                ..Seed::default()
+            },
+        );
+        let ordinary = seed(
+            &runtime,
+            Seed {
+                title: "ordinary overlapping work",
+                context_files: Some(&["foo/ordinary.rs"]),
+                ..Seed::default()
+            },
+        );
+        let before = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            excluded_entry(&before, &expiring.id)["reason"],
+            "surface_reserved",
+            "without expiry the reserver ranks ahead: {before:#}"
+        );
+        admitted_frozen_batch(
+            &runtime,
+            "code-review",
+            &expiring.id,
+            chrono::Duration::minutes(90),
+        );
+
+        let output = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            admitted(&output),
+            vec![expiring.id.clone()],
+            "expiry-aware order must let overlapping work ahead of the reserver admit: {output:#}"
+        );
+        let waiting = excluded_entry(&output, &reserver.id);
+        assert_eq!(waiting["reason"], "context_lock_conflict", "{waiting}");
+        assert_eq!(waiting["conflicts"][0]["locking_task_id"], holder.id);
+        let withheld = excluded_entry(&output, &ordinary.id);
+        assert_eq!(withheld["reason"], "surface_reserved", "{withheld}");
+        assert_eq!(withheld["conflicts"][0]["locking_task_id"], reserver.id);
+
+        let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+        let wave = classify(&runtime, &drain);
+        assert_eq!(wave["loose_task_ids"], json!([expiring.id]), "{wave:#}");
+        let readiness = runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        let ready = readiness_task(&readiness, &expiring.id);
+        assert_eq!(ready["eligible"], true, "{ready}");
+        assert_eq!(ready["reason"], "ready", "{ready}");
+        assert!(ready["frozen_batch_deadline"].is_string(), "{ready}");
+
+        // With both batches expiring, priority or age puts the reserver
+        // first again: expiry must be considered on both sides.
+        admitted_frozen_batch(
+            &runtime,
+            "friction-curation",
+            &reserver.id,
+            chrono::Duration::minutes(90),
+        );
+        let both_expiring = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            excluded_entry(&both_expiring, &expiring.id)["reason"],
+            "surface_reserved",
+            "the reserver's expiry must also affect ranking: {both_expiring:#}"
+        );
+    }
+}
+
 /// Record `task_id` as the admitted action of a frozen batch on this
 /// workspace's `name` consumer, due `remaining` from now — the state delivery
 /// automation leaves after minting the batch's task.
