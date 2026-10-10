@@ -78,20 +78,34 @@ impl HostResourceProbe for NativeProbe {
     }
 }
 
-fn disk_percent(path: &Path) -> Option<f64> {
+pub(super) fn disk_percent(path: &Path) -> Option<f64> {
     // The worktrees directory may not exist yet; use its nearest existing
     // ancestor's filesystem without creating anything. Permission/I/O failures
     // are unknown rather than being disguised by a fallback.
-    let mut existing = path;
-    while let Err(error) = existing.metadata() {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return None;
-        }
-        existing = existing.parent()?;
-    }
-    let stat = fs2::statvfs(existing).ok()?;
+    let existing = nearest_existing_ancestor(path)?;
+    let stat = fs2::statvfs(&existing).ok()?;
     let total = stat.total_space();
     (total > 0).then(|| 100.0 * total.saturating_sub(stat.available_space()) as f64 / total as f64)
+}
+
+/// Canonical form of the nearest existing ancestor of `path`. Resolving before
+/// the filesystem is probed settles `..` and symlinks first, so the probe only
+/// ever touches a resolved absolute path. A relative input is refused rather
+/// than resolved against the process's working directory.
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut candidate = path;
+    loop {
+        match candidate.canonicalize() {
+            Ok(resolved) => return Some(resolved),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                candidate = candidate.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

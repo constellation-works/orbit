@@ -482,6 +482,8 @@
         "bootstrap/tests/init.rs::global_and_workspace_init_create_private_directory_trees_under_permissive_umask",
         "bootstrap/tests/init.rs::refresh_defaults_preserves_a_user_authored_terra_crew",
         "bootstrap/tests/init.rs::unlink_skills_does_not_follow_a_symlinked_discovery_directory",
+        "runtime/host_resource/tests/platform.rs::missing_descendant_reports_its_existing_ancestor_filesystem",
+        "runtime/host_resource/tests/platform.rs::relative_path_is_refused_instead_of_resolved_against_the_working_directory",
         "runtime/host_resource/tests/pressure.rs::config_admission_rejects_invalid_thresholds_and_exposes_overrides",
         "runtime/host_resource/tests/pressure.rs::disk_aggregation_keeps_all_path_hysteresis_but_reports_one_held_disk",
         "runtime/host_resource/tests/pressure.rs::stale_invalid_disabled_and_observation_gaps_fail_open",
