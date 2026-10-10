@@ -86,6 +86,11 @@ impl ExecutionEnvPolicy {
         self.inherit
     }
 
+    /// The `execution.env.pass` names the operator admits.
+    pub fn pass_names(&self) -> &[String] {
+        &self.pass
+    }
+
     /// The complete environment an agent subprocess is launched with.
     ///
     /// This is the only place the policy becomes a concrete child environment,

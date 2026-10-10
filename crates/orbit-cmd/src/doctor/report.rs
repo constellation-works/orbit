@@ -93,8 +93,6 @@ pub fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
 /// may refresh credentials or call the network, while `doctor` must stay fast
 /// and read-only.
 fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    use std::collections::BTreeSet;
-
     let config = match ResolvedConfig::load(&ConfigRoots::new(
         runtime.global_root(),
         runtime.shared_root(),
@@ -113,50 +111,20 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
         }
     };
 
-    let mut names = BTreeSet::new();
-    if let Some(name) = &config.default_crew
-        && routing_selects_crew(&config, name)
-    {
-        names.insert(name.clone());
-    }
-    if routing_selects_crew(&config, &config.system_crew) {
-        names.insert(config.system_crew.clone());
-    }
-    for (complexity, entries) in [
-        ("low", &config.complexity_crews.low),
-        ("medium", &config.complexity_crews.medium),
-        ("hard", &config.complexity_crews.hard),
-        ("xhard", &config.complexity_crews.xhard),
-    ] {
-        if let Some(entries) = entries {
-            match canonical_crew_pool(
-                entries,
-                &config.crews,
-                &format!("workflow.{complexity}_complexity_crews"),
-            ) {
-                Ok(pool) => names.extend(
-                    pool.entries
-                        .into_iter()
-                        .filter(|entry| {
-                            entry.weight > 0 && routing_selects_crew(&config, &entry.name)
-                        })
-                        .map(|entry| entry.name),
+    let names = match routed_crew_names(&config) {
+        Ok(names) => names,
+        Err(message) => {
+            return vec![WorkspaceDoctorResult {
+                duration_ms: 0,
+                check_name: "provider-routing".to_string(),
+                status: WorkspaceDoctorStatus::Error,
+                message,
+                remediation: Some(
+                    "Repair the config reported by `orbit doctor`, then rerun it.".to_string(),
                 ),
-                Err(error) => {
-                    return vec![WorkspaceDoctorResult {
-                        duration_ms: 0,
-                        check_name: "provider-routing".to_string(),
-                        status: WorkspaceDoctorStatus::Error,
-                        message: format!("cannot inspect {complexity} crew pool: {error}"),
-                        remediation: Some(
-                            "Repair the config reported by `orbit doctor`, then rerun it."
-                                .to_string(),
-                        ),
-                    }];
-                }
-            }
+            }];
         }
-    }
+    };
 
     names.into_iter().map(|name| {
         let check_name = format!("provider:{name}");
@@ -212,6 +180,45 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
             },
         }
     }).collect()
+}
+
+/// The enabled crews normal workflow routing can select: the default and
+/// system lanes plus every weighted entry of a complexity pool. `Err` carries
+/// the row message when a pool cannot be resolved.
+pub(super) fn routed_crew_names(
+    config: &ResolvedConfig,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut names = std::collections::BTreeSet::new();
+    if let Some(name) = &config.default_crew
+        && routing_selects_crew(config, name)
+    {
+        names.insert(name.clone());
+    }
+    if routing_selects_crew(config, &config.system_crew) {
+        names.insert(config.system_crew.clone());
+    }
+    for (complexity, entries) in [
+        ("low", &config.complexity_crews.low),
+        ("medium", &config.complexity_crews.medium),
+        ("hard", &config.complexity_crews.hard),
+        ("xhard", &config.complexity_crews.xhard),
+    ] {
+        if let Some(entries) = entries {
+            let pool = canonical_crew_pool(
+                entries,
+                &config.crews,
+                &format!("workflow.{complexity}_complexity_crews"),
+            )
+            .map_err(|error| format!("cannot inspect {complexity} crew pool: {error}"))?;
+            names.extend(
+                pool.entries
+                    .into_iter()
+                    .filter(|entry| entry.weight > 0 && routing_selects_crew(config, &entry.name))
+                    .map(|entry| entry.name),
+            );
+        }
+    }
+    Ok(names)
 }
 
 /// Provider readiness follows dispatch. A disabled crew is omitted. A name

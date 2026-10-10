@@ -51,6 +51,7 @@ mod permissions;
 mod report;
 mod system;
 mod task;
+mod worker_token;
 mod workspace;
 
 use automation::*;

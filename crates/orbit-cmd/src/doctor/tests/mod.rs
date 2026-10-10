@@ -12,6 +12,7 @@ use crate::doctor::DoctorCommands;
 mod automation;
 mod permissions;
 mod task;
+mod worker_token;
 mod workspace;
 
 use workspace::*;

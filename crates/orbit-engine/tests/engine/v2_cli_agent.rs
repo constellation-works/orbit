@@ -192,6 +192,60 @@ fn provider_authentication_results_are_typed_without_reading_transcripts() {
     }
 }
 
+/// On a host that would otherwise let `claude` start on the Claude Desktop
+/// app's shared login, an activity without a worker credential is refused
+/// before the provider launches; one that carries a credential runs
+/// [ORB-15154].
+#[cfg(unix)]
+#[test]
+fn claude_without_a_worker_credential_is_refused_before_launch_on_a_desktop_login_host() {
+    let cases: [(&[(&str, &str)], bool); 4] = [
+        (&[], false),
+        (&[("CLAUDE_CODE_OAUTH_TOKEN", "")], false),
+        (&[("CLAUDE_CODE_OAUTH_TOKEN", "fixture-worker-token")], true),
+        (&[("ANTHROPIC_API_KEY", "fixture-api-key")], true),
+    ];
+    for (index, (admitted, launches)) in cases.into_iter().enumerate() {
+        let run = format!("worker-credential-{index}");
+        let audit = tempfile::tempdir().unwrap();
+        let (writer, _) = build_writer(audit.path(), &run).unwrap();
+        let marker = audit.path().join("launched");
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\ntouch '{}'\necho '{{\"type\":\"result\",\"is_error\":false,\"result\":\"ok\"}}'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let host = ScriptHost::new(fake.cli_path()).requiring_claude_credential(admitted);
+        let mut spec = cli_agent_loop_spec(Some(Provider::Claude));
+        spec.model = None;
+        spec.require_completion_envelope = false;
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "worker_credential_fixture",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({"prompt":"test"}),
+            audit: writer,
+            run_id: &run,
+            host: Some(&host),
+        });
+        assert_eq!(marker.exists(), launches, "{admitted:?}: launched");
+        if launches {
+            assert!(outcome.is_ok(), "{admitted:?}: {outcome:?}");
+            continue;
+        }
+        let Err(DispatchError::CliInvocationPermanent(message)) = outcome else {
+            panic!("{admitted:?}: expected a permanent refusal, got {outcome:?}");
+        };
+        assert!(
+            message.contains("CLAUDE_CODE_OAUTH_TOKEN") && message.contains("~/.zprofile"),
+            "the refusal names the variable and where to set it: {message}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn claude_revoked_token_preserves_the_release_marker_without_step_recovery() {
@@ -1086,6 +1140,10 @@ fn synthetic_loop_session_job() -> JobV2 {
 struct ScriptHost {
     command: String,
     args: Vec<String>,
+    /// Behave as a macOS host: Claude must bring its own credential.
+    requires_claude_credential: bool,
+    /// Variables the host's allowlist admits, beyond the baseline.
+    admitted_env: Vec<(String, String)>,
 }
 impl ScriptHost {
     fn new(path: &Path) -> Self {
@@ -1096,10 +1154,32 @@ impl ScriptHost {
         Self {
             command: path.to_string_lossy().into_owned(),
             args,
+            requires_claude_credential: false,
+            admitted_env: Vec::new(),
         }
+    }
+
+    fn requiring_claude_credential(mut self, admitted_env: &[(&str, &str)]) -> Self {
+        self.requires_claude_credential = true;
+        self.admitted_env = admitted_env
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        self
     }
 }
 impl RuntimeHost for ScriptHost {
+    fn requires_claude_worker_credential(&self) -> bool {
+        self.requires_claude_credential
+    }
+
+    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
+        let mut env =
+            orbit_common::security::child_env::allowlisted_child_env(&[], required_env_vars);
+        env.extend(self.admitted_env.iter().cloned());
+        env
+    }
+
     fn run_deterministic(
         &self,
         _action: &str,

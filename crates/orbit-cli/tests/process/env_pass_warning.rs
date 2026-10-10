@@ -290,3 +290,57 @@ fn doctor_does_not_warn_for_unset_template_defaults_after_fresh_init() {
         "the macOS-only template name is absent on Linux: {row}"
     );
 }
+
+#[cfg(unix)]
+impl Fixture {
+    fn clock_env(&self, contents: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = self.home.join(".orbit/clock.env");
+        fs::write(&path, contents).expect("write clock.env");
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod clock.env");
+    }
+
+    fn tick(&self) -> (Value, String) {
+        let output = self
+            .command(&[])
+            .args(["clock", "tick", "--json"])
+            .output()
+            .expect("clock tick");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            !stdout.contains(SECRET) && !stderr.contains(SECRET),
+            "clock tick printed a clock.env value: {stdout}{stderr}"
+        );
+        (serde_json::from_str(&stdout).expect("tick JSON"), stderr)
+    }
+}
+
+/// The launchd/systemd clock holds no login environment, so `clock.env` is its
+/// only source of operator credentials [ORB-15154]. Only pass-listed names are
+/// loaded, and a file other users can read is refused outright.
+#[cfg(unix)]
+#[test]
+fn clock_tick_loads_only_pass_listed_names_from_an_owner_only_clock_env() {
+    let fixture = Fixture::new();
+    fixture.clock_env(
+        &format!("{UNSET}={SECRET}\nNOT_PASS_LISTED={SECRET}\n# {SET}=ignored\n"),
+        0o600,
+    );
+    let (tick, stderr) = fixture.tick();
+    assert_eq!(
+        tick["clock_env_loaded"],
+        serde_json::json!([UNSET]),
+        "only the pass-listed name is loaded: {tick} {stderr}"
+    );
+    assert!(!stderr.contains("clock.env"), "{stderr}");
+
+    fixture.clock_env(&format!("{UNSET}={SECRET}\n"), 0o644);
+    let (tick, stderr) = fixture.tick();
+    assert_eq!(tick["clock_env_loaded"], serde_json::json!([]), "{tick}");
+    assert!(
+        stderr.contains("clock.env") && stderr.contains("chmod 600"),
+        "a group/world-readable file is refused with its fix: {stderr}"
+    );
+}

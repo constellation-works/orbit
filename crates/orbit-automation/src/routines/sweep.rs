@@ -151,6 +151,9 @@ pub struct SweepOutcome {
     pub auto_task_reports: Vec<AutoTaskSweepReport>,
     /// Fail-closed definition/load failures (those routines were absent).
     pub load_errors: Vec<RoutineLoadError>,
+    /// `execution.env.pass` names this pass exported from the clock
+    /// environment file into the runs it starts. Names only.
+    pub clock_env_loaded: Vec<String>,
     /// Set when every discovered workspace failed to open, so this pass
     /// loaded nothing. The CLI prints this one row and exits non-zero.
     /// Partial load errors leave this `None`.

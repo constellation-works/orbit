@@ -46,6 +46,10 @@ orbit clock pause|enable            # host-wide, without touching definition sta
 orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit
 ```
 
+The clock starts with no login environment. Credentials its runs need (on a Mac,
+`CLAUDE_CODE_OAUTH_TOKEN`) come from the owner-only `~/.orbit/clock.env`, which
+the install creates; see [macOS](macos.md).
+
 `clock pause` stops scheduled invocation; a manual `orbit clock tick` still works.
 `orbit sweep` is a compatibility alias for the same tick and produces the same output.
 
