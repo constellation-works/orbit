@@ -3,9 +3,11 @@ name: Coverage
 # [ORB-10010] Workspace coverage, moved off every push and PR (2026-10-10):
 # the instrumented build took ~23 runner-minutes per run, about 40% of the
 # Linux job time, and pushed CI past the organization's concurrent-job limit.
-# It runs on agent-main (the default branch, where `schedule` runs) every six
-# hours and on demand. The host CI failure sweep treats `schedule` and
-# `workflow_dispatch` runs like pushes, so a red run is still filed.
+# After this workflow is promoted to the default branch (`main`), it runs
+# there every six hours and can be dispatched on demand. GitHub schedules
+# workflows only from the default branch and exposes `workflow_dispatch`
+# after the workflow reaches that branch. The host CI failure sweep treats
+# `schedule` and `workflow_dispatch` runs like pushes, so a red run is filed.
 on:
   schedule:
     - cron: "17 */6 * * *"
