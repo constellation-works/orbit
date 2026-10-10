@@ -933,6 +933,19 @@ a.orbit-card:focus-visible :is(h2, h3) {
   font-size: 0.85em;
 }
 
+/* This long setting key needs to wrap as sentence text in the guarantee card. */
+.orbit-landing .orbit-wrap-code .orbit-code-box {
+  white-space: normal;
+}
+
+.orbit-landing .orbit-wrap-code code:not(pre code) {
+  display: inline;
+  max-width: none;
+  overflow: visible;
+  vertical-align: baseline;
+  white-space: normal;
+}
+
 .orbit-footer {
   border-top: 1px solid var(--sl-color-hairline-light);
   color: var(--sl-color-gray-3);
