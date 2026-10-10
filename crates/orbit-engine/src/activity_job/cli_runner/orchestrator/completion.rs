@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orbit_agent::{
-    ParsedStdout, antigravity_print_timeout_diagnostic, antigravity_terminal_error_diagnostic,
-    normalize_cli_stdout, project_cli_response, provider_authentication_failure,
-    provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
-    provider_usage_limit,
+    ParsedStdout, antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
+    antigravity_terminal_error_diagnostic, normalize_cli_stdout, project_cli_response,
+    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
+    provider_invocation_diagnostic, provider_usage_limit,
 };
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
@@ -260,6 +260,23 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         observed_limit = Some((limit, reported));
         message
     };
+    // [ORB-15243] An exit 0 with no envelope whose stream last reported a
+    // background task still running: the agent ended its turn without waiting
+    // for work it started. Only a step that already fails for the missing
+    // envelope is reworded; the exit code and a persisted summary are no
+    // evidence either way.
+    let background_task_diagnostic = (exit_success
+        && completion_envelope_error.is_some()
+        && (spec.require_completion_envelope || spec.require_response_envelope))
+        .then(|| {
+            antigravity_background_task_diagnostic(
+                &provider,
+                stdout.protocol_bytes(),
+                duration,
+                |text| bounded_diagnostic(text, redaction),
+            )
+        })
+        .flatten();
     let message = if timed_out {
         Some(format!(
             "cli subprocess exceeded {}s wall-clock timeout",
@@ -430,6 +447,11 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     } else if let Some(budget) = print_timeout.filter(|_| print_timeout_reached) {
         Some(with_sandbox_write_attribution(
             antigravity_print_timeout_diagnostic(budget, duration),
+            sandbox_write_diagnostic.as_deref(),
+        ))
+    } else if let Some(diagnostic) = background_task_diagnostic {
+        Some(with_sandbox_write_attribution(
+            diagnostic,
             sandbox_write_diagnostic.as_deref(),
         ))
     } else if (spec.require_completion_envelope || spec.require_response_envelope)

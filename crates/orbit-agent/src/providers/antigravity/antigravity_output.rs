@@ -60,6 +60,15 @@ fn is_json_envelope(value: &Value) -> bool {
         && (value.get("response").is_some() || value.get("error").is_some())
 }
 
+/// The `response` text of the terminal `result`, whatever its status: what the
+/// agent last said, without the wrapper's usage and conversation fields.
+/// Unbounded and unredacted; the caller bounds it. [ORB-15243]
+pub(crate) fn antigravity_terminal_response(stdout: &[u8]) -> Option<String> {
+    let result = terminal_result(stdout)?;
+    let response = result.get("response").and_then(Value::as_str)?.trim();
+    (!response.is_empty()).then(|| response.to_string())
+}
+
 /// Extract a bounded Antigravity terminal `error` for a failed run.
 ///
 /// Reads only `status` and `error`. The `response` field is never copied, so a
