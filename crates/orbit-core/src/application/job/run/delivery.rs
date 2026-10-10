@@ -30,6 +30,8 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+use crate::runtime::run_input::recorded_task_ids;
+
 use crate::OrbitRuntime;
 
 const COMMIT_ACTIVITY: &str = "git_commit";
@@ -255,14 +257,12 @@ fn bounded_id<'a>(value: &'a str, field: &str) -> Result<&'a str, OrbitError> {
     Ok(value)
 }
 
-/// The tasks the run was submitted with. Only the run's own recorded input
-/// counts; a caller cannot widen it.
+/// The tasks the run was submitted with. Only the run's own recorded
+/// `task_ids` array counts; a singular `task_id` cannot widen it.
 fn run_task_ids(run: &JobRun) -> Vec<&str> {
     run.input
         .as_ref()
-        .and_then(|input| input.get("task_ids"))
-        .and_then(Value::as_array)
-        .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+        .map(recorded_task_ids)
         .unwrap_or_default()
 }
 

@@ -2,6 +2,7 @@
 
 use super::{COVERAGE_ARTIFACT, source::Source};
 use crate::OrbitRuntime;
+use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
     AutomationError,
@@ -379,12 +380,12 @@ fn evidence_owner(
     }
 
     let run = runtime.show_job_run(&submission.run_id)?;
+    // Exact, untrimmed membership. A padded stored id must not match the
+    // canonical task: that would flip `assigned` and the `run:<id>` owner.
+    // The singular key still counts; the array half is the shared raw reader.
     let assigned = run.input.as_ref().is_some_and(|input| {
-        input.get("task_id").and_then(serde_json::Value::as_str) == Some(&task.id)
-            || input
-                .get("task_ids")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(&task.id)))
+        input.get("task_id").and_then(serde_json::Value::as_str) == Some(task.id.as_str())
+            || recorded_task_ids(input).iter().any(|id| *id == task.id)
     });
 
     Ok(assigned.then(|| format!("run:{}", submission.run_id)))

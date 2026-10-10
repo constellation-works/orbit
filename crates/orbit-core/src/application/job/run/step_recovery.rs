@@ -11,27 +11,17 @@ use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::Value;
 
+use crate::runtime::run_input::carried_task_ids;
+
 /// The tasks a run carries, from its persisted input.
+///
+/// Ids are trimmed and empties dropped. A whitespace-only id is gone; a
+/// padded non-empty id is kept in trimmed form.
 fn run_task_ids(run: &JobRun) -> Vec<String> {
     let Some(input) = run.input.as_ref() else {
         return Vec::new();
     };
-    let mut ids = input
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if let Some(id) = input.get("task_id").and_then(Value::as_str) {
-        ids.push(id.to_string());
-    }
-    ids.sort();
-    ids.dedup();
-    ids
+    carried_task_ids(input).into_iter().collect()
 }
 
 impl crate::OrbitRuntime {

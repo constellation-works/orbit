@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::Value;
 
 /// Environment marker emitted only for an Orbit-managed activity together
@@ -84,4 +86,34 @@ pub(crate) fn singular_task_id_from_input(input: &Value) -> Option<&str> {
 pub(crate) fn non_empty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Task ids a run input carries: the `task_ids` array plus a singular `task_id`.
+///
+/// Each entry is trimmed and empties are dropped. The set is sorted and
+/// deduplicated. `epic_task_id` and nested `task.id` are not read; callers
+/// that need those keys add them themselves.
+pub(crate) fn carried_task_ids(input: &Value) -> BTreeSet<String> {
+    input
+        .get("task_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .chain(input.get("task_id").and_then(Value::as_str))
+        .filter_map(non_empty)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// The recorded `task_ids` array, in input order, borrowed as stored.
+///
+/// Strings are not trimmed. Empties and duplicates are kept, and non-strings
+/// are skipped. The singular `task_id` is not included. A missing array is empty.
+pub(crate) fn recorded_task_ids(input: &Value) -> Vec<&str> {
+    input
+        .get("task_ids")
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
 }

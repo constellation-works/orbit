@@ -34,9 +34,9 @@ use orbit_types::task::{
 };
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::runtime::run_input::{carried_task_ids, non_empty};
 use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
 /// The retired job. Its stored runs are the migration's primary evidence.
@@ -349,29 +349,15 @@ fn run_task_ids(run: &JobRun) -> Vec<String> {
     let Some(input) = run.input.as_ref() else {
         return Vec::new();
     };
-    let mut ids: Vec<String> = input
-        .get("task_ids")
-        .and_then(Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    for key in ["task_id", "epic_task_id"] {
-        if let Some(id) = input
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        {
-            ids.push(id.to_string());
-        }
+    // `epic_task_id` is the retired epic root key. It is not part of the
+    // shared run-input readers.
+    let mut ids = carried_task_ids(input);
+    if let Some(id) = input
+        .get("epic_task_id")
+        .and_then(|value| value.as_str())
+        .and_then(non_empty)
+    {
+        ids.insert(id.to_string());
     }
-    ids.sort();
-    ids.dedup();
-    ids
+    ids.into_iter().collect()
 }

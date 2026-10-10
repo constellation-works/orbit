@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::runtime::run_input::recorded_task_ids;
+
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
 /// Non-terminal runs are always among the newest rows, so a bounded window is
 /// enough to spot a duplicate dispatch without walking the whole history.
@@ -436,11 +438,9 @@ impl OrbitRuntime {
             let task_id = run
                 .input
                 .as_ref()
-                .and_then(|input| input.get("task_ids"))
-                .and_then(Value::as_array)
+                .map(recorded_task_ids)
                 .into_iter()
                 .flatten()
-                .filter_map(Value::as_str)
                 .find(|candidate| task_ids.iter().any(|wanted| wanted == candidate))
                 .map(str::to_string)?;
             Some(OrbitError::ShipRunInFlight {
