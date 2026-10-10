@@ -319,6 +319,34 @@ const rowFor = id => taskRows().find(row => row.dataset.key === `task-${id}`);
 const dotOf = id => rowFor(id).querySelector('.ready-dot');
 const legendButtons = () => backlogBody.querySelectorAll('.ready-filter');
 const legendCounts = () => Object.fromEntries(legendButtons().map(button => [button.dataset.pool, button.querySelector('.ready-filter-count').textContent]));
+
+// ORB-15344: equal-count selector replacements repaint the run tooltip on the
+// lock read, and an ordinary list refresh reaches the same new paths. Repeating
+// the exact snapshot leaves both the row and runtime publication count alone.
+const taskRuntime = modules.get('task-runtime.js').namespace;
+const lockTask = task(36, { job_run_id: 'run-36', job_run_machine: { machine_name: 'dk-server-2' } });
+const lockPage = { total: 1, limit: 50, offset: 0, next_cursor: null };
+const lockPayload = path => ({ by_task: [{ id: 'ORB-36', context_files: [path] }], total_locked: 1 });
+taskRuntime.setTaskLocks(lockPayload('file:old.rs'));
+paint(lockPage, [lockTask]);
+assert.ok(rowFor('ORB-36').querySelector('.run-cell').title.includes('file:old.rs'));
+const lockPublications = [];
+const stopLockListening = taskRuntime.onTaskRuntimeChange(() => {
+  lockPublications.push('changed');
+  renderTasks(currentTasks, taskContext);
+});
+taskRuntime.setTaskLocks(lockPayload('file:new.rs'));
+assert.equal(lockPublications.length, 1, 'a same-count replacement publishes the changed selector');
+assert.ok(rowFor('ORB-36').querySelector('.run-cell').title.includes('file:new.rs'), 'the lock read repaints the run tooltip');
+paint(lockPage, [lockTask]);
+const refreshedLockRow = rowFor('ORB-36');
+assert.ok(refreshedLockRow.querySelector('.run-cell').title.includes('file:new.rs'), 'a task-list refresh keeps the replacement path');
+taskRuntime.setTaskLocks(lockPayload('file:new.rs'));
+assert.equal(lockPublications.length, 1, 'an identical lock snapshot does not publish');
+renderTasks(currentTasks, taskContext);
+assert.equal(rowFor('ORB-36'), refreshedLockRow, 'an identical snapshot preserves the existing row');
+stopLockListening();
+
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
 
