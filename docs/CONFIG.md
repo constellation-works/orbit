@@ -157,9 +157,11 @@ Percentages are integers `1..=100`; each resume mark must be below its high mark
 
 | Resource | Linux | macOS |
 |---|---|---|
-| CPU | One-minute load ÷ online CPUs × 100; can exceed 100% and includes I/O wait. | Busy fraction of aggregate Mach CPU tick deltas. A process's first sample takes a baseline, waits about 200 ms and reads again. |
+| CPU | One-minute load ÷ online CPUs × 100; can exceed 100% and includes I/O wait. | Busy fraction of aggregate Mach CPU tick deltas. A process's first sample takes a baseline, waits about 1.1 seconds and reads again, crossing the kernel's shared statistics cache window. |
 | Memory | `(MemTotal - MemAvailable) / MemTotal` | Physical memory minus free and reclaimable inactive pages, so compressed and wired memory count as used (speculative pages are already free; purgeable pages overlap other categories). See Apple's [VM](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/vm_statistics.h) and [host CPU](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/host_info.h) statistics. |
 | Disk | `(total - available) / total` with space available to the current user, for each checkout's filesystem, `.orbit/state/worktrees` (or its nearest existing ancestor) and the global Orbit root (`~/.orbit` or the serving root override). | Same. |
+
+On macOS, [XNU caches host statistics after a shared query quota is reached](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c). Identical CPU tick counters do not mean zero utilization. The initial sampling pair waits across the one-second cache window without retrying or increasing the query rate; a failed native read remains `unknown` with reason `unavailable`.
 
 Every watched path takes part in admission, but `GET /api/host/resources` reports one `disk` object (highest known percentage, severity and path; `null` when none is known), and a disk hold names only the highest held path. That endpoint covers every active registered local checkout whatever `?workspace=` says (or with none), never remote hosts, and returns severity, sample time and age, thresholds, verdict and reason.
 
