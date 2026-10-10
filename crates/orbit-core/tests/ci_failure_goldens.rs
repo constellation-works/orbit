@@ -201,8 +201,8 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
 }
 
 #[test]
-fn ci_closed_compiler_owners_do_not_cover_new_checkouts() {
-    if !isolated("ci_closed_compiler_owners_do_not_cover_new_checkouts") {
+fn ci_done_compiler_owner_does_not_cover_new_checkouts() {
+    if !isolated("ci_done_compiler_owner_does_not_cover_new_checkouts") {
         return;
     }
     use orbit_engine::TaskAutomationUpdate;
@@ -215,23 +215,131 @@ fn ci_closed_compiler_owners_do_not_cover_new_checkouts() {
         25,
     );
     let second_log = first_log.replace(":277:25", ":280:25");
-    for status in [TaskStatus::Done, TaskStatus::Archived] {
-        let (_root, runtime, commits) = operator_fixture("");
+    let (_root, runtime, commits) = operator_fixture("");
+    let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap();
+    runtime
+        .apply_task_automation_update(
+            owner,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let second = file(&runtime, vec![failure(&second_log, 1, &commits[1])]);
+    assert_eq!(second["filed_count"], 1, "{second}");
+    assert_ne!(second["filed"][0]["task_id"], owner);
+    assert!(runtime.get_task_comments(owner).unwrap().is_empty());
+}
+
+/// The compiler failure key embeds the observed checkout, so an operator's hold
+/// must follow the location-free diagnostic set across agent-main advances.
+#[test]
+fn ci_operator_cover_on_a_compiler_owner_holds_at_a_later_checkout() {
+    if !isolated("ci_operator_cover_on_a_compiler_owner_holds_at_a_later_checkout") {
+        return;
+    }
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_types::task::TaskStatus;
+    let first_log = compiler_log(
+        "E0433",
+        "cannot find `git_sandbox` in `runtime`",
+        "crates/orbit-core/src/application/distributed/entry.rs",
+        277,
+        25,
+    );
+    let later_log = first_log.replace(":277:25", ":280:28");
+    let (_root, runtime, commits) = operator_fixture("");
+    let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap();
+    let cover = runtime
+        .add_task(TaskAddParams {
+            title: "Hand fix".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    archive_owner(&runtime, owner, TaskStatus::Archived, Some(&cover.id));
+    let tasks_before = runtime.list_tasks().unwrap().len();
+    for (index, checkout) in [(1, &commits[1]), (2, &commits[2])] {
+        let held = file(&runtime, vec![failure(&later_log, index, checkout)]);
+        assert_eq!(held["filed_count"], 0, "{held}");
+        assert_eq!(held["pilot_candidate_count"], 0, "{held}");
+        assert_eq!(held["withheld"][0]["outcome"], "covered", "{held}");
+        assert_eq!(held["withheld"][0]["reason"], "operator_cover_open");
+        assert_eq!(held["withheld"][0]["owner"], owner);
+        assert_eq!(held["withheld"][0]["cover"], cover.id);
+        assert_ne!(
+            held["withheld"][0]["failure_key"], first["filed"][0]["failure_key"],
+            "the later checkout has its own exact key"
+        );
+    }
+    assert_eq!(runtime.list_tasks().unwrap().len(), tasks_before);
+
+    // A different diagnostic set is not covered by that owner.
+    let other = compiler_log(
+        "E0425",
+        "cannot find value `foo` in this scope",
+        "crates/orbit-core/src/application/distributed/entry.rs",
+        300,
+        10,
+    );
+    let unrelated = file(&runtime, vec![failure(&other, 3, &commits[2])]);
+    assert_eq!(unrelated["filed_count"], 1, "{unrelated}");
+}
+
+#[test]
+fn ci_operator_plain_archive_of_a_compiler_owner_suppresses_a_later_checkout() {
+    if !isolated("ci_operator_plain_archive_of_a_compiler_owner_suppresses_a_later_checkout") {
+        return;
+    }
+    use chrono::Duration;
+    use orbit_types::task::TaskStatus;
+    let first_log = compiler_log(
+        "E0433",
+        "cannot find `git_sandbox` in `runtime`",
+        "crates/orbit-core/src/application/distributed/entry.rs",
+        277,
+        25,
+    );
+    let later_log = first_log.replace(":277:25", ":280:28");
+    for (status, config, hours) in [
+        (TaskStatus::Archived, "", 6),
+        (
+            TaskStatus::Rejected,
+            "[ci_failure]\noperator_suppression_hours = 2\n",
+            2,
+        ),
+    ] {
+        let (_root, runtime, commits) = operator_fixture(config);
         let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
         let owner = first["filed"][0]["task_id"].as_str().unwrap();
-        runtime
-            .apply_task_automation_update(
-                owner,
-                TaskAutomationUpdate {
-                    status: Some(status),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        let second = file(&runtime, vec![failure(&second_log, 1, &commits[1])]);
-        assert_eq!(second["filed_count"], 1, "{status:?}: {second}");
-        assert_ne!(second["filed"][0]["task_id"], owner);
-        assert!(runtime.get_task_comments(owner).unwrap().is_empty());
+        archive_owner(&runtime, owner, status, None);
+        let decision_at = runtime
+            .get_task_history(owner)
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|entry| entry.to_status == Some(status))
+            .unwrap()
+            .at;
+        let before = runtime
+            .clone()
+            .with_ci_failure_time(decision_at + Duration::hours(hours) - Duration::nanoseconds(1));
+        let withheld = file(&before, vec![failure(&later_log, 1, &commits[1])]);
+        assert_eq!(withheld["filed_count"], 0, "{status:?}: {withheld}");
+        assert_eq!(withheld["pilot_candidate_count"], 0);
+        assert_eq!(withheld["withheld"][0]["outcome"], "withheld");
+        assert_eq!(withheld["withheld"][0]["reason"], "operator_archived");
+        assert_eq!(withheld["withheld"][0]["owner"], owner);
+        assert_ne!(
+            withheld["withheld"][0]["failure_key"], first["filed"][0]["failure_key"],
+            "the later checkout has its own exact key"
+        );
+        let at_boundary = runtime.with_ci_failure_time(decision_at + Duration::hours(hours));
+        let released = file(&at_boundary, vec![failure(&later_log, 2, &commits[2])]);
+        assert_eq!(released["filed_count"], 1, "{status:?}: {released}");
+        assert_eq!(released["withheld"], json!([]));
     }
 }
 

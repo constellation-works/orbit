@@ -1,4 +1,5 @@
-//! Exact-key ownership retained by an operator's archive or rejection.
+//! Ownership retained by an operator's archive or rejection: the exact failure
+//! key, plus the coordinate-free diagnostic set for compiler clusters.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +9,7 @@ use orbit_types::task::{TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use orbit_types::workflow::LandingObservationStatus;
 use serde_json::{Value, json};
 
-use super::cluster::FailureCluster;
+use super::cluster::{FailureCluster, task_open_compiler_identity};
 use super::filing::{CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_TAG};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::DuplicateTaskLookup;
@@ -77,6 +78,22 @@ impl<'a> OperatorCovers<'a> {
                         continue;
                     }
                     owners.insert(task.id.clone(), task);
+                }
+            }
+        }
+        // A compiler failure key embeds the observed checkout, so a hold taken
+        // at one commit is invisible to the exact-key lookup at the next. Match
+        // closed CI-sweep owners on the same location-free diagnostic set the
+        // open-owner lookup uses; the exact key stays the reported evidence.
+        if let Some(identity) = cluster.open_compiler_identity() {
+            for task in lookup.list_tasks()?.iter() {
+                if matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
+                    && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                    && task_open_compiler_identity(task).as_ref() == Some(&identity)
+                {
+                    owners
+                        .entry(task.id.clone())
+                        .or_insert_with(|| task.clone());
                 }
             }
         }
