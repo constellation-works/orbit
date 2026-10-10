@@ -82,7 +82,7 @@ onWorkspaceChange(() => {
 // accepts it, the server's 409 protects the live run; releasing this guard lets
 // a task returned to backlog be shipped again without reloading the page.
 const shipInFlightTaskIds = new Set();
-// Row shortcuts (Approve on a proposed task, Ship on a backlog one): the
+// Row shortcuts (Approve on proposed or review tasks, Ship on backlog): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
 
@@ -3112,18 +3112,24 @@ function summaryExecutionLocation(machine) {
 }
 
 // The one decision a row is waiting on, one click from the list: Approve a
-// proposed task, Ship a backlog one, open the run of one in progress. They hit
-// the same endpoints as the detail's actions; the detail keeps the full set.
+// proposed or review task, Ship a backlog one, open the run of one in progress.
+// They hit the same endpoints as the detail's actions; the detail keeps the full set.
 // True when buildQuickAction renders something for the task. The list drops the
 // action column only when no visible row would fill it, so this must agree with
-// buildQuickAction; a test compares the two.
+// buildQuickAction.
 function hasQuickAction(task) {
   if (task.status === "in-progress" && task.job_run_id) {
     if (task.job_run_navigable !== false) return true;
     if (summaryExecutionLocation(task.job_run_machine).known) return true;
   }
   if (PULL_REQUEST_LINK_STATUSES.has(task.status) && pullRequestLink(task)) return true;
-  return task.status === "proposed" || SHIP_STATUSES.has(task.status);
+  return APPROVE_STATUSES.has(task.status) || SHIP_STATUSES.has(task.status);
+}
+
+function canRunQuickAction(task) {
+  // Review admission reads claim state in the selected workspace. Aggregate
+  // review rows need that selection even when their ordinary writes are scoped.
+  return canMutateTask(task) && (task.status !== "review" || !isAggregateView());
 }
 
 function buildQuickAction(task, context) {
@@ -3155,11 +3161,13 @@ function buildQuickAction(task, context) {
     link.target = "_blank";
     link.addEventListener("click", (event) => event.stopPropagation());
     cell.appendChild(link);
-    return cell;
+    if (task.status !== "review") return cell;
   }
   let spec = null;
   if (task.status === "proposed") {
     spec = { kind: "approve", text: "Approve", title: `Approve ${task.id}: move it to backlog so it can run` };
+  } else if (task.status === "review") {
+    spec = { kind: "approve", text: "Approve", title: `Approve ${task.id}: close it as done` };
   } else if (SHIP_STATUSES.has(task.status)) {
     spec = { kind: "ship", text: "Ship", title: `Ship ${task.id}: dispatch it through the pipeline with its own crew` };
   }
@@ -3171,10 +3179,10 @@ function buildQuickAction(task, context) {
   const btn = el("button", {
     class: `task-quick ${spec.kind}${ready ? " ready" : ""}`,
     text: pending ? (spec.kind === "ship" ? "Shipping…" : "Approving…") : spec.text,
-    title: canMutateTask(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind),
+    title: canRunQuickAction(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind),
   });
   btn.type = "button";
-  btn.disabled = pending || !canMutateTask(task);
+  btn.disabled = pending || !canRunQuickAction(task);
   btn.addEventListener("click", (event) => {
     event.stopPropagation();
     runQuickAction(task, spec.kind, context);
@@ -3216,7 +3224,7 @@ async function runQuickAction(task, kind, context) {
   const visit = captureWorkspaceVisit();
   const dispatchKey = taskDispatchIdentity(task);
   const requestPath = visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));
-  if (!canMutateTask(task)) return;
+  if (!canRunQuickAction(task)) return;
   if (quickActionState.get(task.id)?.kind === "pending") return;
   if (kind === "ship" && shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
   quickActionState.set(task.id, { kind: "pending", text: kind });
@@ -3233,10 +3241,28 @@ async function runQuickAction(task, kind, context) {
       const state = result && result.state ? result.state : "submitted";
       taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
     } else {
-      await postJson(requestPath, {});
+      let claimed = null;
+      if (task.status === "review") {
+        try {
+          claimed = await claimedReviewApproval(task.id);
+        } catch (_) {
+          // As in the detail panel, an unreadable claim leaves the owner to decide.
+        }
+        if (!visit.isCurrent()) return;
+        if (claimed?.refusal) throw new Error(claimed.refusal);
+      }
+      if (claimed?.claim) {
+        const request = handoffApprovalRequest(claimed.claim);
+        invalidateDistributedConsole();
+        await postJson(visit.path(request.path), request.body);
+      } else {
+        await postJson(requestPath, {});
+      }
       dispatched = true;
       if (!visit.isCurrent()) return;
-      taskActionNotice = `${task.id} approved and moved to backlog`;
+      taskActionNotice = claimed?.claim
+        ? `${task.id}: handoff approved; the owner landing job completes it`
+        : `${task.id} approved and moved to ${task.status === "review" ? "done" : "backlog"}`;
     }
     quickActionState.delete(task.id);
     await refreshTasks(context);

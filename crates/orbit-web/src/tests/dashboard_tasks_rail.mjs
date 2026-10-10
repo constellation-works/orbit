@@ -400,6 +400,172 @@ assert.equal(backlogBody.querySelector('.group-readiness'), null, 'and the card 
 stopListening();
 common.setWorkspace('ws_orbit');
 
+// Review approval runs the shipped row handler and request client. Hold the
+// response to observe pending state without timers or an optimistic status edit.
+const approvalStatuses = ['proposed', 'review', 'backlog', 'in-progress', 'blocked', 'someday', 'done', 'rejected', 'archived'];
+let refreshes = 0;
+let refreshedStatus = 'done';
+const approvalContext = {
+  ...taskContext,
+  getActiveStatuses: () => new Set(approvalStatuses),
+  statusOrder: approvalStatuses,
+  refreshDashboard: async () => {
+    refreshes += 1;
+    currentTasks = currentTasks.map(item => ({ ...item, status: refreshedStatus }));
+    renderTasks(currentTasks, approvalContext);
+  },
+};
+const paintApprovals = items => {
+  served = { total: items.length, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = items;
+  renderTasks(items, approvalContext);
+};
+const approveButton = id => rowFor(id).querySelector('.task-quick.approve');
+const response = (body, ok = true) => ({ ok, status: ok ? 200 : 409, text: async () => JSON.stringify(body), json: async () => body });
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+};
+const settleActions = () => new Promise(setImmediate);
+const requests = [];
+let claims = [];
+let nextApproval = null;
+context.fetch = (path, options = {}) => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (options.method === 'POST') {
+    requests.push({ path: url.pathname, workspace: url.searchParams.get('workspace'), body: JSON.parse(options.body) });
+    assert.ok(nextApproval, 'the fixture provides the approval response');
+    return nextApproval.promise;
+  }
+  assert.equal(url.pathname, '/api/distributed/claims', 'review admission reads claim state once on click');
+  return Promise.resolve(response({ claims }));
+};
+const prRef = [{ system: 'github-pr', id: '123', url: 'https://github.com/example/orbit/pull/123' }];
+paintApprovals([
+  task(81, { status: 'review' }),
+  task(82, { status: 'review', external_refs: prRef }),
+  task(83, { status: 'proposed' }),
+  ...approvalStatuses.filter(status => !['review', 'proposed'].includes(status)).map((status, index) => task(90 + index, { status })),
+]);
+assert.equal(approveButton('ORB-81').textContent, 'Approve', 'review without a PR has an approval');
+assert.ok(approveButton('ORB-81').title.includes('done'), 'review approval explains the destination');
+assert.equal(approveButton('ORB-82').textContent, 'Approve', 'review with a PR keeps an approval');
+const prLink = rowFor('ORB-82').querySelector('.task-quick-link');
+assert.equal(prLink.href, prRef[0].url, 'review keeps the PR link beside approval');
+assert.equal(prLink.textContent, 'PR #123');
+assert.equal(approveButton('ORB-83').textContent, 'Approve', 'proposed keeps its approval');
+assert.ok(approveButton('ORB-83').title.includes('backlog'));
+for (const item of currentTasks.filter(item => !['review', 'proposed'].includes(item.status))) {
+  assert.equal(approveButton(item.id), null, `${item.status} gains no approval`);
+}
+assert.equal(rowFor('ORB-90').querySelector('.task-quick.ship').textContent, 'Ship', 'backlog keeps Ship');
+paintApprovals([task(81, { status: 'review' })]);
+assert.ok(approveButton('ORB-81'), 'a review-only list retains its action column');
+nextApproval = deferred();
+approveButton('ORB-81').dispatch('click');
+assert.equal(approveButton('ORB-81').textContent, 'Approving…');
+assert.equal(approveButton('ORB-81').disabled, true, 'pending approval is disabled');
+await settleActions();
+assert.deepEqual(requests, [{ path: '/api/tasks/ORB-81/approve', workspace: 'ws_orbit', body: {} }]);
+assert.equal(currentTasks[0].status, 'review', 'pending approval keeps the task in review');
+assert.equal(refreshes, 0, 'the list waits for API confirmation');
+approveButton('ORB-81').dispatch('click');
+await settleActions();
+assert.equal(requests.length, 1, 'a pending action cannot submit twice');
+nextApproval.resolve(response({}));
+await settleActions();
+assert.equal(refreshes, 1, 'accepted approval refreshes the list');
+assert.equal(currentTasks[0].status, 'done');
+assert.ok(byId['tasks-body'].querySelectorAll('.group-label').some(label => label.textContent === 'Done'), 'the refreshed task appears under Done');
+assert.equal(approveButton('ORB-81'), null, 'Done offers no approval');
+assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('done'), 'the notice reports the review destination');
+
+paintApprovals([task(82, { status: 'review', external_refs: prRef })]);
+nextApproval = deferred();
+approveButton('ORB-82').dispatch('click');
+await settleActions();
+nextApproval.resolve(response({ error: 'The pull request has not landed' }, false));
+await settleActions();
+assert.equal(rowFor('ORB-82').querySelector('.task-quick-error').textContent, 'approve failed: The pull request has not landed', 'the server refusal is inline');
+assert.equal(currentTasks[0].status, 'review', 'refusal leaves the task in review');
+assert.equal(refreshes, 1, 'refusal does not refresh or move the task');
+assert.equal(approveButton('ORB-82').disabled, false, 'a refused approval can be retried');
+assert.ok(rowFor('ORB-82').querySelector('.task-quick-link'), 'the refusal retains the PR link');
+
+// Both approval statuses use the same existing mutation refusal text.
+const assertDisabledApprovals = reason => {
+  paintApprovals([task(84, { status: 'review' }), task(85, { status: 'proposed' })]);
+  for (const id of ['ORB-84', 'ORB-85']) {
+    assert.equal(approveButton(id).disabled, true);
+    assert.ok(approveButton(id).title.includes(reason), 'disabled approval names the shared refusal');
+    approveButton(id).dispatch('click');
+  }
+};
+const priorRequests = requests.length;
+common.setWorkspace(null);
+assertDisabledApprovals('select a specific workspace');
+paintApprovals([
+  task(84, { status: 'review', workspace_id: 'ws_orbit' }),
+  task(85, { status: 'proposed', workspace_id: 'ws_orbit' }),
+]);
+assert.equal(approveButton('ORB-84').disabled, true, 'qualified review rows also require a selected workspace');
+assert.ok(approveButton('ORB-84').title.includes('select a specific workspace'));
+approveButton('ORB-84').dispatch('click');
+assert.equal(approveButton('ORB-85').disabled, false, 'qualified proposed approvals keep their existing behavior');
+await settleActions();
+assert.equal(requests.length, priorRequests, 'unqualified aggregate approvals send no write');
+common.setWorkspace('ws_orbit');
+common.setHost('dk-server-2');
+common.setHostWrites({ authorized: false, reason: 'Operator authorization is required' });
+byId['tasks-body'].replaceChildren(); // The dashboard clears panels on a host switch.
+assertDisabledApprovals('Read-only on dk-server-2: Operator authorization is required');
+await settleActions();
+assert.equal(requests.length, priorRequests, 'read-only approvals send no write');
+common.setHost(null);
+common.setWorkspace('ws_orbit');
+
+// A handed-off review uses the same exact-candidate approval as the detail.
+refreshedStatus = 'review';
+claims = [{ task_id: 'ORB-86', phase: 'handed_off', handoff: {
+  handoff_id: 'handoff-86', authority: { state: 'not_authorized' },
+  candidate: { candidate: { commit: 'candidate-86' }, base: { commit: 'base-86' } },
+} }];
+paintApprovals([task(86, { status: 'review' })]);
+nextApproval = deferred();
+approveButton('ORB-86').dispatch('click');
+await settleActions();
+const handoffRequest = requests.at(-1);
+assert.equal(handoffRequest.path, '/api/distributed/handoffs/handoff-86/approve');
+assert.equal(handoffRequest.workspace, 'ws_orbit');
+assert.equal(handoffRequest.body.expected_candidate_commit, 'candidate-86');
+assert.equal(handoffRequest.body.expected_base_commit, 'base-86');
+assert.ok(handoffRequest.body.request_id, 'handoff approval has a replay identity');
+nextApproval.resolve(response({}));
+await settleActions();
+assert.equal(currentTasks[0].status, 'review', 'handoff approval waits for the owner landing job');
+assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('owner landing job'), 'handoff notice does not claim it completed');
+claims[0].handoff.authority = { state: 'authorized', summary: 'Landing is already authorized' };
+paintApprovals([task(86, { status: 'review' })]);
+const beforeClaimRefusal = requests.length;
+approveButton('ORB-86').dispatch('click');
+await settleActions();
+assert.equal(requests.length, beforeClaimRefusal, 'claim refusal sends no status write');
+assert.ok(rowFor('ORB-86').querySelector('.task-quick-error').textContent.includes('Landing is already authorized'), 'claim refusal is inline on the row');
+claims = [];
+
+// Admission must not approve in a different workspace after an asynchronous read.
+const admission = deferred();
+context.fetch = () => admission.promise;
+paintApprovals([task(87, { status: 'review' })]);
+approveButton('ORB-87').dispatch('click');
+common.setWorkspace('ws_other');
+common.setWorkspace('ws_orbit');
+admission.resolve(response({ claims: [] }));
+await settleActions();
+assert.equal(requests.length, beforeClaimRefusal, 'a stale workspace visit starts no approval');
+context.fetch = () => new Promise(() => {});
+
 // A task link names only the task: it opens under the operator's own filter
 // instead of replacing it, and the open task is what a copied URL carries.
 let statuses = new Set(['review']);
