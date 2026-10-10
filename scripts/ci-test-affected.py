@@ -214,7 +214,12 @@ def main():
                 tool_config = Path(report) / "nextest.toml"
                 tool_config.write_text(f"[profile.default.junit]\npath = {json.dumps(str(junit))}\n")
                 report_flags = ["--tool-config-file", f"ci-test-affected:{tool_config}"]
-            command = [*cargo, "nextest", "run", "--no-fail-fast", *report_flags, *package_flags, *target_flags]
+            # nextest hides a passing test's stdout and stderr, and with it the
+            # `DEFERRED:` notice of a test that returned without running its
+            # sandboxed path [ORB-15161]. The host judge classifies the gate's
+            # complete output, so passing tests' output must reach it.
+            command = [*cargo, "nextest", "run", "--no-fail-fast", "--success-output", "immediate",
+                       *report_flags, *package_flags, *target_flags]
         else:
             # cargo test reports no executed-test count, so the summary records none.
             print("ci-test-affected: cargo-nextest unavailable; falling back to cargo test", file=sys.stderr)

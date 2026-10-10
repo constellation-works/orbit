@@ -806,6 +806,153 @@ fn a_deferred_host_pass_never_overrides_the_reviewers_failure() {
     );
 }
 
+/// A gated task whose check is the real `scripts/ci-test-affected.py` over a
+/// one-crate Cargo workspace, run by real cargo-nextest [ORB-15161]. The
+/// crate's integration test is `test_body`; the candidate changes the crate so
+/// the gate selects it. `None` when this host lacks cargo-nextest.
+fn nextest_fixture(test_body: &str) -> Option<Fixture> {
+    let nextest = std::process::Command::new("cargo")
+        .args(["nextest", "--version"])
+        .output();
+    if !nextest.is_ok_and(|output| output.status.success()) {
+        // The transport under test is nextest's; the gate falls back to
+        // `cargo test` without it.
+        return None;
+    }
+    // The validation environment is cleared, so hand the toolchain over.
+    let toolchain = ["HOME", "RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN"]
+        .iter()
+        .filter_map(|name| {
+            let value = std::env::var(name).ok()?;
+            Some(format!("{name}='{}' ", value.replace('\'', "'\\''")))
+        })
+        .collect::<String>();
+    let check = format!(
+        "#!/bin/sh\n\
+         {toolchain}CI_TEST_BASE=main BUILD_BUDGET=env CARGO_NET_OFFLINE=true \\\n\
+         CARGO_TARGET_DIR=\"$(git rev-parse --path-format=absolute --git-common-dir)/suite-target\" \\\n\
+         exec python3 scripts/ci-test-affected.py\n"
+    );
+    let fixture = fixture(&check, "after\n");
+    let repo = &fixture.repo;
+    git(repo, &["checkout", "--quiet", "main"]);
+    let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ci-test-affected.py");
+    std::fs::create_dir_all(repo.join("scripts")).unwrap();
+    std::fs::copy(gate, repo.join("scripts/ci-test-affected.py")).unwrap();
+    std::fs::create_dir_all(repo.join("crates/suite/src")).unwrap();
+    std::fs::create_dir_all(repo.join("crates/suite/tests")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/suite\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("crates/suite/Cargo.toml"),
+        "[package]\nname = \"suite\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("crates/suite/src/lib.rs"), "// before\n").unwrap();
+    std::fs::write(repo.join("crates/suite/tests/fixture.rs"), test_body).unwrap();
+    std::fs::write(repo.join(".gitignore"), ".orbit/\nCargo.lock\n").unwrap();
+    git(repo, &["add", "."]);
+    git(
+        repo,
+        &["commit", "--quiet", "-m", "base adds the suite crate"],
+    );
+    git(repo, &["checkout", "--quiet", "candidate"]);
+    git(repo, &["rebase", "--quiet", "main"]);
+    std::fs::write(repo.join("crates/suite/src/lib.rs"), "// changed\n").unwrap();
+    git(
+        repo,
+        &["commit", "--quiet", "-am", "candidate changes the suite"],
+    );
+    Some(fixture)
+}
+
+/// [ORB-15161] A test that passes under nextest after printing the canonical
+/// deferral notice is a self-skipped sandbox path. nextest captures a passing
+/// test's output, so the gate must transport it for the host to judge: the
+/// positive executed-test count never turns it into a host override.
+#[test]
+fn a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure",
+    ) {
+        return;
+    }
+    let notice = orbit_exec::bwrap_deferral_notice(
+        "runtime::sandbox_path",
+        "the host cannot apply the sandbox",
+    );
+    let body = format!("#[test]\nfn sandboxed_path() {{ eprintln!({notice:?}); }}\n");
+    let Some(mut fixture) = nextest_fixture(&body) else {
+        return;
+    };
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(settled.host_overrides.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    let escalation = settled.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused") && escalation.contains(&notice),
+        "the certificate retains the deferred-path reason: {escalation}"
+    );
+
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the candidate run is attached as baseline evidence")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "refused", "{evidence}");
+    assert_eq!(check["candidate"]["passed"], true, "{evidence}");
+    assert_eq!(check["candidate"]["summary"]["tests_run"], 1, "{evidence}");
+    assert_eq!(
+        check["candidate"]["host_output_refusal"]["reason"], "self_skipped",
+        "{evidence}"
+    );
+    assert_eq!(check["candidate"]["host_output_refusal"]["detail"], notice);
+}
+
+/// [ORB-15161] The same gate over a test that ran its path to the end still
+/// lets the host's pass override the reviewer's failed outcome.
+#[test]
+fn a_fully_executed_passing_nextest_gate_still_permits_the_host_override() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_fully_executed_passing_nextest_gate_still_permits_the_host_override",
+    ) {
+        return;
+    }
+    let Some(mut fixture) =
+        nextest_fixture("#[test]\nfn sandboxed_path() { assert_eq!(1 + 1, 2); }\n")
+    else {
+        return;
+    };
+    fixture.admit();
+    fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
+    let passed = fixture
+        .settle()
+        .expect("the host's pass settles the review");
+    assert_eq!(passed["gate"], "passed", "{passed}");
+
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Accept);
+    assert_eq!(
+        settled.host_overrides.len(),
+        1,
+        "{:?}",
+        settled.host_overrides
+    );
+    assert_eq!(settled.host_overrides[0].tests_run, Some(1));
+}
+
 /// [ORB-15122] The before-landing trial's incident shape: the reviewer found
 /// no defect, the trusted check failed only in its own environment, and it
 /// claimed the base fails it too. The host passes the check on the final

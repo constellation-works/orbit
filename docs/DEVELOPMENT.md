@@ -75,7 +75,12 @@ dependencies. For example, changing `crates/orbit-core/` selects `orbit-core`,
 `orbit-cmd`, `orbit-web` and `orbit-cli`. It runs their complete library,
 binary and integration test targets with nextest (or Cargo when nextest is
 unavailable), followed by Cargo doctests. Compilation and execution retain
-the shared [build-budget admission](runbooks/build-budget.md).
+the shared [build-budget admission](runbooks/build-budget.md). The nextest
+run passes `--success-output immediate`, so a passing test's output reaches
+the gate's output. Without it nextest hides that output, and with it the
+`DEFERRED:` notice of a test that returned without running its sandboxed
+path; the host verifying a required check refuses a pass whose output carries
+one.
 When the temporary directory is inside the checkout, the runner adds that
 directory to `GIT_CEILING_DIRECTORIES` for test execution. This prevents
 non-Git fixtures from discovering the managed checkout above them; existing
