@@ -44,7 +44,10 @@ $EDITOR ~/.orbit/clock.env           # CLAUDE_CODE_OAUTH_TOKEN=<token>
 - Only names in the effective `execution.env.pass` of the workspaces the tick
   evaluates are loaded; everything else in the file is ignored. `ORBIT_*`
   names are never loaded.
-- A value already set in the tick's own environment wins over the file.
+- A non-empty value already set in the tick's own environment wins over the file;
+  an empty value can be filled from the file. Credentials are passed as
+  per-workspace child-environment data, without changing the tick's process
+  environment.
 - The tick refuses a file that is a symlink, not owned by the user, or readable
   by group or others (`chmod 600 ~/.orbit/clock.env`). It reports a
   `clock.env` load error and still runs; Claude activities then fail with the

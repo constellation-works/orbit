@@ -790,10 +790,11 @@ impl OrbitRuntime {
         self.validation_environment().preflight_warning()
     }
 
-    /// The operator-added `execution.env.pass` names this process's
-    /// environment holds no value for [ORB-14777]. Names only, never values.
-    /// Agents this process starts, directly or through a detached worker that
-    /// inherits its environment, do not receive them.
+    /// The operator-added `execution.env.pass` names this runtime has no
+    /// non-empty child-environment value for [ORB-14777], including clock
+    /// credentials supplied as runtime defaults. Names only, never values.
+    /// Agents this runtime starts, directly or through a detached worker,
+    /// do not receive them.
     pub fn unset_env_pass_names(&self) -> Vec<String> {
         self.execution_env_policy().unset_pass_names()
     }
