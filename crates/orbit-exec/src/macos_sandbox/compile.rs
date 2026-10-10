@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, tracing};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::Provider;
 
@@ -583,12 +583,21 @@ fn emit_denied_ancestor_pins(
 
 /// Append every existing entry strictly beneath `dir`. Symlinks are not
 /// followed: Seatbelt checks the physical path a write lands on, which is the
-/// walked one only for a non-link entry.
+/// walked one only for a non-link entry. A permission-denied listing is
+/// skipped with a warning; other unexpected listing failures remain errors.
 fn collect_entries(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), OrbitError> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                target: "orbit.sandbox.macos",
+                directory = %dir.display(),
+                "skipping unreadable directory while compiling macOS sandbox glob denies"
+            );
+            return Ok(());
+        }
         Err(error) => {
             return Err(OrbitError::Execution(format!(
                 "list `{}` for macOS sandbox glob denies: {error}",
@@ -597,12 +606,23 @@ fn collect_entries(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), OrbitError>
         }
     };
     for entry in entries {
-        let entry = entry.map_err(|error| {
-            OrbitError::Execution(format!(
-                "list `{}` for macOS sandbox glob denies: {error}",
-                dir.display()
-            ))
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                tracing::warn!(
+                    target: "orbit.sandbox.macos",
+                    directory = %dir.display(),
+                    "skipping unreadable directory while compiling macOS sandbox glob denies"
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(OrbitError::Execution(format!(
+                    "list `{}` for macOS sandbox glob denies: {error}",
+                    dir.display()
+                )));
+            }
+        };
         let path = entry.path();
         out.push(path.clone());
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {

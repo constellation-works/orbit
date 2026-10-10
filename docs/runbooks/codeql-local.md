@@ -69,6 +69,7 @@ and retained on success or failure. It contains:
 
 CodeQL extracts every `.rs` file under the checkout that the configuration does
 not exclude. The shared `.github/codeql/codeql-config.yml` excludes tests,
+test-only helpers named `test_support.rs` (including those under `src/`),
 examples and benches, and also Orbit state (`.orbit/`) and Cargo output
 (`target/`). Neither exists in a hosted checkout, so hosted selection is
 unchanged, but locally they hold worktrees, earlier runs' toolchains and
