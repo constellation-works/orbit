@@ -10,6 +10,7 @@
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
+//! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
@@ -23,6 +24,7 @@ mod owner;
 mod projection;
 mod query;
 mod reconcile;
+mod root_cause;
 mod step_recovery;
 mod types;
 mod worker_limit;
@@ -48,5 +50,6 @@ pub use projection::{
     ActivityInvocationEvidence, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };
+pub use root_cause::{RunIncident, fold_run_incidents};
 pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild, UnstoppedLeaf};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

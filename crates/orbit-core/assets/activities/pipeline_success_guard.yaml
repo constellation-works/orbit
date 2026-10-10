@@ -10,8 +10,13 @@ spec:
     that still need access to the raw child status. Workspace-level sequencers
     may opt into `allow_non_success` to validate, retain, and count exact
     terminal child outcomes without failing solely for a non-success status.
-    A child that ended `held` (awaiting named evidence or a forge) is neither
-    a success nor a failure: the guard passes it and reports it in `held_count`.
+    A child that ended `held` (awaiting named evidence or a forge, a required
+    check red on the base, or a before-landing review awaiting a recorded
+    decision) is neither a success nor a failure: the guard passes it and
+    reports it in `held_count`. When every child that did not succeed was
+    cancelled, the guard ends the workflow `cancelled` rather than failed. A
+    failure records on the current run the leaf it echoes (`root_cause`: leaf
+    run, task, step and code) and names that leaf instead of nesting its text.
   input_schema_json:
     type: object
     properties:

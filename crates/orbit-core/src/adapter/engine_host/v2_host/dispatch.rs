@@ -510,10 +510,11 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::InvokeDetached => {
             pipeline_actions::invoke_detached(runtime, action, input, tool_context)
         }
-        // Fail a workflow if child wait results did not reach `succeeded`, or
-        // apply the explicit workspace-sequencer recording policy.
+        // Fail a workflow if child wait results did not reach `succeeded`
+        // (cancel it when every such child was cancelled), or apply the
+        // explicit workspace-sequencer recording policy.
         CoreDeterministicAction::PipelineSuccessGuard => {
-            let output = pipeline_actions::pipeline_success_guard(action, input)?;
+            let output = pipeline_actions::pipeline_success_guard(runtime, action, input)?;
             pipeline_actions::record_pipeline_results_audit(runtime, action, input, &output)?;
             Ok(output)
         }

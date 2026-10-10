@@ -41,6 +41,9 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
         Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
         Err(error @ DispatchError::ForgeUnavailableHold(_)) => ("held", Some(error.to_string())),
+        Err(error @ DispatchError::ChildRunCancelled { .. }) => {
+            ("cancelled", Some(error.to_string()))
+        }
         Err(err) => ("error", Some(err.to_string())),
     };
     emit_job_event_lossy(
