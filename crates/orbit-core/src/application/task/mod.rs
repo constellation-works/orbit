@@ -77,6 +77,7 @@ pub(crate) use lifecycle::{
 };
 pub use lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 pub(crate) use paths::{compute_task_add_warnings, context_workspace_root};
+pub(crate) use update::admit_agent_artifact;
 
 #[cfg(test)]
 mod tests;
