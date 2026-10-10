@@ -113,7 +113,7 @@ definition of the same name.
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
   commit, measures tracked text at that SHA, and splits directories or file
-  sets into areas of at most 25,000 lines. Its `review-areas.json` artifact
+  sets into areas of at most 25,000 lines. Its `full-review-areas.json` artifact
   records the inventories, counts and exclusions. It files one area-review
   chore per bounded area tagged
   `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
