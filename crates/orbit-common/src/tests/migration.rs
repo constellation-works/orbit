@@ -1,5 +1,7 @@
-use super::super::*;
-use serde_yaml::Mapping;
+use serde_yaml::{Mapping, Value};
+
+use super::super::migration::Plan;
+use crate::OrbitError;
 
 fn doc(version: u64) -> Value {
     let mut map = Mapping::new();

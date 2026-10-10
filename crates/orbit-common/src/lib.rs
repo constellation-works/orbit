@@ -37,3 +37,6 @@ pub use error::{
 pub use fs::task_io::task_artifact_from_source_file;
 pub use model::pricing::derive_cost_usd;
 pub use tracing;
+
+#[cfg(test)]
+mod tests;

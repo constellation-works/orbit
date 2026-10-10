@@ -143,6 +143,3 @@ pub fn read_schema_version(value: &Value) -> Result<u32, OrbitError> {
     u32::try_from(raw)
         .map_err(|_| OrbitError::Migration(format!("schema_version {raw} exceeds u32 range")))
 }
-
-#[cfg(test)]
-mod tests;
