@@ -137,7 +137,7 @@ function buildCancelRunButton(run, host) {
 
 function buildReplayRunButton(run, host) {
   const btn = el("button", {
-    class: "action approve run-replay",
+    class: "action archive run-replay",
     text: "Replay run",
     title: `Replay ${run.run_id}`,
   });
@@ -437,10 +437,59 @@ async function replayRun(run, btn, host) {
   }
 }
 
+function runTaskIds(run) {
+  const ids = Array.isArray(run && run.task_ids) ? run.task_ids : [];
+  const taskRows = Array.isArray(run && run.tasks) ? run.tasks : [];
+  return [...new Set([
+    ...ids,
+    ...taskRows.map((task) => task && task.id),
+    run && run.task_id,
+  ].filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))];
+}
+
+function runTaskLabels(run, taskIds = runTaskIds(run)) {
+  const tasks = Array.isArray(run && run.tasks) ? run.tasks : [];
+  return taskIds.map((id) => {
+    const title = tasks.find((task) => task && task.id === id)?.title;
+    return typeof title === "string" && title.trim() ? `${title.trim()} (${id})` : id;
+  });
+}
+
+function activeRunForTask(run, taskIds, activeRuns) {
+  if (taskIds.length === 0) return null;
+  const matchingTasks = new Set(taskIds);
+  return activeRuns.find((candidate) => candidate
+    && candidate.run_id !== run.run_id
+    && ["pending", "running", "retrying"].includes(candidate.state)
+    && runTaskIds(candidate).some((id) => matchingTasks.has(id))) || null;
+}
+
 async function replayRunInVisit(run, btn, host, visit) {
   const runId = run && run.run_id;
   if (!runId) return;
-  if (run.state === "running" && !window.confirm(`Replay still-running run ${runId}?`)) return;
+  let activeRuns;
+  try {
+    const payload = await fetchJson(visit.path(runScopedPath("/api/job-runs?limit=200&state=active", run)));
+    if (!Array.isArray(payload && payload.items) || payload.truncated) {
+      throw new Error("the active run list is incomplete");
+    }
+    activeRuns = payload.items;
+  } catch (e) {
+    if (!visit.isCurrent()) return;
+    showRunActionError(host, `Could not check for another live run, so replay was not started. ${e.message || e}`);
+    console.error(e);
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  const taskIds = runTaskIds(run);
+  const task = runTaskLabels(run, taskIds).join(", ") || `the task recorded for ${runId}`;
+  const job = run.job_id || "unknown job";
+  let message = `Start a new ${job} run for ${task}? The original run ${runId} stays as is.`;
+  const liveRun = activeRunForTask(run, taskIds, activeRuns);
+  if (liveRun) {
+    message += `\n\nThis task already has live run ${liveRun.run_id}; replay will start another run for the same task.`;
+  }
+  if (!window.confirm(message)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>Replay run`;

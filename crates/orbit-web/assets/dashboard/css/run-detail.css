@@ -369,6 +369,9 @@
   padding: 8px 16px 0 16px;
   flex-wrap: wrap;
 }
+.run-detail-actions .run-replay {
+  margin-left: auto;
+}
 
 /* Run Detail — Gantt timeline */
 .gantt-panel {
