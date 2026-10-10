@@ -6,7 +6,7 @@ import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
-import { assertRunTaskLabels } from './dashboard_run_tasks_browser.mjs';
+import { assertRunTaskLabels, assertTaskLinkScopeHistory } from './dashboard_run_tasks_browser.mjs';
 import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
 import { assertPullRequestLinks } from '../../tests/http_api/dashboard_pull_request_links_browser.mjs';
 
@@ -1293,6 +1293,7 @@ let browser;
 try {
   browser = await chromium.launch({ headless: true });
   if (!locksOnly && !authExclusionsOnly) await assertWorkspaceScope(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly) await assertTaskLinkScopeHistory(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const failures = [];
   page.on('pageerror', error => failures.push(error.message));

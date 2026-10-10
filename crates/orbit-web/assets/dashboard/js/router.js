@@ -579,9 +579,18 @@ function initTabsImpl(ctx) {
       ctx.refreshDashboard();
     });
   }
-  window.addEventListener("hashchange", () => {
+  // Back and Forward fire popstate, then hashchange when the fragment differs.
+  // An entry made by pushState (a task link that changes workspace) fires no
+  // hashchange, so popstate routes too; the address that was just routed is not
+  // routed twice. common.js restores the scope on popstate first.
+  let routedHref = null;
+  const routeFromLocation = () => {
+    if (window.location.href === routedHref) return;
+    routedHref = window.location.href;
     setActiveTabImpl(ctx, window.location.hash);
-  });
+  };
+  window.addEventListener("hashchange", routeFromLocation);
+  window.addEventListener("popstate", routeFromLocation);
   setActiveTabImpl(ctx, window.location.hash || "tasks", {
     refresh: false,
     updateHash: false,
