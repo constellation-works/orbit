@@ -96,6 +96,11 @@ impl BoundaryDepth {
     pub(super) fn active(partition: &Path) -> bool {
         BOUNDARY_DEPTH.with(|depth| depth.borrow().iter().any(|held| held == partition))
     }
+
+    /// Whether this thread is inside any partition's boundary section.
+    fn any() -> bool {
+        BOUNDARY_DEPTH.with(|depth| !depth.borrow().is_empty())
+    }
 }
 
 impl Drop for BoundaryDepth {
@@ -278,26 +283,67 @@ impl TaskCommitBoundary {
         }
     }
 
-    /// Hold the boundary exclusively for one admission decision.
+    /// Hold this partition exclusively for one admission decision.
     ///
-    /// Readiness, dependencies, conflicts, and the commit itself run inside
-    /// `op`, so nothing an ordinary write could change moves underneath the
-    /// decision. Calling [`Self::commit_task_transition`] inside `op` re-enters
-    /// the same acquisition.
+    /// Readiness, dependencies within the partition, conflicts, and the
+    /// commit itself run inside `op`, so nothing an ordinary write could
+    /// change moves underneath the decision. Calling
+    /// [`Self::commit_task_transition`] inside `op` re-enters the same
+    /// acquisition.
+    ///
+    /// The host lock is held shared, as an ordinary section holds it, so
+    /// ordinary sections in every other partition keep running while this
+    /// one decides. Excluding them all for every claim mutation and commit
+    /// stalled every workspace's task reads and writes on the host behind
+    /// one drain's admissions (ORB-15106). `op` must therefore read only
+    /// this partition; an admission whose decision reads another
+    /// partition's dependency takes a host-wide section instead.
     #[track_caller]
     pub fn with_admission<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
         let section = Section::here("admission");
+        self.shared(&self.host_lock_target(), section, || {
+            self.admission_locked(section, op)
+        })
+    }
+
+    /// [`Self::with_admission`] that also excludes every other partition's
+    /// ordinary sections, for a decision that reads a dependency another
+    /// workspace partition holds: nothing an ordinary write anywhere on the
+    /// host could change moves underneath that read.
+    ///
+    /// The host lock is never upgraded in place, so this is refused inside
+    /// any boundary section on this thread: a nested request would run under
+    /// the outer section's shared hold.
+    #[track_caller]
+    pub(super) fn with_host_admission<T, F>(&self, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        let section = Section::here("host admission");
+        if BoundaryDepth::any() {
+            return Err(OrbitError::Store(
+                "a host-wide admission cannot nest inside another boundary section".into(),
+            ));
+        }
         self.exclusive(&self.host_lock_target(), section, || {
-            self.exclusive(&self.lock_target(), section, || {
-                #[cfg(test)]
-                let _probe = section_probe::SectionProbe::enter();
-                self.recover_pending_in(section)?;
-                let _depth = BoundaryDepth::enter(&self.partition_dir);
-                op()
-            })
+            self.admission_locked(section, op)
+        })
+    }
+
+    fn admission_locked<T>(
+        &self,
+        section: Section,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        self.exclusive(&self.lock_target(), section, || {
+            #[cfg(test)]
+            let _probe = section_probe::SectionProbe::enter(section.kind);
+            self.recover_pending_in(section)?;
+            let _depth = BoundaryDepth::enter(&self.partition_dir);
+            op()
         })
     }
 
@@ -364,7 +410,8 @@ impl TaskCommitBoundary {
 }
 
 /// What each outermost admission section on this thread cost, so tests can
-/// bound the work done while every other task writer on the host waits.
+/// bound the work done while other task writers wait, and tell a
+/// partition-scoped section from a host-wide one.
 #[cfg(test)]
 pub(crate) mod section_probe {
     use std::cell::{Cell, RefCell};
@@ -372,9 +419,12 @@ pub(crate) mod section_probe {
 
     use crate::repository::task::v2_bundle::{CANONICAL_BUNDLE_READS, LIGHTWEIGHT_BUNDLE_READS};
 
-    /// One exclusive section: how long it was held and the bundles read in it.
+    /// One exclusive section: its kind (`admission` holds the host lock
+    /// shared, `host admission` exclusively), how long it was held, and the
+    /// bundles read in it.
     #[derive(Debug, Clone, Copy)]
     pub(crate) struct SectionCost {
+        pub(crate) kind: &'static str,
         pub(crate) held: Duration,
         pub(crate) lightweight_reads: u64,
         pub(crate) canonical_reads: u64,
@@ -386,15 +436,17 @@ pub(crate) mod section_probe {
     }
 
     pub(super) struct SectionProbe {
+        kind: &'static str,
         started: Instant,
         lightweight: u64,
         canonical: u64,
     }
 
     impl SectionProbe {
-        pub(super) fn enter() -> Self {
+        pub(super) fn enter(kind: &'static str) -> Self {
             DEPTH.with(|depth| depth.set(depth.get() + 1));
             Self {
+                kind,
                 started: Instant::now(),
                 lightweight: LIGHTWEIGHT_BUNDLE_READS.with(Cell::get),
                 canonical: CANONICAL_BUNDLE_READS.with(Cell::get),
@@ -410,6 +462,7 @@ pub(crate) mod section_probe {
             });
             if outermost {
                 let cost = SectionCost {
+                    kind: self.kind,
                     held: self.started.elapsed(),
                     lightweight_reads: LIGHTWEIGHT_BUNDLE_READS.with(Cell::get) - self.lightweight,
                     canonical_reads: CANONICAL_BUNDLE_READS.with(Cell::get) - self.canonical,
