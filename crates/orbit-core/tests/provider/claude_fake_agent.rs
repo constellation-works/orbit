@@ -68,27 +68,51 @@ fn claude_resource() -> ExecutorResource {
 }
 
 fn dispatch(program: &Path) -> DispatchOutcome {
-    dispatch_admitting(program, true).expect("dispatch Claude CLI backend")
+    try_dispatch(program).expect("dispatch Claude CLI backend")
 }
 
-/// `admit_token` puts a synthetic credential on the provider environment.
-/// Without it, macOS `OrbitRuntime` refuses before the binary starts.
-fn dispatch_admitting(program: &Path, admit_token: bool) -> Result<DispatchOutcome, DispatchError> {
+/// Set credentials only on an isolated child, never in the parallel parent.
+fn run_isolated_test(function_name: &str, admit_token: bool) -> bool {
+    const CHILD: &str = "ORBIT_TEST_CLAUDE_FAKE_AGENT_CHILD";
+    let test_name = function_name
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(function_name);
+    if std::env::var(CHILD).as_deref() == Ok(test_name) {
+        return false;
+    }
+    let home = tempfile::tempdir().expect("isolated Claude fixture home");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test_name)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+        .env_remove("ANTHROPIC_API_KEY")
+        .current_dir(home.path());
+    if admit_token {
+        command.env("CLAUDE_CODE_OAUTH_TOKEN", FIXTURE_CLAUDE_WORKER_TOKEN);
+    }
+    let output = orbit_common::test_env::run_child_test(&mut command, test_name, home.path());
+    orbit_common::test_env::assert_child_test_passed(
+        test_name,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    true
+}
+
+fn try_dispatch(program: &Path) -> Result<DispatchOutcome, DispatchError> {
     let root = tempfile::tempdir().expect("runtime root");
     let global = root.path().join("global");
     let workspace = root.path().join("repo").join(".orbit");
     std::fs::create_dir_all(&global).expect("global root");
     std::fs::create_dir_all(&workspace).expect("workspace root");
-    if admit_token {
-        std::fs::write(global.join("config.toml"), FIXTURE_PASS_CONFIG).expect("fixture config");
-    }
-    let _credential = orbit_common::test_env::scoped([
-        (
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            admit_token.then_some(FIXTURE_CLAUDE_WORKER_TOKEN),
-        ),
-        ("ANTHROPIC_API_KEY", None),
-    ]);
+    std::fs::write(global.join("config.toml"), FIXTURE_PASS_CONFIG).expect("fixture config");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
 
     let resource = claude_resource();
@@ -151,6 +175,12 @@ fn spec() -> AgentLoopSpec {
 /// envelope, so the failure below is the guard and not a broken fixture.
 #[test]
 fn envelope_turn_satisfies_the_completion_guard() {
+    if run_isolated_test(
+        std::any::type_name_of_val(&envelope_turn_satisfies_the_completion_guard),
+        true,
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("fake claude tempdir");
     let program = fake_claude(dir.path(), &envelope_turn());
     let outcome = dispatch(&program);
@@ -166,6 +196,12 @@ fn envelope_turn_satisfies_the_completion_guard() {
 /// Exit 0 without an envelope stays a failure.
 #[test]
 fn exit_zero_prose_only_wakeup_result_fails_the_completion_guard() {
+    if run_isolated_test(
+        std::any::type_name_of_val(&exit_zero_prose_only_wakeup_result_fails_the_completion_guard),
+        true,
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("fake claude tempdir");
     let program = fake_claude(dir.path(), prose_only_wakeup_turn());
     let outcome = dispatch(&program);
@@ -188,12 +224,20 @@ fn exit_zero_prose_only_wakeup_result_fails_the_completion_guard() {
 #[cfg(target_os = "macos")]
 #[test]
 fn orbit_runtime_refuses_claude_without_a_worker_credential_before_launch() {
+    if run_isolated_test(
+        std::any::type_name_of_val(
+            &orbit_runtime_refuses_claude_without_a_worker_credential_before_launch,
+        ),
+        false,
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("fake claude tempdir");
     let marker = dir.path().join("launched");
     let body = format!("touch '{}'\n{}", marker.display(), envelope_turn());
     let program = fake_claude(dir.path(), &body);
-    let error = dispatch_admitting(&program, false)
-        .expect_err("claude without a worker credential must be refused");
+    let error =
+        try_dispatch(&program).expect_err("claude without a worker credential must be refused");
     let message = error.to_string();
     assert!(
         message.contains("CLAUDE_CODE_OAUTH_TOKEN") && message.contains("ANTHROPIC_API_KEY"),
