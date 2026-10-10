@@ -693,6 +693,69 @@ fn a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim() {
     );
 }
 
+/// A gate that, like `make ci-test-affected`, reports the selection it ran
+/// and honours a handed one, including `failing_tests`. It fails
+/// `suite::broken` everywhere and logs `full` or `replay` for each run to
+/// [`CHECK_RUNS_LOG`] in the Git common directory.
+const REPLAYING_GATE: &str = "#!/bin/sh\n\
+    log=\"$(git rev-parse --path-format=absolute --git-common-dir)/check-runs.log\"\n\
+    selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+    [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
+    case \"$selection\" in *failing_tests*) echo replay >> \"$log\" ;; *) echo full >> \"$log\" ;; esac\n\
+    printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+    echo 'test suite::broken ... FAILED'\n\
+    exit 1\n";
+const CHECK_RUNS_LOG: &str = "check-runs.log";
+
+/// [ORB-15328] A failing gate whose failures the base shares settles with
+/// them attributed to the base by replaying only the failing tests there: the
+/// full selection runs once, on the candidate, and settlement records the
+/// replay path.
+#[test]
+fn a_shared_gate_failure_is_attributed_by_replaying_only_the_failing_tests() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_shared_gate_failure_is_attributed_by_replaying_only_the_failing_tests",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(REPLAYING_GATE, "after\n");
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+    let hold = BaselineRedHold::from_text(&failure).expect("the claim is confirmed and held");
+    assert_eq!(
+        hold.selection,
+        Some(json!({"packages": ["suite"]})),
+        "the hold keeps the candidate's whole selection, which a moved base must pass"
+    );
+    let settled = certificate(&fixture);
+    assert_eq!(settled.baseline_red, vec![hold]);
+
+    let common = fixture.repo.join(".git").canonicalize().unwrap();
+    let runs = std::fs::read_to_string(common.join(CHECK_RUNS_LOG)).unwrap();
+    assert_eq!(
+        runs.lines().collect::<Vec<_>>(),
+        ["full", "replay"],
+        "the full selection ran only on the candidate"
+    );
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "confirmed", "{check}");
+    assert_eq!(check["base_replay"], "failing_tests", "{check}");
+    assert_eq!(check["cut"], Value::Null, "{check}");
+    assert_eq!(
+        check["base"]["summary"]["selection"],
+        json!({"packages": ["suite"], "failing_tests": ["suite::broken"]}),
+        "{check}"
+    );
+}
+
 /// [ORB-15131] A hold confirmed for a diff-selecting check records the
 /// candidate's selection, and a moved base lifts it only when that selection
 /// passes there: a tip that tests nothing of its own keeps the task held.

@@ -46,10 +46,18 @@
 //!   tested another selection, or passed without executing a counted test
 //!   [ORB-15131] — is neither refuted nor confirmed: the review settles
 //!   `incomplete` under `baseline_not_comparable`.
+//! - A claim whose candidate rerun was stopped at the base-replay reserve
+//!   [ORB-15328] is not confirmed either: the review settles `incomplete`
+//!   under `baseline_cut`, naming the cut and the failures the base shares.
+//!
+//! Each claim's host runs get one review budget (`review.minutes`) of wall
+//! clock, a quarter of it reserved for the base. The base runs only the
+//! failing tests when it can, or reuses a full result already recorded for
+//! that base; `review-baseline.json` records the path as `base_replay`.
 
 use orbit_automation::review::{in_scope, same_host_command, validation_evidence};
 use orbit_common::OrbitError;
-use orbit_engine::review_gate::{BaseFailureVerdict, verify_base_failure};
+use orbit_engine::review_gate::{BaseFailureVerdict, ReplayBudget, verify_base_failure};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     BaselineRedHold, CommitIdentity, HostCandidateOverride, REVIEW_BASELINE_ARTIFACT,
@@ -66,6 +74,8 @@ impl Judgement {
     /// Check every baseline claim in the report and return the holds the
     /// review settles under, or none when it settles as before. `repair` is
     /// the reviewer's repair commit, which an accept override must name.
+    /// `budget` bounds each claim's host runs.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn verify_baseline_claims(
         &mut self,
         runtime: &OrbitRuntime,
@@ -74,6 +84,7 @@ impl Judgement {
         base_ref: &str,
         scope: &[String],
         repair: Option<&CommitIdentity>,
+        budget: ReplayBudget,
     ) -> Result<Vec<BaselineRedHold>, OrbitError> {
         let claimed = self
             .validation
@@ -126,6 +137,7 @@ impl Judgement {
                 &command,
                 claim,
                 &context.run_id,
+                budget,
             )?;
             let (decision, detail) = match &check.verdict {
                 BaseFailureVerdict::Reproduced { failures } => {
@@ -189,6 +201,22 @@ impl Judgement {
                     held = false;
                     ("rejected", json!({ "reason": reason }))
                 }
+                BaseFailureVerdict::Cut { reason, failures } => {
+                    self.downgrade(&format!(
+                        "baseline_cut: `{command}`: {reason}{}",
+                        if failures.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                "; base {} fails {} too, but the cut run proves no more",
+                                base.commit,
+                                failures.join(", ")
+                            )
+                        }
+                    ));
+                    held = false;
+                    ("cut", json!({ "reason": reason, "failures": failures }))
+                }
                 BaseFailureVerdict::NotComparable(reason) => {
                     self.downgrade(&format!(
                         "baseline_not_comparable: `{}`: {reason}",
@@ -207,6 +235,7 @@ impl Judgement {
             checks.push(json!({
                 "record": record.record_id(), "command": command, "base_sha": check.base_sha,
                 "decision": decision, "detail": detail,
+                "base_replay": check.base_replay.map(|replay| replay.as_str()), "cut": check.cut,
                 "candidate": check.candidate_log, "base": check.base_log,
             }));
         }

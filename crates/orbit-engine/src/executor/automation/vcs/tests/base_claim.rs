@@ -1,0 +1,158 @@
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use orbit_common::test_env::canonical_temp_dir;
+use serde_json::json;
+
+use super::super::base_claim::{
+    BaseFailureVerdict, BaseReplay, ReplayBudget, failure_identities, verify_base_failure,
+};
+use crate::RuntimeHost;
+
+struct Host;
+
+impl RuntimeHost for Host {}
+
+fn git_ok(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args([
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+        ])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git setup");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// The output grammars of each runner meet the combinatorial pure-logic
+// unit-test criterion: the boundary test drives one of them.
+#[test]
+fn failure_identities_name_each_failed_test_and_located_error_across_runners() {
+    let root = Path::new("/work/run-a");
+    let output = "\
+running 3 tests
+test suite::ok ... ok
+test suite::broken ... FAILED
+\u{1b}[31m        FAIL\u{1b}[0m [   0.004s] (2/9) orbit-core runtime::red
+     TIMEOUT [  60.001s] orbit-core runtime::slow
+       PASS [   0.002s] orbit-core runtime::fine
+error[E0308]: mismatched types
+  --> /work/run-a/src/lib.rs:4:9
+warning: unused variable
+  --> src/lib.rs:7:1
+error: an error with no location
+error: this `if` has identical blocks
+   --> src/main.rs:10:5
+";
+    let found = failure_identities(output, root);
+    assert_eq!(
+        found.into_iter().collect::<Vec<_>>(),
+        vec![
+            "src/lib.rs:4:9: error[E0308]: mismatched types",
+            "src/main.rs:10:5: error: this `if` has identical blocks",
+            "test orbit-core runtime::red",
+            "test orbit-core runtime::slow",
+            "test suite::broken",
+        ],
+        "an error is located under its own root; warnings and passes are not failures"
+    );
+    // The same failures from another checkout are the same identities.
+    assert_eq!(
+        failure_identities(
+            &output.replace("/work/run-a", "/base/tree"),
+            Path::new("/base/tree")
+        ),
+        failure_identities(output, root)
+    );
+}
+
+// Fault injection: the candidate's check prints a failure and then stalls, so
+// only the budget's reserve stops it. A real budget is minutes of review time;
+// this one is scaled down to seconds, keeping the production relation (the
+// candidate stops a quarter of the window early). The boundary test drives
+// the uncut paths [ORB-15328].
+#[test]
+fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the_base() {
+    let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+    let repo = root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git_ok(&repo, &["init", "-q", "-b", "main"]);
+    // Reports the selection it is handed (its own otherwise) before it runs,
+    // fails `suite::broken` everywhere, and stalls only on the candidate.
+    fs::write(
+        repo.join("check.sh"),
+        "#!/bin/sh\n\
+         selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+         [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
+         printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" \
+         > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         echo 'test suite::broken ... FAILED'\n\
+         if [ -f candidate.txt ]; then exec sleep 600; fi\n\
+         exit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    git_ok(&repo, &["add", "check.sh"]);
+    git_ok(&repo, &["commit", "-q", "-m", "base"]);
+    let base = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    fs::write(repo.join("candidate.txt"), "after\n").unwrap();
+    git_ok(&repo, &["add", "candidate.txt"]);
+    git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
+
+    let budget = ReplayBudget::new(Duration::from_secs(4));
+    let started = Instant::now();
+    let check = verify_base_failure(
+        &Host,
+        &repo,
+        base.trim(),
+        "./check.sh",
+        &["suite::broken".to_string()],
+        "jrun-fixture",
+        budget,
+    )
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(60),
+        "the stalled candidate run was stopped"
+    );
+    assert_eq!(
+        check.verdict,
+        BaseFailureVerdict::Cut {
+            reason: check.cut.clone().expect("the check names the cut"),
+            failures: vec!["test suite::broken".to_string()],
+        },
+        "the failure the cut run printed is attributed to the base, and nothing is confirmed"
+    );
+    assert_eq!(check.base_replay, Some(BaseReplay::FailingTests));
+    assert_eq!(
+        check.base_log["summary"]["selection"],
+        json!({"packages": ["suite"], "failing_tests": ["suite::broken"]}),
+        "the base replayed only the failing test"
+    );
+    assert_eq!(check.candidate_log["timed_out"], true);
+}

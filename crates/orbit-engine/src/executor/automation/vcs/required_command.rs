@@ -259,12 +259,14 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
 }
 
 /// Run one required command in `workspace_path`, handing it `selection`
-/// to test when one is given.
+/// to test when one is given, for at most `timeout_ms` (normally
+/// [`VALIDATION_TIMEOUT_MS`]).
 pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     command: &str,
     selection: Option<&Value>,
+    timeout_ms: u64,
 ) -> Result<RequiredCommandRun, OrbitError> {
     let command = command.trim();
     if command.is_empty() {
@@ -303,7 +305,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],
             current_dir: Some(workspace_path.to_string_lossy().into_owned()),
-            timeout_ms: Some(VALIDATION_TIMEOUT_MS),
+            timeout_ms: Some(timeout_ms),
             stdin_mode: StdinMode::Null,
             environment_mode: EnvironmentMode::ClearAndSet(env),
             debug: false,

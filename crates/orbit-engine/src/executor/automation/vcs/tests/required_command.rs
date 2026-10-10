@@ -10,7 +10,9 @@ use std::path::Path;
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::super::required_command::{RequiredCommandRun, missing_tool, run_required_command};
+use super::super::required_command::{
+    RequiredCommandRun, VALIDATION_TIMEOUT_MS, missing_tool, run_required_command,
+};
 use crate::RuntimeHost;
 
 const DIAGNOSTIC: &str = "make: rg: No such file or directory";
@@ -232,7 +234,7 @@ fn captured_body(output: &str) -> &str {
 }
 
 fn run_in(dir: &Path, command: &str) -> RequiredCommandRun {
-    run_required_command(&CaptureHost, dir, command, None).expect(command)
+    run_required_command(&CaptureHost, dir, command, None, VALIDATION_TIMEOUT_MS).expect(command)
 }
 
 fn write_streams(dir: &TempDir, stdout: &str, stderr: &str) {
