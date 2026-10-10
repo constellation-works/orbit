@@ -11,7 +11,7 @@ paths:
   - "scripts/build-bundled-bwrap.sh"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
-last_validated: 2026-10-04
+last_validated: 2026-10-10
 ---
 
 # Linux sandbox onboarding and diagnostics
@@ -240,9 +240,9 @@ cause, then run `orbit init --host-prerequisites-only` and recheck doctor. Do no
 `kernel.apparmor_restrict_unprivileged_userns` globally or enable
 `allow_fallback`; both weaken or bypass the fail-closed boundary.
 
-Other distributions need the same two conditions: a Bubblewrap with `--bind-fd` (the
-host's `/usr/bin/bwrap` or the bundled one) and permission for an unprivileged user to
-create user namespaces and mounts. Non-Linux hosts are unaffected: macOS uses
+Other distributions need the same two conditions: a Bubblewrap with both `--bind-fd` and
+`--ro-bind-fd` (the host's `/usr/bin/bwrap` or the bundled one) and permission for an
+unprivileged user to create user namespaces and mounts. Non-Linux hosts are unaffected: macOS uses
 `sandbox-exec`, and platforms without a shipped OS-level backend rely on in-process
 filesystem guards only.
 

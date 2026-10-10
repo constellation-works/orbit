@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-05
+last_validated: 2026-10-10
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -53,7 +53,9 @@ The queue is a logical owner-side query, not a required maintained table:
   Missing filesystem targets are valid declarations, not grounds for pruning: retain canonical
   selectors for new files and symbols, and freeze the full footprint on the claim through review.
   All task context read/write and status-lock paths use this non-pruning rule. A truly empty
-  declaration requires operator correction before admission; execution cannot expand its scope.
+  declaration is admitted with an empty footprint and no context lock. Selectors guide
+  scheduling, while task intent defines scope; undeclared edit conflicts are handled by rebase
+  and conflict repair at landing.
 
 Each participant must meet all workspace execution requirements. The owner checks a task's
 `os:` tags against the executor's declared OS; mismatches stay in the backlog with an
@@ -337,7 +339,7 @@ store schema are implementation choices; their atomic behavior is required:
 |---|---|
 | Bind execution | Validate claim, machine, captured policy and mode; bind one host-qualified leaf run idempotently; move `claimed → running`; generic resume may not replace this run |
 | Execution mutation | Check current claim, machine/run, and phase within the write transaction; deduplicate repeated mutation IDs |
-| Accept handoff | Persist candidate/base SHAs, validation evidence, the typed review disposition the claim's contract requires (`not_required`, or verified before-PR evidence whose certificate the owner records), and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
+| Accept handoff | Persist candidate/base SHAs, validation evidence, the typed review disposition the claim's contract requires (`not_required`, or verified before-PR or before-landing evidence whose certificate the owner records), and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
 | Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
 | Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail | Persist failure evidence and its typed `candidate` or `task_input` class (or an `operator_cancel` whose operator asked to block the task), keep the failure's committed candidate for the next claim, block the task, invalidate execution authority, release only this reservation atomically |
@@ -366,8 +368,9 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
   carries, and a local gate whose task came under a live claim while it waited skips dispatch as
   a `claimed_elsewhere` no-op.
 - Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
-- The owner alone orders work; only invalid or conflicting candidates, and candidates whose crew
-  the executor declares it cannot run, are skipped in v1.
+- The owner alone orders work; invalid, conflicting, in-flight, OS-incompatible, crew-incompatible,
+  and owner-held candidates are deferred or excluded with diagnostics. Follower capability
+  declarations may narrow eligibility but never reorder the owner's work.
 - A refusal creates no claim. Idle persists only its receipt and diagnostics.
 - Trusted invocation context fences execution machine and bound run; host labels confer no rights.
 - Reassignment invalidates former attempt writes and landing authority before a new admission.
@@ -425,7 +428,8 @@ merge intent must first reconcile. The merge-intent write rechecks current evide
 including grant revocation within the SQLite transaction. Historical receipt replay does not grant
 new execution or landing permission. The summary-only legacy handoff variant refuses new writes.
 
-A claim whose ship contract captured a before-PR `review` must hand off typed before-PR evidence:
+A published-PR claim whose ship contract captured a before-PR or before-landing `review` must
+hand off typed evidence from the corresponding gate:
 verdict, reviewed head and base SHAs, the reviewer's fix commit when it made one, reviewer crew and
 run, and digest-pinned certificate and reviewer artifacts. Acceptance re-reads the certificate from
 the owner task bundle and refuses, with a typed reason, missing or unexpected evidence
@@ -441,9 +445,9 @@ the handoff as `review_contract_mismatch` instead of rewriting the claim. Approv
 recheck the pinned evidence. An
 accepted certificate is written to the owner's review store, so after-landing coverage excludes the
 reviewed tree instead of reviewing it again. A claim without a captured `review` refuses before-PR
-evidence.
+or before-landing evidence.
 
-The claimed PR leaf produces that evidence itself [ORB-13908]. The pull store creates the leaf with
+The claimed PR leaf produces before-PR evidence itself [ORB-13908]. The pull store creates the leaf with
 a review admission seeded from the claim's captured `review`, never from the follower's settings,
 and the leaf runs `review_gate_admit` → `review` → `review_gate_settle` between base
 synchronization and push. The gate reads the claimed task through the worker binding, keeps its
@@ -453,6 +457,14 @@ the claim footprint does not widen until acceptance. `claim_handoff` carries the
 evidence. A non-passing verdict fails the leaf before push, and the failure settlement blocks the
 task. A follower that cannot run the captured reviewer crew requests no claim
 (`before_pr_reviewer_unavailable`).
+
+When the captured contract is before-landing instead [ORB-14849], the PR leaf publishes first,
+then runs `landing_review_gate_admit` → `landing_review` → `landing_review_gate_settle` before
+pinning validation. A reviewer fix is validated on its new head and pushed under a lease on the
+published head; the final candidate and validation are then pinned. The handoff carries separate
+`landing_review_evidence`, which the owner checks against the captured contract and candidate. A
+non-approve verdict fails the leaf with the PR open and unmerged; an evidence-only gap after
+publication is not held.
 
 `OrbitRuntime::accept_task_handoff`, `approve_task_handoff`, `revoke_task_handoff`,
 `accepted_task_handoff` and `landing_start_requests` are internal owner-domain seams, not registered
