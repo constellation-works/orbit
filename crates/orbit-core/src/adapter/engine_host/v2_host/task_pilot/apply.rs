@@ -209,6 +209,8 @@ pub(in super::super) fn apply(
     };
     if let Some(outcome) = &piloted_elsewhere {
         carried_task_outcomes.push(outcome.clone());
+    } else if ci_sweep_filing.is_none() && mode == "explicit" {
+        carried_task_outcomes.extend(held_elsewhere(prepared_value));
     }
     let promotion_authorized = input
         .get("promotion_authorized")
@@ -642,7 +644,18 @@ pub(in super::super) fn apply(
                                 // receipt; apply_task rechecks it under task locks.
                                 admission_task.status = snapshot.status;
                             }
-                            Ok(false) => {}
+                            Ok(false) => {
+                                // Another pilot, a drain or the operator
+                                // already admitted the filed task: the sweep's
+                                // purpose is met, so its stale assessment is
+                                // dropped without failing the sweep.
+                                outcomes.push(json!({
+                                    "task_id": task_id, "outcome": "superseded",
+                                    "reason": "promoted_elsewhere", "status": current.status,
+                                    "detail": "the CI-sweep task was promoted to backlog elsewhere before admission",
+                                }));
+                                continue;
+                            }
                             Err(error) => {
                                 outcomes.push(task_outcome(
                                     task_id,
@@ -1051,4 +1064,29 @@ pub(in super::super) fn apply(
         "ci_sweep_admission": ci_sweep_admission,
         "drain_approval": drain_approval,
     }))
+}
+
+/// An explicit selection names tasks its caller wants assessed. Each one
+/// another live pilot holds settles superseded, naming the holder that
+/// applies it, so the caller's run neither fails nor leaves a claimed member
+/// without an outcome.
+fn held_elsewhere(prepared: &Value) -> Vec<Value> {
+    prepared
+        .get("excluded")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["reason"] == "already_preparing")
+        .filter_map(|entry| {
+            let run_ids = entry.get("prepared_by_run_ids")?.as_array()?;
+            Some(json!({
+                "task_id": entry.get("task_id")?.as_str()?,
+                "outcome": "superseded",
+                "reason": "piloted_elsewhere",
+                "run_id": run_ids.first()?,
+                "run_ids": run_ids,
+                "detail": "another active task-pilot run already prepared this task",
+            }))
+        })
+        .collect()
 }

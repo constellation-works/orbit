@@ -333,8 +333,8 @@ supply own `context_files` yourself. Context is optional for local auto, ship
 and distributed pull admission: selector-free backlog tasks are admitted on
 the next pass without a context lock. Undeclared edit conflicts are handled at
 landing by rebase and conflict repair. Operator task-scope reservation still
-requires a declared surface. A live task-pilot preparation checkpoint still
-holds its tasks until that run settles.
+requires a declared surface. A live task-pilot preparation (its reservation
+from prepare, then its checkpoint) still holds its tasks until that run settles.
 
 Reservation TTL on a pulled claim is 14,400 seconds (four hours). Expiry does
 **not** revoke the claim, admit another worker, or shrink the frozen

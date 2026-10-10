@@ -11,6 +11,7 @@ pub(crate) mod incidents;
 mod inspect;
 pub(crate) mod members;
 mod ownership;
+pub(crate) mod pilot_reservation;
 mod pins;
 pub(crate) mod preparation;
 mod provider;

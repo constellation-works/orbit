@@ -373,6 +373,105 @@ fn a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry
 }
 
 #[test]
+fn editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it() {
+    if !super::super::dispatch_admission::isolated(
+        "task_pilot::source_moves::editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let tasks = (0..5)
+        .map(|index| workspace.task(&format!("claimed {index}")))
+        .collect::<Vec<_>>();
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted_batch(&tasks.iter().collect::<Vec<_>>(), 2);
+    let edited = &tasks[2];
+    workspace
+        .runtime
+        .update_task_as_human(
+            &edited.id,
+            TaskUpdateParams {
+                description: Some("Prepare the edited scope.".into()),
+                ..Default::default()
+            },
+            "fixture".into(),
+        )
+        .unwrap();
+
+    let prepared = prepare_claim(&workspace, &attempt);
+    let siblings = tasks
+        .iter()
+        .filter(|task| task.id != edited.id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prepared["task_ids"],
+        json!(siblings.iter().map(|task| &task.id).collect::<Vec<_>>()),
+        "{prepared}"
+    );
+    let set_aside = &prepared["superseded_during_preparation"];
+    assert_eq!(set_aside.as_array().map(Vec::len), Some(1), "{prepared}");
+    assert_eq!(set_aside[0]["task_id"], edited.id);
+    assert_eq!(set_aside[0]["reason"], "material_changed");
+
+    let output = apply_claim(&workspace, &attempt, &prepared);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 4, "{output}");
+    assert_eq!(output["superseded_count"], 1, "{output}");
+    assert_eq!(outcome_for(&output, edited)["reason"], "material_changed");
+    assert!(!pilot_applied(&workspace, edited));
+    assert!(siblings.iter().all(|task| pilot_applied(&workspace, task)));
+
+    finish_run(&workspace, &attempt, &[(0, &prepared), (2, &output)]);
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(1),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert!(members.active.is_none());
+    assert!(members.failed.is_empty(), "{:?}", members.failed);
+    assert!(
+        siblings
+            .iter()
+            .all(|task| members.assessed[&task.id].receipt_id == attempt.id)
+    );
+    assert!(!members.assessed.contains_key(&edited.id));
+    let claimed_fingerprint = &attempt
+        .members()
+        .iter()
+        .find(|member| member.key == edited.id)
+        .unwrap()
+        .fingerprint;
+    assert_ne!(
+        &members.pending[&edited.id].fingerprint,
+        claimed_fingerprint
+    );
+
+    let due = evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        true,
+        now + Duration::minutes(3),
+    )
+    .unwrap();
+    assert_eq!(due.reason, "would_fire", "{due:?}");
+    assert_eq!(due.batch.len(), 1, "{due:?}");
+    assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&edited.id));
+    let reclaimed = workspace.admitted(edited, 2);
+    let fresh = prepare_claim(&workspace, &reclaimed);
+    assert_eq!(fresh["task_ids"], json!([edited.id]), "{fresh}");
+    let applied = apply_claim(&workspace, &reclaimed, &fresh);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert!(pilot_applied(&workspace, edited));
+}
+
+#[test]
 fn context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures() {
     if !super::super::dispatch_admission::isolated(
         "task_pilot::source_moves::context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures",
