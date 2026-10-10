@@ -488,6 +488,7 @@ fn pull_claimed_local_leaf_resumes_and_keeps_its_committed_candidate() {
         published: false,
         durable_ref: None,
         carry_failure: None,
+        interrupted_review: None,
     };
     let peer = Peer {
         resume_candidate: RefCell::new(Some(kept.clone())),

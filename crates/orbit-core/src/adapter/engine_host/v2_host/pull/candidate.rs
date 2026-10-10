@@ -9,8 +9,13 @@
 //! claimed-local leaf commits on its worktree branch in the owner's own
 //! repository, which every later claim of the task shares, so its commit
 //! checkpoint names the candidate.
+//!
+//! [ORB-15314] A leaf stopped inside a review gate also names where the host
+//! that stopped it kept the reviewer's uncommitted repair, which the owner
+//! completes with the attempt's findings.
 
-use orbit_store::contracts::{ClaimCandidateRef, ClaimFailure};
+use orbit_engine::review_gate::{INTERRUPTED_REVIEW_KEY, interrupted_review_ref, review_in_flight};
+use orbit_store::contracts::{ClaimCandidateRef, ClaimFailure, InterruptedReview};
 use orbit_types::workflow::{JobRun, PipelineState};
 
 /// The claimed PR leaf's base synchronization step.
@@ -105,6 +110,7 @@ pub(super) fn preserved_candidate(
         published: false,
         durable_ref: None,
         carry_failure: None,
+        interrupted_review: kept_interrupted_review(state),
     };
     let committed = text(step("commit"), "commit_sha");
     if run.job_id == CLAIMED_LOCAL_PIPELINE {
@@ -137,7 +143,63 @@ pub(super) fn preserved_candidate(
         }
         _ => {}
     }
+    // [ORB-15314] A repair carried to `origin` has the candidate head as its
+    // parent, so its ref serves the head to any host as well.
+    let kept = step(INTERRUPTED_REVIEW_KEY);
+    if candidate.durable_ref.is_none()
+        && !candidate.published
+        && kept.and_then(|kept| kept.get("carried")) == Some(&serde_json::Value::Bool(true))
+    {
+        candidate.durable_ref = text(kept, "repair_ref");
+    }
     Some(candidate)
+}
+
+/// [`preserved_candidate`] for a leaf about to be stopped: a review it is
+/// inside names the ref its stop keeps the reviewer's repair under, which the
+/// next claim resolves and checks before applying it.
+pub(super) fn stopping_candidate(run: &JobRun, state: &PipelineState) -> Option<ClaimCandidateRef> {
+    let mut candidate = preserved_candidate(run, state)?;
+    if candidate.interrupted_review.is_none()
+        && let Some(review) = review_in_flight(&state.pipeline)
+        && let Some(serde_json::Value::Array(task_ids)) =
+            run.input.as_ref().and_then(|input| input.get("task_ids"))
+        && let [serde_json::Value::String(task_id)] = task_ids.as_slice()
+    {
+        candidate.interrupted_review = Some(InterruptedReview {
+            step_id: review.step_id,
+            attempt_id: review.attempt_id,
+            repair_ref: Some(interrupted_review_ref(task_id, &run.run_id)),
+            repair_commit: None,
+            verdict: None,
+            findings: Vec::new(),
+        });
+    }
+    Some(candidate)
+}
+
+/// What the host that stopped the leaf kept of the review it was inside.
+fn kept_interrupted_review(state: &PipelineState) -> Option<InterruptedReview> {
+    let kept = state
+        .pipeline
+        .get(INTERRUPTED_REVIEW_KEY)
+        .filter(|kept| kept.is_object())?;
+    let text = |field: &str| {
+        kept.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let repair_commit = text("repair_commit");
+    Some(InterruptedReview {
+        step_id: text("step_id")?,
+        attempt_id: text("attempt_id")?,
+        repair_ref: repair_commit.as_ref().and(text("repair_ref")),
+        repair_commit,
+        verdict: None,
+        findings: Vec::new(),
+    })
 }
 
 /// Where the failure's candidate is kept for the next claim, if it has one.
@@ -170,6 +232,19 @@ pub(super) fn candidate_note(failure: &ClaimFailure) -> String {
             ", so the task's next claim resumes it only here and a claim on another host \
              implements fresh",
         );
+    }
+    if let Some(review) = &candidate.interrupted_review {
+        note.push_str(&format!(
+            "; it was stopped during review step `{}` (attempt `{}`)",
+            review.step_id, review.attempt_id
+        ));
+        match &review.repair_ref {
+            Some(reference) => note.push_str(&format!(
+                ", and the reviewer's uncommitted repair is kept at `{reference}` for that claim \
+                 to continue from with the attempt's findings"
+            )),
+            None => note.push_str(", and the reviewer left no uncommitted repair"),
+        }
     }
     note
 }

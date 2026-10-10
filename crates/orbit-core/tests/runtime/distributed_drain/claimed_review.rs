@@ -101,9 +101,31 @@ impl ReviewedLeaf {
     /// A leaf admitted from an owner whose workspace `config.toml` is
     /// `owner_config`.
     pub(super) fn admit_from(owner_config: &str, follower_config: &str) -> Self {
+        Self::admit_launched(owner_config, follower_config, |pair, drain| {
+            pair.launched_leaf(drain, 1, std::process::id())
+        })
+    }
+
+    /// [`Self::admit`] whose leaf runs under a real worker process in its
+    /// own group, so cancelling the leaf stops it [ORB-15314].
+    pub(super) fn admit_with_worker() -> (Self, Worker) {
+        let mut worker = None;
+        let leaf = Self::admit_launched(&before_pr_owner(REVIEW_CREW), "", |pair, drain| {
+            let (leaf, launched) = pair.running_leaf_with_worker(drain, 1);
+            worker = Some(launched);
+            leaf
+        });
+        (leaf, worker.expect("the leaf's worker"))
+    }
+
+    fn admit_launched(
+        owner_config: &str,
+        follower_config: &str,
+        launch: impl FnOnce(&Pair, &str) -> String,
+    ) -> Self {
         let pair = Pair::with_configs(owner_config, follower_config, &[None]);
         let drain = pair.run_drain();
-        let leaf = pair.launched_leaf(&drain, 1, std::process::id());
+        let leaf = launch(&pair, &drain);
         let task = pair.claimed_task(&leaf);
 
         let repo = pair.follower_repo.clone();

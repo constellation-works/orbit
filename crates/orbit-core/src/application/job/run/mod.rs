@@ -10,6 +10,7 @@
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
+//! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
@@ -20,6 +21,7 @@ mod build_budget;
 mod conflict;
 mod delivery;
 mod drain_cancel;
+mod interrupted_review;
 mod owner;
 mod projection;
 mod query;

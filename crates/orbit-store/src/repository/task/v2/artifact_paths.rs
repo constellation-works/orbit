@@ -4,7 +4,7 @@ pub(crate) fn normalize_v2_artifact_path(raw: &str) -> Result<String, OrbitError
     Ok(orbit_types::task::canonical_artifact_path(raw)?)
 }
 
-pub(super) fn resolve_v2_artifact_file_path(
+pub(crate) fn resolve_v2_artifact_file_path(
     bundle_dir: &Path,
     blob: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {

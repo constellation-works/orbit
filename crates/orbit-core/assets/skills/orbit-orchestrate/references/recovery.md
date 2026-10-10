@@ -89,6 +89,52 @@ lock file alone does not prove a worker is alive. Follow
 [run-debugging.md](run-debugging.md) before process-level
 intervention, and never weaken protected-path policies to make a retry pass.
 
+## Salvage an incomplete candidate
+
+A run that stopped with a candidate is not a reason to start over. This
+includes a failed or cancelled run, an interrupted review, or a blocked
+claim. Orbit already keeps what it can. A claimed leaf's candidate stays with
+its released claim. A reviewer stopped mid-review leaves its uncommitted
+repair as a marked commit at `refs/orbit/candidates/<task>/<run>-review`.
+The attempt's report stays on the task. The task's next claim continues from
+those automatically. When you must decide what happens next, follow these
+steps:
+
+1. **Diagnose with `orbit_agent_invoke`.** Run it on the host that owns the
+   preserved worktree, with `cwd` set to that worktree (`orbit run show
+   <run-id> --json` names it), or `orbit run agent --cwd <worktree>
+   "<prompt>"`. Ask for a verdict:
+   - Is the candidate salvageable?
+   - Which review findings still hold?
+   - What work remains?
+   - Is a design decision needed?
+
+   Point it at the candidate head, the kept repair ref and the task's
+   `review-report.json`. Record its answer on the task as a comment or as
+   remaining work. The invocation is diagnosis only. It must not commit,
+   push, edit a pull request, or change the task. Say so in the prompt, and
+   check afterwards that it did not.
+2. **Route by cause.**
+   - **Transient** (host restart, provider outage, a killed worker, a forge
+     refusal): resume the stopped run with `orbit job resume <run-id>` where
+     it is resumable, or requeue the task.
+   - **Defects** (findings that hold, missing work): record them as remaining
+     work on the task, then return it to `backlog` and re-ship it. The next
+     run resumes the kept candidate and repairs it; it does not re-implement.
+   - **Design decision** (approach, scope or acceptance criteria in doubt):
+     escalate to the human who owns the decision, with the diagnosis attached.
+     Do not dispatch until it is decided.
+3. **Last resort.** Use operator subagents or a manual rebase only when the
+   routes above cannot recover the candidate, for example because the kept
+   ref cannot be fetched or the repair no longer applies. Record on the task
+   what was done, by whom, and which commits resulted.
+
+An owner's own run stopped mid-review keeps the same marked commit and ref,
+and a task comment names them. Its next run does not apply that repair
+automatically. To keep it, follow the steps above and fold the repair into
+the remaining work. Discard a candidate only deliberately, with
+`orbit task update <task-id> --discard-candidate --status backlog`.
+
 ## Close a rescued blocked task
 
 When a blocked task's work landed outside its run (its PR was merged by hand),

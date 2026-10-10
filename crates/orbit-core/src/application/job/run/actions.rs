@@ -293,6 +293,9 @@ impl OrbitRuntime {
             .with_providers_stopped(providers_stopped));
         }
 
+        // [ORB-15314] With the reviewer stopped, keep its uncommitted repair
+        // before finalization settles the run on what it left.
+        self.keep_interrupted_review(&after_signal, true);
         let now = chrono::Utc::now();
         let duration_ms = run
             .started_at

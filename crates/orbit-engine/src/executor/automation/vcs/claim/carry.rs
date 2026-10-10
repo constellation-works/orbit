@@ -132,18 +132,31 @@ pub(in crate::executor::automation::vcs) fn carry_to_durable_ref<H: RuntimeHost 
     run_id: &str,
 ) -> Result<String, String> {
     let durable_ref = format!("{CANDIDATE_REF_PREFIX}{task_id}/{run_id}");
+    push_candidate_ref(host, workspace_path, branch, head_sha, &durable_ref).map(|()| durable_ref)
+}
+
+/// Push `commit`, made in the checkout of `branch`, to `target_ref` under
+/// `refs/orbit/candidates/` on `origin`. The error is the bounded push
+/// diagnostic.
+pub(in crate::executor::automation::vcs) fn push_candidate_ref<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    branch: &str,
+    commit: &str,
+    target_ref: &str,
+) -> Result<(), String> {
     ensure_origin_publishes_elsewhere(workspace_path, branch)
         .and_then(|()| {
             host.run_private_vcs_operation(
                 CANDIDATE_REF_PUSH,
                 json!({
                     "repo_root": workspace_path.to_string_lossy(),
-                    "head_sha": head_sha,
-                    "target_ref": durable_ref,
+                    "head_sha": commit,
+                    "target_ref": target_ref,
                 }),
             )
         })
-        .map(|_| durable_ref)
+        .map(|_| ())
         .map_err(|error| {
             let reason = error.to_string();
             let reason = reason.trim();

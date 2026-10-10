@@ -36,7 +36,7 @@ const CARRIED: &str = "fn work() { carried(); }\n";
 /// preserved; resuming it would be reading the wrong machine's run.
 const UNRELATED: &str = "0123456789abcdef0123456789abcdef01234567";
 
-fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Value {
+pub(super) fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Value {
     orbit_engine::execute_deterministic_action(
         host,
         action,
@@ -50,7 +50,7 @@ fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Value {
 }
 
 /// The owner's repository published to its bare `origin`; returns the base.
-fn owner_published(pair: &Pair) -> String {
+pub(super) fn owner_published(pair: &Pair) -> String {
     let repo = &pair.owner_repo;
     std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
     git(repo, &["init", "-q", "-b", "main"]);
@@ -62,7 +62,7 @@ fn owner_published(pair: &Pair) -> String {
 }
 
 /// `host`'s own clone of `origin`'s `main`, in its own object store.
-fn host_checkout(pair: &Pair, host: &Pair) -> PathBuf {
+pub(super) fn host_checkout(pair: &Pair, host: &Pair) -> PathBuf {
     let repo = host.follower_repo.clone();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["remote", "add", "origin", ORIGIN_URL]);
@@ -79,11 +79,11 @@ fn host_checkout(pair: &Pair, host: &Pair) -> PathBuf {
     repo
 }
 
-fn bare(pair: &Pair) -> PathBuf {
+pub(super) fn bare(pair: &Pair) -> PathBuf {
     pair.owner_repo.with_file_name("origin.git")
 }
 
-fn has_commit(repo: &Path, sha: &str) -> bool {
+pub(super) fn has_commit(repo: &Path, sha: &str) -> bool {
     std::process::Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -175,7 +175,7 @@ fn released_candidate(pair: &Pair, leaf: &str) -> Value {
 
 /// The candidate `leaf`'s claim settlement of `kind` (`Release` or `Fail`)
 /// named for the owner to keep.
-fn settled_candidate(pair: &Pair, leaf: &str, kind: &str) -> Value {
+pub(super) fn settled_candidate(pair: &Pair, leaf: &str, kind: &str) -> Value {
     let claim_id = pair
         .admission(leaf)
         .receipt
@@ -191,7 +191,10 @@ fn settled_candidate(pair: &Pair, leaf: &str, kind: &str) -> Value {
         .expect("the leaf's settlement was delivered")
 }
 
-fn claim_candidate(pair: &Pair, leaf: &str) -> Option<orbit_store::contracts::ClaimCandidateRef> {
+pub(super) fn claim_candidate(
+    pair: &Pair,
+    leaf: &str,
+) -> Option<orbit_store::contracts::ClaimCandidateRef> {
     pair.admission(leaf)
         .receipt
         .and_then(|receipt| receipt.task)

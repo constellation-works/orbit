@@ -44,6 +44,7 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
 | Diagnose a specific failed or stuck run | [Run debugging](references/run-debugging.md) |
 | Match an observed failure to a remedy | [Common failures](references/common-failures.md) |
 | Route CI findings, recover delivery and verify deployment | [Recovery](references/recovery.md) |
+| Salvage an incomplete or stopped candidate instead of starting over | [Salvage an incomplete candidate](references/recovery.md#salvage-an-incomplete-candidate) |
 | Work through typical orchestration decisions | [Walkthroughs](references/walkthroughs.md) |
 
 Use [task authoring](../orbit/references/task-authoring.md) when filing work.

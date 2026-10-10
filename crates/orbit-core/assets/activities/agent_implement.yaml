@@ -30,7 +30,8 @@ spec:
       # task's preserved candidate that needs repair: `trigger`
       # (`implementation`, `conflict`, `validation`, `review`,
       # `continuation` or, for a claimed repair leaf, `landing`), `output`,
-      # and `failed_step_id`, `conflicting_paths` or the failing `command`.
+      # and `failed_step_id`, `conflicting_paths` or the failing `command`;
+      # `interrupted_review` when the earlier run was stopped mid-review.
       resume_candidate:
         type: [object, "null"]
       # The pinned delivery base: the commit the worktree started on. A
@@ -233,7 +234,12 @@ spec:
       subset is not done), `conflict` (resolve the conflict markers in
       `conflicting_paths` against the new base), `validation` (the `output`
       of the failing `command`), `review` (the findings in the review
-      settlement comment), `continuation` (an earlier claim committed it
+      settlement comment or, when `interrupted_review` is set, in its
+      `findings`: the earlier run was stopped while its reviewer worked, and
+      when `repair_applied` is true the diff includes that reviewer's
+      unvalidated, unsettled repair — address the `open` findings, check the
+      `repaired` ones against the diff, and repair rather than
+      re-implement), `continuation` (an earlier claim committed it
       but did not deliver it — check it against the task and finish what is
       missing) or `landing` (a handed-off candidate whose landing stopped
       because its base moved; it applied cleanly onto the current base, so

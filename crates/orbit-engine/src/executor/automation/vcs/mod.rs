@@ -15,6 +15,7 @@ mod freshness;
 pub(crate) mod git;
 mod handoff;
 mod host_evidence;
+mod interrupted_review;
 mod landing;
 mod operations;
 mod pr;

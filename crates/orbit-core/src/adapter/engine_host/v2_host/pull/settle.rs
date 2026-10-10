@@ -52,6 +52,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
+use super::candidate::stopping_candidate;
 use super::drain::{
     PullDrain, RefusedDelivery, SettleScope, leaf_failure_settlement, operator_cancel_release,
 };
@@ -64,6 +65,7 @@ use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
 use orbit_store::contracts::{
     JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
+use orbit_types::workflow::JobRun;
 
 /// Why a settle-only pass releases unlaunched work no live drain carries.
 const DRAIN_ENDED_CAUSE: &str = "the drain ended before launching this task";
@@ -213,16 +215,23 @@ impl OrbitRuntime {
     /// already decided, and the owner's task returns to the backlog rather
     /// than being failed for a stop the operator asked for. A settlement the
     /// leaf recorded first — its handoff — wins, and is returned instead.
+    ///
+    /// [ORB-15314] The release keeps the candidate `leaf` committed so far,
+    /// and names the ref its stop keeps a running reviewer's repair under.
     pub(crate) fn record_forced_leaf_release(
         &self,
         record: &LocalPullAdmission,
+        leaf: &JobRun,
         why: &str,
     ) -> Result<LocalPullAdmission, OrbitError> {
         let jobs = self.stores().jobs();
+        let candidate = jobs
+            .read_run_state(&leaf.run_id)?
+            .and_then(|state| stopping_candidate(leaf, &state));
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
-            &LocalPullMutation::Settle(Box::new(operator_cancel_release(record, why))),
+            &LocalPullMutation::Settle(Box::new(operator_cancel_release(record, why, candidate))),
         ) {
             Ok(settling) => Ok(settling),
             Err(error) => {

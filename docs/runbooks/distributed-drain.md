@@ -903,6 +903,56 @@ Owner-local landing of an already-authorized handoff does not need a drain or
 ship-sweep. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
 
+### Requeue or salvage an interrupted review
+
+A claimed leaf that is cancelled or interrupted while its reviewer is working
+is not failed. Its uncommitted repair is kept, and the leaf's run state
+records what was kept under `interrupted_review` (`orbit run show <leaf-run>
+--json`). This covers `orbit run cancel <leaf>`, a forced drain cancel, or a
+worker the orphan reconciler finalizes.
+
+- The host that stopped the leaf commits the reviewer's edits as one
+  reviewer-authored commit, `review: partial reviewer repairs preserved`. The
+  commit carries the `Orbit-Review-Run`, `Orbit-Review-Step` and
+  `Orbit-Review-Attempt` trailers, and its parent is the reviewed candidate
+  head. It is kept at `refs/orbit/candidates/<task>/<run>-review`. A cancel
+  pushes that ref to `origin`. Reconciliation, which also runs when a
+  workspace opens, keeps the ref local to that host. The candidate branch, the worktree and
+  any pull request are left as they were.
+- The release keeps the candidate, its pull request, and the stopped review:
+  the step, the attempt and the repair ref. Its comment on the owner's task
+  names the ref. The owner adds the verdict and findings from the attempt's
+  `review-report.json`. A forced drain cancel records the release before it
+  stops the leaf, so that release names the ref the stop is about to write.
+- The task returns to the backlog, and its next claim resumes the candidate.
+  `resume_candidate` resolves the repair commit, fetching the ref from
+  `origin` when it is missing. It applies the repair only when the commit is
+  that run's partial repair on that head. The implementer then runs with
+  trigger `review` and `repair.interrupted_review`: the findings,
+  `repair_applied`, and `repair_refused` when the repair was not applied. A
+  published candidate continues its branch and pull request (`reused_branch`).
+  The resumed leaf is a new admission. Validation, footprint locks, the build
+  budget and the review policy it captured all apply to it as to any leaf.
+- An unpublished candidate is durable through its repair ref once the ref
+  reached `origin`, because the ref's parent is the head. A forced-cancel
+  release, or a reconciled leaf, may name a ref that never reached `origin`.
+  A claim on another host then implements fresh, with reason `not_durable`.
+
+To requeue, do nothing: the release already returned the task to the
+backlog. Check that the owner comment names the repair ref and that
+`git ls-remote origin 'refs/orbit/candidates/<task>/*'` lists it. If the
+repair should not be continued, run
+`orbit task update <task> --discard-candidate --status backlog` instead. To
+judge whether the candidate is worth continuing, follow the orbit-orchestrate
+skill's "Salvage an incomplete candidate" procedure. It diagnoses with
+`orbit run agent --cwd <preserved worktree>`, which never commits, pushes or
+edits a pull request, and then routes the task by cause. Prune `-review`
+refs with the other carried refs once the task is done.
+
+An owner's own run stopped mid-review keeps the same commit and ref, and a
+task comment names them. Its next run does not apply that repair
+automatically. Use the salvage procedure to fold it into the remaining work.
+
 ### Let the owner land follower deliveries
 
 To land follower deliveries the way `orbit run auto --complete` lands the

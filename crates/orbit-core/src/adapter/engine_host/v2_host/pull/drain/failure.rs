@@ -2,8 +2,8 @@
 //! carries back to its task.
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
-    ClaimEvidence, ClaimFailure, ClaimFinalRecovery, ClaimMutation, LocalPullAdmission,
-    LocalPullPhase, ProviderUnavailable,
+    ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery, ClaimMutation,
+    LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, ClaimFailureClass, FORGE_UNAVAILABLE_MARKER,
@@ -490,9 +490,14 @@ pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> Clai
 /// [`release_settlement`] for a launched leaf an operator stopped: typed
 /// [`ClaimFailureClass::OperatorCancel`], so the owner returns the task to
 /// backlog with the cancel reason and counts the release against its budget.
-pub(crate) fn operator_cancel_release(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
-    let mut evidence = release_evidence(record, why);
-    evidence.failure = Some(ClaimFailure {
+/// [ORB-15314] It keeps the leaf's committed `candidate`, as the leaf's own
+/// cancel settlement would, so the task's next claim continues it.
+pub(crate) fn operator_cancel_release(
+    record: &LocalPullAdmission,
+    why: &str,
+    candidate: Option<ClaimCandidateRef>,
+) -> ClaimMutation {
+    let failure = ClaimFailure {
         class: ClaimFailureClass::OperatorCancel,
         reason: why.to_string(),
         crew: record
@@ -500,9 +505,11 @@ pub(crate) fn operator_cancel_release(record: &LocalPullAdmission, why: &str) ->
             .as_ref()
             .and_then(|receipt| receipt.task.as_ref())
             .and_then(|task| task.crew.clone()),
-        candidate: None,
+        candidate,
         provider_limit: false,
-    });
+    };
+    let mut evidence = release_evidence(record, &format!("{why}{}", candidate_note(&failure)));
+    evidence.failure = Some(failure);
     ClaimMutation::Release(evidence)
 }
 

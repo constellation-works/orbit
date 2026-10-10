@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::InterruptedReview;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, Task};
 use serde_json::{Value, json};
 
@@ -10,6 +11,7 @@ use super::super::baseline::{compare_with_base, run_validation_command};
 use super::super::git::{
     git_command_success, git_output, git_run, git_success, timeout_recovery_error,
 };
+use super::super::interrupted_review::locate_review_repair;
 use super::{
     COMPLETED_IMPLEMENTATION_STEPS, Candidate, Fresh, MAX_REPAIR_OUTPUT_BYTES, Outcome,
     REVIEW_VERDICT_STEP,
@@ -27,10 +29,12 @@ pub(super) enum Applied {
     Clean,
 }
 
-/// Squash-merge `candidate` onto the clean checkout of `base_sha`, leaving the
-/// result as plain uncommitted edits — conflict markers included.
+/// Squash-merge `candidate` — its commit `target`, which is its head or a
+/// kept review repair on it — onto the clean checkout of `base_sha`, leaving
+/// the result as plain uncommitted edits — conflict markers included.
 pub(super) fn apply(
     candidate: &Candidate,
+    target: &str,
     workspace_path: &Path,
     base_sha: &str,
 ) -> Result<Applied, OrbitError> {
@@ -62,14 +66,14 @@ pub(super) fn apply(
     // its own base onto this base; HEAD does not move.
     let merge = git_run(
         workspace_path,
-        &["merge", "--squash", "--no-commit", &candidate.head_sha],
+        &["merge", "--squash", "--no-commit", target],
     )?;
     if merge.timed_out {
         return Err(timeout_recovery_error(
             merge.timeout_ms,
             format!(
-                "candidate_resume: squash merge of {} timed out after {}ms",
-                candidate.head_sha, merge.timeout_ms
+                "candidate_resume: squash merge of {target} timed out after {}ms",
+                merge.timeout_ms
             ),
         ));
     }
@@ -88,8 +92,7 @@ pub(super) fn apply(
         // verified clean above.
         git_success(workspace_path, &["reset", "--quiet", "--hard", base_sha])?;
         return Ok(Applied::Refused(format!(
-            "candidate {} could not be merged onto base {base_sha}: {}",
-            candidate.head_sha,
+            "candidate {target} could not be merged onto base {base_sha}: {}",
             merge.stderr.trim()
         )));
     }
@@ -116,7 +119,33 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
     base_sha: &str,
     claimed: bool,
 ) -> Result<Outcome, OrbitError> {
-    match apply(candidate, workspace_path, base_sha)? {
+    // [ORB-15314] A review stopped mid-way kept its reviewer's repair as a
+    // commit on the head; resume that, or the head alone when it is gone.
+    let interrupted = match &candidate.interrupted_review {
+        Some(review) => Some((
+            review,
+            match &review.repair_ref {
+                Some(repair_ref) => locate_review_repair(
+                    workspace_path,
+                    &candidate.head_sha,
+                    &candidate.run_id,
+                    repair_ref,
+                    review.repair_commit.as_deref(),
+                )?,
+                None => Err("the reviewer left no uncommitted repair to keep".to_string()),
+            },
+        )),
+        None => None,
+    };
+    let target = match &interrupted {
+        Some((_, Ok(repair))) => repair.as_str(),
+        _ => candidate.head_sha.as_str(),
+    };
+    let reviewed = |repair: Value| match &interrupted {
+        Some((review, located)) => with_interrupted_review(repair, candidate, review, located),
+        None => repair,
+    };
+    match apply(candidate, target, workspace_path, base_sha)? {
         Applied::Refused(reason) => {
             return Ok(Outcome::Fresh(Fresh::new("candidate_missing", reason)));
         }
@@ -139,11 +168,11 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
             } else {
                 output
             };
-            return Ok(Outcome::Repair(json!({
+            return Ok(Outcome::Repair(reviewed(json!({
                 "trigger": "conflict",
                 "conflicting_paths": paths,
                 "output": tail(&output),
-            })));
+            }))));
         }
         Applied::Clean => {}
     }
@@ -167,6 +196,12 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
                 candidate.run_id, candidate.failed_step_id
             ),
         })));
+    }
+    if interrupted.is_some() {
+        return Ok(Outcome::Repair(reviewed(json!({
+            "trigger": "review",
+            "failed_step_id": candidate.failed_step_id,
+        }))));
     }
     if candidate.failed_step_id == REVIEW_VERDICT_STEP && candidate.needs_review_repair {
         return Ok(Outcome::Repair(json!({
@@ -226,6 +261,50 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
         })));
     }
     Ok(Outcome::Validated)
+}
+
+/// [ORB-15314] `repair` with the stopped review's record for the
+/// implementer: its findings, and whether the reviewer's kept repair is part
+/// of the applied changes. A clean apply's `output` says how to continue.
+fn with_interrupted_review(
+    mut repair: Value,
+    candidate: &Candidate,
+    review: &InterruptedReview,
+    located: &Result<String, String>,
+) -> Value {
+    let (repair_commit, refused) = match located {
+        Ok(commit) => (Some(commit.as_str()), None),
+        Err(why) => (None, Some(why.as_str())),
+    };
+    repair["interrupted_review"] = json!({
+        "step_id": review.step_id,
+        "attempt_id": review.attempt_id,
+        "verdict": review.verdict,
+        "findings": review.findings,
+        "repair_ref": review.repair_ref,
+        "repair_commit": repair_commit,
+        "repair_applied": repair_commit.is_some(),
+        "repair_refused": refused,
+    });
+    if repair.get("output").is_none() {
+        let kept = match refused {
+            None => "The reviewer's uncommitted repair was kept and is applied with it; it was \
+                     never validated or settled, so check it like your own work."
+                .to_string(),
+            Some(why) => format!("Only the candidate is applied: {why}."),
+        };
+        repair["output"] = json!(format!(
+            "{} was stopped while its review step '{}' was running, so the review never \
+             settled. The candidate is applied onto the current base. {kept} Repair the \
+             candidate rather than re-implementing it: address the findings in \
+             `interrupted_review.findings` whose `disposition` is `open`, confirm the ones \
+             marked `repaired` against the applied changes, keep what is already done, and \
+             finish what is missing.",
+            candidate.source(),
+            review.step_id
+        ));
+    }
+    repair
 }
 
 /// Whether `failed_step_id` is `commit` or a later delivery step.

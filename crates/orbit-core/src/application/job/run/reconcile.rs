@@ -250,6 +250,9 @@ impl OrbitRuntime {
                 .num_milliseconds()
                 .max(0) as u64
         });
+        // [ORB-15314] Keep a stopped reviewer's repair locally; reconciling
+        // also runs when a workspace opens, so it pushes nothing.
+        self.keep_interrupted_review(&current, false);
         // [ORB-12969] The diagnostic is handed to finalization so the coupled
         // tasks' interruption block names the error code; the step itself is
         // recorded below, only once the interrupted write has won.
