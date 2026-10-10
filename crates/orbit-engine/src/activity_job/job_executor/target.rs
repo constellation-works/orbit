@@ -113,8 +113,8 @@ struct Dispatched {
 }
 
 /// Dispatch the step's activity once. A reviewer's start and end are
-/// reported around it, and its wall clock is bounded by the review's
-/// remaining minutes; `None` when those minutes are already spent, so no
+/// reported around it, and its wall clock is the deadline the review's
+/// remaining minutes allow; `None` when those minutes are already spent, so no
 /// reviewer is started.
 fn dispatch_once(
     step: &JobV2Step,
@@ -123,7 +123,7 @@ fn dispatch_once(
     spec: &ActivityV2Spec,
     input: &Value,
 ) -> Result<Option<Dispatched>, DispatchError> {
-    let mut reviewer = ReviewerInvocation::start(ctx, t, spec, input);
+    let mut reviewer = ReviewerInvocation::start(ctx, t, input);
     if let Some(reviewer) = reviewer.take_if(|reviewer| reviewer.exhausted()) {
         reviewer.finish(ctx, false);
         return Ok(None);

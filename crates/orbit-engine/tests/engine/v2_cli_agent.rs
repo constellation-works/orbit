@@ -920,7 +920,7 @@ fn agent_relay_uses_an_independent_persistent_feed() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
+pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
         tool_disallow_list: None,
         instruction: "cli smoke".to_string(),
@@ -949,7 +949,7 @@ fn must_contain(types: &[&str], needle: &str) {
     );
 }
 
-fn build_writer(
+pub(super) fn build_writer(
     root: &Path,
     run_id: &str,
 ) -> Result<(Arc<V2AuditWriter>, Arc<Store>), Box<dyn std::error::Error>> {
@@ -967,7 +967,7 @@ fn build_writer(
     Ok((writer, store))
 }
 
-fn events_snapshot(
+pub(super) fn events_snapshot(
     store: &Store,
     run_id: &str,
 ) -> Result<Vec<V2AuditEvent>, Box<dyn std::error::Error>> {
@@ -988,19 +988,19 @@ fn events_snapshot(
 /// The struct retains ownership of the `TempDir` so the file lives for the
 /// whole scenario.
 #[cfg(unix)]
-struct FakeCli {
+pub(super) struct FakeCli {
     _tempdir: TempDir,
     path: PathBuf,
 }
 #[cfg(unix)]
 impl FakeCli {
-    fn cli_path(&self) -> &Path {
+    pub(super) fn cli_path(&self) -> &Path {
         &self.path
     }
 }
 
 #[cfg(unix)]
-fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn std::error::Error>> {
+pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn std::error::Error>> {
     let tempdir = tempfile::tempdir()?;
     let path = tempdir.path().join(basename);
     {

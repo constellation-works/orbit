@@ -102,7 +102,6 @@ pub(super) fn record_invocation(
     event: ReviewerInvocationEvent,
     now: DateTime<Utc>,
 ) -> bool {
-    let budget_seconds = u64::from(ledger.budget.minutes).saturating_mul(60);
     let Some(position) = ledger
         .attempts
         .iter()
@@ -116,22 +115,19 @@ pub(super) fn record_invocation(
         return false;
     }
     match event {
-        ReviewerInvocationEvent::Started { timeout_seconds } => {
+        ReviewerInvocationEvent::Started => {
             // A start the previous invocation never reported finishing
             // means that invocation is gone; charge it up to this start.
             stop_reviewer(&mut ledger.attempts[position], now);
             // [ORB-13992] `review.minutes` is the wall-clock limit for the
             // candidate's one review: the invocation may run only for what
             // the review has left, and the engine bounds the reviewer
-            // process by this deadline.
+            // process by this deadline, not by the activity's own timeout.
+            // The manifest advertises the same remaining seconds.
             let attempt = &ledger.attempts[position];
-            let spent = ledger
-                .consumed_for(&attempt.candidate, &attempt.task_meaning_digest, now)
+            let bounded = ledger
+                .remaining_for(&attempt.candidate, &attempt.task_meaning_digest, now)
                 .seconds;
-            // Keep time for a continuation if this invocation hits its deadline.
-            // Actual process runtime still counts; no time is refunded.
-            let remaining = budget_seconds.saturating_sub(spent);
-            let bounded = timeout_seconds.min(remaining / 2);
             let attempt = &mut ledger.attempts[position];
             let timeout = Duration::seconds(i64::try_from(bounded).unwrap_or(i64::MAX));
             attempt.reviewer_running = Some(ReviewerInvocation {

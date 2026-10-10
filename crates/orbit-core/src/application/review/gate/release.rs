@@ -125,7 +125,7 @@ pub(crate) fn record_reviewer_invocation(
             now,
         },
     )?;
-    if !matches!(request.event, ReviewerInvocationEvent::Started { .. }) {
+    if !matches!(request.event, ReviewerInvocationEvent::Started) {
         return Ok(None);
     }
     Ok(ledger

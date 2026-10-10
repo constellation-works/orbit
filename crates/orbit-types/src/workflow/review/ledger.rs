@@ -65,8 +65,10 @@ pub struct ReviewerInvocation {
 /// observes it around the reviewer step's dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewerInvocationEvent {
-    /// The reviewer process is about to start under its own wall-clock bound.
-    Started { timeout_seconds: u64 },
+    /// The reviewer process is about to start; the ledger answers with the
+    /// wall-clock deadline it may run to, what its review has left
+    /// ([`ReviewLedger::remaining_for`]).
+    Started,
     /// The reviewer process ended, successfully or not, after running this
     /// long.
     Finished { runtime_seconds: u64 },

@@ -7,8 +7,10 @@
 //! review minutes.
 //!
 //! [ORB-13992] `review.minutes` is the wall-clock limit for one candidate's
-//! review: the host answers a start with what the review has left, and the
-//! reviewer process is bounded by it.
+//! review: the host answers a start with the deadline the review allows this
+//! invocation, and the reviewer process's wall clock is that deadline, longer
+//! or shorter than the activity's own `wall_clock_timeout_seconds`, which
+//! applies only when the host does not bound reviews.
 
 use std::time::Instant;
 
@@ -17,7 +19,6 @@ use orbit_types::workflow::activity_job::{ActivityV2Spec, TargetStep};
 use serde_json::Value;
 
 use super::ExecCtx;
-use crate::activity_job::cli_runner::DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS;
 use crate::context::ReviewerInvocationRequest;
 use crate::review_gate::REVIEWER_ACTIVITY;
 
@@ -32,12 +33,7 @@ pub(super) struct ReviewerInvocation {
 impl ReviewerInvocation {
     /// Report the start of the reviewer about to be dispatched, when `target`
     /// is the reviewer activity bound to an admitted attempt.
-    pub(super) fn start(
-        ctx: &ExecCtx<'_>,
-        target: &TargetStep,
-        spec: &ActivityV2Spec,
-        input: &Value,
-    ) -> Option<Self> {
+    pub(super) fn start(ctx: &ExecCtx<'_>, target: &TargetStep, input: &Value) -> Option<Self> {
         if target.activity_name.as_deref() != Some(REVIEWER_ACTIVITY) {
             return None;
         }
@@ -52,9 +48,7 @@ impl ReviewerInvocation {
             run_id: ctx.run_id.clone(),
             lineage_key: field("lineage_key")?,
             attempt_id: field("attempt_id")?,
-            event: ReviewerInvocationEvent::Started {
-                timeout_seconds: timeout_seconds(target, spec),
-            },
+            event: ReviewerInvocationEvent::Started,
         };
         let bound_seconds = record(ctx, &request);
         Some(Self {
@@ -70,15 +64,12 @@ impl ReviewerInvocation {
         self.bound_seconds == Some(0)
     }
 
-    /// `spec` shortened to the review's remaining minutes, when that is
-    /// tighter than the activity's own wall-clock bound.
+    /// `spec` with its wall clock set to the host's deadline for this
+    /// invocation, whichever way it differs from the activity's own bound.
     pub(super) fn bounded_spec(&self, spec: &ActivityV2Spec) -> Option<ActivityV2Spec> {
         let bound = self.bound_seconds.filter(|bound| *bound > 0)?;
         match spec {
-            ActivityV2Spec::AgentLoop(agent)
-                if agent.wall_clock_timeout_seconds == 0
-                    || bound < agent.wall_clock_timeout_seconds =>
-            {
+            ActivityV2Spec::AgentLoop(agent) if bound != agent.wall_clock_timeout_seconds => {
                 let mut agent = agent.clone();
                 agent.wall_clock_timeout_seconds = bound;
                 Some(ActivityV2Spec::AgentLoop(agent))
@@ -97,18 +88,6 @@ impl ReviewerInvocation {
             ReviewerInvocationEvent::Finished { runtime_seconds }
         };
         let _ = record(ctx, &self.request);
-    }
-}
-
-/// The reviewer's own wall-clock bound: no process outlives it, so a start
-/// whose end was never reported is never charged past it.
-fn timeout_seconds(target: &TargetStep, spec: &ActivityV2Spec) -> u64 {
-    match spec {
-        ActivityV2Spec::AgentLoop(agent) if agent.wall_clock_timeout_seconds > 0 => {
-            agent.wall_clock_timeout_seconds
-        }
-        _ if target.timeout_seconds > 0 => target.timeout_seconds,
-        _ => DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS,
     }
 }
 

@@ -117,7 +117,7 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     assert_eq!(invocations[2].attempt_id, "rvw-re-review");
     assert!(matches!(
         invocations[0].event,
-        ReviewerInvocationEvent::Started { .. }
+        ReviewerInvocationEvent::Started
     ));
     assert!(matches!(
         invocations[1].event,
@@ -125,7 +125,7 @@ fn shipped_completion_rebases_re_reviews_and_completes_the_new_head() {
     ));
     assert!(matches!(
         invocations[2].event,
-        ReviewerInvocationEvent::Started { .. }
+        ReviewerInvocationEvent::Started
     ));
     assert!(matches!(
         invocations[3].event,
