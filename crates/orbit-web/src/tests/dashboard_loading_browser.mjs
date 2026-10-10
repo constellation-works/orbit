@@ -1119,6 +1119,27 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  if (!locksOnly && !authExclusionsOnly && process.argv[4] !== '--run-detail') {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => globalThis.showHealthEvidence('errors'));
+    const layout = await page.evaluate(() => {
+      const panel = document.getElementById('diag-body');
+      const errors = panel.querySelector('.diagnostics-errors-main');
+      const preview = errors.querySelector('.error-message-preview');
+      const panelBounds = panel.getBoundingClientRect();
+      const errorsBounds = errors.getBoundingClientRect();
+      return {
+        viewport: [window.innerWidth, window.innerHeight],
+        contained: errorsBounds.left >= panelBounds.left - 1 && errorsBounds.right <= panelBounds.right + 1,
+        overflowX: getComputedStyle(errors).overflowX,
+        lineClamp: getComputedStyle(preview).webkitLineClamp,
+      };
+    });
+    if (layout.viewport[0] !== 1440 || layout.viewport[1] !== 900 || !layout.contained
+      || layout.overflowX !== 'auto' || layout.lineClamp !== '2') {
+      throw new Error(`Errors panel must contain its table and wrap messages at 1440x900: ${JSON.stringify(layout)}`);
+    }
+  }
   if (authExclusionsOnly) {
     await assertCrewWindow(page);
     console.log('Authentication exclusion provider, host, time, class, credential route, login hint and next probe rendered at desktop and mobile widths.');

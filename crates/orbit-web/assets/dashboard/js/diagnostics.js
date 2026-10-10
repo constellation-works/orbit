@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, formatDateTime, listItems } from './common.js';
+import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, getHost, getWorkspace, formatDateTime, listItems } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -115,6 +115,67 @@ function errorRunLabel(row) {
   return "-";
 }
 
+function dashboardHref(hash, workspaceId = getWorkspace()) {
+  const url = new URL(window.location.href);
+  if (getHost()) url.searchParams.set("host", getHost());
+  if (workspaceId) url.searchParams.set("workspace", workspaceId);
+  url.hash = hash;
+  return url.href;
+}
+
+function dashboardLink(label, hash, workspaceId = getWorkspace()) {
+  const link = el("a", { class: "mono", text: label, title: `Open ${label}` });
+  link.href = dashboardHref(hash, workspaceId);
+  return link;
+}
+
+function errorMessageDisclosure(value, row, ctx, td) {
+  const full = value || "";
+  const shortened = shortenWorktreePaths(full);
+  td.title = row.target ? `${row.target}: ${full}` : full;
+  const details = el("details", { class: "error-message" });
+  const summary = el("summary");
+  summary.appendChild(el("span", {
+    class: "error-message-preview",
+    text: truncateValue(ctx, shortened, 220),
+  }));
+  details.appendChild(summary);
+  details.appendChild(el("div", { class: "error-message-full", text: full }));
+  return details;
+}
+
+function errorColumnHasData(rows, key) {
+  if (key === "recovered") return rows.some(row => row.recovered === true);
+  return rows.some(row => {
+    const value = row[key];
+    return value != null && value !== false && String(value).trim() !== "" && String(value).trim() !== "-";
+  });
+}
+
+function loadMoreErrorsLink(payload, ctx) {
+  if (!errorsCoverageLabel(payload)) return null;
+  const url = new URL(window.location.href);
+  const configured = Number.parseInt(url.searchParams.get("diag") || "50", 10);
+  const current = Number.isInteger(configured) && configured > 0 ? configured : 50;
+  const next = Math.min(current + 50, 200);
+  if (next <= current) return null;
+  url.searchParams.set("diag", String(next));
+  const link = el("a", {
+    class: "diagnostics-load-more",
+    text: "Load more errors",
+    title: `Load up to ${next} error events`,
+  });
+  link.href = url.href;
+  link.addEventListener("click", event => {
+    event.stopPropagation();
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    if (!hasCtx(ctx, "loadMoreErrors")) return;
+    event.preventDefault();
+    ctx.loadMoreErrors(next);
+  });
+  return link;
+}
+
 function getDiagErrorsColumns(ctx) {
   return [
     { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
@@ -123,7 +184,19 @@ function getDiagErrorsColumns(ctx) {
       key: "job_run",
       label: "run",
       num: false,
-      render: (_v, row) => errorRunLabel(row),
+      render: (_v, row) => {
+        const runId = row.job_run;
+        if (!runId) return errorRunLabel(row);
+        const workspaceId = row.workspace_id || getWorkspace();
+        const link = dashboardLink(runId, `runs/${encodeURIComponent(runId)}`, workspaceId);
+        link.addEventListener("click", event => {
+          event.stopPropagation();
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+          event.preventDefault();
+          if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(runId, workspaceId);
+        });
+        return link;
+      },
     },
     { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
     { key: "step", label: "step", num: false, render: (v) => v || "-" },
@@ -134,11 +207,7 @@ function getDiagErrorsColumns(ctx) {
       label: "message",
       num: false,
       cellClass: "stderr",
-      render: (v, row, td) => {
-        const full = v || "";
-        td.title = row.target ? `${row.target}: ${full}` : full;
-        return truncateValue(ctx, shortenWorktreePaths(full), 220);
-      },
+      render: (v, row, td) => errorMessageDisclosure(v, row, ctx, td),
     },
   ];
 }
@@ -183,8 +252,9 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, 
         (col.num ? "num" : "") + (col.cellClass ? ` ${col.cellClass}` : "") + ` c-${col.key}`;
       const td = el("td", { class: baseClass });
       const v = row[col.key];
-      const text = col.render ? col.render(v, row, td) : v == null ? "" : String(v);
-      td.textContent = text;
+      const rendered = col.render ? col.render(v, row, td) : v == null ? "" : String(v);
+      if (rendered && typeof rendered === "object" && rendered.nodeType) td.appendChild(rendered);
+      else td.textContent = rendered;
       tr.appendChild(td);
     }
     tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
@@ -315,8 +385,32 @@ function incidentEvidenceTable(events, ctx) {
     tr.appendChild(el("td", { text: event.actor || "-" }));
     tr.appendChild(el("td", { class: "mono", text: event.surface || "-" }));
     tr.appendChild(el("td", { class: "mono", text: event.tool || "-" }));
-    tr.appendChild(el("td", { class: "mono", text: event.run_id || "-" }));
-    tr.appendChild(el("td", { class: "mono", text: event.task_id || "-" }));
+    const runCell = el("td", { class: "mono" });
+    if (event.run_id) {
+      const workspaceId = event.workspace_id || getWorkspace();
+      const link = dashboardLink(event.run_id, `runs/${encodeURIComponent(event.run_id)}`, workspaceId);
+      link.addEventListener("click", click => {
+        click.stopPropagation();
+        if (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey || click.button !== 0) return;
+        click.preventDefault();
+        if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(event.run_id, workspaceId);
+      });
+      runCell.appendChild(link);
+    } else {
+      runCell.textContent = "-";
+    }
+    tr.appendChild(runCell);
+    const taskCell = el("td", { class: "mono" });
+    if (event.task_id) {
+      taskCell.appendChild(dashboardLink(
+        event.task_id,
+        `tasks?status=all&q=${encodeURIComponent(event.task_id)}`,
+        event.workspace_id || getWorkspace(),
+      ));
+    } else {
+      taskCell.textContent = "-";
+    }
+    tr.appendChild(taskCell);
     const message = el("td", { class: "stderr", text: truncateValue(ctx, event.message || "", 160) });
     message.title = event.message || "";
     tr.appendChild(message);
@@ -523,6 +617,11 @@ function renderDiagnostics(ctx = {}) {
     count.title = coverage
       ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
       : "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
+    const loadMore = loadMoreErrorsLink(last.errors, ctx);
+    if (loadMore) {
+      count.appendChild(document.createTextNode(" · "));
+      count.appendChild(loadMore);
+    }
   } else {
     count.textContent = `${rows.length} metric entries · window ${getWindow()}`;
     count.title = "Most recent invocation metrics in the selected window; capped by the diag URL parameter (default 50).";
@@ -530,7 +629,8 @@ function renderDiagnostics(ctx = {}) {
   const columns =
     sub === "metrics"
       ? getDiagMetricsColumns(ctx)
-      : getDiagErrorsColumns(ctx);
+      : getDiagErrorsColumns(ctx).filter(column =>
+        ["ts", "source", "job_run", "message"].includes(column.key) || errorColumnHasData(rows, column.key));
   if (sub === "errors") {
     const main = el("div", { class: "diagnostics-errors-main" });
     const internal = rows.filter(recoverableAgentDiagnostic);
