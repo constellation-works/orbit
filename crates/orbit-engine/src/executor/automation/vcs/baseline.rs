@@ -780,7 +780,14 @@ pub enum BaseFailureVerdict {
     /// The base fails too, but the candidate names failures it does not:
     /// those still belong to the candidate.
     CandidateAdds { failures: Vec<String> },
-    /// The host's runs contradict the claim, and how.
+    /// The final candidate passes when the host runs it [ORB-15122], so the
+    /// reviewer's failure was its own environment's. A run that reports a
+    /// summary executed at least one counted test; carries that count.
+    CandidatePasses { tests_run: Option<u64> },
+    /// The candidate fails on the host and the base passes a comparable run
+    /// [ORB-15122]: the failure is the candidate's own. Carries how.
+    BasePasses(String),
+    /// The host's runs contradict the claim otherwise, and how.
     Contradicted(String),
     /// The base ran, but its run does not show what the candidate's would:
     /// it tested another selection, or passed without executing a counted
@@ -810,15 +817,17 @@ pub struct BaseFailureCheck {
 /// the candidate checked out in `workspace_path` [ORB-14434].
 ///
 /// Settlement never takes the claim on trust. The command runs again on the
-/// candidate, then on the base through `compare_with_base`, whose
-/// `(base, command)` result cache is the same one delivery validation fills,
-/// so a gate-step `baseline_red` run of the same command on the same base is
-/// reused rather than repeated. The base run is handed the selection the
-/// candidate run reported, and a base run that is not comparable with it
-/// settles nothing. Beyond the exit status and timeout outcome
-/// `BaselineCheck::reproduces` compares, the failures each output names
-/// (`failure_identities`) must not grow on the candidate, and every failure
-/// the reviewer named must appear in the base's output.
+/// candidate first: a pass there is `CandidatePasses` unless its summary
+/// shows it executed no counted test, which leaves the claim inconclusive
+/// [ORB-15122]. A failure there is checked on the base through
+/// `compare_with_base`, whose `(base, command)` result cache is the same one
+/// delivery validation fills, so a gate-step `baseline_red` run of the same
+/// command on the same base is reused rather than repeated. The base run is
+/// handed the selection the candidate run reported, and a base run that is
+/// not comparable with it settles nothing. Beyond the exit status and
+/// timeout outcome `BaselineCheck::reproduces` compares, the failures each
+/// output names (`failure_identities`) must not grow on the candidate, and
+/// every failure the reviewer named must appear in the base's output.
 ///
 /// Only call this with a command the host itself trusts: it runs on the host,
 /// outside any agent sandbox.
@@ -853,13 +862,16 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         base_log,
     };
     if run.passed {
-        return Ok(checked(
-            BaseFailureVerdict::Contradicted(format!(
-                "`{}` passes on the final candidate when the host runs it",
+        let verdict = match executed_no_tests(run.summary.as_ref()) {
+            Some(reason) => BaseFailureVerdict::Inconclusive(format!(
+                "the host's run of `{}` on the candidate {reason}",
                 run.command
             )),
-            Value::Null,
-        ));
+            None => BaseFailureVerdict::CandidatePasses {
+                tests_run: run.summary.as_ref().and_then(|summary| summary.tests_run),
+            },
+        };
+        return Ok(checked(verdict, Value::Null));
     }
     if run.missing_tool.is_some() || run.network_evidence.is_some() {
         return Ok(checked(
@@ -897,8 +909,9 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         }
         Ok(base) if base.passed => {
             return Ok(checked(
-                BaseFailureVerdict::Contradicted(format!(
-                    "base {base_sha} passes `{}`",
+                BaseFailureVerdict::BasePasses(format!(
+                    "`{}` fails on the final candidate when the host runs it, and base \
+                     {base_sha} passes it",
                     run.command
                 )),
                 base_log,
@@ -950,6 +963,18 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         BaseFailureVerdict::CandidateAdds { failures: added }
     };
     Ok(checked(verdict, base_log))
+}
+
+/// Why a passing run shows nothing about the disputed check, when it does
+/// not [ORB-15122]: a run that reports a summary must have executed a counted
+/// test, by the rule a base run's pass is held to ([`not_comparable`]). A
+/// command that reports no summary is judged by its exit status.
+fn executed_no_tests(summary: Option<&ValidationSummary>) -> Option<String> {
+    match summary?.tests_run {
+        Some(0) => Some("passed without executing a test".to_string()),
+        None => Some("passed without reporting how many tests it executed".to_string()),
+        Some(_) => None,
+    }
 }
 
 /// Whitespace runs collapsed and color codes dropped, so two captures of one

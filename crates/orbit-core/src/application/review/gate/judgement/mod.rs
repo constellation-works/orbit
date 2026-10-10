@@ -40,4 +40,7 @@ pub(super) struct Judgement {
     pub(super) host_refused: bool,
     /// [ORB-14478] `host_sandbox_test` requirements this host ran or refused.
     pub(super) host_evidence: Vec<orbit_types::workflow::HostEvidenceRecord>,
+    /// [ORB-15122] Failed required checks the host passed on the final
+    /// candidate after refuting the reviewer's red-base claim.
+    pub(super) host_overrides: Vec<orbit_types::workflow::HostCandidateOverride>,
 }

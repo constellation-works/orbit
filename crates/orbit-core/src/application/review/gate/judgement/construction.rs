@@ -55,6 +55,7 @@ impl Judgement {
             evidence_carried: None,
             host_refused: true,
             host_evidence: Vec::new(),
+            host_overrides: Vec::new(),
         };
         let mut reports = Vec::new();
         let mut revisions = Vec::new();
@@ -133,6 +134,7 @@ impl Judgement {
             evidence_carried: None,
             host_refused: false,
             host_evidence: Vec::new(),
+            host_overrides: Vec::new(),
         })
     }
 
@@ -169,6 +171,7 @@ impl Judgement {
             evidence_carried: None,
             host_refused: false,
             host_evidence: certificate.host_evidence.clone(),
+            host_overrides: certificate.host_overrides.clone(),
         }
     }
 
