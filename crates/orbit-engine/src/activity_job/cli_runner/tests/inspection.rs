@@ -322,6 +322,7 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
 const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
 const SLOW_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::slow_full_ancestry_copy_outlasts_the_local_deadline";
 const STALLED_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::stalled_full_ancestry_copy_leaves_a_reusable_slot";
+const KILLED_LOOKUP_CHILD: &str = "activity_job::cli_runner::tests::inspection::a_commit_lookup_killed_by_a_signal_stays_retryable";
 
 /// [ORB-14806] A full-ancestry copy that runs past the 10 s local deadline
 /// still seeds the slot, so the copy runs under its bulk bound. Admitted under
@@ -377,18 +378,54 @@ fn stalled_full_ancestry_copy_leaves_a_reusable_slot() {
     run_child_with_stub_git(STALLED_COPY_CHILD);
 }
 
+/// A Git that a signal ends answers nothing. The commit lookup then fails
+/// with no exit status and no stderr, which must stay retryable IO rather
+/// than read as a missing commit. Admitted under test_strategy criterion 2:
+/// the stub git injects the kill that a loaded host produced.
+#[test]
+fn a_commit_lookup_killed_by_a_signal_stays_retryable() {
+    if let Some(stub_dir) = std::env::var_os(STUB_GIT_DIR_ENV) {
+        let temp = tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        let revision = init_repo(&repo);
+        fs::write(Path::new(&stub_dir).join(KILL_VERIFY_MARKER), "").expect("kill switch");
+        assert_retryable(
+            SourceInspection::from_input(
+                &json!({"inspection_revision": revision, "source_revision": revision}),
+                Some(&repo),
+                Some("reviewer"),
+            ),
+            "rev-parse --verify",
+        );
+        return;
+    }
+    run_child_with_stub_git(KILLED_LOOKUP_CHILD);
+}
+
+/// Present in the stub directory: the stub `git` kills itself with SIGKILL
+/// before any `rev-parse --verify` runs.
+const KILL_VERIFY_MARKER: &str = "kill-verify";
+
 /// Re-executes `test` in a child whose `git` is a stub: it sleeps for the
-/// seconds in `fetch-delay` before each fetch, then runs the real Git. PATH is
-/// process-global, so the stub is installed only in the child.
+/// seconds in `fetch-delay` before each fetch, kills itself before a
+/// `--verify` lookup while [`KILL_VERIFY_MARKER`] exists, then runs the real
+/// Git. PATH is process-global, so the stub is installed only in the child.
 fn run_child_with_stub_git(test: &str) {
     let stub_dir = tempdir().expect("stub dir");
     set_fetch_delay(stub_dir.path(), 0);
     let delay = quote_posix_arg(&stub_dir.path().join("fetch-delay").display().to_string());
+    let kill = quote_posix_arg(
+        &stub_dir
+            .path()
+            .join(KILL_VERIFY_MARKER)
+            .display()
+            .to_string(),
+    );
     let git_path = quote_posix_arg(&real_git_path().display().to_string());
     write_executable(
         &stub_dir.path().join("git"),
         &format!(
-            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) sleep \"$(cat {delay})\" ;;\nesac\nexec {git_path} \"$@\"\n"
+            "#!/bin/sh\ncase \" $* \" in\n  *\" fetch \"*) sleep \"$(cat {delay})\" ;;\n  *\" --verify \"*) [ -e {kill} ] && kill -9 $$ ;;\nesac\nexec {git_path} \"$@\"\n"
         ),
     );
     let mut paths = vec![stub_dir.path().to_path_buf()];

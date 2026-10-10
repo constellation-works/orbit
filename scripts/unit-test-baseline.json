@@ -555,6 +555,7 @@
         "activity_job/cli_runner/supervisor/tests/spawn.rs::stdin_delivery_and_finalization_run_in_an_isolated_child",
         "activity_job/cli_runner/supervisor/tests/spawn.rs::stdin_lifecycle_child",
         "activity_job/cli_runner/supervisor/tests/spawn.rs::stdin_provider",
+        "activity_job/cli_runner/tests/inspection.rs::a_commit_lookup_killed_by_a_signal_stays_retryable",
         "activity_job/cli_runner/tests/inspection.rs::missing_commit_and_slot_ownership_are_permanent",
         "activity_job/cli_runner/tests/inspection.rs::short_inspection_revision_fails_a_retried_task_pilot_once",
         "activity_job/cli_runner/tests/inspection.rs::slot_exhaustion_and_git_io_stay_retryable",

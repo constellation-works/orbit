@@ -436,10 +436,14 @@ fn require_commit(source: &Path, revision: &str) -> Result<(), DispatchError> {
     )))
 }
 
-/// `rev-parse --verify -q <rev>^{commit}` fails with empty stderr when the
+/// `rev-parse --verify -q <rev>^{commit}` exits 1 with empty stderr when the
 /// name is absent. A type mismatch names the object. Repository-level
-/// failures write a fatal line and are not a missing commit.
+/// failures write a fatal line and are not a missing commit, and neither is a
+/// Git that a signal ended before it could answer.
 fn missing_commit(output: &GitCommandOutput) -> bool {
+    if output.code != Some(1) {
+        return false;
+    }
     let stderr = output.stderr.trim();
     if stderr.is_empty() {
         return true;

@@ -417,6 +417,7 @@ pub fn run_git_within(
 
     Ok(GitCommandOutput {
         success: output.status.success(),
+        code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
@@ -424,6 +425,8 @@ pub fn run_git_within(
 
 pub struct GitCommandOutput {
     pub success: bool,
+    /// Git's exit status; `None` when a signal ended the process.
+    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
