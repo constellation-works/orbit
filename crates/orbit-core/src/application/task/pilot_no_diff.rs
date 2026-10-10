@@ -349,12 +349,20 @@ fn collect_strings<'a>(value: &'a Value, texts: &mut Vec<&'a str>) {
 
 /// The distinct commit citations in `texts`, in first-seen order.
 fn commit_citations<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    hex_tokens(texts, commit_citation)
+}
+
+/// The distinct tokens in `texts` that `accept` takes, in first-seen order.
+fn hex_tokens<'a>(
+    texts: impl IntoIterator<Item = &'a str>,
+    accept: fn(&str) -> bool,
+) -> Vec<String> {
     let mut commits = Vec::new();
     for token in texts
         .into_iter()
         .flat_map(|text| text.split(|c: char| !c.is_ascii_alphanumeric()))
     {
-        if commit_citation(token) && !commits.iter().any(|seen| seen == token) {
+        if accept(token) && !commits.iter().any(|seen| seen == token) {
             commits.push(token.to_string());
         }
     }
@@ -365,7 +373,7 @@ fn commit_citations<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String>
 /// resolves from its description, and the landed commit of each
 /// `regression_from` target that delivery observed as merged.
 fn named_commits(runtime: &OrbitRuntime, source: &Source, task: &Task) -> Vec<String> {
-    let mut named = commit_citations([task.description.as_str()])
+    let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
         .iter()
         .filter_map(|sha| resolve_commit(source, sha))
         .collect::<Vec<_>>();
@@ -431,11 +439,23 @@ fn touches_paths(source: &Source, commit: &str, selectors: &[String]) -> bool {
     })
 }
 
+/// A cited commit must hold both a digit and a letter, so that plain numbers
+/// in the evidence are not taken as citations: a citation that does not
+/// resolve refuses the whole proof.
 fn commit_citation(token: &str) -> bool {
+    abbreviated_sha(token)
+        && token.bytes().any(|byte| byte.is_ascii_digit())
+        && token.bytes().any(|byte| byte.is_ascii_alphabetic())
+}
+
+/// Any token shaped like a full or abbreviated SHA, including an all-digit
+/// abbreviation (about 4% of 7-character ones). `named_commits` keeps only the
+/// tokens that resolve, and an extra named commit can only hold a finding, so
+/// it takes every such token: missing the culprit would let a proof that cites
+/// the culprit itself close the finding.
+fn abbreviated_sha(token: &str) -> bool {
     (7..=40).contains(&token.len())
         && token
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        && token.bytes().any(|byte| byte.is_ascii_digit())
-        && token.bytes().any(|byte| byte.is_ascii_alphabetic())
 }

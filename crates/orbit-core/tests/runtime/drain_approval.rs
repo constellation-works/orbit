@@ -1275,6 +1275,59 @@ fn a_verified_no_diff_citing_only_the_findings_own_commits_is_held() {
 }
 
 #[test]
+fn a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count() {
+    if !super::dispatch_admission::isolated(
+        "drain_approval::a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    // About 4% of 7-character abbreviations are all digits: recommit the
+    // culprit until its abbreviation is one.
+    let culprit = (0..1000)
+        .map(|attempt| workspace.commit(&format!("the culprit {attempt}")))
+        .find(|sha| sha[..7].bytes().all(|byte| byte.is_ascii_digit()))
+        .expect("an all-digit abbreviation within 1000 commits");
+    let fix = workspace.commit("the fix");
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let description = format!("Introduced by {} on the base branch.", &culprit[..7]);
+    let own_culprit = workspace.finding(
+        "own culprit",
+        description.clone(),
+        &["file:README.md"],
+        Vec::new(),
+    );
+    let fixed = workspace.finding(
+        "fixed after culprit",
+        description,
+        &["file:README.md"],
+        Vec::new(),
+    );
+
+    let pilot = workspace.running("task_pilot_pipeline", json!({}));
+    let applied = workspace
+        .apply(
+            &pilot,
+            vec![
+                verified_no_diff(&own_culprit, &format!("Commit {culprit} is the culprit.")),
+                verified_no_diff(&fixed, &format!("Commit {fix} repaired the README.")),
+            ],
+            json!({}),
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["closed"], json!([fixed.id]), "{selection}");
+    assert_eq!(workspace.status(&own_culprit), TaskStatus::Proposed);
+    assert_eq!(
+        held_reason(&selection, &own_culprit),
+        Some("pilot_verified_no_diff"),
+        "{selection}"
+    );
+}
+
+#[test]
 fn an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed() {
     if !super::dispatch_admission::isolated(
         "drain_approval::an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed",
