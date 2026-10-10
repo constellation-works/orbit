@@ -482,6 +482,22 @@ html:not([data-has-sidebar]) header.header {
   white-space: nowrap;
 }
 
+/* The raw-HTML code transform inserts explicit <wbr> break points after
+   slashes. Remove them here so the fit-content box sizes to the full command;
+   the code element handles narrow screens with its own horizontal scrolling. */
+.orbit-hero-install code wbr {
+  display: none;
+}
+
+/* Inline-code styling reserves 3ch for punctuation after the code. The hero
+   command has no trailing punctuation, so let it use its full width once the
+   viewport can accommodate it. */
+@media (min-width: 48rem) {
+  .orbit-hero-install code:not(pre code) {
+    max-width: none;
+  }
+}
+
 .orbit-hero-install-prompt {
   color: var(--sl-color-gray-4);
   margin-right: 0.6em;
