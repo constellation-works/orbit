@@ -1,8 +1,6 @@
 # Orbit Website — Design
 
-**Status:** Draft
-**Owner:** Orbit contributors
-**Last updated:** 2026-09-27
+The design contract for `orbit-cli.com`: what the site is for, how it looks, how it is organized and how its pages are written. Read it before changing the site's look, navigation or homepage.
 
 ---
 
@@ -32,6 +30,8 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
    support search, the theme toggle, and the homepage's narrow-viewport Menu;
    they should not delay the page's readable state.
 5. **Dark-default, light-available.** First-time visitors see dark whatever their OS prefers; the theme toggle persists an explicit choice, and a stored light choice wins. Neither mode is an afterthought.
+
+Visual reference: the Radix Primitives docs. Density reference: the Tailwind docs.
 
 ---
 
@@ -102,60 +102,34 @@ Three-column, fixed:
 
 ### 3.5 Landing page
 
-The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only).
+The homepage replaces Starlight's auto-rendered title with an in-content hero;
+a CSS rule scoped to the homepage hides the title. Other pages keep Starlight's
+default chrome (auto title, sidebar, TOC).
 
-**Hero, left column** — release chip (`Early access`, linking to the
-changelog), a 3.6rem headline whose last sentence is muted, a lede that says
-what Orbit is, primary and secondary CTAs, a one-line requirements note, and
-the provider strip: the shipped CLI executors as a plain list under a
-hairline, with the legacy Gemini executor named in a footnote rather than
-implied current.
+- **Hero:** a release chip linking to the changelog, the headline, a lede that
+  says what Orbit is, the CTAs, a requirements note and the shipped CLI
+  executors as a plain list. A legacy executor is footnoted, never implied
+  current.
+- **Hero video:** the site's only motion, a muted, looping tour of the real
+  dashboard. It stays on its poster frame under
+  `prefers-reduced-motion: reduce`, its caption dates the capture so its counts
+  read as a snapshot, and its `aria-label` narrates it. The source lives in
+  `marketing/media/video/orbit-dashboard-tour`; the site serves a web re-encode
+  from `public/media/`.
+- **Below the hero:** short sections that take a reader from what Orbit
+  promises, to how it works and runs unattended, to where to go next. Each
+  opens on a two-column head: a mono eyebrow and one-sentence heading, then a
+  short lede. The page ends on a Quickstart whose copy buttons copy exactly
+  the command shown. The footer, not the page, carries the full docs index.
 
-**Hero, right column** — one **dashboard tour**: a silent, looping 37 s video
-of the real dashboard on a live workspace (approve → drain → record → runs →
-pipeline → audit → agents), laid out for this column at 6:5 and drawn at 2x so
-the captures stay sharp at ~660px. Source and screenshots live in
-`marketing/media/video/orbit-dashboard-tour`; the site serves a web re-encode
-at `public/media/orbit-dashboard-tour.mp4` with a poster frame from the
-approve beat, whose side rails are masked so no panel is cut through its
-label. It autoplays muted with native controls; under
-`prefers-reduced-motion: reduce` it stays on the poster. The `figcaption`
-dates the capture, so its counts read as a snapshot rather than a live metric,
-and the `aria-label` narrates the tour. Below 54rem the columns stack.
+Rules for the page:
 
-Below the hero, in order:
-
-1. **Guarantees** — three short promises (nothing runs until you approve,
-   nothing merges without you, every step is on the record), each with a
-   glyph.
-2. **How it works** — the lifecycle rail (`proposed → backlog → in-progress →
-   review → done`, the default ship's stop at `review` marked and `done`
-   dashed) and a 4-card walkthrough (ask → file → ship → review), each card
-   with the command or MCP call behind it and the review card outlined in the
-   accent.
-3. **Why Orbit** — a 2×2 value-prop grid with glyphs and a command per card.
-4. **When you step away** — one card per unattended shape (`orbit run ship`,
-   `--mode local`, `orbit run auto`, `orbit run ship-sweep`): the command,
-   where it stops, and what `--complete` does. Each links to its guide.
-5. **Go further** — a list of five guides beside the section head, with the
-   CLI reference linked from the head.
-6. **Quickstart** — a closing panel with the three setup commands, then
-   `orbit web serve` to open the dashboard, and CTAs. Each command row has a
-   copy button that copies exactly the command text.
-
-Sections open on a two-column head — mono eyebrow and a one-sentence heading
-on the left, a short lede on the right. The footer, not the page, carries the
-full docs index.
-
-Commands shown on this page must match current CLI behaviour, and illustrative
-output must say that it is illustrative. The page advertises no unlanded feature
-and publishes no live metric; captured numbers carry their capture date.
-
-The homepage's extra script handles the Menu's Escape / breakpoint close. The
-shared theme script applies the dark default (or a stored light choice) before styles load. The Quickstart
-section below the hero retains the install and setup commands.
-
-Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.
+- Commands shown match current CLI behaviour, and illustrative output says it
+  is illustrative.
+- Advertise no unlanded feature and publish no live metric; captured numbers
+  carry their capture date.
+- Keep scripts to the shared theme script and the Menu's Escape and breakpoint
+  close. Nothing delays the readable state.
 
 ---
 
@@ -192,16 +166,7 @@ Each section has an index page that lists its children with one-line description
   Cloudflare Pages applies the repository-owned `public/_headers` policy to
   HTTPS responses; the externally managed Cloudflare zone owns HTTP-to-HTTPS
   redirection.
-- **Repo layout:** new top-level `website/` directory, independent of the Rust workspace
-
-### 5.1 Why Starlight over Nextra
-
-- Docs-first defaults map 1:1 to this site's stated values
-- Zero JS by default → consistent perf as the site grows
-- Pagefind search is excellent and fully static
-- Less framework surface to fight when enforcing minimalism
-
-Nextra is reserved for a future scenario where interactive React widgets become core content (API explorers, config builders). Not a concern at launch.
+- **Repo layout:** `website/`, independent of the Rust workspace
 
 ---
 
@@ -216,28 +181,13 @@ Nextra is reserved for a future scenario where interactive React widgets become 
 
 ---
 
-## 7. Open Questions
-
-1. **Versioning.** Starlight supports versioned docs via directory structure. Add it when release-specific documentation becomes necessary.
-2. **Architecture detail.** Crate boundaries and dependency direction are contributor material, not published here; they live in the repository's `ARCHITECTURE.md`. Revisit only if a public extension surface makes them user-facing.
-3. **Logo refinement.** The ring-with-offset-dot logo ships as `src/assets/orbit-logo-light.svg` and `orbit-logo-dark.svg`. Revisit only if it fails legibility at 16px favicon size.
-4. **Analytics.** Plausible (privacy-respecting) or none at all? Default to none unless there's a decision to measure something specific.
-
----
-
-## 8. Out of Scope (explicitly)
+## 7. Out of Scope
 
 - Interactive code playgrounds
 - Authenticated / gated content
 - Localization (revisit if Orbit gains non-English contributors at scale)
 - Comments, discussions, or embedded social
 - A blog
-
----
-
-## 9. References
-
-- [Radix Primitives docs](https://www.radix-ui.com/primitives/docs) — primary visual reference
-- [Astro Starlight](https://starlight.astro.build) — framework docs
-- [Tailwind docs](https://tailwindcss.com/docs) — information density reference
-- [Pagefind](https://pagefind.app) — search implementation
+- Analytics, unless there is a decision to measure something specific
+- Versioned docs, until release-specific documentation is needed
+- Crate boundaries and dependency direction: contributor material that lives in the repository's `ARCHITECTURE.md`

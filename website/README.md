@@ -2,6 +2,9 @@
 
 Documentation site for `orbit-cli.com`. Astro + Starlight.
 
+The site's purpose, visual system, navigation, homepage rules and content conventions are in
+[DESIGN.md](DESIGN.md). Read it before changing how the site looks or is organized.
+
 ```bash
 npm install
 npm run dev      # local dev server
