@@ -137,6 +137,10 @@ success, failure, and termination, release despite a surviving detached child, s
 forwarding and status preservation, nested admission, job-count precedence, bypass,
 invalid settings, `make run` releasing its slot before application runtime, and
 `make watch` admitting each check/test iteration without retaining a slot while idle.
+Commands expected to run have a 30-second bound to allow delayed admission or
+interpreter startup. The wait-reporting case polls for an elapsed-time progress
+line and limits the number of lines relative to the observation time, so a slow
+first report does not fail the test or weaken its reporting-rate check.
 
 Run a bounded comparison with private targets outside the checkout:
 

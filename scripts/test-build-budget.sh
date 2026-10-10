@@ -7,6 +7,9 @@ WRAPPER="$ROOT/scripts/build-budget.py"
 TMP="$(mktemp -d)"
 BACKGROUND_PIDS=()
 TEST_COMPLETE=0
+# Admission and interpreter startup can take seconds on a contended host.
+# Bypass/re-entry commands also need startup headroom, even without a slot wait.
+COMMAND_TIMEOUT=30
 
 # Clear any build-budget environment inherited from an outer wrapper (e.g. `make ci`).
 # Fixtures manage their own slots, lock directory, and admission hermetically [ORB-12350].
@@ -66,6 +69,16 @@ wait_for() {
   while [[ ! -e "$path" ]]; do
     attempts=$((attempts + 1))
     [[ "$attempts" -lt 1000 ]] || fail "timed out waiting for $path"
+    sleep 0.02
+  done
+}
+
+wait_for_match() {
+  local pattern="$1" path="$2"
+  local attempts=0
+  until grep -Eq "$pattern" "$path"; do
+    attempts=$((attempts + 1))
+    [[ "$attempts" -lt 1500 ]] || fail "timed out waiting for a matching line in $path"
     sleep 0.02
   done
 }
@@ -246,7 +259,7 @@ run_queue_case() {
   local owner_pid=$!
   wait_for "$case_state/started-owner"
   ORBIT_BUILD_BUDGET_DIR="$TMP/locks-$case_name" ORBIT_BUILD_SLOTS=1 \
-    "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 &
+    timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 &
   local queued_pid=$!
   sleep 0.08
   [[ ! -e "$case_state/started-queued" ]] || fail "$case_name queue started before the owner released its slot"
@@ -282,7 +295,7 @@ wait_for "$detached_state/detached-pid"
 detached_pid="$(cat "$detached_state/detached-pid")"
 BACKGROUND_PIDS+=("$detached_pid")
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-detached" ORBIT_BUILD_SLOTS=1 \
-  timeout 2 "$WRAPPER" -- "$TMP/helper.py" "$detached_state" queued sleep 0.01 \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$detached_state" queued sleep 0.01 \
   2>"$TMP/detached-queue.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
@@ -308,7 +321,7 @@ wait_for "$termination_state/started-owner"
 kill -TERM "$owner_pid"
 wait_for "$termination_state/terminating"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-termination-delay" ORBIT_BUILD_SLOTS=1 \
-  timeout 2 "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 &
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
 sleep 0.08
@@ -326,14 +339,15 @@ forget_pid "$queued_pid"
 
 # Check actual signal termination, not just the equivalent shell exit code.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-signals" ORBIT_BUILD_SLOTS=1 \
-  timeout 10 python3 - "$WRAPPER" "$TMP" <<'PY'
+  timeout "$COMMAND_TIMEOUT" python3 - "$WRAPPER" "$TMP" "$COMMAND_TIMEOUT" <<'PY'
 from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
 
-wrapper, scratch = sys.argv[1:]
+wrapper, scratch, command_timeout = sys.argv[1:]
+command_timeout = float(command_timeout)
 signal.signal(signal.SIGTERM, signal.SIG_DFL)
 for signum in (signal.SIGTERM, signal.SIGKILL):
     child = subprocess.run([wrapper, "--", sys.executable, "-c",
@@ -350,16 +364,16 @@ for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                               "pathlib.Path(sys.argv[1]).touch(); signal.pause()",
                               str(ready)], stderr=subprocess.DEVNULL)
     try:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + command_timeout
         while not ready.exists():
             assert time.monotonic() < deadline, "signal command never started"
             time.sleep(0.01)
         child.send_signal(signum)
-        assert child.wait(timeout=2) == -signum, child.returncode
+        assert child.wait(timeout=command_timeout) == -signum, child.returncode
     finally:
         if child.poll() is None:
             child.terminate()
-        child.wait(timeout=2)
+        child.wait(timeout=command_timeout)
 PY
 
 # A held slot produces bounded diagnostics on stderr while the wrapped command
@@ -371,33 +385,48 @@ ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
 owner_pid=$!
 BACKGROUND_PIDS+=("$owner_pid")
 wait_for "$wait_state/started-owner"
+wait_interval=0.05
+wait_started="$(python3 -c 'import time; print(time.monotonic())')"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
-  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  "$WRAPPER" -- bash -c 'printf "wrapped stdout\\n"; exit 23' \
+  _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS="$wait_interval" \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "wrapped stdout\\n"; exit 23' \
   >"$TMP/wait-command.out" 2>"$TMP/wait-command.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
-sleep 0.18
+wait_for_match '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
+  "$TMP/wait-command.err"
 [[ ! -s "$TMP/wait-command.out" ]] || fail "wait-reporting command ran before the owner released its slot"
 [[ -e "$wait_state/active/owner" ]] || fail "wait-reporting owner lost its held slot"
 grep -Fq "build-budget: waiting for admission (slots=1, budget_dir=$TMP/locks-wait-reporting)" \
   "$TMP/wait-command.err" || fail "wait-reporting start line omitted slot count or budget directory"
 grep -Eq '^build-budget: still waiting for admission \(elapsed [0-9]+\.[0-9]s\)$' \
   "$TMP/wait-command.err" || fail "wait-reporting progress line did not include elapsed time"
-progress_lines="$(grep -c '^build-budget: still waiting for admission ' "$TMP/wait-command.err")"
-[[ "$progress_lines" -le 5 ]] || fail "wait-reporting emitted too many progress lines while queued"
+# Polling can take longer than one interval. Check the observed rate, allowing
+# two lines for sampling/startup boundaries rather than a fixed total count.
+python3 - "$TMP/wait-command.err" "$wait_started" "$wait_interval" <<'PY' \
+  || fail "wait-reporting emitted too many progress lines while queued"
+from pathlib import Path
+import sys
+import time
+
+path, started, interval = sys.argv[1:]
+lines = Path(path).read_text().splitlines()
+progress_lines = sum(line.startswith("build-budget: still waiting for admission ") for line in lines)
+elapsed = time.monotonic() - float(started)
+assert progress_lines <= elapsed / float(interval) + 2, (progress_lines, elapsed)
+PY
 
 # Both documented bypass paths execute immediately even while the only slot is held.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
   ORBIT_BUILD_BUDGET_HELD=1 _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout 2 "$WRAPPER" -- bash -c 'printf "reentry stdout\\n"' \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "reentry stdout\\n"' \
   >"$TMP/reentry.out" 2>"$TMP/reentry.err" \
   || fail "held-marker re-entry tried to acquire a second slot"
 [[ "$(cat "$TMP/reentry.out")" == "reentry stdout" ]] || fail "held-marker re-entry changed stdout"
 [[ ! -s "$TMP/reentry.err" ]] || fail "held-marker re-entry emitted admission diagnostics"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 ORBIT_BUILD_BUDGET=0 \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout 2 "$WRAPPER" -- bash -c 'printf "bypass stdout\\n"' \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "bypass stdout\\n"' \
   >"$TMP/bypass-held.out" 2>"$TMP/bypass-held.err" \
   || fail "budget bypass tried to acquire a slot"
 [[ "$(cat "$TMP/bypass-held.out")" == "bypass stdout" ]] || fail "budget bypass changed stdout"
@@ -431,13 +460,17 @@ ORBIT_BUILD_BUDGET_DIR="$TMP/locks-immediate" ORBIT_BUILD_SLOTS=1 \
 
 # A nested admitted entry point must not try to acquire a second slot.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=5 \
+  CARGO_TARGET_DIR="$TMP/targets/nested" \
   "$WRAPPER" -- "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" nested block &
 owner_pid=$!
 BACKGROUND_PIDS+=("$owner_pid")
 wait_for "$TMP/nested/started-nested"
 grep -Fq 'jobs=5' "$TMP/nested/events" || fail "nested command lost Cargo job limit"
-ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 \
-  timeout 2 "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 &
+grep -Fq 'slot=1' "$TMP/nested/events" || fail "nested command lost slot number"
+grep -Fq "target=$TMP/targets/nested" "$TMP/nested/events" || fail "nested command lost target directory"
+ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=5 \
+  CARGO_TARGET_DIR="$TMP/targets/queued" \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
 sleep 0.08
@@ -451,6 +484,10 @@ forget_pid "$owner_pid"
 [[ "$owner_status" == "143" ]] || fail "nested command lost its termination status"
 wait "$queued_pid" || fail "nested command did not release admission"
 forget_pid "$queued_pid"
+grep -Eq '^start queued .* jobs=5 slot=1 ' "$TMP/nested/events" \
+  || fail "queued command lost Cargo job limit or slot number"
+grep -Fq "target=$TMP/targets/queued" "$TMP/nested/events" \
+  || fail "queued command lost target directory"
 
 # Exercise a real Make entry point inside an existing admission. The inner
 # wrapper inherits the marker and must not wait on the only slot.
@@ -461,7 +498,7 @@ printf '%s\n' "$@" >>"${FAKE_CARGO_LOG}"
 SH
 chmod +x "$TMP/fake-cargo"
 FAKE_CARGO_LOG="$TMP/make.log" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-make" \
-  ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=9 timeout 30 "$WRAPPER" -- \
+  ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=9 timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- \
   make -s -C "$ROOT" check CARGO="$TMP/fake-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Fxq 'jobs=9' "$TMP/make.log" || fail "nested Make entry lost Cargo job limit"
 grep -Fxq 'check' "$TMP/make.log" || fail "nested Make entry did not invoke cargo check"
@@ -587,7 +624,9 @@ case "$cmd" in
       "${ORBIT_BUILD_BUDGET_HELD:-}" >>"${FAKE_MAKE_LOG}"
     touch "${FAKE_WATCH_DIR}/started-${cmd}-${FAKE_WATCH_ITER:-unknown}"
     if [[ "$cmd" == "check" && "${FAKE_WATCH_ITER:-}" == "1" ]]; then
-      sleep "${FAKE_CHECK_SLEEP:-0}"
+      while [[ ! -e "${FAKE_WATCH_RELEASE}" ]]; do
+        sleep 0.02
+      done
     fi
     ;;
   *)
@@ -637,7 +676,7 @@ printf 'alpha\nbeta\n' >"$TMP/expected-run-args"
 diff -q "$FAKE_RUN_ARGS" "$TMP/expected-run-args" >/dev/null \
   || fail "make run did not preserve application arguments"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-run" ORBIT_BUILD_SLOTS=1 \
-  timeout 2 "$WRAPPER" -- true \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   || fail "make run application runtime retained the build slot"
 touch "$FAKE_RUN_RELEASE"
 set +e
@@ -715,11 +754,11 @@ FAKE_WATCH_IDLE="$TMP/watch-idle"
 FAKE_WATCH_AGAIN="$TMP/watch-again"
 FAKE_WATCH_SECOND="$TMP/watch-second"
 FAKE_WATCH_PID="$TMP/watch-pid"
-FAKE_CHECK_SLEEP=0.8
+FAKE_WATCH_RELEASE="$TMP/watch-release"
 mkdir -p "$FAKE_WATCH_DIR"
 : >"$FAKE_MAKE_LOG"
 export FAKE_MAKE_LOG FAKE_WATCH_DIR FAKE_WATCH_IDLE FAKE_WATCH_AGAIN \
-  FAKE_WATCH_SECOND FAKE_WATCH_PID FAKE_CHECK_SLEEP
+  FAKE_WATCH_SECOND FAKE_WATCH_PID FAKE_WATCH_RELEASE
 
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
   make -s -C "$ROOT" watch CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER" \
@@ -728,14 +767,17 @@ WATCH_MAKE_PID=$!
 BACKGROUND_PIDS+=("$WATCH_MAKE_PID")
 wait_for "$FAKE_WATCH_DIR/started-check-1"
 set +e
+# This short bound checks refusal, not startup/completion. The check holds its
+# slot until our explicit release below, independently of scheduling latency.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
   timeout 0.4 "$WRAPPER" -- true
 during_check=$?
 set -e
 [[ "$during_check" == "124" ]] || fail "watch check iteration did not hold a slot (status $during_check)"
+touch "$FAKE_WATCH_RELEASE"
 wait_for "$FAKE_WATCH_IDLE"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
-  timeout 2 "$WRAPPER" -- true \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   || fail "idle watch retained a build slot"
 grep -Eq '^event=invoke cmd=watch slot= held=$' "$FAKE_MAKE_LOG" \
   || fail "watch driver should not hold a slot"
@@ -808,7 +850,7 @@ export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
 : >"$FAKE_BUILD_ARGS"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
-  HOME="$FAKE_HOME" timeout 5 \
+  HOME="$FAKE_HOME" timeout "$COMMAND_TIMEOUT" \
   make -s -C "$CONSUMER_ROOT" install CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "make install build was not admitted"
@@ -828,7 +870,7 @@ rm -f "$FAKE_INSTALL_BIN_DIR/orbit"
 : >"$FAKE_BUILD_ARGS"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install-dbg" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
-  HOME="$FAKE_HOME" timeout 5 \
+  HOME="$FAKE_HOME" timeout "$COMMAND_TIMEOUT" \
   make -s -C "$CONSUMER_ROOT" install INSTALL_PROFILE=debug CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "make install debug build was not admitted"
@@ -874,7 +916,7 @@ diff -q "$FAKE_DEV_ARGS" "$TMP/expected-dev-args" >/dev/null \
   || fail "make dev did not preserve application arguments"
 # Build slot must be released before application runtime.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-dev" ORBIT_BUILD_SLOTS=1 \
-  timeout 2 "$WRAPPER" -- true \
+  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   || fail "make dev application runtime retained the build slot"
 touch "$FAKE_DEV_RELEASE"
 wait "$DEV_PID"
