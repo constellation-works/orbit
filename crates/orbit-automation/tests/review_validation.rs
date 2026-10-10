@@ -422,6 +422,8 @@ fn facts() -> LandingFacts {
         objects_present: true,
         task_meaning_current: true,
         managed_landing: None,
+        landed_head: None,
+        rebased_tree: None,
     }
 }
 

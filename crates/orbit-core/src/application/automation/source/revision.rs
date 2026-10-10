@@ -286,14 +286,36 @@ impl<'a> Source<'a> {
 
     /// `true` when `older` is an ancestor of `newer`. A missing object is
     /// divergence, not success. A source deadline propagates.
-    pub(in crate::application::automation) fn is_ancestor(
-        &self,
-        older: &str,
-        newer: &str,
-    ) -> Result<bool, AutomationError> {
+    pub(crate) fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError> {
         match self.git(&["merge-base", "--is-ancestor", older, newer]) {
             Ok(_) => Ok(true),
             Err(AutomationError::Deferred(reason)) if is_evidence_unavailable(&reason) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The tree of a conflict-free merge of `theirs` onto `ours` with `base`
+    /// as the merge base, written to the object store only. `None` when the
+    /// merge conflicts or an input does not resolve. A source deadline
+    /// propagates.
+    pub(crate) fn clean_merge_tree(
+        &self,
+        base: &str,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<Option<String>, AutomationError> {
+        let base = format!("--merge-base={base}");
+        match self.git(&[
+            "merge-tree",
+            "--write-tree",
+            "--no-messages",
+            &base,
+            "--end-of-options",
+            ours,
+            theirs,
+        ]) {
+            Ok(tree) => Ok(Some(tree)),
+            Err(AutomationError::Deferred(reason)) if is_evidence_unavailable(&reason) => Ok(None),
             Err(error) => Err(error),
         }
     }

@@ -146,11 +146,14 @@ pub struct SourcePage {
 pub struct DeliveryExclusion {
     /// The certificate attempt that covers this delivery.
     pub attempt_id: String,
-    /// The assurance label the certificate carries.
+    /// The assurance label the certificate carries, or `rebased_clean` when
+    /// the landing carried the reviewed candidate cleanly onto a base that
+    /// moved after review.
     pub assurance: String,
     /// The certificate's task-meaning digest, retained for audit.
     pub task_meaning_digest: String,
-    /// The verified reviewed tree the landing reproduced.
+    /// The verified reviewed tree the landing reproduced, or carried onto
+    /// the moved base for a `rebased_clean` exclusion.
     pub final_candidate_tree: String,
 }
 
