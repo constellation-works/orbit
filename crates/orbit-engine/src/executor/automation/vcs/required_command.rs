@@ -39,7 +39,9 @@ use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, ValidationEnvironment, program_on_path,
     run_process,
 };
-use orbit_types::workflow::VALIDATION_ENVIRONMENT_MARKER;
+use orbit_types::workflow::{
+    HostEvidenceRefusal, HostSandboxCommand, VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -68,6 +70,8 @@ pub(super) struct RequiredCommandRun {
     pub(super) timed_out: bool,
     pub(super) passed: bool,
     pub(super) output: String,
+    /// Why a successful host run cannot count as passing evidence.
+    pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
     /// The environment the command ran in.
     pub(super) environment: ValidationEnvironment,
     /// Set when the command failed because a tool was missing.
@@ -255,8 +259,21 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         &NoSandbox,
     )?;
     let summary = ValidationSummary::read(&summary_path);
-    let mut output = capture(&outcome.stdout, &outcome.stderr);
+    // Judge the complete streams before `capture` bounds the log. A skip or
+    // deferral in the middle of a large output must still refuse a host pass.
     let passed = outcome.success && !outcome.timed_out;
+    let host_output_refusal = passed
+        .then(|| {
+            judge_host_test_output(
+                &HostSandboxCommand::RequiredValidation(command.to_string()),
+                outcome.success,
+                outcome.timed_out,
+                &format!("{}\n{}", outcome.stdout, outcome.stderr),
+            )
+            .err()
+        })
+        .flatten();
+    let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
         .flatten();
@@ -273,6 +290,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         timed_out: outcome.timed_out,
         passed,
         output,
+        host_output_refusal,
         environment,
         missing_tool,
         network_retries: 0,

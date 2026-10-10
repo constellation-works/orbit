@@ -734,6 +734,78 @@ fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() {
     );
 }
 
+#[test]
+fn a_deferred_host_pass_never_overrides_the_reviewers_failure() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_deferred_host_pass_never_overrides_the_reviewers_failure",
+    ) {
+        return;
+    }
+    let notice = orbit_exec::bwrap_deferral_notice(
+        "runtime::sandbox_path",
+        "the host cannot apply the sandbox",
+    );
+    let check = format!(
+        "#!/bin/sh\n\
+         i=0\n\
+         while [ \"$i\" -lt 8000 ]; do\n\
+           if [ \"$i\" -eq 4000 ]; then printf '%s\\n' '{notice}'; else printf '%040d\\n' 0; fi\n\
+           i=$((i + 1))\n\
+         done\n\
+         printf '%s' '{{\"schema_version\":1,\"selection\":{{\"packages\":[]}},\"tests_run\":1}}' > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         exit 0\n"
+    );
+    let mut fixture = fixture(&check, "after\n");
+    let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
+
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete, "fail-closed");
+    assert!(!settled.validation_complete);
+    assert!(settled.host_overrides.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    let escalation = settled.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("baseline_claim_refused") && escalation.contains(&notice),
+        "the certificate retains the deferred-path reason: {escalation}"
+    );
+
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .expect("the candidate run is attached as baseline evidence")
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "refused", "{evidence}");
+    assert!(
+        check["detail"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("refused as self_skipped")
+    );
+    assert_eq!(
+        check["candidate"]["passed"], true,
+        "process exited successfully"
+    );
+    assert_eq!(check["candidate"]["summary"]["tests_run"], 1);
+    assert_eq!(
+        check["candidate"]["host_output_refusal"]["reason"],
+        "self_skipped"
+    );
+    assert_eq!(check["candidate"]["host_output_refusal"]["detail"], notice);
+    assert!(
+        !check["candidate"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(&notice),
+        "the notice falls in the omitted middle of the bounded output"
+    );
+}
+
 /// [ORB-15122] The before-landing trial's incident shape: the reviewer found
 /// no defect, the trusted check failed only in its own environment, and it
 /// claimed the base fails it too. The host passes the check on the final
