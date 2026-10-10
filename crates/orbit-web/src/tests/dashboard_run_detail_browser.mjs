@@ -202,6 +202,71 @@ export async function assertRunDetailActions(page, evidence) {
   }
 }
 
+// The workspace the run-detail fixtures belong to. It must be one the loading
+// fixture registers, because a plain click on a task link switches to it.
+const FIXTURE_WORKSPACE = 'one';
+
+// A task link names its workspace in the query and only the task in the hash:
+// following it must leave the operator's Tasks filter as it was.
+function linksToTask(href, taskId, workspace = FIXTURE_WORKSPACE) {
+  const url = new URL(href, 'http://127.0.0.1/');
+  const [route, query = ''] = url.hash.slice(1).split('?');
+  const params = new URLSearchParams(query);
+  return url.searchParams.get('workspace') === workspace && route === 'tasks'
+    && params.get('open') === taskId && [...params.keys()].join() === 'open';
+}
+
+// Click each task link under a saved Tasks filter and prove the named task
+// opens, in the fixture workspace, without the filter changing. `show` renders
+// the run detail that holds the links; `selector` matches them.
+async function assertTaskLinksOpenUnderFilter(page, { ids, show, selector }) {
+  await page.evaluate(ids => {
+    globalThis.taskLinkFetch = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const url = new URL(input, window.location.href);
+      const reply = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      // The Tasks tab loads its list and crews here, so the proof holds even
+      // when an earlier scenario left a held fetch installed.
+      if (url.pathname === '/api/tasks') return reply({ items: [], total: 0, limit: 50, truncated: false });
+      if (url.pathname === '/api/crews') return reply({ default_crew: null, crews: [] });
+      const match = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+      if (!match || !ids.includes(match[1])) return globalThis.taskLinkFetch(input, options);
+      return reply({ id: match[1], title: `Linked ${match[1]}`, status: 'done', priority: 'medium' });
+    };
+  }, ids);
+  const taskFilter = () => page.evaluate(() => ({
+    chips: [...document.querySelectorAll('#task-filter .chip.active')].map(chip => chip.textContent),
+    search: document.getElementById('task-search').value,
+  }));
+  try {
+    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?status=review&q=saved-filter'));
+    await page.waitForFunction(() => document.getElementById('task-search').value === 'saved-filter');
+    const saved = await taskFilter();
+    if (saved.search !== 'saved-filter' || saved.chips.length !== 1) {
+      throw new Error(`The saved Tasks filter must be set before following a link: ${JSON.stringify(saved)}`);
+    }
+    for (const id of ids) {
+      await show();
+      await page.locator(selector).filter({ hasText: new RegExp(`^${id}$`) }).click();
+      const pinned = page.locator('#tasks-body .row.pinned-external');
+      await pinned.filter({ hasText: id }).waitFor({ state: 'visible' });
+      const scope = new URL(page.url());
+      if (scope.searchParams.get('workspace') !== FIXTURE_WORKSPACE || !scope.hash.includes(`open=${id}`)) {
+        throw new Error(`Opening ${id} must stay in the link's workspace and name the task: ${page.url()}`);
+      }
+      const after = await taskFilter();
+      if (JSON.stringify(after) !== JSON.stringify(saved)) {
+        throw new Error(`Opening ${id} must not change the saved Tasks filter: ${JSON.stringify({ saved, after })}`);
+      }
+    }
+  } finally {
+    await page.evaluate(() => {
+      globalThis.fetch = globalThis.taskLinkFetch;
+      delete globalThis.taskLinkFetch;
+    });
+  }
+}
+
 export async function assertRunDetailPresentation(page, evidence) {
   await page.setViewportSize({ width: 1440, height: 1100 });
   const render = async (run, steps, logs = []) => page.evaluate(async ({ run, steps, logs }) => {
@@ -218,7 +283,7 @@ export async function assertRunDetailPresentation(page, evidence) {
     detail.renderRunGantt();
   }, { run, steps, logs });
   const waitingRun = {
-    state: 'success', workspace_id: 'fixture-workspace',
+    state: 'success', workspace_id: FIXTURE_WORKSPACE,
     env_pass_unset: ['CLAUDE_CODE_OAUTH_TOKEN'],
     drain_last_pass: {
       queued: 7,
@@ -264,16 +329,15 @@ export async function assertRunDetailPresentation(page, evidence) {
     id: node.textContent.trim(), href: node.href,
   })));
   const expectedTaskIds = ['ORB-15181', 'ORB-15183', 'ORB-15196', 'ORB-15071'];
-  const linksMatchTasks = waitingLinks.every(link => {
-    const url = new URL(link.href);
-    const [route, query] = url.hash.slice(1).split('?');
-    const params = new URLSearchParams(query);
-    return url.searchParams.get('workspace') === 'fixture-workspace'
-      && route === 'tasks' && params.get('status') === 'all' && params.get('q') === link.id;
-  });
+  const linksMatchTasks = waitingLinks.every(link => linksToTask(link.href, link.id));
   if (JSON.stringify(waitingLinks.map(link => link.id)) !== JSON.stringify(expectedTaskIds) || !linksMatchTasks) {
     throw new Error(`Every waiting task and blocker ID must link to its task: ${JSON.stringify(waitingLinks)}`);
   }
+  await assertTaskLinksOpenUnderFilter(page, {
+    ids: expectedTaskIds,
+    show: () => render(waitingRun, []),
+    selector: '#run-detail-meta .still-waiting .waiting-task-link',
+  });
 
   const localDeferred = ['ORB-15208', 'ORB-15209', 'ORB-15210'].map(task_id => ({
     task_id, reason: 'context_lock_conflict', blocked_by: ['ORB-15183'],
@@ -400,9 +464,9 @@ export async function assertRunDetailPresentation(page, evidence) {
   if (!(await page.locator('.step-logs-empty').isVisible()) || await page.locator('.step-log-section').count()) throw new Error('A metadata-only log record must still show empty-log feedback');
 
   const chainMessage = 'gate runs did not succeed: results[0] run jrun-20261010-0552-c2 status failed: result run jrun-20261010-0552-c3 status cancelled for ORB-15159; see ADR-12 and ORB-abc';
-  await render({
+  const chainRun = {
     state: 'failed',
-    workspace_id: 'fixture-workspace',
+    workspace_id: FIXTURE_WORKSPACE,
     error_message: chainMessage,
     failure_root: {
       run_id: 'jrun-20261010-0552-c3',
@@ -410,7 +474,8 @@ export async function assertRunDetailPresentation(page, evidence) {
       step: 'landing_review',
       message: 'stopped for ORB-15178',
     },
-  }, [step]);
+  };
+  await render(chainRun, [step]);
   const chain = await page.locator('.run-failure').evaluate(node => ({
     message: node.querySelector('.run-failure-message').textContent,
     root: node.querySelector('.run-failure-root').textContent,
@@ -432,14 +497,14 @@ export async function assertRunDetailPresentation(page, evidence) {
   if (chain.links.some(link => link.text.startsWith('jrun-') && (link.tag !== 'BUTTON' || link.type !== 'button'))) {
     throw new Error(`Run ids in a failure must be buttons: ${JSON.stringify(chain.links)}`);
   }
-  const taskLinksOk = chain.links.filter(link => link.text.startsWith('ORB-')).every(link => {
-    const url = new URL(link.href, 'http://127.0.0.1/');
-    const [route, query] = url.hash.slice(1).split('?');
-    const params = new URLSearchParams(query);
-    return link.tag === 'A' && url.searchParams.get('workspace') === 'fixture-workspace'
-      && route === 'tasks' && params.get('status') === 'all' && params.get('q') === link.text;
-  });
+  const taskLinksOk = chain.links.filter(link => link.text.startsWith('ORB-')).every(link => link.tag === 'A' && linksToTask(link.href, link.text));
   if (!taskLinksOk) throw new Error(`Task ids in a failure must link to the task: ${JSON.stringify(chain.links)}`);
+  await assertTaskLinksOpenUnderFilter(page, {
+    ids: ['ORB-15159', 'ORB-15178'],
+    show: () => render(chainRun, [step]),
+    selector: '.run-failure .failure-id-link',
+  });
+  await render(chainRun, [step]);
   if (chain.links.some(link => link.text === 'ADR-12' || link.text === 'ORB-abc') || !chain.message.includes('ADR-12') || !chain.message.includes('ORB-abc')) {
     throw new Error('ADR ids and invalid task lookalikes stay plain text');
   }
