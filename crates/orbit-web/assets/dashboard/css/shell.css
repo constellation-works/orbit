@@ -592,6 +592,11 @@ button.scope-chip:hover {
   color: var(--fg-mute);
   border-color: var(--border);
 }
+/* A backlog task the drain readiness snapshot reports as waiting. */
+.drain-wait-badge {
+  color: var(--priority-medium);
+  border-color: var(--priority-medium);
+}
 .readiness-preparing {
   color: var(--fg-dim);
   border-color: var(--fg-dim);

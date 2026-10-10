@@ -4,6 +4,7 @@ import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullS
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 import { cpuLoadMultiple } from './host-resources.js';
+import { DRAIN_HOST_WAIT_REASONS, DRAIN_LOCK_REASONS, drainConflictSelectors, drainHolders, drainPoolKey, drainReason, drainShortSelector, setDrainReadiness } from './drain-waits.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -39,6 +40,7 @@ export function initOperations(nextContext) {
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
+    expandedDrainLists.clear();
     announcedDrainState = null;
     updateDrainIndicators("idle", "idle");
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
@@ -1453,28 +1455,44 @@ function autoDrainCounts(payload) {
   return { eligible, waiting: tasks.length - eligible };
 }
 
-// Readiness reasons that mean "waiting on another task or run": a context lock, a
-// grouped member, a same-wave deferral, a live child's claim, or a task with no
-// footprint waiting for the other leaves to finish so it can run alone.
-const AUTO_DRAIN_LOCK_REASONS = new Set(["context_lock_conflict", "group_member_conflict", "conflict_deferred", "claimed_by_live_child", "awaiting_exclusive_slot"]);
 const AUTO_DRAIN_BLOCKED_ROWS = 3;
+// Which waiting lists the operator has opened past AUTO_DRAIN_BLOCKED_ROWS.
+const expandedDrainLists = new Set();
+
+function autoDrainVisibleRows(tasks, listKey) {
+  return expandedDrainLists.has(listKey) ? tasks : tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS);
+}
+
+// "+N more" opens the rest of a waiting list in place. It is a button, so the
+// keyboard reaches it, and the card keeps focus on it across the repaint.
+function autoDrainMoreItem(tasks, listKey) {
+  if (tasks.length <= AUTO_DRAIN_BLOCKED_ROWS) return null;
+  const open = expandedDrainLists.has(listKey);
+  const hidden = tasks.length - AUTO_DRAIN_BLOCKED_ROWS;
+  const button = el("button", {
+    class: "drain-blocked-more-toggle mono",
+    type: "button",
+    text: open ? "Show fewer" : `+${hidden} more`,
+    title: open ? "Collapse the list" : `Show the other ${hidden} waiting`,
+    "aria-expanded": String(open),
+  });
+  button.dataset.drainFocus = `more-${listKey}`;
+  button.addEventListener("click", () => {
+    if (open) expandedDrainLists.delete(listKey);
+    else expandedDrainLists.add(listKey);
+    if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+  });
+  return el("li", { class: "drain-blocked-more" }, [button]);
+}
 
 function autoDrainTaskId(task) {
   return typeof task.task_id === "string" && task.task_id.trim() ? task.task_id : null;
 }
 
-function autoDrainReason(task) {
-  return typeof task.reason === "string" && task.reason.trim() ? task.reason : "unknown";
-}
-
 function autoDrainBlocked(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_LOCK_REASONS.has(autoDrainReason(task)));
+  return tasks.filter((task) => task.eligible !== true && DRAIN_LOCK_REASONS.has(drainReason(task)));
 }
-
-// Readiness reasons that mean "waiting on slots or host pressure": a full
-// workspace, a throttle, a scheduled shutdown or stopped admissions.
-const AUTO_DRAIN_CAPACITY_REASONS = new Set(["capacity_saturated", "resource_throttled", "host_shutdown_scheduled", "admissions_stopped", "cpu_light_budget_full"]);
 
 // Every readiness task lands in exactly one pool group, so the group counts add
 // up to the backlog total. Each group keeps its per-reason counts for the
@@ -1490,48 +1508,12 @@ function autoDrainPool(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
   const groups = Object.fromEntries(AUTO_DRAIN_POOL_GROUPS.map(({ key, label }) => [key, { key, label, count: 0, reasons: new Map() }]));
   for (const task of tasks) {
-    const reason = autoDrainReason(task);
-    const key = task.eligible === true ? "eligible"
-      : AUTO_DRAIN_LOCK_REASONS.has(reason) ? "locks"
-      : AUTO_DRAIN_CAPACITY_REASONS.has(reason) ? "capacity" : "other";
+    const reason = drainReason(task);
+    const key = drainPoolKey(task);
     groups[key].count += 1;
     groups[key].reasons.set(reason, (groups[key].reasons.get(reason) || 0) + 1);
   }
   return AUTO_DRAIN_POOL_GROUPS.map(({ key }) => groups[key]);
-}
-
-// Holder ids for a lock-blocked row. Context locks report
-// `conflicts[].locking_task_id`; same-wave deferrals report
-// `conflicts[].blocking_task_id` plus `blocking_task_ids`; live-child claims
-// report only `run_ids`, which have no task holder.
-function autoDrainHolders(task) {
-  const holders = new Set();
-  for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
-    const holder = conflict?.locking_task_id || conflict?.blocking_task_id;
-    if (holder) holders.add(holder);
-  }
-  for (const holder of Array.isArray(task.blocking_task_ids) ? task.blocking_task_ids : []) {
-    if (holder) holders.add(holder);
-  }
-  return [...holders].sort();
-}
-
-function autoDrainConflictSelectors(task, holder) {
-  const selectors = [];
-  for (const conflict of Array.isArray(task.conflicts) ? task.conflicts : []) {
-    const conflictHolder = conflict?.locking_task_id || conflict?.blocking_task_id;
-    if (holder && conflictHolder && conflictHolder !== holder) continue;
-    const selector = conflict?.requested_file || conflict?.requested_selector || conflict?.blocking_selector;
-    if (selector && !selectors.includes(selector)) selectors.push(selector);
-  }
-  return selectors;
-}
-
-// `file:crates/a/b/c.rs` → `…/b/c.rs`: the dock is 336px, so the lock line
-// keeps the part of the path that tells files apart; the title has the rest.
-function autoDrainShortSelector(selector) {
-  const parts = String(selector).replace(/^[a-z]+:/, "").split("/");
-  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : parts.join("/");
 }
 
 function autoDrainShortRunId(runId) {
@@ -2096,9 +2078,9 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
   }
   const list = el("ul", { class: "drain-blocked" });
   list.setAttribute("aria-label", "Pool tasks waiting on locks or live claims");
-  for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
+  for (const task of autoDrainVisibleRows(tasks, "locks")) {
     const taskId = autoDrainTaskId(task);
-    const holder = autoDrainHolders(task)[0] || null;
+    const holder = drainHolders(task)[0] || null;
     const runIds = Array.isArray(task.run_ids) ? task.run_ids : [];
     const on = holder
       ? taskLink(holder, workspace?.id)
@@ -2106,10 +2088,10 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
         ? runLink(runIds[0], workspace?.id, autoDrainShortRunId(runIds[0]))
         : el("span", { text: "holder not supplied" });
     const state = holder ? phases.get(holder) || "no slot" : runIds[0] ? "live run" : "";
-    const selectors = autoDrainConflictSelectors(task, holder);
+    const selectors = drainConflictSelectors(task, holder);
     const lock = selectors.length > 0
-      ? `lock · ${autoDrainShortSelector(selectors[0])}${selectors.length > 1 ? ` +${selectors.length - 1}` : ""}`
-      : autoDrainReason(task).replaceAll("_", " ");
+      ? `lock · ${drainShortSelector(selectors[0])}${selectors.length > 1 ? ` +${selectors.length - 1}` : ""}`
+      : drainReason(task).replaceAll("_", " ");
     list.appendChild(el("li", { class: "drain-blocked-row" }, [
       el("div", { class: "drain-blocked-line" }, [
         el("span", { class: "drain-blocked-who mono" }, [
@@ -2119,24 +2101,20 @@ function autoDrainBlockedList(tasks, occupancy, workspace) {
         ]),
         el("span", { class: `drain-blocked-state mono${phases.has(holder) ? " running" : ""}`, text: state }),
       ]),
-      el("div", { class: "drain-blocked-lock mono", text: lock, title: selectors.join("\n") || autoDrainReason(task) }),
+      el("div", { class: "drain-blocked-lock mono", text: lock, title: selectors.join("\n") || drainReason(task) }),
     ]));
   }
-  if (tasks.length > AUTO_DRAIN_BLOCKED_ROWS) {
-    list.appendChild(el("li", { class: "drain-blocked-more mono", text: `+${tasks.length - AUTO_DRAIN_BLOCKED_ROWS} more` }));
-  }
+  const more = autoDrainMoreItem(tasks, "locks");
+  if (more) list.appendChild(more);
   return list;
 }
 
-// A task whose `os:` tags this host's OS does not satisfy waits for a host of
-// its own (a pull-drain follower on that OS, say), and one a pilot found needs
-// native evidence from another OS waits for the `os:` tag readiness names.
-// The card lists both so an idle drain does not read as an empty backlog.
-const AUTO_DRAIN_HOST_WAIT_REASONS = new Set(["host_os_mismatch", "native_os_required"]);
+// The card lists host waits (see DRAIN_HOST_WAIT_REASONS) so an idle drain does
+// not read as an empty backlog.
 
 function autoDrainHostWaits(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  return tasks.filter((task) => task.eligible !== true && AUTO_DRAIN_HOST_WAIT_REASONS.has(autoDrainReason(task)));
+  return tasks.filter((task) => task.eligible !== true && DRAIN_HOST_WAIT_REASONS.has(drainReason(task)));
 }
 
 // [ORB-14698] Tasks every crew of which a provider usage limit keeps out of
@@ -2144,7 +2122,7 @@ function autoDrainHostWaits(payload) {
 // skipped; the wait lifts by itself then.
 function autoDrainProviderLimitWaits(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  return tasks.filter((task) => task.eligible !== true && autoDrainReason(task) === "provider_limit");
+  return tasks.filter((task) => task.eligible !== true && drainReason(task) === "provider_limit");
 }
 
 function autoDrainHostWaitList(tasks, workspace) {
@@ -2167,7 +2145,7 @@ function autoDrainProviderLimitWaitList(tasks, workspace) {
 function autoDrainWaitList(tasks, workspace, { className, label, fallback, reason }) {
   const list = el("ul", { class: `drain-blocked ${className}` });
   list.setAttribute("aria-label", label);
-  for (const task of tasks.slice(0, AUTO_DRAIN_BLOCKED_ROWS)) {
+  for (const task of autoDrainVisibleRows(tasks, className)) {
     const taskId = autoDrainTaskId(task);
     list.appendChild(el("li", { class: "drain-blocked-row" }, [
       el("div", { class: "drain-blocked-line" }, [
@@ -2179,9 +2157,8 @@ function autoDrainWaitList(tasks, workspace, { className, label, fallback, reaso
       ]),
     ]));
   }
-  if (tasks.length > AUTO_DRAIN_BLOCKED_ROWS) {
-    list.appendChild(el("li", { class: "drain-blocked-more mono", text: `+${tasks.length - AUTO_DRAIN_BLOCKED_ROWS} more` }));
-  }
+  const more = autoDrainMoreItem(tasks, className);
+  if (more) list.appendChild(more);
   return list;
 }
 
@@ -2231,6 +2208,7 @@ function autoDrainProviderLimitNote(readings) {
 
 function renderAutoDrain(payload) {
   lastAutoDrain = payload;
+  setDrainReadiness(payload);
   const body = $("auto-drain-body");
   if (!body) return;
   // A poll or a control click rebuilds the card; keep keyboard focus on the

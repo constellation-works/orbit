@@ -13,6 +13,7 @@ import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
+import { onDrainReadinessChange } from './js/drain-waits.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
@@ -1746,6 +1747,11 @@ resetPanel("runs-body", "diag-count");
 resetPanel("diag-body", "diag-count");
 
 const tasksContext = taskContext();
+// The drain readiness snapshot arrives apart from the task list; repaint the
+// rows when it changes what they say about a backlog task's wait.
+onDrainReadinessChange(() => {
+  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+});
 buildChips(tasksContext);
 wireSearch(tasksContext);
 wireFrictionSearch();
