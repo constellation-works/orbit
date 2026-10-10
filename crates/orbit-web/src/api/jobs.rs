@@ -73,10 +73,53 @@ pub(super) struct JobRunListQuery {
     limit: Option<usize>,
     #[serde(default)]
     job_id: Option<String>,
+    /// Exact task id. Matches `input.task_ids` membership or a text top-level
+    /// `input.task_id`, the same rule as `orbit run history --task`.
+    #[serde(default)]
+    task_id: Option<String>,
     #[serde(default)]
     state: Option<String>,
+    /// Duration (`24h`) or timestamp. Empty and `all` mean no time bound, so
+    /// the dashboard window and `orbit run history --since` share one parser.
     #[serde(default)]
-    since: Option<DateTime<Utc>>,
+    since: Option<String>,
+}
+
+/// Parsed run-list filters shared by the workspace list and the aggregate list.
+///
+/// `since` is already resolved to one cutoff. `None` means the list is not
+/// time-bounded, which is what the dashboard's `all` window asks for.
+#[derive(Clone, Default)]
+pub(super) struct JobRunScope {
+    pub(super) job_id: Option<String>,
+    pub(super) task_id: Option<String>,
+    pub(super) since: Option<DateTime<Utc>>,
+}
+
+fn trimmed_filter(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Resolve job, task, and window filters once so a page and its count share
+/// one cutoff. An unparseable `since` is refused before either query runs.
+pub(super) fn resolve_job_run_scope(
+    job_id: Option<&str>,
+    task_id: Option<&str>,
+    since: Option<&str>,
+) -> Result<JobRunScope, String> {
+    let since = match trimmed_filter(since) {
+        None => None,
+        Some(value) if value.eq_ignore_ascii_case("all") => None,
+        Some(value) => Some(crate::parse::parse_since(&value).map_err(|error| error.to_string())?),
+    };
+    Ok(JobRunScope {
+        job_id: trimmed_filter(job_id),
+        task_id: trimmed_filter(task_id),
+        since,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -143,8 +186,16 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
         Ok(state) => state,
         Err(message) => return bad_request(message),
     };
+    let scope = match resolve_job_run_scope(
+        q.job_id.as_deref(),
+        q.task_id.as_deref(),
+        q.since.as_deref(),
+    ) {
+        Ok(scope) => scope,
+        Err(message) => return bad_request(message),
+    };
     match blocking("list job runs", move || {
-        job_runs_page(&runtime, &q, state, limit)
+        job_runs_page(&runtime, &scope, state, limit)
     })
     .await
     {
@@ -155,12 +206,12 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
 
 fn job_runs_page(
     runtime: &OrbitRuntime,
-    query: &JobRunListQuery,
+    scope: &JobRunScope,
     state: JobRunListState,
     limit: usize,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let runs = list_job_runs_for_state(runtime, query, state, limit)?;
-    let total = count_job_runs_for_state(runtime, query, state)?;
+    let runs = list_job_runs_for_state(runtime, scope, state, limit)?;
+    let total = count_job_runs_for_state(runtime, scope, state)?;
     let truncated = total > runs.len() as u64;
     let titles = super::run_tasks::task_titles(runtime, &runs)?;
     let items: Vec<Value> = runs
@@ -182,13 +233,13 @@ fn job_runs_page(
 
 fn list_job_runs_for_state(
     runtime: &OrbitRuntime,
-    query: &JobRunListQuery,
+    scope: &JobRunScope,
     state: JobRunListState,
     limit: usize,
 ) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
     let list = |run_state, terminal_only| {
         runtime.list_job_runs(job_run_list_params(
-            query,
+            scope,
             run_state,
             terminal_only,
             Some(limit),
@@ -216,11 +267,11 @@ fn list_job_runs_for_state(
 
 fn count_job_runs_for_state(
     runtime: &OrbitRuntime,
-    query: &JobRunListQuery,
+    scope: &JobRunScope,
     state: JobRunListState,
 ) -> Result<u64, orbit_core::OrbitError> {
     let count = |run_state, terminal_only| {
-        runtime.count_job_runs(job_run_list_params(query, run_state, terminal_only, None))
+        runtime.count_job_runs(job_run_list_params(scope, run_state, terminal_only, None))
     };
     let states: &[JobRunState] = match state {
         JobRunListState::All => return count(None, false),
@@ -237,16 +288,17 @@ fn count_job_runs_for_state(
 }
 
 fn job_run_list_params(
-    query: &JobRunListQuery,
+    scope: &JobRunScope,
     state: Option<JobRunState>,
     terminal_only: bool,
     limit: Option<usize>,
 ) -> JobRunListParams {
     JobRunListParams {
-        job_id: query.job_id.clone(),
+        job_id: scope.job_id.clone(),
+        task_id: scope.task_id.clone(),
         state,
         terminal_only,
-        since: query.since,
+        since: scope.since,
         limit,
         order_by: JobRunOrder::Recency,
         ..Default::default()

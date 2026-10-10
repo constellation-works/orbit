@@ -18,7 +18,7 @@ use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::jobs::FAILED_RUN_STATES;
+use super::jobs::{FAILED_RUN_STATES, JobRunScope, resolve_job_run_scope};
 use super::pagination::TaskPageQuery;
 use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
 use crate::projections::TaskListProjection;
@@ -111,6 +111,13 @@ pub(super) struct AllJobRunsQuery {
     limit: Option<usize>,
     #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    job_id: Option<String>,
+    #[serde(default)]
+    task_id: Option<String>,
+    /// Duration (`24h`) or timestamp. Empty and `all` mean no time bound.
+    #[serde(default)]
+    since: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -165,8 +172,16 @@ pub(super) async fn list_all_job_runs(
         Ok(filter) => filter,
         Err(message) => return bad_request(message),
     };
+    let scope = match resolve_job_run_scope(
+        query.job_id.as_deref(),
+        query.task_id.as_deref(),
+        query.since.as_deref(),
+    ) {
+        Ok(scope) => scope,
+        Err(message) => return bad_request(message),
+    };
     match blocking("aggregate job run list", move || {
-        Ok::<_, orbit_core::OrbitError>(all_job_runs_json(&state, limit, state_filter))
+        Ok::<_, orbit_core::OrbitError>(all_job_runs_json(&state, limit, state_filter, &scope))
     })
     .await
     {
@@ -179,6 +194,7 @@ pub(super) fn all_job_runs_json(
     state: &DashboardState,
     limit: usize,
     state_filter: AllJobRunsState,
+    scope: &JobRunScope,
 ) -> Value {
     let pinned = state.pin();
     let mut candidates = Vec::new();
@@ -205,7 +221,7 @@ pub(super) fn all_job_runs_json(
                 continue;
             }
         };
-        match workspace_job_runs(&runtime, limit, state_filter) {
+        match workspace_job_runs(&runtime, limit, state_filter, scope) {
             Ok(runs) => {
                 let titles = match super::run_tasks::task_titles(&runtime, &runs) {
                     Ok(titles) => titles,
@@ -267,10 +283,14 @@ fn workspace_job_runs(
     runtime: &OrbitRuntime,
     limit: usize,
     state_filter: AllJobRunsState,
+    scope: &JobRunScope,
 ) -> Result<Vec<JobRun>, orbit_core::OrbitError> {
     let list = |state| {
         runtime.list_job_runs_observed(JobRunListParams {
+            job_id: scope.job_id.clone(),
+            task_id: scope.task_id.clone(),
             state,
+            since: scope.since,
             limit: Some(limit),
             order_by: JobRunOrder::Recency,
             ..Default::default()

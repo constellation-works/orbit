@@ -254,3 +254,181 @@ fn run_tasks_are_projected_over_http_without_per_row_task_reads() {
         },
     );
 }
+
+#[test]
+fn job_run_list_filters_by_task_job_and_since() {
+    isolated("runs::job_run_list_filters_by_task_job_and_since", || {
+        let fixture = Fixture::new();
+        let seed =
+            |name: &str, job: &str, state: JobRunState, input: Option<Value>, age_hours: i64| {
+                let mut run = fixture.seed_run(name, job, state);
+                run.input = input;
+                let created = Utc::now() - chrono::Duration::hours(age_hours);
+                run.created_at = created;
+                run.scheduled_at = created;
+                if run.started_at.is_some() {
+                    run.started_at = Some(created);
+                }
+                if run.finished_at.is_some() {
+                    run.finished_at = Some(created);
+                }
+                fixture.save_run(&run);
+            };
+        seed(
+            "jrun-a",
+            "task_auto_pipeline",
+            JobRunState::Failed,
+            Some(json!({"task_ids": ["ORB-10001"]})),
+            0,
+        );
+        seed(
+            "jrun-b",
+            "task_gate_pipeline",
+            JobRunState::Timeout,
+            Some(json!({"task_id": "ORB-10001"})),
+            0,
+        );
+        seed(
+            "jrun-c",
+            "task_auto_pipeline",
+            JobRunState::Interrupted,
+            Some(json!({"task_ids": ["ORB-10002"]})),
+            0,
+        );
+        seed(
+            "jrun-d",
+            "ci_failure_sweep_pipeline",
+            JobRunState::Failed,
+            Some(json!({"task_ids": ["ORB-10001"]})),
+            0,
+        );
+        seed(
+            "jrun-e",
+            "task_auto_pipeline",
+            JobRunState::Success,
+            Some(json!({"task_ids": ["ORB-10001"]})),
+            0,
+        );
+        seed(
+            "jrun-f",
+            "task_auto_pipeline",
+            JobRunState::Failed,
+            Some(json!({"task_ids": ["ORB-10001"]})),
+            48,
+        );
+        seed("jrun-g", "maintenance", JobRunState::Failed, None, 0);
+        seed(
+            "jrun-h",
+            "task_auto_pipeline",
+            JobRunState::Failed,
+            Some(json!({"wrapper": {"task_id": "ORB-10001", "task_ids": ["ORB-10001"]}})),
+            0,
+        );
+        let server = fixture.server(false);
+        let ids = |page: &Value| {
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|run| run["run_id"].as_str().unwrap().to_string())
+                .collect::<BTreeSet<_>>()
+        };
+        let workspace = "workspace=ws_http_fixture";
+
+        let task = json_ok(server.get(&format!(
+            "/api/job-runs?task_id=ORB-10001&limit=100&{workspace}"
+        )));
+        assert_eq!(
+            ids(&task),
+            BTreeSet::from([
+                "jrun-a".to_string(),
+                "jrun-b".to_string(),
+                "jrun-d".to_string(),
+                "jrun-e".to_string(),
+                "jrun-f".to_string(),
+            ]),
+            "task_id matches top-level task_ids or task_id only"
+        );
+        assert_eq!(task["total"], 5);
+
+        let recent_failures = json_ok(server.get(&format!(
+            "/api/job-runs?task_id=ORB-10001&state=failed&since=24h&limit=100&{workspace}"
+        )));
+        assert_eq!(
+            ids(&recent_failures),
+            BTreeSet::from([
+                "jrun-a".to_string(),
+                "jrun-b".to_string(),
+                "jrun-d".to_string(),
+            ])
+        );
+        assert_eq!(recent_failures["state"], "failed");
+
+        let job = json_ok(server.get(&format!(
+            "/api/job-runs?job_id=ci_failure_sweep_pipeline&limit=100&{workspace}"
+        )));
+        assert_eq!(ids(&job), BTreeSet::from(["jrun-d".to_string()]));
+
+        let both = json_ok(server.get(&format!(
+                "/api/job-runs?task_id=ORB-10001&job_id=task_auto_pipeline&state=failed&since=24h&limit=100&{workspace}"
+            )));
+        assert_eq!(ids(&both), BTreeSet::from(["jrun-a".to_string()]));
+
+        let unbounded = json_ok(server.get(&format!(
+            "/api/job-runs?task_id=ORB-10001&since=all&limit=100&{workspace}"
+        )));
+        assert_eq!(ids(&unbounded), ids(&task), "since=all is not a time bound");
+
+        let blank_task = json_ok(server.get(&format!(
+            "/api/job-runs?task_id=%20&state=failed&since=24h&limit=100&{workspace}"
+        )));
+        let failed_window = json_ok(server.get(&format!(
+            "/api/job-runs?state=failed&since=24h&limit=100&{workspace}"
+        )));
+        assert_eq!(
+            ids(&failed_window),
+            BTreeSet::from([
+                "jrun-a".to_string(),
+                "jrun-b".to_string(),
+                "jrun-c".to_string(),
+                "jrun-d".to_string(),
+                "jrun-g".to_string(),
+                "jrun-h".to_string(),
+            ])
+        );
+        assert_eq!(blank_task["total"], failed_window["total"]);
+        assert_eq!(failed_window["total"], 6);
+
+        let summary = json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+        assert_eq!(
+            summary["failed_runs"], failed_window["total"],
+            "the rail count and the Failed list share one window and outcome set"
+        );
+
+        let aggregate = json_ok(
+            server.get("/api/job-runs/all?task_id=ORB-10001&state=failed&since=24h&limit=100"),
+        );
+        assert_eq!(
+            ids(&aggregate),
+            BTreeSet::from([
+                "jrun-a".to_string(),
+                "jrun-b".to_string(),
+                "jrun-d".to_string(),
+            ])
+        );
+
+        let refused = server.get(&format!("/api/job-runs?since=not-a-window&{workspace}"));
+        assert_eq!(refused.status().as_u16(), 400);
+        let body: Value = refused.json().expect("error json");
+        let message = body["error"].as_str().expect("error text");
+        assert!(message.contains("not-a-window"), "{message}");
+        assert!(body.get("code").is_none(), "{body}");
+        assert_eq!(
+            server
+                .get("/api/job-runs/all?since=not-a-window")
+                .status()
+                .as_u16(),
+            400
+        );
+    });
+}

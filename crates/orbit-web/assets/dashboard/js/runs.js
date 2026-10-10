@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +43,35 @@ let runFilter = (() => {
   const value = new URL(window.location.href).searchParams.get("run_state") || "all";
   return RUN_FILTERS.has(value) ? value : "all";
 })();
+// A hand-built URL may set both. The search field edits one of them and
+// clears the other; until that edit, the API applies them together.
+let runTaskId = (new URL(window.location.href).searchParams.get("task_id") || "").trim();
+let runJobId = (new URL(window.location.href).searchParams.get("job_id") || "").trim();
+let runQueryTimer = null;
+
+// Task ids are PREFIX-digits with a 2-5 letter prefix outside the ADR, L,
+// and F artifact namespaces. Anything else in the search field is a job id.
+function isTaskId(value) {
+  const match = /^([A-Z]{2,5})-(\d+)$/.exec(value);
+  return Boolean(match) && !["ADR", "L", "F"].includes(match[1]);
+}
+
+export function runsQueryKey() {
+  return `${runFilter}\n${runTaskId}\n${runJobId}\n${getWindow()}`;
+}
+
+// Query string for /api/job-runs and /api/job-runs/all. `all` omits since
+// so the list is not time-bounded, matching the rail's window.
+export function jobRunsQuery(limit) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  params.set("state", runFilter);
+  if (runTaskId) params.set("task_id", runTaskId);
+  if (runJobId) params.set("job_id", runJobId);
+  const selected = getWindow();
+  if (selected && selected !== "all") params.set("since", selected);
+  return params.toString();
+}
 
 let _runsCtx = null;
 
@@ -769,15 +798,67 @@ function runMatchesFilter(run) {
   return true;
 }
 
-export function setRunFilter(value) {
-  runFilter = RUN_FILTERS.has(value) ? value : "all";
+function persistRunFilters() {
   const url = new URL(window.location.href);
   if (runFilter === "all") url.searchParams.delete("run_state");
   else url.searchParams.set("run_state", runFilter);
+  if (runTaskId) url.searchParams.set("task_id", runTaskId);
+  else url.searchParams.delete("task_id");
+  if (runJobId) url.searchParams.set("job_id", runJobId);
+  else url.searchParams.delete("job_id");
   if (url.href !== window.location.href) history.replaceState(null, "", url);
+}
+
+function clearRunsFetchTimer() {
+  if (runQueryTimer) {
+    clearTimeout(runQueryTimer);
+    runQueryTimer = null;
+  }
+}
+
+function showRunsLoading() {
   if (hasCtx("markRunsLoading")) _runsCtx.markRunsLoading();
-  renderRuns(hasCtx("getLastRuns") ? _runsCtx.getLastRuns() : []);
+  renderRuns(currentRuns());
+}
+
+export function setRunFilter(value) {
+  runFilter = RUN_FILTERS.has(value) ? value : "all";
+  persistRunFilters();
+  clearRunsFetchTimer();
+  showRunsLoading();
   doFetchAndRenderRuns().catch((error) => console.error(error));
+}
+
+function setRunWindow(value) {
+  if (!DASHBOARD_WINDOWS.includes(value) || value === getWindow()) return;
+  setWindow(value);
+  persistScopeToUrl();
+  clearRunsFetchTimer();
+  showRunsLoading();
+  // The scope listener refreshes every open panel, including this list.
+  notifyScopeChange();
+}
+
+function applyRunQuery(raw) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    runTaskId = "";
+    runJobId = "";
+  } else if (isTaskId(value)) {
+    runTaskId = value;
+    runJobId = "";
+  } else {
+    runTaskId = "";
+    runJobId = value;
+  }
+  persistRunFilters();
+  showRunsLoading();
+  clearRunsFetchTimer();
+  runQueryTimer = setTimeout(() => {
+    runQueryTimer = null;
+    doFetchAndRenderRuns().catch((error) => console.error(error));
+  }, 250);
+  if (runQueryTimer && typeof runQueryTimer.unref === "function") runQueryTimer.unref();
 }
 
 export function getRunFilter() {
@@ -805,26 +886,51 @@ export function formatRunCount(shown, fetched, meta) {
 
 function runsAreLoading(runs, meta) {
   if (!(hasCtx("getRunsLoading") && _runsCtx.getRunsLoading())) return false;
+  if (!runs || runs.length === 0) return true;
+  if (meta && meta.runsQuery && meta.runsQuery !== runsQueryKey()) return true;
   const loadedState = meta && meta.state;
-  return !runs || runs.length === 0 || (loadedState && loadedState !== runFilter);
+  return Boolean(loadedState && loadedState !== runFilter);
+}
+
+function windowPhrase() {
+  const selected = getWindow();
+  if (!selected || selected === "all") return "with no time window";
+  return `in the ${selected} window`;
 }
 
 function runsEmptyText() {
+  const qualifiers = [];
+  if (runTaskId) qualifiers.push(`task ${runTaskId}`);
+  if (runJobId) qualifiers.push(`job ${runJobId}`);
+  const extra = qualifiers.length ? ` for ${qualifiers.join(", ")}` : "";
   if (runFilter === "failed") {
-    return "No failed, timed-out, or interrupted job runs (no time window).";
+    return `No failed, timed-out, or interrupted job runs${extra} (${windowPhrase()}).`;
   }
   if (runFilter === "active") {
-    return "No pending or running job runs.";
+    return `No pending or running job runs${extra} (${windowPhrase()}).`;
   }
-  return "No job runs in this workspace.";
+  return `No job runs${extra} in this workspace (${windowPhrase()}).`;
+}
+
+function runsScopeText() {
+  let lead = "Every job run";
+  if (runFilter === "failed") lead = "Failed, timed-out, and interrupted job runs";
+  else if (runFilter === "active") lead = "Pending and running job runs";
+  const qualifiers = ["newest first", windowPhrase()];
+  if (runTaskId) qualifiers.push(`task ${runTaskId}`);
+  if (runJobId) qualifiers.push(`job ${runJobId}`);
+  return `${lead}, ${qualifiers.join(", ")}.`;
 }
 
 function runsScopeNote() {
-  return el("div", {
+  const note = el("div", {
     class: "runs-scope-note",
-    text: "Every job run, newest first, with no time window.",
-    title: "The failed count beside Runs in the rail covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures in the selected window.",
+    text: runsScopeText(),
+    title: "The count beside Runs uses these same Failed, Timeout, and Interrupted outcomes for the selected window. Click that count to open this list on Failed for that window. Health › Errors lists step and event failures in the selected window.",
   });
+  note.dataset.key = "runs-scope-note";
+  note.dataset.hash = `scope-${runFilter}-${getWindow()}-${runTaskId}-${runJobId}`;
+  return note;
 }
 
 function runsLimitNote(meta) {
@@ -881,8 +987,6 @@ function runFilterControls() {
   const controls = el("div", { class: "runs-filter", title: "Filter runs by state" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Filter runs by state");
-  controls.dataset.key = "runs-filter";
-  controls.dataset.hash = `runs-filter-${runFilter}`;
   for (const [value, label] of [["all", "All"], ["active", "Live"], ["failed", "Failed"]]) {
     const button = el("button", {
       class: `runs-filter-button${runFilter === value ? " active" : ""}`,
@@ -894,6 +998,52 @@ function runFilterControls() {
     controls.appendChild(button);
   }
   return controls;
+}
+
+function runsQueryInput() {
+  const input = el("input", { class: "runs-query" });
+  input.type = "search";
+  input.placeholder = "Task or job id";
+  input.setAttribute("aria-label", "Filter runs by task or job id");
+  input.title = "A task id such as ORB-15159 filters by task. Any other id filters by job. The address can set both.";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.tabIndex = 0;
+  input.value = runTaskId || runJobId;
+  input.addEventListener("input", () => applyRunQuery(input.value));
+  return input;
+}
+
+function runsWindowControls() {
+  const controls = el("div", { class: "runs-window", title: "Time window" });
+  controls.setAttribute("role", "group");
+  controls.setAttribute("aria-label", "Time window");
+  const selected = getWindow();
+  for (const value of DASHBOARD_WINDOWS) {
+    const button = el("button", {
+      class: `runs-filter-button${selected === value ? " active" : ""}`,
+      text: value,
+    });
+    button.type = "button";
+    button.dataset.window = value;
+    button.setAttribute("aria-pressed", selected === value ? "true" : "false");
+    button.addEventListener("click", () => setRunWindow(value));
+    controls.appendChild(button);
+  }
+  return controls;
+}
+
+function runsToolbar() {
+  // The search field's node stays while the state and window segments are
+  // rebuilt: its identity is the toolbar, and this hash ignores the typed
+  // query so a keystroke does not replace the focused input.
+  const toolbar = el("div", { class: "runs-toolbar" });
+  toolbar.dataset.key = "runs-toolbar";
+  toolbar.dataset.hash = `runs-toolbar-${runFilter}-${getWindow()}`;
+  toolbar.appendChild(runFilterControls());
+  toolbar.appendChild(runsQueryInput());
+  toolbar.appendChild(runsWindowControls());
+  return toolbar;
 }
 
 function unavailableSourcesNode(unavailable) {
@@ -996,7 +1146,7 @@ export function renderRuns(runs) {
   if ($("diag-count")) {
     $("diag-count").textContent = loading ? "…" : formatRunCount(top.length, sorted.length, meta);
   }
-  frag.appendChild(runFilterControls());
+  frag.appendChild(runsToolbar());
   frag.appendChild(runsScopeNote());
   if (cancelNotice) {
     frag.appendChild(buildCancelNotice(cancelNotice, () => {

@@ -115,10 +115,20 @@ const document = {
   getElementById: id => byId[id] || null,
 };
 
+const location = { search: '', hash: '#diagnostics/runs', href: 'http://localhost/#diagnostics/runs' };
+const history = {
+  replaceState(_data, _title, url) {
+    if (url == null) return;
+    const resolved = new URL(String(url), location.href);
+    location.href = resolved.href;
+    location.search = resolved.search;
+    location.hash = resolved.hash;
+  },
+};
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch: () => Promise.resolve(), document,
-  window: { location: { search: '', hash: '', href: 'http://localhost/#diagnostics/runs' } },
-  history: { replaceState() {} },
+  window: { location },
+  history,
   Date,
   Math,
 });
@@ -167,8 +177,9 @@ initRuns({
 renderRuns([]);
 const scopeNote = runsBody.querySelector('.runs-scope-note');
 assert.ok(scopeNote, 'scope note exists');
-assert.equal(scopeNote.textContent, 'Every job run, newest first, with no time window.', 'scope note text is shortened to one line');
-assert.ok(scopeNote.title && scopeNote.title.includes('selected window only'), 'extended details are in scope note title attribute');
+assert.match(scopeNote.textContent, /Every job run, newest first, in the 24h window/);
+assert.doesNotMatch(scopeNote.textContent, /no time window/);
+assert.match(scopeNote.title, /selected window/);
 
 // Test 2: Load more control when truncated
 const sampleRuns = [
@@ -286,5 +297,43 @@ assert.equal(cappedNote.querySelector('.runs-load-more'), null, 'no Load more bu
 limitCapped = false;
 renderRuns(sampleRuns);
 assert.ok(runsBody.querySelector('.runs-load-more'), 'Load more returns while the server can still return more');
+
+// Filters update the address and the scope note before the next fetch returns.
+const filterButton = (label) => [...runsBody.querySelectorAll('.runs-filter-button')].find((button) => button.textContent === label);
+const windowButton = (value) => [...runsBody.querySelectorAll('.runs-filter-button')].find((button) => button.dataset.window === value);
+const searchParams = () => new URL(location.href).searchParams;
+currentMeta = { limit: 25, total: 2, truncated: false, state: 'all', runsQuery: 'all\n\n\n24h' };
+runsLoading = false;
+renderRuns(sampleRuns);
+filterButton('Failed').click();
+assert.ok(classesOf(filterButton('Failed')).includes('active'), 'Failed is selected as soon as it is clicked');
+assert.ok(!classesOf(filterButton('All')).includes('active'), 'All is no longer selected while the failed list loads');
+assert.equal(searchParams().get('run_state'), 'failed');
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /Failed, timed-out, and interrupted/);
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /24h/);
+assert.doesNotMatch(runsBody.querySelector('.runs-scope-note').textContent, /no time window/);
+windowButton('7d').click();
+assert.equal(searchParams().get('window'), '7d');
+assert.equal(searchParams().get('run_state'), 'failed');
+assert.ok(classesOf(windowButton('7d')).includes('active'));
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /7d/);
+windowButton('all').click();
+assert.equal(searchParams().get('window'), 'all');
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /no time window/);
+const query = runsBody.querySelector('.runs-query');
+query.value = 'ORB-15159';
+query.dispatch('input');
+assert.equal(searchParams().get('task_id'), 'ORB-15159');
+assert.equal(searchParams().get('job_id'), null);
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /ORB-15159/);
+query.value = 'ci_failure_sweep_pipeline';
+query.dispatch('input');
+assert.equal(searchParams().get('job_id'), 'ci_failure_sweep_pipeline');
+assert.equal(searchParams().get('task_id'), null);
+assert.match(runsBody.querySelector('.runs-scope-note').textContent, /ci_failure_sweep_pipeline/);
+query.value = 'orb-15159';
+query.dispatch('input');
+assert.equal(searchParams().get('job_id'), 'orb-15159');
+assert.equal(searchParams().get('task_id'), null, 'a lowercase id is a job id');
 
 console.log('All dashboard runs behavior assertions passed.');

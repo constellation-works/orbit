@@ -11,7 +11,7 @@ import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.j
 import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
-import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
+import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -1091,6 +1091,8 @@ function renderKnowledgeDetailPlaceholder(prefix) {
 function resetSummaryCounts() {
   setRailCount("rail-count-diag-runs", null);
   setRailCount("rail-count-audit", null);
+  const runsCount = $("rail-count-diag-runs");
+  if (runsCount) delete runsCount.dataset.window;
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1457,20 +1459,24 @@ function activeRefreshJobs() {
 
 function fetchAndRenderRuns() {
   const requestedAggregate = isAggregateView();
-  const runFilter = getRunFilter();
-  return requestPanel("runs-body", runFilter, () => requestedAggregate
-    ? fetchJson(`/api/job-runs/all?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`).then((payload) => ({
+  // Stable scope: a filter or window change must not wipe the panel, or the
+  // segment the operator just clicked stays on the previous choice until the
+  // response arrives. Stale responses are still dropped by request identity.
+  const query = jobRunsQuery(jobRunLimit);
+  const signature = runsQueryKey();
+  return requestPanel("runs-body", "runs", () => requestedAggregate
+    ? fetchJson(`/api/job-runs/all?${query}`).then((payload) => ({
         runs: listItems(payload), frictionRows: [], meta: payload,
         unavailable: Array.isArray(payload && payload.unavailable) ? payload.unavailable : [],
       }))
     : Promise.all([
-        fetchJson(`/api/job-runs?limit=${jobRunLimit}&state=${encodeURIComponent(runFilter)}`),
+        fetchJson(`/api/job-runs?${query}`),
         fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
       ]).then(([payload, frictionRows]) => ({
         runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
       })), ({ runs, frictionRows, meta, unavailable }) => {
     lastRuns = mergeRunsWithFriction(runs, frictionRows);
-    lastRunsMeta = meta;
+    lastRunsMeta = meta && typeof meta === "object" ? { ...meta, runsQuery: signature } : meta;
     lastRunsLoading = false;
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
@@ -1606,7 +1612,12 @@ function renderSummaryCounts(data) {
   if (!data) return;
   const windowLabel = data.window || getWindow();
   setRailCount("rail-count-diag-runs", data.failed_runs, true,
-    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Runs' Failed filter lists the same outcomes with no time window.`);
+    `Failed, timeout and interrupted job runs in the ${windowLabel} window. Click this count to open Runs on Failed for the same window.`);
+  const runsCount = $("rail-count-diag-runs");
+  if (runsCount) {
+    if (data.failed_runs) runsCount.dataset.window = String(windowLabel);
+    else delete runsCount.dataset.window;
+  }
   setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
 }
 
