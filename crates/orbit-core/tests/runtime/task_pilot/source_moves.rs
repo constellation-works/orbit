@@ -424,7 +424,11 @@ fn editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it()
     assert!(!pilot_applied(&workspace, edited));
     assert!(siblings.iter().all(|task| pilot_applied(&workspace, task)));
 
-    finish_run(&workspace, &attempt, &[(0, &prepared), (2, &output)]);
+    finish_run(
+        &workspace,
+        &attempt,
+        &[("prepare", &prepared), ("apply", &output)],
+    );
     evaluate_routine(
         &workspace.runtime,
         &routine,
