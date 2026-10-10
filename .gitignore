@@ -6,7 +6,6 @@
 .gemini/
 .grok/
 
-agentspace
 !.claude/settings.json
 !.claude/hooks/
 !.codex/
@@ -37,14 +36,7 @@ plugin/.claude-plugin/types/
 .vscode/settings.json
 
 # Scratch / session files
-sessions
 tmp
-raw
-examples.md
-feature.md
-feat.md
-schema.md
-critique.md
 
 # Runtime state
 
