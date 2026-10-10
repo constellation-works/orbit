@@ -122,6 +122,7 @@ spec:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            owner_machine: "{{ steps.prepare.output.owner_machine }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
@@ -156,6 +157,7 @@ spec:
             validation_errors: "{{ item.validation_errors }}"
             repair_attempt: true
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            owner_machine: "{{ steps.prepare.output.owner_machine }}"
             base_branch: "{{ steps.prepare.output.source.base_branch }}"
             source_revision: "{{ steps.prepare.output.source.source_revision }}"
             inspection_revision: "{{ steps.prepare.output.source.source_revision }}"

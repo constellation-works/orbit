@@ -322,11 +322,35 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
     }
 }
 
+/// What the follower's drain recorded of the owner's idle answer for `task`:
+/// its reason code and the owner's sentence [ORB-15278].
+fn recorded_wait(pair: &Pair, drain: &str, task: &str) -> (String, String) {
+    let recorded = pair
+        .follower
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("the pass is recorded");
+    recorded
+        .deferred
+        .iter()
+        .chain(&recorded.excluded)
+        .find(|waiting| waiting.task_id == task)
+        .map(|waiting| {
+            (
+                waiting.reason.clone().unwrap_or_default(),
+                waiting.detail.clone().unwrap_or_default(),
+            )
+        })
+        .unwrap_or_else(|| panic!("{task} is not recorded as waiting: {recorded:#?}"))
+}
+
 #[test]
-fn owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os() {
+fn a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it() {
     if !isolated(
         module_path!(),
-        "owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os",
+        "a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it",
     ) {
         return;
     }
@@ -339,6 +363,13 @@ fn owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os() {
             "evidence": "The criterion requires a native macOS sandbox-exec launch.",
         }]}),
     );
+    // The untagged task now routes by the tag the pilot added.
+    let task = pair.wire.owner.get_task(&pair.tasks[0]).unwrap();
+    assert!(
+        task.tags.contains(&"os:macos".to_string()),
+        "{:?}",
+        task.tags
+    );
     pair.follower = pair
         .follower
         .clone()
@@ -348,23 +379,9 @@ fn owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os() {
     assert!(first["error"].is_null(), "{first}");
     assert!(pair.owner_claims().is_empty());
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
-    let records = pair.follower_jobs.local_pull_admissions().unwrap();
-    let receipt = records
-        .iter()
-        .filter_map(|record| record.receipt.as_ref())
-        .next()
-        .unwrap();
-    assert_eq!(receipt.queue_depth, 0);
-    assert!(
-        receipt.deferred_conflicts.iter().any(|entry| {
-            entry.task_id == pair.tasks[0]
-                && entry
-                    .reason
-                    .contains("criterion 1 needs native macos evidence")
-                && entry.reason.contains("`os:macos`")
-        }),
-        "{receipt:?}"
-    );
+    let (reason, detail) = recorded_wait(&pair, &drain, &pair.tasks[0]);
+    assert_eq!(reason, "host_os_mismatch", "{detail}");
+    assert!(detail.contains("os:macos"), "{detail}");
 
     // A follower that can produce the evidence is handed the task.
     pair.follower = pair
@@ -373,6 +390,64 @@ fn owner_pull_holds_a_native_os_finding_from_a_follower_of_another_os() {
         .with_host_os(Some(orbit_types::task::HostOs::Macos));
     let mac_drain = pair.start_drain();
     pair.pass(&mac_drain);
+    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+}
+
+#[test]
+fn a_machine_finding_keeps_the_task_off_every_other_machine() {
+    if !isolated(
+        module_path!(),
+        "a_machine_finding_keeps_the_task_off_every_other_machine",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let criterion =
+        "Timings measured on the owner against its live task store reach a p95 under 1 s.";
+    apply_assessment(
+        &pair,
+        criterion,
+        json!({"required_machine": [{
+            "criterion": 1, "machine": OWNER,
+            "evidence": "Only the owner's live store holds the measured workspace.",
+        }]}),
+    );
+    // A machine requirement has no tag: routing is the owner's hold alone.
+    let task = pair.wire.owner.get_task(&pair.tasks[0]).unwrap();
+    assert!(
+        !task.tags.iter().any(|tag| tag.starts_with("os:")),
+        "{:?}",
+        task.tags
+    );
+    let drain = pair.start_drain();
+    let first = pair.pass(&drain);
+    assert!(first["error"].is_null(), "{first}");
+    assert!(pair.owner_claims().is_empty());
+    assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+    let (reason, detail) = recorded_wait(&pair, &drain, &pair.tasks[0]);
+    assert_eq!(reason, "owner_hold", "{detail}");
+    assert!(
+        detail.starts_with("Machine requirement: criterion 1")
+            && detail.contains(&format!("only machine {OWNER}"))
+            && detail.contains(&format!("machine {FOLLOWER} cannot satisfy it")),
+        "{detail}"
+    );
+
+    // Re-scoping the criterion releases the hold.
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &pair.tasks[0],
+            orbit_core::application::task::TaskUpdateParams {
+                acceptance_criteria: Some(vec![
+                    "The freshness statement's query plan searches tags by task id.".into(),
+                ]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    pair.pass(&drain);
     assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
 }
 

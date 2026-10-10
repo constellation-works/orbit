@@ -132,6 +132,10 @@ pub struct AtomicTaskMutationParams {
     /// boundary makes the mutation stale.
     pub expected_context_creation: Option<String>,
     pub context_files: Vec<String>,
+    /// Tags appended to the task's own in the same commit, after the usual
+    /// normalization and `os:` namespace check. Existing tags are never
+    /// removed or replaced; empty adds none.
+    pub add_tags: Vec<String>,
     pub status: TaskStatus,
     pub complexity: TaskComplexity,
     pub event_type: String,

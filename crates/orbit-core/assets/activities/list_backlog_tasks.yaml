@@ -34,7 +34,10 @@ spec:
     criterion that needs native evidence from an OS the task's `os:` tags do
     not name — withholds admission on a host of another OS as
     `native_os_required`, with `detail` naming the criterion and the tag to
-    add. A host of that OS may still take it, and a task whose own `os:`
+    add. (The pilot adds that tag itself when the task had no `os:` tag, so
+    this wait remains only when the task's own tags conflict with it.) A
+    typed `required_machine` finding withholds admission the same way on
+    any machine other than the owner it names. A host of that OS may still take it, and a task whose own `os:`
     tags exclude this host keeps `host_os_mismatch`. Adding the tag,
     re-scoping the acceptance criteria, a newer assessment without the
     finding, or the same evidenced operator decision (recorded as

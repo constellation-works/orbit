@@ -208,19 +208,31 @@ assessment without another hold admits as before. `no-diff-expected` does not
 exempt host-operational work, even if an auto-task lane grants relevant tools.
 An operator decision releases admission only; task prose never grants tools.
 
-Task-pilot checks acceptance criteria for native OS evidence requirements.
-It records each one as a typed `required_os` finding (the one-based criterion
-and the OS), committed with the applied assessment as `native_os_hold`. When the
-matching tag is missing, the pilot also reports a `utility_warnings` finding
-citing the criterion and naming `os:macos`, `os:linux` or `os:windows` to add
-before dispatch. The pilot recommends the tag; it does not retag the task. A
-matching tag already present needs no warning, even when the pilot runs on
-another OS. Platform mentions, cross-compilation, mocked checks and negative
-admission tests alone do not require a native host. If evidence is required on
-every named OS, use separate host-scoped validation tasks: multiple tags allow
-any one OS.
+Task-pilot checks acceptance criteria for native host evidence requirements.
+It records each one as a typed finding, committed with the applied assessment
+as `native_os_hold`: `required_os` (the one-based criterion and the OS) for an
+OS requirement, `required_machine` (the criterion and the owner machine) for
+evidence only the owner's own store, services or data can produce. A
+requirement stated only in warning prose routes nothing. When every
+`required_os` entry names one OS and the task carries no `os:` tag, the pilot's
+atomic apply adds that tag, so tag routing sends the task to a host of that OS
+and a follower of another OS sees it as `host_os_mismatch`. An `os:` tag the
+task already carries is never removed or replaced; a conflicting one is
+reported in `utility_warnings`. Platform mentions, cross-compilation, mocked
+checks, negative admission tests and measurements any host could repeat do not
+require a native host. If evidence is required on every named OS, use separate
+host-scoped validation tasks: multiple tags allow any one OS, so the pilot adds
+none.
 
-Admission honours the finding while the task's `os:` tags do not name the
+A `required_machine` finding has no tag. The owner refuses a pull claim from
+every other machine (`deferred_conflicts`, shown as an `owner_hold` whose
+reason begins `Machine requirement:` and names the machine), while its own
+local drain may start the task. A pilot may name only the owner (by its
+registered machine name or id); a requirement on another machine stays a
+`utility_warnings` finding for an operator. The same re-scope, newer assessment
+or evidenced operator decision clears it.
+
+Admission honours an OS finding while the task's `os:` tags do not name the
 required OS. A local drain, ship discovery or `orbit run ship` on a host of
 another OS leaves the task in `backlog` as `native_os_required`, and the owner
 defers a pull from a follower of another OS (`deferred_conflicts`, shown as an

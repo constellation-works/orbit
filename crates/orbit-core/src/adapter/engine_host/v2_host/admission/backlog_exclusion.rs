@@ -1007,7 +1007,11 @@ fn pilot_finding_exclusion(
             ),
             PilotAdmissionHold::NativeOs(hold) => (
                 BacklogTaskExclusionReason::NativeOsRequired,
-                hold.wait_on(task, runtime.host_os())?,
+                hold.wait_on(
+                    task,
+                    runtime.host_os(),
+                    runtime.automation_machine_identity(),
+                )?,
             ),
             PilotAdmissionHold::Duplicate => (
                 BacklogTaskExclusionReason::PilotDuplicate,

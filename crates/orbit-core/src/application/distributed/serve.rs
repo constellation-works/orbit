@@ -407,8 +407,10 @@ impl crate::OrbitRuntime {
         // bundle it read, so one applied after this read is still honoured.
         let backlog =
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?;
-        // A native-OS finding holds only an executor whose OS cannot produce
-        // the evidence, so it is judged against the requesting executor.
+        // A native-host finding holds only an executor whose OS or machine
+        // cannot produce the evidence, so it is judged against the requesting
+        // executor.
+        let machine_id = Some(identity.location().machine_id.as_str());
         for task in &backlog {
             let comments = self.get_task_comments(&task.id)?;
             match self
@@ -423,7 +425,7 @@ impl crate::OrbitRuntime {
                     admission_holds.insert(task.id.clone(), hold.detail());
                 }
                 Some(PilotAdmissionHold::NativeOs(hold)) => {
-                    if let Some(wait) = hold.wait_on(task, request.os) {
+                    if let Some(wait) = hold.wait_on(task, request.os, machine_id) {
                         admission_holds.insert(task.id.clone(), wait);
                     }
                 }
@@ -463,7 +465,9 @@ impl crate::OrbitRuntime {
             )? {
                 Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
                 Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
-                Some(PilotAdmissionHold::NativeOs(hold)) => Ok(hold.wait_on(task, request.os)),
+                Some(PilotAdmissionHold::NativeOs(hold)) => {
+                    Ok(hold.wait_on(task, request.os, machine_id))
+                }
                 _ => Ok(None),
             },
         )

@@ -28,9 +28,9 @@ use super::source::SourceSnapshot;
 use super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED, PILOT_NORMALIZATIONS,
     VALIDATION_TOOL_WARNINGS, action_failed, member_ready, normalize_evidence_gaps,
-    requested_workspace_root, required_os, required_string, required_string_array, string_array,
-    string_array_value, unauthorized_missing_targets, validate_after_selectors,
-    validate_recommendations,
+    requested_workspace_root, required_machine, required_os, required_string,
+    required_string_array, string_array, string_array_value, unauthorized_missing_targets,
+    validate_after_selectors, validate_recommendations,
 };
 
 pub(in super::super) fn apply(
@@ -585,6 +585,19 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
+            let native_machine = match required_machine(
+                action,
+                task_id,
+                assessment,
+                current.acceptance_criteria.len(),
+                runtime.automation_execution_location(),
+            ) {
+                Ok(requirement) => requirement,
+                Err(error) => {
+                    outcomes.push(task_outcome(task_id, "invalid", Some(error.to_string())));
+                    continue;
+                }
+            };
             // The pilot never sees the deterministic findings — the lane's
             // validation-tool feasibility [ORB-11980] and this boundary's
             // over-attachment budget [ORB-12228] — so apply attaches them
@@ -729,6 +742,7 @@ pub(in super::super) fn apply(
                 complexity,
                 operation_id,
                 required_os: native_os,
+                required_machine: native_machine,
             };
 
             let outcome = apply_task(runtime, snapshot, &validated, prepared_value, &policy);

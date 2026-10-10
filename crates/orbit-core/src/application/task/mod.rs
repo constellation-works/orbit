@@ -61,8 +61,9 @@ pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};
 pub use paths::ContextCreationAuthorization;
 pub(crate) use pilot_admission::{
-    HostOperationalHold, NativeOsHold, NativeOsRequirement, OperatorValidationHold,
-    OperatorValidationRequirement, PilotAdmissionHold, operator_validation_requirements,
+    HostOperationalHold, MachineRequirement, NativeOsHold, NativeOsRequirement,
+    OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
+    operator_validation_requirements,
 };
 pub(crate) use pilot_no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 pub use provider_limit_view::{

@@ -96,9 +96,13 @@ discovery and `orbit run ship` start the task only on a host of a named OS, and
 an owner hands a pull-drain claim only to a follower of one. Elsewhere the
 task stays in `backlog` with the wait named (`waits for a macos host
 (os:macos)`) in readiness, `orbit run show` and the dashboard Drain card.
-When task-pilot finds a criterion that needs native evidence from an OS the
-tags do not name, a host of another OS likewise leaves the task waiting as
-`native_os_required`, naming the tag to add.
+When task-pilot finds a criterion that needs native evidence from one OS and
+the task has no `os:` tag, it adds that tag itself; it never replaces an `os:`
+tag you set. If your tag names another OS, a host that cannot produce the
+evidence leaves the task waiting as `native_os_required`. When only the
+owner's own machine can produce the evidence (timings against its live store,
+say), the pilot records a machine requirement and the owner refuses pull
+claims from every other machine.
 
 To route a task an auto-task or a sweep already minted, retag it with
 `orbit.task.update`, sending the full tag list (it replaces the stored one):

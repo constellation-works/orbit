@@ -83,7 +83,7 @@ and utility findings do not withhold an already-approved backlog task. A current
 operator-reserved validation requirement holds local workflow admission and
 owner pull claims until an operator handles it, and a criterion that needs
 native evidence from an OS the task's `os:` tags do not name holds a host of
-another OS (see [Native OS evidence](#native-os-evidence)).
+another OS (see [Native host evidence](#native-host-evidence)).
 
 - **Transport.** An MCP session reaches only MCP-advertised tools. `proc.spawn`
   is registered CLI-only, so a criterion that requires it over MCP can never
@@ -145,20 +145,31 @@ while no document edit follows the assessment. Their governed-operation warnings
 are checked against the current registry and positive criterion mentions; all
 other warning kinds stay advisory.
 
-### Native OS evidence
+### Native host evidence
 
 When a criterion needs execution or evidence that only a native host of one OS
 can produce (a real macOS `sandbox-exec` launch, a Linux Bubblewrap result), the
 pilot records a typed `required_os` finding naming the one-based criterion and
-the OS, commits it as `native_os_hold` in its assessment audit, and adds a
-`utility_warnings` entry naming the tag to add when the task lacks it. The pilot
-never edits tags. While the task's `os:` tags do not name that OS, a local
-drain, ship discovery, `orbit run ship` and an owner's pull admission on a host
-of another OS leave the task in `backlog` as `native_os_required`; readiness,
-`orbit run show` and the dashboard Drain card name the criterion and the tag. A
-host of that OS may still take it, and a task whose own `os:` tags exclude the
-host keeps `host_os_mismatch`. Platform mentions, cross-compilation targets,
-mocked checks and negative tests are not findings.
+the OS, and commits it as `native_os_hold` in its assessment audit. When every
+finding names one OS and the task carries no `os:` tag, the same atomic write
+adds that tag (`os:linux`), so admission routes the task by its tags and a host
+of another OS waits as `host_os_mismatch`. The pilot never removes or replaces
+an `os:` tag already on the task. While those tags do not name the required OS
+(an operator chose another, or findings name several OSes), a local drain, ship
+discovery, `orbit run ship` and an owner's pull admission on a host that cannot
+meet it leave the task in `backlog` as `native_os_required`; readiness,
+`orbit run show` and the dashboard Drain card name the criterion and the tag.
+
+When only the machine that owns the task store can produce the evidence (its
+live store, services or data), the pilot records a `required_machine` finding
+naming the criterion and that owner machine, committed in the same hold. The
+owner then refuses a pull claim from any other machine with a reason naming
+the machine; its own drain may start the task. A requirement on any other
+machine stays a `utility_warnings` finding for an operator to arrange.
+
+Only typed findings route work: a host requirement stated in warning prose does
+not. Platform mentions, cross-compilation targets, mocked checks, negative
+tests and measurements any host could repeat are not findings.
 
 The wait clears when the matching `os:` tag is added (admission then routes the
 task by its tags), when the acceptance criteria are re-scoped, when a newer
