@@ -66,6 +66,13 @@
   letter-spacing: 0.08em;
   margin-bottom: 6px;
 }
+.child-dispatch-notice {
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.child-dispatch-notice strong { color: var(--fg); }
 .child-dispatch-row {
   display: flex;
   flex-wrap: wrap;
@@ -74,6 +81,9 @@
   margin-bottom: 4px;
 }
 .child-dispatch-meta { color: var(--fg-dim); }
+.waiting-task { color: var(--fg-dim); }
+.waiting-task-link { color: var(--accent); text-decoration: none; }
+.waiting-task-link:hover { text-decoration: underline; }
 .child-dispatch-error { color: var(--state-failed); }
 .child-dispatch-summary { margin-bottom: 8px; }
 .child-dispatch-row .state-label { color: var(--dot); }

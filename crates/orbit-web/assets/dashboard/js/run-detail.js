@@ -17,6 +17,7 @@
 
 import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatClock, elapsedDurationInfo } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
+import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
 
 const $ = (id) => document.getElementById(id);
@@ -318,7 +319,7 @@ export function renderRunDetailMeta() {
   if (crews) wrap.appendChild(crews);
   const unsetEnv = buildUnsetEnvPass(run.env_pass_unset);
   if (unsetEnv) wrap.appendChild(unsetEnv);
-  const waiting = buildStillWaiting(run.drain_last_pass || null);
+  const waiting = buildStillWaiting(run.drain_last_pass || null, run);
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
@@ -330,10 +331,10 @@ export function renderRunDetailMeta() {
 function buildUnsetEnvPass(names) {
   if (!Array.isArray(names) || names.length === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel" });
-  panel.appendChild(el("div", {
-    class: "label",
-    text: `unset env: ${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)`,
-  }));
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Unset env: " }),
+    el("span", { text: `${names.join(", ")} (listed in execution.env.pass but not set where this run was submitted, so its agents did not receive them)` }),
+  ]));
   return panel;
 }
 
@@ -417,7 +418,7 @@ function buildCrewWindow(window) {
   return panel;
 }
 
-// Reason codes whose `detail` is the sentence that names what clears the wait.
+// Reason codes whose `detail` adds useful context to the shared Drain card label.
 const WAITING_DETAIL_REASONS = new Set([
   "host_os_mismatch", "native_os_required", "local_route_before_pr", "local_route_before_landing", "crew_unavailable", "owner_hold",
   "invalid_candidate",
@@ -437,40 +438,74 @@ const KEPT_OFF_CAUSES = {
 // nothing. Mirrors the CLI's `idle:` line.
 const IDLE_SUMMARY_PASSES = 3;
 
-function waitingTaskText(task, fallback) {
-  let text = `Task ${task.task_id}: ${task.reason || fallback}`;
-  if (Array.isArray(task.blocked_by) && task.blocked_by.length > 0) text += ` blocked-by=${task.blocked_by.join(",")}`;
-  if (WAITING_DETAIL_REASONS.has(task.reason) && task.detail) text += ` (${task.detail})`;
-  return text;
+function waitingTaskLink(taskId, workspaceId) {
+  const link = el("a", { class: "waiting-task-link", text: taskId, title: `Open ${taskId}` });
+  const url = new URL(window.location.href);
+  url.searchParams.set("workspace", workspaceId || getWorkspace() || "");
+  url.hash = `tasks?status=all&q=${encodeURIComponent(taskId)}`;
+  link.href = `${url.search}${url.hash}`;
+  return link;
+}
+
+function waitingTaskRow(task, fallback, workspaceId) {
+  const taskId = typeof task.task_id === "string" && task.task_id.trim() ? task.task_id : null;
+  const reason = typeof task.reason === "string" && task.reason.trim() ? task.reason : fallback;
+  const row = el("div", { class: "child-dispatch-row waiting-task" }, [
+    el("span", { text: "Task " }),
+    taskId ? waitingTaskLink(taskId, workspaceId) : el("span", { text: "?" }),
+    el("span", { class: "waiting-task-reason", text: `: ${drainWaitBadge({ ...task, reason }).text}` }),
+  ]);
+  const blockedBy = Array.isArray(task.blocked_by) ? task.blocked_by.filter(id => typeof id === "string" && id.trim()) : [];
+  if (blockedBy.length > 0) {
+    row.appendChild(el("span", { text: " · blocked by " }));
+    blockedBy.forEach((id, index) => {
+      if (index > 0) row.appendChild(el("span", { text: ", " }));
+      row.appendChild(waitingTaskLink(id, workspaceId));
+    });
+  }
+  if (WAITING_DETAIL_REASONS.has(reason) && task.detail) {
+    row.appendChild(el("span", { class: "waiting-task-detail", text: ` (${task.detail})` }));
+  }
+  return row;
 }
 
 // The backlog a drain's last admission pass left unstarted, for local and pull
 // drains alike: each task with its reason and the tasks it waits on. A pull
 // drain's list is the owner's last answer, so it is dated. Mirrors the
 // `Still waiting:` lines of `orbit run show`.
-function buildStillWaiting(pass) {
+function buildStillWaiting(pass, run = {}) {
   if (!pass) return null;
   const deferred = Array.isArray(pass.deferred) ? pass.deferred : [];
   const excluded = Array.isArray(pass.excluded) ? pass.excluded : [];
-  const queued = pass.queued || 0;
-  const excludedTotal = pass.excluded_total || 0;
   const deferredTotal = Math.max(pass.deferred_total || 0, deferred.length);
-  if (queued === 0 && deferredTotal === 0 && excludedTotal === 0) return null;
+  const queued = Math.max(pass.queued || 0, deferredTotal);
+  const excludedTotal = Math.max(pass.excluded_total || 0, excluded.length);
+  if (queued === 0 && excludedTotal === 0) return null;
   const panel = el("div", { class: "child-dispatch-panel still-waiting" });
   const answered = pass.waiting_recorded_at ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})` : "";
-  panel.appendChild(el("div", {
-    class: "label",
-    text: `still waiting: ${queued} admissible, ${deferredTotal} deferred and ${excludedTotal} excluded backlog task(s) were never started at the last pass${answered}`,
-  }));
-  const rows = [
-    ...deferred.map((task) => waitingTaskText(task, "lock conflict")),
-    ...(deferredTotal > deferred.length ? [`... and ${deferredTotal - deferred.length} more deferred`] : []),
-    ...excluded.map((task) => waitingTaskText(task, "excluded")),
-  ];
-  if (excludedTotal > excluded.length) rows.push(`... and ${excludedTotal - excluded.length} more excluded`);
-  for (const text of rows) {
+  const reasonTaskTotal = deferredTotal + excludedTotal;
+  const additionalAdmissible = Math.max(0, queued - deferredTotal);
+  const additionalSummary = additionalAdmissible === 1
+    ? "1 additional admissible task was not started and is not listed below"
+    : `${additionalAdmissible} additional admissible tasks were not started and are not listed below`;
+  const summary = reasonTaskTotal > 0
+    ? `${reasonTaskTotal} backlog ${reasonTaskTotal === 1 ? "task has" : "tasks have"} recorded wait reasons (${deferredTotal} deferred, ${excludedTotal} excluded)${additionalAdmissible > 0 ? `; ${additionalSummary}` : ""}${answered}`
+    : `${queued === 1 ? "1 admissible task was" : `${queued} admissible tasks were`} not started and not listed individually${answered}`;
+  panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
+    el("strong", { text: "Still waiting: " }),
+    el("span", { text: summary }),
+  ]));
+  const workspaceId = run.workspace_id || getWorkspace();
+  for (const task of deferred) panel.appendChild(waitingTaskRow(task, "lock conflict", workspaceId));
+  if (deferredTotal > deferred.length) {
     panel.appendChild(el("div", { class: "child-dispatch-row waiting-task" }, [
-      el("span", { class: "child-dispatch-meta", text }),
+      el("span", { class: "child-dispatch-meta", text: `... and ${deferredTotal - deferred.length} more deferred` }),
+    ]));
+  }
+  for (const task of excluded) panel.appendChild(waitingTaskRow(task, "excluded", workspaceId));
+  if (excludedTotal > excluded.length) {
+    panel.appendChild(el("div", { class: "child-dispatch-row waiting-task" }, [
+      el("span", { class: "child-dispatch-meta", text: `... and ${excludedTotal - excluded.length} more excluded` }),
     ]));
   }
   const byReason = pass.waiting_by_reason || {};
