@@ -846,7 +846,7 @@ A reviewer may forget to name owed evidence, or report a check as passed
 when its host could not have run it. To close that gap, the workspace
 declares what a claimed leaf owes, and Orbit derives the requirement instead of
 reading it from the report. Each `[[review.host_evidence]]` rule
-([config](../../CONFIG.md#other-sections)) names a `kind` (`codeql` or
+([config](../../CONFIG.md#owed-host-evidence)) names a `kind` (`codeql` or
 `host_sandbox_test`), a display `name`, workspace-relative `paths` globs, an
 `os`, the exact `command` and the result `artifact`. The owner captures the
 rules in the review contract each claim carries. A rule is owed when a claimed

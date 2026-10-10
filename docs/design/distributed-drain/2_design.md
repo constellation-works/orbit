@@ -204,7 +204,7 @@ no origin or PR credentials.
   `ClaimEvidence.baseline_red`, and the owner records a `baseline_red_hold` in the task's history.
   Owner pull admission defers the task until the held command passes on a new
   base tip ([ORB-14258];
-  [CONFIG.md](../../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)).
+  [CONFIG.md](../../CONFIG.md#a-red-base-is-held-not-blocked)).
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable

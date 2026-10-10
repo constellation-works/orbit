@@ -409,7 +409,7 @@ claimed leaf on a follower releases its claim the same way, and the owner
 withholds the task from pulls until its own refresh run sees the base pass.
 Both runs' logs are attached to the task: `validation/<run>/<n>.json` and
 `validation/<run>/<n>.baseline.json`. See
-[CONFIG.md](../CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with).
+[CONFIG.md](../CONFIG.md#a-red-base-is-held-not-blocked).
 
 ## A task held after a provider failure
 
