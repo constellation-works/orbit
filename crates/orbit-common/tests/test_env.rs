@@ -212,3 +212,162 @@ fn env_probe_child() {
         );
     }
 }
+
+/// ORB-15240: nextest interrupting a test parent must not leave the fixture
+/// child group it spawned running. The parent is SIGKILLed mid-run, which
+/// gives it no chance to run its own cleanup.
+#[cfg(unix)]
+mod orphaned_fixture_children {
+    use super::*;
+    use orbit_common::test_env::run_child_test_within;
+    use std::io::Write;
+    use std::path::Path;
+    use std::time::Instant;
+
+    const DIR_ENV: &str = "ORBIT_ORPHAN_FIXTURE_DIR";
+    /// Long enough that a survivor is unmistakable, short enough that a failed
+    /// run does not leave processes for long.
+    const SURVIVOR_SECS: &str = "120";
+    const BOUND: Duration = Duration::from_secs(20);
+
+    fn reexec(entry: &str, dir: &Path) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                &format!("orphaned_fixture_children::{entry}"),
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(DIR_ENV, dir);
+        command
+    }
+
+    fn wait_for_pid(path: &Path) -> u32 {
+        let started = Instant::now();
+        loop {
+            if let Some(pid) = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                return pid;
+            }
+            assert!(
+                started.elapsed() < BOUND,
+                "{} never written",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Running and not a zombie: a killed process nobody has reaped yet is gone.
+    fn is_running(pid: u32) -> bool {
+        let output = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&output.stdout);
+        let state = state.trim();
+        !state.is_empty() && !state.starts_with('Z')
+    }
+
+    fn assert_gone_within_bound(what: &str, pid: u32) {
+        let started = Instant::now();
+        while is_running(pid) {
+            assert!(
+                started.elapsed() < BOUND,
+                "{what} (pid {pid}) still running {BOUND:?} after its test parent died"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn kill_leftovers(pids: &[u32]) {
+        for pid in pids {
+            // Best effort so a failed assertion does not leave the sleepers.
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+
+    #[test]
+    fn a_killed_test_parent_takes_its_fixture_child_group_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut parent = reexec("orphan_parent_entry", dir.path());
+        let mut parent = parent
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let child = wait_for_pid(&dir.path().join("child.pid"));
+        let grandchild = wait_for_pid(&dir.path().join("grandchild.pid"));
+        assert!(
+            is_running(child) && is_running(grandchild),
+            "fixture started"
+        );
+
+        parent.kill().unwrap();
+        parent.wait().unwrap();
+
+        let outcome = std::panic::catch_unwind(|| {
+            assert_gone_within_bound("fixture child", child);
+            assert_gone_within_bound("fixture grandchild", grandchild);
+        });
+        if outcome.is_err() {
+            kill_leftovers(&[child, grandchild]);
+        }
+        outcome.unwrap();
+    }
+
+    #[test]
+    fn an_overrunning_child_is_reported_with_its_output_and_its_group_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = reexec("orphan_child_entry", dir.path());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_child_test_within(
+                &mut command,
+                "orphan_child_entry",
+                dir.path(),
+                Duration::from_secs(2),
+            )
+        }));
+        let message = panic_message(result.expect_err("an overrunning child fails the caller"));
+        for expected in ["orphan_child_entry", "host load", "fixture child running"] {
+            assert!(message.contains(expected), "{expected:?} in {message}");
+        }
+        let child = wait_for_pid(&dir.path().join("child.pid"));
+        let grandchild = wait_for_pid(&dir.path().join("grandchild.pid"));
+        let outcome = std::panic::catch_unwind(|| {
+            assert_gone_within_bound("overrun child", child);
+            assert_gone_within_bound("overrun grandchild", grandchild);
+        });
+        if outcome.is_err() {
+            kill_leftovers(&[child, grandchild]);
+        }
+        outcome.unwrap();
+    }
+
+    /// Plays the nextest-owned test process: runs a fixture child and waits.
+    #[test]
+    #[ignore = "re-executed by the killed-parent regression"]
+    fn orphan_parent_entry() {
+        let dir = std::path::PathBuf::from(std::env::var_os(DIR_ENV).unwrap());
+        let mut command = reexec("orphan_child_entry", &dir);
+        run_child_test(&mut command, "orphan_child_entry", &dir);
+    }
+
+    /// The fixture child: records its pid, spawns a descendant, then lingers.
+    #[test]
+    #[ignore = "re-executed by the killed-parent regression"]
+    fn orphan_child_entry() {
+        let dir = std::path::PathBuf::from(std::env::var_os(DIR_ENV).unwrap());
+        let mut grandchild = Command::new("sleep").arg(SURVIVOR_SECS).spawn().unwrap();
+        std::fs::write(dir.join("grandchild.pid"), grandchild.id().to_string()).unwrap();
+        std::fs::write(dir.join("child.pid"), std::process::id().to_string()).unwrap();
+        let _ = writeln!(std::io::stdout(), "fixture child running");
+        grandchild.wait().unwrap();
+    }
+}
