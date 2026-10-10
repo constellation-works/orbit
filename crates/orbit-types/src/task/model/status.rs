@@ -21,9 +21,15 @@ pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
 pub const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
 
 /// Task history event recorded when Orbit, not the executing agent, wrote the
-/// task's execution summary. Delivery automation reads it to tell a review
-/// whose agent persisted no summary from one that did [ORB-15186].
+/// task's execution summary. It is audit history and stays after the agent
+/// replaces the summary; [`DERIVED_EXECUTION_SUMMARY_PREFIX`] tells whether the
+/// current text is still Orbit's [ORB-15186].
 pub const EXECUTION_SUMMARY_DERIVED_EVENT: &str = "execution_summary_derived";
+
+/// First words of every execution summary Orbit derives. The history event
+/// outlives a later agent-authored replacement, so only the current summary's
+/// text says who wrote it [ORB-15255].
+pub const DERIVED_EXECUTION_SUMMARY_PREFIX: &str = "Execution summary derived by Orbit for";
 
 /// Operator-facing projection for a valid task reference whose prefix is not
 /// represented in this machine's coordination registry.

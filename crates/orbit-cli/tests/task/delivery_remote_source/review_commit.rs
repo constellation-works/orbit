@@ -250,3 +250,71 @@ fn a_derived_summary_leaves_the_batch_owed() {
         "{shown}"
     );
 }
+
+/// The derived-summary history event outlives the agent's own replacement, so
+/// the current summary text, not the event, decides who wrote it: a review that
+/// replaces Orbit's summary settles the batch without spending a retry
+/// [ORB-15255].
+#[test]
+fn an_agent_replacement_of_a_derived_summary_settles_the_batch() {
+    const TEST: &str = "delivery_remote_source::review_commit::an_agent_replacement_of_a_derived_summary_settles_the_batch";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let (runtime, attempt, run_id) = admitted_action(&fixture, 1, REVIEW_CONSUMER);
+    let action_id = attempt.action_id.clone().expect("admitted action");
+    put_coverage(
+        &fixture,
+        &runtime,
+        &action_id,
+        &run_id,
+        &complete_evidence(&attempt),
+    );
+    let worktree = clean_worktree(&fixture, "review");
+    git_commit(&runtime, &run_id, &worktree).expect("derived summary commits");
+    assert!(
+        runtime
+            .get_task(&action_id)
+            .unwrap()
+            .execution_summary
+            .starts_with(orbit_types::task::DERIVED_EXECUTION_SUMMARY_PREFIX),
+        "the commit step derived the summary"
+    );
+
+    fixture.json(&[
+        "task",
+        "update",
+        &action_id,
+        "--execution-summary",
+        "Examined the frozen delivery and its changed paths; no defects found.",
+        "--json",
+    ]);
+    fixture.json(&[
+        "task", "update", &action_id, "--status", "done", "--force", "--json",
+    ]);
+    with_pull_lookup(&fixture, || {
+        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+    })
+    .expect("evaluate the closed review");
+
+    let state = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    assert_eq!(state.covered, attempt.batch.through_inclusive, "{state:#?}");
+    assert!(state.active.is_none(), "no retry is spent: {state:#?}");
+    let receipts = runtime
+        .automation_store()
+        .unwrap()
+        .automation_receipts(&state.consumer, 10)
+        .unwrap();
+    assert_eq!(receipts.len(), 1, "{receipts:#?}");
+    assert!(
+        runtime
+            .get_task_history(&action_id)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event == orbit_types::task::EXECUTION_SUMMARY_DERIVED_EVENT),
+        "the derivation stays in the task's history"
+    );
+}
