@@ -433,8 +433,9 @@ jobs:
     # `apt-get install` aborts the installer before the fallback. So this job
     # removes Bubblewrap and hides apt-get to reach the no-package-manager
     # branch, then checks the bundled binary is installed and passes the
-    # unprivileged capability probe. The host-package path is covered by the
-    # Ubuntu 24.04 installer smoke.
+    # unprivileged capability probe. The Ubuntu 24.04 smoke installs the binary
+    # for image builds with host prerequisites skipped; no native release smoke
+    # covers host-package preparation.
     name: Smoke test bundled Bubblewrap on Ubuntu 22.04
     needs: publish-release
     runs-on: ubuntu-22.04
