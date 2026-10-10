@@ -272,6 +272,9 @@ or config exception is re-allowed.
 The host-prepared recovery checkout also uses the managed sandbox path:
 Bubblewrap's post-run guard catches future filename denies such as
 `**/.env`, which a direct invocation cannot enforce with mounts alone.
+A new match fails the step, except under the run's `.orbit/tmp` scratch
+(resolved before the provider starts): commit never includes scratch, so
+the guard removes the match there and records it as a denied modify.
 Seatbelt enforces those dynamic filters in the kernel; the common checkout
 boundary guard still checks the assigned and primary checkouts after the
 agent exits on either platform. Recovery does not acquire task-worktree

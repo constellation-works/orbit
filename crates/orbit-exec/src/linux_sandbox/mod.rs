@@ -45,7 +45,7 @@ pub use spawn::spawn_under_linux_bwrap;
 pub use types::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
-    LinuxBwrapSpawnRequest,
+    LinuxBwrapScratchRemoval, LinuxBwrapSpawnRequest,
 };
 pub use wrapper::{BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapSource, HOST_BWRAP_PATH};
 pub use write_grants::{

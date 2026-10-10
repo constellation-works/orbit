@@ -457,6 +457,105 @@ fn linux_post_run_guard_exercise() {
     assert_output_survives(&error, &audit, &audit_root);
 }
 
+/// A provider that creates a denyModify match only in run scratch (a test
+/// fixture's `clock.env`) completes the step: the guard removes the match and
+/// records it as a denied modify, while the scratch directory itself stays.
+///
+/// Admitted under criterion 3: the scratch exemption is a write-policy
+/// invariant, and a host that refuses user namespaces reaches it only through
+/// this crate's post-run guard seam.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_post_run_guard_removes_scratch_only_match_and_completes() {
+    let exercise = linux_post_run_guard_scratch_exercise;
+    if probe_bwrap().available {
+        exercise();
+    } else {
+        crate::activity_job::cli_runner::spawn::with_post_run_guard_without_user_namespace(
+            exercise,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_post_run_guard_scratch_exercise() {
+    let temp = tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let script = workspace.join("grok");
+    write_executable(
+        &script,
+        "#!/bin/sh\ncat > /dev/null\nmkdir -p .orbit/tmp/clock-probe/home/.orbit\nprintf secret > .orbit/tmp/clock-probe/home/.orbit/clock.env\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"marker\":\"provider-stdout-marker\"},\"error\":null}'\n",
+    );
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-linux-scratch", "grok:grok-build");
+    let root = workspace.display().to_string();
+    let sandbox = ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: ResolvedFsProfile {
+            name: "post-run-scratch".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![
+                format!("{root}/**"),
+                format!("!{root}/.orbit/**"),
+                format!("{root}/.orbit/tmp/**"),
+                format!("!{root}/**/*.env"),
+            ],
+        },
+        allow_fallback: false,
+        managed_worktree: true,
+        runtime_write_authority: Vec::new(),
+        mask: None,
+    };
+
+    run_cli_backend(
+        &TestHost::with_command(script.display().to_string()).with_sandbox(sandbox),
+        &test_agent_loop_spec_for("grok", Duration::from_secs(15)),
+        "test_activity",
+        "job-linux-scratch",
+        audit.clone(),
+        &serde_json::json!({
+            "prompt": "hi",
+            "workspace_path": workspace,
+        }),
+        Some("implementer"),
+    )
+    .expect("a scratch-only denyModify match does not fail the step");
+
+    let created = workspace.join(".orbit/tmp/clock-probe/home/.orbit/clock.env");
+    assert!(!created.exists(), "the scratch match is removed");
+    assert!(
+        workspace
+            .join(".orbit/tmp/clock-probe/home/.orbit")
+            .is_dir(),
+        "only the matched path is removed"
+    );
+    let denied: Vec<(String, String, String)> = audit
+        .events_snapshot()
+        .expect("audit snapshot")
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            V2AuditEventKind::FsCallDenied {
+                profile,
+                path,
+                matched_rule,
+                ..
+            } => Some((profile, path, matched_rule)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        denied,
+        vec![(
+            "post-run-scratch".to_string(),
+            created.display().to_string(),
+            format!("!{root}/**/*.env"),
+        )],
+        "the removal is recorded as a denied modify"
+    );
+}
+
 /// [ORB-14090] A persistence refresh failure still stores the provider output
 /// and emits the finish event through the connection the refresh left in place.
 #[test]

@@ -14,6 +14,7 @@ use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
 };
 use orbit_common::security::redaction::argv_redactor;
+use orbit_exec::LinuxBwrapScratchRemoval;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, V2AuditEventKind};
 use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind};
@@ -452,17 +453,24 @@ pub(crate) fn run_cli_backend_for_step(
     if let Some(workspace) = host.orbit_workspace_selector() {
         dispatch_env.push((MCP_MANAGED_WORKSPACE_ENV.to_string(), workspace));
     }
-    if let Some(cwd) = subprocess_cwd.as_ref() {
-        let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(cwd).map_err(|error| {
-            DispatchError::CliInvocationPermanent(format!(
-                "failed to create worker scratch dir: {error}"
-            ))
-        })?;
-        dispatch_env.push((
-            orbit_common::fs::path::ORBIT_SCRATCH_DIR_ENV.to_string(),
-            scratch.display().to_string(),
-        ));
-    }
+    // Canonical before the provider starts, so the Linux post-run guard's
+    // scratch exemption cannot be redirected by the child.
+    let scratch_dir = match subprocess_cwd.as_ref() {
+        Some(cwd) => {
+            let scratch =
+                orbit_common::fs::path::ensure_orbit_scratch_dir(cwd).map_err(|error| {
+                    DispatchError::CliInvocationPermanent(format!(
+                        "failed to create worker scratch dir: {error}"
+                    ))
+                })?;
+            dispatch_env.push((
+                orbit_common::fs::path::ORBIT_SCRATCH_DIR_ENV.to_string(),
+                scratch.display().to_string(),
+            ));
+            Some(scratch)
+        }
+        None => None,
+    };
     // The child's whole environment is composed here and applied to a cleared
     // one by every launcher, so the `[execution.env]` allowlist governs what an
     // untrusted provider subprocess can read. The provider's declared
@@ -746,10 +754,13 @@ pub(crate) fn run_cli_backend_for_step(
         .as_ref()
         .and_then(|snapshot| snapshot.verify().err());
     let guard_error = linux_post_run_guard.as_ref().and_then(|guard| {
-        guard
-            .verify()
-            .err()
-            .map(|error| DispatchError::CliInvocationPermanent(error.to_string()))
+        match guard.verify(scratch_dir.as_deref()) {
+            Ok(removed) => {
+                record_scratch_removals(&audit, &provider, guard.profile(), &removed);
+                None
+            }
+            Err(error) => Some(DispatchError::CliInvocationPermanent(error.to_string())),
+        }
     });
     let post_run_error = inspection_error.or(guard_error).or(refresh_error);
 
@@ -785,6 +796,31 @@ pub(crate) fn run_cli_backend_for_step(
         &stdout_blob_ref,
         &stderr_blob_ref,
     )
+}
+
+/// A denyModify match in run scratch is removed rather than failing the run;
+/// each removal stays visible as a warning and a denied modify in the audit.
+fn record_scratch_removals(
+    audit: &V2AuditWriter,
+    provider: &str,
+    profile: &str,
+    removed: &[LinuxBwrapScratchRemoval],
+) {
+    for removal in removed {
+        tracing::warn!(
+            provider,
+            path = %removal.path.display(),
+            rule = %removal.rule,
+            "removed a path forbidden by denyModify that the provider created in run scratch"
+        );
+        audit.emit_lossy(V2AuditEventKind::FsCallDenied {
+            profile: profile.to_string(),
+            op: "modify".to_string(),
+            path: removal.path.display().to_string(),
+            allowed: false,
+            matched_rule: format!("!{}", removal.rule),
+        });
+    }
 }
 
 fn emit_build_waits(audit: &V2AuditWriter, provider: &str, waits: &BuildBudgetWaits) {
