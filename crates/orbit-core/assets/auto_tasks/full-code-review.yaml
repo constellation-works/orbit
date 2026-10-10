@@ -60,11 +60,11 @@ template:
     count; do not file an oversized chore or silently exclude the file.
 
     Before filing, verify all area counts against the bound and reconcile the
-    inventories for gaps and duplicates. Write `.orbit/tmp/review-areas.json`
+    inventories for gaps and duplicates. Write `.orbit/tmp/full-review-areas.json`
     with `schema_version: 1`, `pinned_sha`, `area_line_bound: 25000`, the areas
     (name, selectors, file paths and per-file counts, total line count), and
     exclusions (path and reason). Attach it to this coordinator task with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/review-areas.json","path":"review-areas.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/full-review-areas.json","path":"full-review-areas.json","model":"<agent-family>"}'`.
 
     ## File one area review per area
 
@@ -180,7 +180,7 @@ template:
     ID.
   acceptance_criteria:
   - One integration-branch commit was pinned by full SHA and every area task names it.
-  - The tracked tree is partitioned into areas of at most 25,000 text lines along directory or file boundaries, with measured inventories in `review-areas.json` and every exclusion named; an unpartitionable oversized file is reported as `review_incomplete`, never filed as an oversized area.
+  - The tracked tree is partitioned into areas of at most 25,000 text lines along directory or file boundaries, with measured inventories in `full-review-areas.json` and every exclusion named; an unpartitionable oversized file is reported as `review_incomplete`, never filed as an oversized area.
   - Each bounded area has exactly one filed `chore` tagged `full-code-review` and `no-diff-expected` (never `code-review`), complexity `hard` at most, no crew, source `dir:` / `file:` context selectors, artifact read/write tools, a measured line count, the partitioned reading and resume brief, and a `spawned_from` relation to this task.
   - The execution summary records the pinned SHA, the area table and every area task ID.
   task_type: chore

@@ -175,6 +175,40 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
 }
 
 #[test]
+fn full_review_inventory_is_accepted_through_the_agent_artifact_tool() {
+    if !super::dispatch_admission::isolated(
+        "artifact_tools::full_review_inventory_is_accepted_through_the_agent_artifact_tool",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture.repo.join(".orbit/tmp/full-review-areas.json");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let content = br#"{"schema_version":1,"areas":[],"exclusions":[]}"#;
+    std::fs::write(&source, content).unwrap();
+
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": fixture.task_id,
+                "model": "codex",
+                "source_path": source,
+                "path": "full-review-areas.json"
+            }),
+        )
+        .expect("the coordinator inventory name must be accepted from an agent caller");
+
+    let stored = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, "full-review-areas.json")
+        .unwrap()
+        .expect("the coordinator inventory must be stored");
+    assert_eq!(stored.content, content);
+}
+
+#[test]
 fn normalized_reviewer_reports_are_validated_on_put_and_update() {
     if !super::dispatch_admission::isolated(
         "artifact_tools::normalized_reviewer_reports_are_validated_on_put_and_update",
