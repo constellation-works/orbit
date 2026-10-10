@@ -486,7 +486,7 @@ pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
     workspace_path: &Path,
     command: &str,
 ) -> Result<RequiredValidationRun, OrbitError> {
-    let run = super::required_command::run_required_command(host, workspace_path, command)?;
+    let run = super::required_command::run_required_command(host, workspace_path, command, None)?;
     Ok(RequiredValidationRun {
         failure_kind: run.failure_kind().as_str().map(str::to_string),
         environment: run.environment_record(),

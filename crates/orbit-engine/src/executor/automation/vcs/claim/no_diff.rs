@@ -245,7 +245,7 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
     let mut results = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in context.required_commands.iter().enumerate() {
-        let run = run_validation_command(host, workspace, command)?;
+        let run = run_validation_command(host, workspace, command, None)?;
         validation_env = run.environment_record();
         if !run.passed {
             return Err(claim_failure(

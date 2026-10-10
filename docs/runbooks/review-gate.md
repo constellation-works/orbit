@@ -195,7 +195,14 @@ with the same exit status, every claimed failure appears in the base output,
 and the candidate adds no failing test or lint location. A candidate that
 fails beyond the base keeps its verdict (`reject`, escalated
 `baseline_exceeded`). A claim the host contradicts or cannot check settles
-`incomplete` with a `baseline_claim_refused` escalation. The certificate's
+`incomplete` with a `baseline_claim_refused` escalation. A command that
+selects its own tests, such as `make ci-test-affected`, reports its selection
+and executed-test count, and the base rerun is handed the candidate's
+selection. A base run that tests another selection, or passes without
+executing a counted test, is not comparable: the claim is neither refuted nor
+confirmed, and the review settles `incomplete` with a
+`baseline_not_comparable` escalation (see the
+[validation summary](../DEVELOPMENT.md#validation-summary-and-base-reruns)). The certificate's
 `baseline_red` names the holds. When the base ref moves to a commit where the
 command passes, admission lifts the hold. The next delivery resumes the
 preserved candidate (`resumed_validated`) without the implementer and admits

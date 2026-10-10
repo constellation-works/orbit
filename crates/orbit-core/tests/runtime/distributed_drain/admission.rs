@@ -1322,6 +1322,7 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
         base_sha: red.clone(),
         command: "make ci-lint".into(),
         run_id: String::new(),
+        selection: None,
     };
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -1363,6 +1364,7 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
         latest["note"].as_str().and_then(BaselineRedHold::from_text),
         Some(BaselineRedHold {
             run_id: leaf.clone(),
+            selection: None,
             ..hold.clone()
         }),
         "{owner_task:#}"

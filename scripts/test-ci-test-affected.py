@@ -29,7 +29,8 @@ class AffectedTestGateTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         BUILD_BUDGET=str(self.bin / "build-budget"), CARGO="cargo")
-        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE"):
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE",
+                     "ORBIT_VALIDATION_SUMMARY", "ORBIT_VALIDATION_SELECTION"):
             self.env.pop(name, None)
         packages = []
         # Renamed, build and dev edges must all contribute to the transitive
@@ -86,6 +87,13 @@ else:
             for package in metadata["packages"] if package["name"] in selected
             for target in package["targets"]):
         sys.exit(101)  # Cargo rejects --lib when the selection has no library.
+    if "--tool-config-file" in arguments:
+        # nextest writes the JUnit report the tool config names: one test per package.
+        assert "ORBIT_VALIDATION_SUMMARY" not in os.environ
+        config = arguments[arguments.index("--tool-config-file") + 1].split(":", 1)[1]
+        junit = json.loads(open(config).read().split("path = ", 1)[1])
+        with open(junit, "w") as report:
+            report.write(f'<testsuites name="nextest-run" tests="{len(selected)}"/>')
     if os.environ.get("GUARD_TEST_PROBE_TMP_GIT"):
         fixture = os.path.join(os.environ["TMPDIR"], "non-git-fixture")
         assert subprocess.run(["git", "-C", fixture, "rev-parse", "--is-inside-work-tree"],
@@ -262,6 +270,56 @@ os.execvp(sys.argv[2], sys.argv[2:])
                                    GUARD_TEST_PROBE_WORKER_MARKER="1", **environment)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(any("--doc" in call for call in self.calls()))
+
+    def summarized(self, **environment):
+        summary = self.root / ".scratch/summary.json"
+        summary.parent.mkdir(exist_ok=True)
+        summary.unlink(missing_ok=True)
+        result = self.gate(ORBIT_VALIDATION_SUMMARY=str(summary), **environment)
+        return result, json.loads(summary.read_text()) if summary.exists() else None
+
+    def test_summary_reports_the_selection_and_the_tests_nextest_executed(self):
+        self.touch_core()
+        result, summary = self.summarized()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), selection=dict(
+            packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"],
+            doctest_packages=self.core_dependents)))
+        # A failing run still reports what it selected and ran.
+        result, failed = self.summarized(GUARD_TEST_EXIT="17")
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assertEqual(failed, summary)
+        # cargo test reports no count, so the summary claims none.
+        result, fallback = self.summarized(GUARD_TEST_NO_NEXTEST="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(fallback["tests_run"])
+        self.assertEqual(fallback["selection"], summary["selection"])
+
+    def test_a_base_checkout_runs_the_candidate_selection_it_is_given(self):
+        # [ORB-15131] On the base itself the diff is empty: left to select,
+        # the run tests nothing, and its summary says so.
+        self.touch_core()
+        _, candidate = self.summarized()
+        self.git("checkout", "--", "crates/orbit-core")
+        self.git("checkout", "--quiet", "--detach", self.base)
+        self.log.write_text("")
+        result, nothing = self.summarized()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((nothing["tests_run"], nothing["selection"]["packages"]), (0, []))
+        self.assertTrue(all(call[0] == "metadata" for call in self.calls()))
+        # Given the candidate's selection, it tests the same packages and targets.
+        result, rerun = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(candidate["selection"]))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(rerun, candidate)
+        self.assertTrue(any(call[:2] == ["nextest", "run"] for call in self.calls()))
+
+    def test_a_selection_the_checkout_cannot_run_fails_without_a_summary(self):
+        for selection in ('{"packages": ["orbit-removed"]}', '["orbit-core"]', "not json"):
+            with self.subTest(selection=selection):
+                result, summary = self.summarized(ORBIT_VALIDATION_SELECTION=selection)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNone(summary)
+                self.assertTrue(all(call[0] == "metadata" for call in self.calls()))
 
     def test_missing_base_fails_closed(self):
         result = self.gate("--base", "missing-delivery-base")

@@ -199,6 +199,7 @@ impl RuntimeHost for CapacityHost {
                 base_sha: "b".repeat(40),
                 command: "make ci-lint".to_string(),
                 run_id: String::new(),
+                selection: None,
             };
             return Err(DispatchError::DeterministicActionFailed {
                 action: action.to_string(),

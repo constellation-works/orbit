@@ -331,6 +331,7 @@ fn a_red_base_failure_holds_the_task_until_the_command_passes() {
         base_sha: git(&repo_root, &["rev-parse", "HEAD"]),
         command: "make ci-lint".to_string(),
         run_id: String::new(),
+        selection: None,
     };
     let task_id = create_task(
         &runtime,

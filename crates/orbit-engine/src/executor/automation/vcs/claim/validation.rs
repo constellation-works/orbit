@@ -88,7 +88,7 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     let mut results = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in context.required_commands.iter().enumerate() {
-        let run = run_validation_command(host, &workspace_path, command)?;
+        let run = run_validation_command(host, &workspace_path, command, None)?;
         validation_env = run.environment_record();
         if !run.passed {
             return Err(claim_failure(
@@ -284,7 +284,13 @@ pub(super) fn claim_failure<H: RuntimeHost + ?Sized>(
     if run.missing_tool.is_some() {
         return run.failure(commit);
     }
-    let check = compare_with_base(host, workspace_path, &candidate.base.commit, &run.command);
+    let check = compare_with_base(
+        host,
+        workspace_path,
+        &candidate.base.commit,
+        &run.command,
+        run.selection(),
+    );
     let red = check.reproduces(run);
     let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
     let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
@@ -311,6 +317,7 @@ pub(super) fn claim_failure<H: RuntimeHost + ?Sized>(
             run.failure_kind()
         },
         "network_retries": run.network_retries,
+        "summary": run.summary,
         "baseline": check.record(Some(&base_path)),
     });
     // The logs are evidence for whoever reads the owner's task; failing to
@@ -333,6 +340,7 @@ pub(super) fn claim_failure<H: RuntimeHost + ?Sized>(
             base_sha: check.base_sha.clone(),
             command: run.command.clone(),
             run_id: context.run_id.clone(),
+            selection: run.selection().cloned(),
         };
         return baseline_red_failure(&hold, run, commit, &evidence);
     }

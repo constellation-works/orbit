@@ -182,6 +182,34 @@ require a passing affected-test record. Distributed review contracts freeze
 the owner's list at admission; existing claims need a fresh admission after
 a policy change.
 
+### Validation summary and base reruns
+
+When required validation fails, Orbit reruns the command on the candidate's
+base to tell a red base from the candidate's own failure. On the base itself
+the diff is empty, so a run left to select its own crates tests nothing and
+passes. Orbit's validation runner therefore gives every required command two
+environment variables, and `scripts/ci-test-affected.py` implements both:
+
+- `ORBIT_VALIDATION_SUMMARY` names a file outside the checkout. The script
+  writes `{"schema_version": 1, "selection": {"packages", "target_flags",
+  "doctest_packages"}, "tests_run": N}` there. `tests_run` is the count from
+  nextest's JUnit report, which a `--tool-config-file` adds to the
+  repository's own profile. It is `null` when nextest wrote no report (a
+  build failure) or under the `cargo test` fallback. Doctests are not
+  counted.
+- `ORBIT_VALIDATION_SELECTION` holds the `selection` a candidate run
+  reported. The script then tests exactly those packages instead of
+  computing a diff. A package the checkout lacks fails the run without a
+  summary.
+
+A base run is compared with the candidate's only when it reports the same
+selection, and a base pass counts only when it executed at least one test.
+Otherwise the base run is not comparable: it never makes a failure
+`baseline_red`, never refutes a reviewer's red-base claim, and never lifts a
+hold that recorded the selection. A command that writes no summary keeps the exit-status comparison. A
+summary covers only commands that write one, so today only
+`make ci-test-affected` is guarded against a zero-test base pass.
+
 ## Filesystem writes
 
 Create Orbit-owned directories with `orbit_common::fs::io::create_private_dir_all`

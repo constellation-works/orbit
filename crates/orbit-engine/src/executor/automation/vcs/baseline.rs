@@ -26,6 +26,16 @@
 //! A base run that cannot be set up, or whose own result is a missing tool or
 //! a network failure, is inconclusive and also leaves the failure the
 //! candidate's.
+//!
+//! A command that selects what to test from the candidate's diff
+//! (`make ci-test-affected`) selects nothing on the base itself, where that
+//! diff is empty [ORB-15131]. When the candidate run reported its selection
+//! (see [`super::required_command`]), the base run is handed that selection,
+//! which also enters the cache key. A base result that ran another selection,
+//! reported none, or passed without executing a counted test is *not
+//! comparable* ([`not_comparable`]): it neither makes the failure
+//! `baseline_red` nor refutes a reviewer's claim, and never lifts a hold that
+//! recorded the selection.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,7 +56,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::git::{fetch_remote_base, git_output, git_run};
-use super::required_command::{RequiredCommandRun, run_required_command};
+use super::required_command::{RequiredCommandRun, ValidationSummary, run_required_command};
 use super::worktree::scratch_checkout_path;
 
 /// Reruns of a network-inconclusive failure, after the first attempt.
@@ -67,7 +77,9 @@ const HOLD_INCONCLUSIVE_BACKOFF: chrono::Duration = chrono::Duration::minutes(15
 const CACHE_DIR: &str = "orbit-baseline";
 /// Version 2 moved the base checkout out of the common directory, so a
 /// version 1 result's output names paths under the old checkout root.
-const CACHE_SCHEMA_VERSION: u32 = 2;
+/// Version 3 records the command's summary [ORB-15131]; an older passing
+/// result cannot show that it executed any test.
+const CACHE_SCHEMA_VERSION: u32 = 3;
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
 const LEGACY_WORKTREES_DIR: &str = "worktrees";
@@ -89,13 +101,15 @@ fn network_inconclusive(output: &str) -> Option<String> {
 }
 
 /// Run one required command, rerunning a network-inconclusive failure with
-/// backoff. The returned run records how many reruns it took.
+/// backoff. The returned run records how many reruns it took. `selection`,
+/// from a candidate run's summary, is what a base run must test.
 pub(super) fn run_validation_command<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
     command: &str,
+    selection: Option<&Value>,
 ) -> Result<RequiredCommandRun, OrbitError> {
-    let mut run = run_required_command(host, workspace_path, command)?;
+    let mut run = run_required_command(host, workspace_path, command, selection)?;
     for backoff in NETWORK_RETRY_BACKOFF {
         if run.passed || run.timed_out || run.missing_tool.is_some() {
             break;
@@ -111,7 +125,7 @@ pub(super) fn run_validation_command<H: RuntimeHost + ?Sized>(
         );
         std::thread::sleep(backoff);
         let retries = run.network_retries + 1;
-        run = run_required_command(host, workspace_path, command)?;
+        run = run_required_command(host, workspace_path, command, selection)?;
         run.network_retries = retries;
     }
     if !run.passed && !run.timed_out && run.missing_tool.is_none() {
@@ -132,7 +146,43 @@ pub struct BaseCommandResult {
     pub output: String,
     pub network_retries: u32,
     pub validation_env: Value,
+    /// What the base run reported it tested [ORB-15131].
+    #[serde(default)]
+    pub summary: Option<ValidationSummary>,
     pub recorded_at: chrono::DateTime<Utc>,
+}
+
+/// Why `base` cannot stand in for the candidate's run of the same command,
+/// which reported `selection`, or `None` when it can [ORB-15131].
+///
+/// A command that reports no summary on either side is judged by its exit
+/// status as before. Otherwise the base must report the candidate's selection,
+/// and a pass counts only when it executed at least one counted test.
+fn not_comparable(selection: Option<&Value>, base: &BaseCommandResult) -> Option<String> {
+    let summary = base.summary.as_ref();
+    if let Some(selection) = selection {
+        let Some(summary) = summary else {
+            return Some(format!(
+                "the base run reported no selection, so it cannot be shown to have tested the \
+                 candidate's ({selection})"
+            ));
+        };
+        if summary.selection != *selection {
+            return Some(format!(
+                "the base run tested {} where the candidate tested {selection}",
+                summary.selection
+            ));
+        }
+    }
+    match summary.map(|summary| summary.tests_run) {
+        Some(Some(0)) if base.passed => {
+            Some("the base run passed without executing a test".to_string())
+        }
+        Some(None) if base.passed => {
+            Some("the base run passed without reporting how many tests it executed".to_string())
+        }
+        _ => None,
+    }
 }
 
 /// What rerunning a failed command on the candidate's base showed.
@@ -142,21 +192,27 @@ pub(super) struct BaselineCheck {
     pub(super) result: Result<BaseCommandResult, String>,
     /// Whether the result came from another candidate's run of this base.
     pub(super) cached: bool,
+    /// Why the base result does not show what the candidate's would
+    /// ([`not_comparable`]), when it does not.
+    pub(super) not_comparable: Option<String>,
 }
 
 impl BaselineCheck {
     /// Whether the base fails exactly as the candidate did: same exit status
-    /// and the same timeout outcome. A base result that is itself a missing
-    /// tool or a network failure was never cached and never gets here.
+    /// and the same timeout outcome, on a comparable run. A base result that
+    /// is itself a missing tool or a network failure was never cached and
+    /// never gets here.
     pub(super) fn reproduces(&self, run: &RequiredCommandRun) -> bool {
-        self.result.as_ref().is_ok_and(|base| {
-            !base.passed && base.exit_code == run.exit_code && base.timed_out == run.timed_out
-        })
+        self.not_comparable.is_none()
+            && self.result.as_ref().is_ok_and(|base| {
+                !base.passed && base.exit_code == run.exit_code && base.timed_out == run.timed_out
+            })
     }
 
-    /// `passed`, `failed` or `inconclusive`.
+    /// `passed`, `failed`, `not_comparable` or `inconclusive`.
     pub(super) fn decision(&self) -> &'static str {
         match &self.result {
+            Ok(_) if self.not_comparable.is_some() => "not_comparable",
             Ok(base) if base.passed => "passed",
             Ok(_) => "failed",
             Err(_) => "inconclusive",
@@ -172,7 +228,7 @@ impl BaselineCheck {
             "exit_code": self.result.as_ref().ok().map(|base| base.exit_code),
             "timed_out": self.result.as_ref().ok().map(|base| base.timed_out),
             "cached": self.cached,
-            "reason": self.result.as_ref().err(),
+            "reason": self.result.as_ref().err().or(self.not_comparable.as_ref()),
             "log": log,
         })
     }
@@ -192,6 +248,8 @@ impl BaselineCheck {
                 "network_retries": base.network_retries,
                 "output": base.output,
                 "validation_env": base.validation_env,
+                "summary": base.summary,
+                "not_comparable": self.not_comparable,
                 "recorded_at": base.recorded_at,
                 "cached": self.cached,
             }),
@@ -207,6 +265,8 @@ impl BaselineCheck {
 }
 
 /// Rerun `command` on `base_sha`, or read another candidate's run of it.
+/// `selection` is what the candidate run reported testing, which the base
+/// run is handed and must report back.
 ///
 /// Never fails the step: anything that keeps the base from being judged is an
 /// inconclusive check, which leaves the candidate's failure standing.
@@ -215,22 +275,26 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
     base_sha: &str,
     command: &str,
+    selection: Option<&Value>,
 ) -> BaselineCheck {
     let inconclusive = |reason: String| BaselineCheck {
         base_sha: base_sha.to_string(),
         result: Err(reason),
         cached: false,
+        not_comparable: None,
     };
-    let cache = match cache_paths(workspace_path, base_sha, command) {
+    let judged = |result: BaseCommandResult, cached: bool| BaselineCheck {
+        base_sha: base_sha.to_string(),
+        not_comparable: not_comparable(selection, &result),
+        result: Ok(result),
+        cached,
+    };
+    let cache = match cache_paths(workspace_path, base_sha, command, selection) {
         Ok(cache) => cache,
         Err(error) => return inconclusive(format!("locate the base result cache: {error}")),
     };
     if let Some(result) = read_cached(&cache.result) {
-        return BaselineCheck {
-            base_sha: base_sha.to_string(),
-            result: Ok(result),
-            cached: true,
-        };
+        return judged(result, true);
     }
     let _guard = match acquire_exclusive_file_lock(
         &cache.lock,
@@ -247,14 +311,17 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
     // Another candidate may have finished the same base run while this one
     // waited for the lock.
     if let Some(result) = read_cached(&cache.result) {
-        return BaselineCheck {
-            base_sha: base_sha.to_string(),
-            result: Ok(result),
-            cached: true,
-        };
+        return judged(result, true);
     }
     remove_legacy_checkouts(workspace_path, &cache.legacy_worktrees);
-    match run_on_base(host, workspace_path, &cache.worktree, base_sha, command) {
+    match run_on_base(
+        host,
+        workspace_path,
+        &cache.worktree,
+        base_sha,
+        command,
+        selection,
+    ) {
         Ok(run) => {
             if run.missing_tool.is_some() {
                 return inconclusive(format!(
@@ -278,6 +345,7 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
                 validation_env: run.environment_record(),
                 output: run.output,
                 network_retries: run.network_retries,
+                summary: run.summary,
                 recorded_at: Utc::now(),
             };
             if let Err(error) = serde_json::to_vec(&result)
@@ -289,11 +357,7 @@ pub(super) fn compare_with_base<H: RuntimeHost + ?Sized>(
                     "could not cache the required validation base result: {error}"
                 );
             }
-            BaselineCheck {
-                base_sha: base_sha.to_string(),
-                result: Ok(result),
-                cached: false,
-            }
+            judged(result, false)
         }
         Err(error) => inconclusive(format!("run the command on base {base_sha}: {error}")),
     }
@@ -307,8 +371,20 @@ struct CachePaths {
     legacy_worktrees: PathBuf,
 }
 
-fn cache_paths(repo: &Path, base_sha: &str, command: &str) -> Result<CachePaths, OrbitError> {
-    let key = sha256_hex(format!("{}\0{}", base_sha.trim(), command.trim()).as_bytes());
+fn cache_paths(
+    repo: &Path,
+    base_sha: &str,
+    command: &str,
+    selection: Option<&Value>,
+) -> Result<CachePaths, OrbitError> {
+    let mut identity = format!("{}\0{}", base_sha.trim(), command.trim());
+    // The selection is handed to the command outside its text, so a run of
+    // another selection is another result [ORB-15131].
+    if let Some(selection) = selection {
+        identity.push('\0');
+        identity.push_str(&selection.to_string());
+    }
+    let key = sha256_hex(identity.as_bytes());
     let dir = git_common_dir(repo)?.join(CACHE_DIR);
     Ok(CachePaths {
         result: dir.join(format!("{key}.json")),
@@ -333,9 +409,10 @@ fn run_on_base<H: RuntimeHost + ?Sized>(
     worktree: &Path,
     base_sha: &str,
     command: &str,
+    selection: Option<&Value>,
 ) -> Result<RequiredCommandRun, OrbitError> {
     in_detached_worktree(workspace_path, worktree, base_sha, |checkout| {
-        run_validation_command(host, checkout, command)
+        run_validation_command(host, checkout, command, selection)
     })?
 }
 
@@ -452,19 +529,24 @@ pub(super) fn candidate_failure(
     };
     let baseline = match check {
         None => "The base was not checked: the step names no synchronized base.".to_string(),
-        Some(check) => match &check.result {
-            Ok(base) if base.passed => format!(
+        Some(check) => match (&check.result, &check.not_comparable) {
+            (Ok(_), Some(reason)) => format!(
+                "Base {} ran the command, but its run is not comparable with the candidate's \
+                 ({reason}), so the failure is judged the candidate's.",
+                check.base_sha
+            ),
+            (Ok(base), None) if base.passed => format!(
                 "Base {} passes this command, so the candidate introduced the failure.",
                 check.base_sha
             ),
-            Ok(base) => format!(
+            (Ok(base), None) => format!(
                 "Base {} also fails this command, but differently (exit {}{}), so the failure \
                  is judged the candidate's.",
                 check.base_sha,
                 base.exit_code,
                 if base.timed_out { ", timed out" } else { "" }
             ),
-            Err(reason) => format!(
+            (Err(reason), _) => format!(
                 "Base {} could not be judged ({reason}), so the failure is judged the \
                  candidate's.",
                 check.base_sha
@@ -488,8 +570,9 @@ pub enum BaselineHoldStatus {
 ///
 /// The hold stands while its base ref still points at the red commit. When
 /// that ref advances, run the command on the new tip (or use the shared
-/// result cache) and lift the hold only after it passes. A failed or
-/// inconclusive check keeps the task held. An inconclusive attempt is recorded
+/// result cache), handing it the hold's recorded selection, and lift the hold
+/// only after a comparable run passes. A failed, inconclusive or
+/// not-comparable check keeps the task held. An inconclusive attempt is recorded
 /// separately and suppresses further hold checks for 15 minutes on that tip
 /// and command; a conclusive cached result always takes precedence.
 /// A remote-tracking ref is refreshed
@@ -510,9 +593,9 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
             if let Some(status) = recorded_moved_base_status(repo, hold, &tip) {
                 return status;
             }
-            let check = compare_with_base(host, repo, &tip, &hold.command);
+            let check = compare_with_base(host, repo, &tip, &hold.command, hold.selection.as_ref());
             if let Err(reason) = &check.result {
-                record_inconclusive_hold(repo, &tip, &hold.command, reason);
+                record_inconclusive_hold(repo, &tip, hold, reason);
             }
             judge_moved_base(hold, &tip, check.result)
         }
@@ -547,9 +630,10 @@ struct InconclusiveHoldAttempt {
     reason: String,
 }
 
-fn record_inconclusive_hold(repo: &Path, tip: &str, command: &str, reason: &str) {
+fn record_inconclusive_hold(repo: &Path, tip: &str, hold: &BaselineRedHold, reason: &str) {
+    let command = hold.command.as_str();
     let record = || -> Result<(), OrbitError> {
-        let cache = cache_paths(repo, tip, command)?;
+        let cache = cache_paths(repo, tip, command, hold.selection.as_ref())?;
         let bytes = serde_json::to_vec(&InconclusiveHoldAttempt {
             recorded_at: Utc::now(),
             reason: reason.to_string(),
@@ -572,7 +656,7 @@ fn recorded_moved_base_status(
     hold: &BaselineRedHold,
     tip: &str,
 ) -> Option<BaselineHoldStatus> {
-    let result = match cache_paths(repo, tip, &hold.command) {
+    let result = match cache_paths(repo, tip, &hold.command, hold.selection.as_ref()) {
         Ok(cache) => match read_cached(&cache.result) {
             Some(result) => Ok(result),
             None => {
@@ -637,16 +721,30 @@ fn judge_moved_base(
     result: Result<BaseCommandResult, String>,
 ) -> BaselineHoldStatus {
     let base_ref = hold.base_ref.trim();
-    match result {
-        Ok(result) if result.passed => BaselineHoldStatus::Lifted(format!(
+    // A hold recorded before holds kept a selection names nothing to compare
+    // with, so its tip is judged by exit status as before; the next delivery
+    // holds again, with the selection, if the base is still red.
+    let unlike = hold.selection.as_ref().and_then(|selection| {
+        result
+            .as_ref()
+            .ok()
+            .and_then(|result| not_comparable(Some(selection), result))
+    });
+    match (result, unlike) {
+        (Ok(_), Some(reason)) => BaselineHoldStatus::Holding(format!(
+            "`{base_ref}` moved to {tip}, but the run of required validation `{}` there is not \
+             comparable with the held one: {reason}",
+            hold.command
+        )),
+        (Ok(result), None) if result.passed => BaselineHoldStatus::Lifted(format!(
             "`{base_ref}` moved from {} to {tip}, where required validation `{}` passes",
             hold.base_sha, hold.command
         )),
-        Ok(_) => BaselineHoldStatus::Holding(format!(
+        (Ok(_), None) => BaselineHoldStatus::Holding(format!(
             "`{base_ref}` moved to {tip}, where required validation `{}` still fails",
             hold.command
         )),
-        Err(reason) => BaselineHoldStatus::Holding(format!(
+        (Err(reason), _) => BaselineHoldStatus::Holding(format!(
             "`{base_ref}` moved to {tip}, but required validation `{}` could not be checked: {reason}",
             hold.command
         )),
@@ -684,6 +782,10 @@ pub enum BaseFailureVerdict {
     CandidateAdds { failures: Vec<String> },
     /// The host's runs contradict the claim, and how.
     Contradicted(String),
+    /// The base ran, but its run does not show what the candidate's would:
+    /// it tested another selection, or passed without executing a counted
+    /// test [ORB-15131]. The claim is neither refuted nor confirmed.
+    NotComparable(String),
     /// The host could not judge the claim, and why.
     Inconclusive(String),
 }
@@ -695,6 +797,9 @@ pub struct BaseFailureCheck {
     pub command: String,
     pub base_sha: String,
     pub verdict: BaseFailureVerdict,
+    /// The selection the candidate run reported testing, which the base run
+    /// was handed and a hold records [ORB-15131].
+    pub selection: Option<Value>,
     /// The candidate run: exit status, timeout and captured output.
     pub candidate_log: Value,
     /// The base run as `BaselineCheck::log` records it.
@@ -708,7 +813,9 @@ pub struct BaseFailureCheck {
 /// candidate, then on the base through `compare_with_base`, whose
 /// `(base, command)` result cache is the same one delivery validation fills,
 /// so a gate-step `baseline_red` run of the same command on the same base is
-/// reused rather than repeated. Beyond the exit status and timeout outcome
+/// reused rather than repeated. The base run is handed the selection the
+/// candidate run reported, and a base run that is not comparable with it
+/// settles nothing. Beyond the exit status and timeout outcome
 /// `BaselineCheck::reproduces` compares, the failures each output names
 /// (`failure_identities`) must not grow on the candidate, and every failure
 /// the reviewer named must appear in the base's output.
@@ -723,7 +830,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
     claimed_failures: &[String],
     run_id: &str,
 ) -> Result<BaseFailureCheck, OrbitError> {
-    let run = run_validation_command(host, workspace_path, command)?;
+    let run = run_validation_command(host, workspace_path, command, None)?;
     let candidate_log = json!({
         "schema_version": 1,
         "role": "candidate",
@@ -735,11 +842,13 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         "network_retries": run.network_retries,
         "output": run.output,
         "validation_env": run.environment_record(),
+        "summary": run.summary,
     });
     let checked = |verdict: BaseFailureVerdict, base_log: Value| BaseFailureCheck {
         command: run.command.clone(),
         base_sha: base_sha.to_string(),
         verdict,
+        selection: run.selection().cloned(),
         candidate_log: candidate_log.clone(),
         base_log,
     };
@@ -766,8 +875,17 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             Value::Null,
         ));
     }
-    let check = compare_with_base(host, workspace_path, base_sha, command);
+    let check = compare_with_base(host, workspace_path, base_sha, command, run.selection());
     let base_log = check.log(run_id);
+    if let Some(reason) = &check.not_comparable {
+        return Ok(checked(
+            BaseFailureVerdict::NotComparable(format!(
+                "base {base_sha}'s run of `{}` is not comparable with the candidate's: {reason}",
+                run.command
+            )),
+            base_log,
+        ));
+    }
     let base = match &check.result {
         Err(reason) => {
             return Ok(checked(
@@ -815,7 +933,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             base_log,
         ));
     }
-    let base_root = cache_paths(workspace_path, base_sha, command)
+    let base_root = cache_paths(workspace_path, base_sha, command, run.selection())
         .map(|paths| paths.worktree)
         .unwrap_or_default();
     let on_base = failure_identities(&base.output, &base_root);
