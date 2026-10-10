@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-06
-last_validated: 2026-10-04
+last_updated: 2026-10-09
+last_validated: 2026-10-09
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -734,14 +734,21 @@ through the task journal.
 and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
 and landing branch, execution summary and validation artifact references.
 
-- The owner captures its `review.before_pr` contract at admission. When that policy is on, the
-  owner admits only PR-mode executors that declare `review_gate`; the executor's captured
-  `caller_before_pr` is diagnostic. Local ship mode is refused because it has no claimed leaf on
-  which to run the gate. After-landing review is the owner's `delivery-code-review` auto-task and
-  never affects admission. Its `deliveries_landed` batches list a landed follower PR under the
-  claimed task, which the owner reads from the handoff it accepted for that repository, landing
-  branch and PR number [ORB-13894]. The handoff carries typed before-PR review evidence when the
-  captured contract requires it, or `{ policy: none, disposition: not_required }` otherwise. Task
+- The owner captures its `review.before_pr` and `review.before_landing` contract at admission;
+  config load refuses both on at once [ORB-14849]. When either is on, the owner admits only
+  PR-mode executors that declare `review_gate`; the executor's captured `caller_before_pr` is
+  diagnostic. Local ship mode is refused because it has no claimed leaf on which to run the gate.
+  Before-PR review runs on the leaf before the PR opens. Before-landing review runs on the leaf
+  after `pr_open`, against the open PR's published head, and merges nothing; `handoff_land` merges
+  only the head that review settled. After-landing review is the owner's `delivery-code-review`
+  auto-task and never affects admission. Its `deliveries_landed` batches list a landed follower PR
+  under the claimed task, which the owner reads from the handoff it accepted for that repository,
+  landing branch and PR number [ORB-13894]. The handoff carries typed review evidence matching the
+  captured timing: `before_pr` evidence when the contract captured before-PR review, `before_landing`
+  evidence (disposition `before_landing`) for the head it settled when the contract captured
+  before-landing review, or `{ policy: none, disposition: not_required }` otherwise. The owner
+  refuses evidence of the other timing or for another head (`review_evidence_missing`,
+  `reviewed_head_mismatch`). Task
   status `review` means a delivery handoff awaiting completion authority, not that a review
   occurred. The claimed-leaf gate and its owner-captured policy are described in
   [the decision](./4_decisions.md#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured).
@@ -1111,7 +1118,7 @@ Acceptance criteria, not reported as passing.
 | Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
-| `review.before_pr` on or off, after-landing auto-task on or off | With before-PR off, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with it on, admit only a PR-mode executor declaring `review_gate` and require its typed review evidence. After-landing does not affect admission |
+| `review.before_pr` or `review.before_landing` on or off, after-landing auto-task on or off | With both off, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with either on, admit only a PR-mode executor declaring `review_gate` and require typed review evidence for the captured timing: before-PR evidence before the PR opens, or before-landing evidence for the settled head after `pr_open`. After-landing does not affect admission |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
 | SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
 | Revocation during a live attempt | Revoked attempt cannot bind, mutate, settle or promote; its receipt reports the revoked phase |
