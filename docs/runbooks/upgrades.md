@@ -276,7 +276,10 @@ the installed binary for its `update --contract` and, when it speaks
 The new image joins the authority like any newcomer, so an incompatible replacement
 triggers the quiesce wait above instead. A candidate that cannot take over (older
 contract, missing capability) is logged once, and the process keeps running the
-replaced image until it exits. The `mcp listen` TCP listener and one-shot commands
+replaced image until it exits; it is not probed again until the installation changes.
+A candidate that does not answer within the probe bound (the first exec of a new
+executable can be held while the OS assesses it) is not remembered as a refusal: the
+process asks again at the next idle boundary. The `mcp listen` TCP listener and one-shot commands
 are not handed over; they finish on the image they started with.
 
 #### `--contract` and `--preflight`
