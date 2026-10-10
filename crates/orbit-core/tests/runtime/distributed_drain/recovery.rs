@@ -12,7 +12,6 @@ fn recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw() {
 
     use orbit_core::application::task::{
         BLOCKED_TASK_RECOVERY_JOB, BlockedRecoveryInput, EpisodeDisposition, FinalRecoveryRecord,
-        FinalRecoveryTaskRevision,
     };
     use orbit_types::workflow::{ExecutorSandboxKind, FINAL_RECOVERY_CREWS_KEY};
 
@@ -172,7 +171,9 @@ model = "fixture-b"
         episode_key: view.episode.key(),
         block_source: view.episode.source.as_str().to_string(),
         failed_run_id: view.episode.failed_run_id.clone(),
-        observed: FinalRecoveryTaskRevision::of(&owner.get_task(&task_id).unwrap()),
+        observed: owner
+            .final_recovery_revision(&owner.get_task(&task_id).unwrap())
+            .unwrap(),
     };
     let job = owner
         .show_job_catalog_entry(BLOCKED_TASK_RECOVERY_JOB)
@@ -347,7 +348,7 @@ model = "fixture-b"
             episode_key: view.episode.key(),
             block_source: view.episode.source.as_str().into(),
             failed_run_id: view.episode.failed_run_id,
-            observed: FinalRecoveryTaskRevision::of(&task),
+            observed: owner.final_recovery_revision(&task).unwrap(),
         };
         let recovery = owner
             .run_job_v2_from_yaml(&job.path, input.to_json())
@@ -554,4 +555,128 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
     for field in ["status", "comments", "history"] {
         assert_eq!(after[field], applied[field], "{field} changed on replay");
     }
+}
+
+/// [ORB-15292] A claimed leaf's final recovery may record a friction. The
+/// bridge keeps it on the owner as `claim_friction` history, which advances
+/// the task's update time but is no lifecycle change: the recovery's requeue,
+/// carried by the failure settlement, still returns the task to the backlog.
+#[test]
+fn a_friction_the_claimed_recovery_records_leaves_its_requeue_standing() {
+    use orbit_core::application::task::FINAL_RECOVERY_REQUEUED_EVENT;
+    use orbit_types::task::TaskStatus;
+    use orbit_types::tool::WorkerInvocation;
+
+    use super::claimed_review::ToOwner;
+
+    if !isolated(
+        module_path!(),
+        "a_friction_the_claimed_recovery_records_leaves_its_requeue_standing",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let owner = &pair.wire.owner;
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+    // The leaf's worker, as its final-recovery agent calls the owner.
+    let bound = pair
+        .follower
+        .clone()
+        .with_worker_invocation(
+            WorkerInvocation {
+                owner_machine_id: OWNER.into(),
+                owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                owner_destination: record.destination.selector.clone(),
+                task_id: claim.task_id.clone(),
+                claim_id: claim.claim_id.clone(),
+                execution: claim.executed_on.clone(),
+                bound_run_id: leaf.clone(),
+            },
+            Arc::new(ToOwner(owner.clone())),
+        )
+        .unwrap();
+    let observed = owner
+        .final_recovery_revision(&owner.get_task(&task).unwrap())
+        .unwrap();
+
+    bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "The golden fixtures timed out.", "model": "codex"}),
+        )
+        .expect("the recovery records a friction during the claim");
+    let history = owner.get_task_history(&task).unwrap();
+    assert_eq!(
+        history.last().map(|entry| entry.event.as_str()),
+        Some("claim_friction"),
+        "{history:#?}"
+    );
+    let current = owner
+        .final_recovery_revision(&owner.get_task(&task).unwrap())
+        .unwrap();
+    assert!(
+        current.updated_at > observed.updated_at,
+        "the friction must advance the owner's update time"
+    );
+    assert!(
+        !current.changed_since(&observed),
+        "a friction the recovery records is not a lifecycle change"
+    );
+
+    let mut state = pair
+        .follower_jobs
+        .read_run_state(&leaf)
+        .unwrap()
+        .unwrap_or_else(|| PipelineState::new(leaf.clone(), LEAF_JOB.into(), json!({})));
+    state.final_recovery = Some(FinalRecoveryCheckpoint {
+        key: FinalRecoveryKey {
+            run_id: leaf.clone(),
+            attempt: 1,
+        },
+        failed_step_id: "implement".into(),
+        task_id: task.clone(),
+        observed: None,
+        repair_commit: None,
+        base_ref: Some("main".into()),
+        admitted_at: Utc::now(),
+        decision: Some(FinalRecoveryDecision::Requeue {
+            reason: "the goldens now pass on the unchanged candidate".into(),
+        }),
+        outcome: Some("settled: recorded for the claim settlement".into()),
+    });
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    pair.leaf_fails_with(&leaf, "golden fixtures failed");
+    pair.pass(&drain);
+
+    // The owner applied the requeue; the same pass may then pull the task
+    // again under a new claim.
+    let claims = pair.owner_claims();
+    let settled = claims
+        .iter()
+        .find(|entry| entry["claim"]["claim_id"] == claim.claim_id.as_str())
+        .expect("the leaf's claim");
+    assert_eq!(settled["claim"]["phase"], "failed", "{settled:#}");
+    let applied = pair.owner_task(&task);
+    let comments = comments_of(&applied);
+    assert!(
+        comments.contains(&format!(
+            "final_recovery run_id={leaf} decision=requeue outcome=requeued"
+        )),
+        "{comments}"
+    );
+    let requeued = owner
+        .get_task_history(&task)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == FINAL_RECOVERY_REQUEUED_EVENT)
+        .expect("the requeue is recorded");
+    assert_eq!(
+        requeued.to_status,
+        Some(TaskStatus::Backlog),
+        "{requeued:?}"
+    );
 }

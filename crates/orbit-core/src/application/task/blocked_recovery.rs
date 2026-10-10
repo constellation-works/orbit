@@ -357,6 +357,11 @@ impl BlockedRecoveryInput {
                 .observed
                 .updated_at
                 .to_rfc3339_opts(SecondsFormat::Nanos, true),
+            "observed_lifecycle_digest": self
+                .observed
+                .lifecycle_digest
+                .clone()
+                .unwrap_or_default(),
         })
     }
 
@@ -382,7 +387,11 @@ impl BlockedRecoveryInput {
             episode_key: text(EPISODE_KEY_FIELD)?,
             block_source: text("block_source")?,
             failed_run_id: text("failed_run_id").ok(),
-            observed: FinalRecoveryTaskRevision { status, updated_at },
+            observed: FinalRecoveryTaskRevision {
+                status,
+                updated_at,
+                lifecycle_digest: text("observed_lifecycle_digest").ok(),
+            },
         })
     }
 }
@@ -595,7 +604,7 @@ impl OrbitRuntime {
                 episode_key: key,
                 block_source: view.episode.source.as_str().to_string(),
                 failed_run_id: view.episode.failed_run_id.clone(),
-                observed: FinalRecoveryTaskRevision::of(&task),
+                observed: self.final_recovery_revision(&task)?,
             };
             match submit(input.to_json()) {
                 Ok(run_id) => {
@@ -619,7 +628,10 @@ impl OrbitRuntime {
         input: &BlockedRecoveryInput,
     ) -> Result<Result<BlockEpisode, String>, OrbitError> {
         let task = self.get_task(&input.task_id)?;
-        if FinalRecoveryTaskRevision::of(&task) != input.observed {
+        if self
+            .final_recovery_revision(&task)?
+            .changed_since(&input.observed)
+        {
             return Ok(Err(format!(
                 "task changed after the recovery was dispatched (was {} at {}, now {} at {})",
                 input.observed.status,
@@ -784,7 +796,7 @@ impl OrbitRuntime {
         let request = FinalRecoveryRequest {
             task_id: input.task_id.clone(),
             run_id: recovery_run_id.to_string(),
-            observed: input.observed,
+            observed: input.observed.clone(),
             repo_root: self.paths().repo_root.clone(),
             base_ref: base_ref.to_string(),
             completion: FinalRecoveryCompletion::Review,

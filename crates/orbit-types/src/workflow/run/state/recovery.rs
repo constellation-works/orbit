@@ -44,10 +44,14 @@ pub struct ActivityCrewDraw {
 }
 
 /// The task revision final recovery observed when it was admitted.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FinalRecoveryObservedTask {
     pub status: TaskStatus,
     pub updated_at: DateTime<Utc>,
+    /// Digest of the task's lifecycle content; absent on a checkpoint
+    /// written before it was recorded, which compares by `updated_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_digest: Option<String>,
 }
 
 /// Idempotency key of a run's final-recovery decision: the run that admitted

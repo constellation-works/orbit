@@ -76,9 +76,11 @@ fn admit(
         None
     } else {
         let task = runtime.get_task(&request.task_id)?;
+        let revision = runtime.final_recovery_revision(&task)?;
         Some(FinalRecoveryObservedTask {
-            status: task.status,
-            updated_at: task.updated_at,
+            status: revision.status,
+            updated_at: revision.updated_at,
+            lifecycle_digest: revision.lifecycle_digest,
         })
     };
     let mut refusal = None;
@@ -100,7 +102,7 @@ fn admit(
                     },
                     failed_step_id: request.failed_step_id.clone(),
                     task_id: request.task_id.clone(),
-                    observed,
+                    observed: observed.clone(),
                     base_ref: request.base_ref.clone(),
                     admitted_at: Utc::now(),
                     decision: None,
@@ -200,6 +202,7 @@ fn apply(
         observed: FinalRecoveryTaskRevision {
             status: observed.status,
             updated_at: observed.updated_at,
+            lifecycle_digest: observed.lifecycle_digest,
         },
         repo_root: application.workspace_path.clone(),
         base_ref: checkpoint.base_ref.clone().unwrap_or_default(),

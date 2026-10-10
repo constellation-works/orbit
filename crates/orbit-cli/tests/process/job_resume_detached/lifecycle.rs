@@ -10,9 +10,7 @@ use chrono::Utc;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::task::{
-    FinalRecoveryCompletion, FinalRecoveryRequest, FinalRecoveryTaskRevision,
-};
+use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRunState, PipelineState};
@@ -183,9 +181,10 @@ impl Delivery {
                 &FinalRecoveryRequest {
                     task_id: self.task.clone(),
                     run_id: run.into(),
-                    observed: FinalRecoveryTaskRevision::of(
-                        &self.runtime.get_task(&self.task).unwrap(),
-                    ),
+                    observed: self
+                        .runtime
+                        .final_recovery_revision(&self.runtime.get_task(&self.task).unwrap())
+                        .unwrap(),
                     repo_root: self.cli.repo.clone(),
                     base_ref: "agent-main".into(),
                     completion: FinalRecoveryCompletion::Done,
