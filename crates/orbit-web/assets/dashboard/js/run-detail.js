@@ -338,8 +338,9 @@ function buildUnsetEnvPass(names) {
 }
 
 // A pull drain's launched leaves that are still running, and whether a
-// graceful cancel is waiting for them (`run.drain_cancel`). Mirrors the
-// `Cancelling:` and `Claimed leaves:` lines of `orbit run show`.
+// graceful cancel is waiting for them (`run.drain_cancel`), each implementing
+// or reviewing. Mirrors the `Cancelling:` and `Claimed leaves:` lines of
+// `orbit run show`.
 function buildClaimedLeaves(run, leaves) {
   const cancel = run.drain_cancel || null;
   if (leaves.length === 0 && !cancel) return null;
@@ -352,10 +353,17 @@ function buildClaimedLeaves(run, leaves) {
     panel.appendChild(el("div", { class: "label", text }));
   }
   if (leaves.length > 0) {
-    panel.appendChild(el("div", { class: "label", text: `claimed leaves (${leaves.length} running)` }));
+    // A reviewing leaf is in the before-landing review of its open PR; the
+    // drain admits a replacement beside it, up to its concurrency.
+    const reviewing = leaves.filter(leaf => leaf.stage === "reviewing").length;
+    panel.appendChild(el("div", {
+      class: "label",
+      text: `claimed leaves (${leaves.length} running: ${leaves.length - reviewing} implementing, ${reviewing} reviewing)`,
+    }));
     for (const leaf of leaves) {
       const parts = [`task ${leaf.task_id || "?"}`, `owner ${leaf.owner || "?"}`];
       if (leaf.leaf_state) parts.push(`state ${leaf.leaf_state}`);
+      if (leaf.stage) parts.push(leaf.stage);
       if (leaf.settlement_phase) parts.push(`claim ${leaf.settlement_phase}`);
       const link = el("button", {
         class: "back-action",

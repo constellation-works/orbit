@@ -26,7 +26,7 @@ use orbit_types::workflow::{
 use orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT;
 
 /// A crew every runtime's default registry resolves.
-const REVIEW_CREW: &str = "sol";
+pub(super) const REVIEW_CREW: &str = "sol";
 const REPOSITORY: &str = "owner/repository";
 
 fn before_pr_owner(crew: &str) -> String {

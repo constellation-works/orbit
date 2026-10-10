@@ -352,7 +352,8 @@ fn dispatch_lineage(
 /// definitions, or a pull admission whose bound leaf has gone terminal but has
 /// not settled yet. An admission with no live run of its own — never created,
 /// or created and since terminal — holds its own slot instead, so a slot is
-/// released exactly when the claim settles and not before.
+/// released exactly when the claim settles and not before. Claimed leaves in
+/// their before-landing review are counted again, apart, as `reviewing`.
 fn occupancy(
     conn: &Connection,
     workspace: &str,
@@ -396,6 +397,19 @@ fn occupancy(
         .map(|(id, _, _)| id.clone())
         .collect();
     let mut slots: BTreeSet<String> = leaves.iter().cloned().collect();
+    // [ORB-15194] Live claimed leaves past their before-landing review
+    // admission. A state that does not decode reads as implementing, so it
+    // never earns an extra admission.
+    let reviewing = active
+        .iter()
+        .filter(|(_, job, state)| {
+            job == CLAIMED_PR_PIPELINE
+                && state
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<PipelineState>(raw).ok())
+                    .is_some_and(|state| state.in_landing_review())
+        })
+        .count();
     for (id, job, state) in &active {
         if is_leaf_pipeline(job) {
             *pipelines.entry(job.clone()).or_insert(0) += 1;
@@ -450,7 +464,21 @@ fn occupancy(
         inherited: coordinator.map(|_| {
             occupied.saturating_sub(slots.intersection(&owned).count() + owned_unrepresented)
         }),
+        reviewing,
     })
+}
+
+/// The slots a new pull admission competes for under `ceiling` [ORB-15194].
+///
+/// A claimed leaf in its before-landing review runs no implementer, yet holds
+/// its slot until its claim settles, one to two hours later. Each such leaf
+/// frees its slot for a replacement, but at most `ceiling` of them do, so one
+/// drain carries at most `ceiling` implementing leaves plus `ceiling`
+/// reviewing ones. Build-budget admission still limits the compilers they run.
+fn pull_admission_load(occupancy: &DrainLeafOccupancy, ceiling: usize) -> usize {
+    occupancy
+        .occupied
+        .saturating_sub(occupancy.reviewing.min(ceiling))
 }
 
 /// The shared reading both admission paths allocate against [ORB-12617].
@@ -602,7 +630,7 @@ pub(super) fn allocate(
             as usize;
         // The drain's worker limit is the only ceiling: the leaf definitions
         // declare no active-run limit of their own [ORB-13893].
-        if occupancy(conn, workspace, None)?.occupied >= ceiling {
+        if pull_admission_load(&occupancy(conn, workspace, None)?, ceiling) >= ceiling {
             return Ok(None);
         }
         let record = LocalPullAdmission {

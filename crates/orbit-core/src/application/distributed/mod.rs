@@ -62,8 +62,8 @@ pub use probe::{AdmissionReceiptLookup, DrainProbeReport, DrainProbeSession};
 pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
 pub use settlement::{
-    DrainClaimedLeaf, PendingPullSettlements, PullCrewWindow, PullLeafClaim, PullSettlementEntry,
-    RefusedPullSettlement,
+    ClaimedLeafStage, DrainClaimedLeaf, PendingPullSettlements, PullCrewWindow, PullLeafClaim,
+    PullSettlementEntry, RefusedPullSettlement,
 };
 pub(crate) use settlement::{
     is_owner_refusal, is_owner_transport_failure, settlement_refusal_backoff,

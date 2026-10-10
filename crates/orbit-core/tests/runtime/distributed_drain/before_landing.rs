@@ -3,9 +3,10 @@
 //! the owner accepts — and so can land — only a handoff whose before-landing
 //! review settled the exact head handed off [ORB-14849].
 
-use super::claimed_review::{ReviewedLeaf, revision};
+use super::claimed_review::{REVIEW_CREW, ReviewedLeaf, revision};
 use super::*;
 
+use orbit_core::application::distributed::ClaimedLeafStage;
 use orbit_types::workflow::handoff::HandoffReviewEvidence;
 use orbit_types::workflow::{ReviewAdmission, ReviewVerdict};
 
@@ -98,4 +99,60 @@ fn a_claimed_pr_lands_only_at_the_head_its_before_landing_review_settled() {
     leaf.owner_accepts_review(landing_review(&evidence), &reviewed)
         .expect("the owner accepts the before-landing review of the handed-off head");
     assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
+}
+
+/// [ORB-15194] A claimed leaf that has reached its before-landing review is
+/// listed as reviewing rather than implementing, and its drain admits a
+/// replacement beside it even though the leaf still holds its slot.
+#[test]
+fn a_reviewing_leaf_lets_its_full_drain_admit_a_replacement() {
+    if !isolated(
+        module_path!(),
+        "a_reviewing_leaf_lets_its_full_drain_admit_a_replacement",
+    ) {
+        return;
+    }
+    let pair = Pair::with_owner_config(
+        &format!(
+            "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+        ),
+        &[None, None],
+    );
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let stages = || {
+        pair.follower
+            .pull_drain_claimed_leaves(&drain)
+            .expect("claimed leaves")
+            .into_iter()
+            .map(|leaf| (leaf.leaf_run_id, leaf.stage))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        stages(),
+        vec![(leaf.clone(), ClaimedLeafStage::Implementing)]
+    );
+    let full = pair.pass_with(&drain, 1);
+    assert_eq!(full["admitted"], 0, "{full}");
+    assert_eq!(pair.leaf_runs(), vec![leaf.clone()], "the drain is full");
+
+    // The leaf's `landing_review_gate_admit` step checkpoints that its
+    // before-landing review applies.
+    let mut state = pair
+        .follower
+        .read_run_state(&leaf)
+        .unwrap()
+        .expect("leaf state");
+    state.record_pipeline_output("landing_review_gate_admit", json!({"applies": true}));
+    pair.follower.write_run_state(&leaf, &state).unwrap();
+    assert_eq!(stages(), vec![(leaf.clone(), ClaimedLeafStage::Reviewing)]);
+
+    let replacement = pair.queued_leaf(&drain, 1);
+    assert_ne!(replacement, leaf);
+    let occupancy = pair.follower_jobs.drain_leaf_occupancy().unwrap();
+    assert_eq!(
+        (occupancy.occupied, occupancy.reviewing),
+        (2, 1),
+        "the reviewing leaf keeps its slot beside its replacement"
+    );
 }
