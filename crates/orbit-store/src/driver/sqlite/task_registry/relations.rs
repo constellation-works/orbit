@@ -134,36 +134,6 @@ impl TaskRegistryStore {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))
     }
-
-    pub fn indexed_relation_sources(
-        &self,
-        partition_id: &str,
-        target_task_id: &str,
-        relation_type: TaskRelationType,
-    ) -> Result<Vec<String>, OrbitError> {
-        let partition_id = validate_partition_id(partition_id)?;
-        validate_orb_task_id(target_task_id)?;
-        let conn = self.read()?;
-        let mut stmt = conn
-            .prepare_cached(
-                "SELECT source_task_id FROM task_bundle_relations
-                 WHERE workspace_id = ?1 AND target_task_id = ?2 AND relation_type = ?3
-                 ORDER BY source_task_id ASC",
-            )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let rows = stmt
-            .query_map(
-                params![
-                    partition_id,
-                    target_task_id,
-                    relation_type_name(relation_type)
-                ],
-                |row| row.get(0),
-            )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))
-    }
 }
 
 fn task_relation_edges(envelope: &TaskEnvelopeV2) -> Vec<TaskRelationEdge> {
