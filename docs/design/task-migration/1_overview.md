@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: task-migration
 doc_role: overview
@@ -23,7 +23,7 @@ rows, and a single monotonic id allocator) had no import/export/rebuild path.
 Task migration adds `orbit task export`/`import`/`reindex` so tasks move between
 hosts as a three-command operation with a printed id mapping and no hand-written
 SQL ([ORB-00034]). Hosts no longer share an id space: each mints under its own
-`task_prefix` from `~/.orbit/host.toml` ([ORB-10721],
+`[machine].task_prefix` in global `~/.orbit/config.toml` ([ORB-10721],
 [host-registry](../host-registry/2_design.md)), and the host that minted a task
 is its sole writer — see [§5](#5-multi-host-authority) and
 [4_decisions](./4_decisions.md).
@@ -52,7 +52,8 @@ machine a disjoint id range).
   local id and rewrites every relation target (including the `ChildOf` parent
   link) *within the imported set*, then writes an old→new mapping file.
 - **`task_prefix`** — the per-host id namespace (`ORB-`, `DANI-`, …), chosen once
-  at `orbit init` and projected into the allocator before any runtime opens. Two
+  at `orbit init`, stored in `[machine].task_prefix` in global `~/.orbit/config.toml`,
+  and projected into the allocator before any runtime opens. Two
   hosts with different prefixes cannot collide, whatever their counters say.
 - **Owner** — the host whose prefix a task carries. Only the owner mutates the
   task; any copy elsewhere is a read-only mirror.
@@ -135,8 +136,8 @@ record of what landed.
 ### Preventing future collisions
 
 Each host mints under its own `task_prefix` ([ORB-10721]): `orbit init` asks
-for it once, `host.toml` holds it, and `RegisteredRuntimeFactory` projects it
-into the allocator before any runtime opens. Two hosts with different prefixes
+for it once, global `~/.orbit/config.toml` holds it, and `RegisteredRuntimeFactory`
+projects it into the allocator before any runtime opens. Two hosts with different prefixes
 share no id, so cross-host imports keep their ids and `--on-conflict` never
 fires on a well-formed fleet. A conflicting prefix after allocation has begun
 fails closed rather than renaming issued ids.
@@ -266,7 +267,7 @@ in [4_decisions](./4_decisions.md).
 ## Task References
 
 - [ORB-00034] — task migration tooling: `orbit task export/import/reindex`, `tasks.id_start` allocator config.
-- [ORB-10721] — per-host `task_prefix` in `host.toml`, projected into the allocator.
+- [ORB-10721] — per-host `task_prefix` in global `~/.orbit/config.toml`, projected into the allocator.
 - [ORB-12126] — owner-wins cross-host sync: import policy that overwrites only foreign-prefix bundles.
 - [ORB-12164] — the unbound-bundle repair path honors the local-prefix guard.
 

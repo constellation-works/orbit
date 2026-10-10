@@ -1,7 +1,7 @@
 ---
 type: glossary
 summary: Vocabulary for the routines scheduler feature.
-last_validated: 2026-10-04
+last_validated: 2026-10-10
 tags: [routines, scheduler]
 ---
 
@@ -15,8 +15,8 @@ activity-job feature (activity, job, run, catalog) are defined in
 | Term | Meaning |
 |------|---------|
 | Clock | The per-user OS unit (launchd/systemd) that invokes the tick on a whole-minute cadence; host-local, configured and controlled through `orbit clock`. See [2_design.md](../2_design.md). |
-| Fire | One scheduled dispatch of a routine's target; an ordinary run tagged `origin: routine/<name>`. See [2_design.md §3](../2_design.md). |
-| Fire intent | The idempotency record (routine name + scheduled slot) written before dispatch so a slot never double-fires. See [2_design.md §3](../2_design.md). |
+| Fire | One scheduled dispatch of a routine's target; the run records actor provenance `routine/<name>` and its routine/slot trigger. See [2_design.md §3](../2_design.md). |
+| Fire intent | The idempotency record for one routine, scheduled slot, and attempt; it is written with the cursor advance before dispatch so a sweep cannot submit that attempt twice. See [2_design.md §3](../2_design.md). |
 | Host identity | The stable `machine.id`, display `machine.name`, and immutable `machine.task_prefix` in the global `~/.orbit/config.toml`; registered workspaces identify their owning machine by `machine.id`. See [host-registry glossary](../../host-registry/references/glossary.md). |
 | Local pause | A host-local, SQLite-persisted suppression of one routine (`orbit routine pause`); never versioned. See [2_design.md §4](../2_design.md). |
 | Missed-run policy | Per-routine handling of slots that elapsed while the host was down: `catch_up_once` or `skip`. See [2_design.md §1](../2_design.md). |
@@ -24,4 +24,4 @@ activity-job feature (activity, job, run, catalog) are defined in
 | Routine | A per-checkout YAML definition of recurring work: trigger, target, enabled flag, policy. See [2_design.md §1](../2_design.md). |
 | Routine source | Any registered, active owner checkout on the host; where routine YAML lives. Registration is the whole opt-in. See [2_design.md §2](../2_design.md). |
 | Sweep | Compatibility alias for `orbit clock tick`. See [2_design.md §3](../2_design.md). |
-| Tick | One invocation of the pass by the clock; evaluates routines then auto-task definitions for every owner checkout on the host. See [2_design.md §3](../2_design.md). |
+| Tick | One invocation of the scheduler pass by the clock; it evaluates routines and auto-task definitions for every owner checkout, alongside other bounded recovery work. See [2_design.md §3](../2_design.md). |
