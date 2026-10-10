@@ -30,6 +30,25 @@ use super::output_of;
 
 const WAIT_SLICE: Duration = Duration::from_millis(20);
 
+/// [`PROBE_TIMEOUT_ENV`] for every fixture command, in seconds. Each probe's
+/// clock starts at spawn, and macOS holds the first exec of a new executable,
+/// such as the staged release, until it has assessed the file. That wait
+/// queues behind every other new image on the host, so on a loaded host a
+/// release script that answers at once outlasted the 30 s default. A hang
+/// guard, half the command's [`test_env::FIXTURE_STEP_DEADLINE`], so a probe
+/// that truly hangs is still reported by the update rather than killed with it.
+const PROBE_BOUND_SECS: u64 = 60;
+
+/// The probe bound under which the hanging candidate is killed. Linux starts
+/// the script at once. On macOS the probe's clock also runs while the host
+/// assesses the new script (see [`PROBE_BOUND_SECS`]), and a probe killed in
+/// that wait never starts, so it gets the full hang guard.
+const HUNG_PROBE_BOUND_SECS: u64 = if cfg!(target_os = "macos") {
+    PROBE_BOUND_SECS
+} else {
+    8
+};
+
 struct Install {
     _root: TempDir,
     home: PathBuf,
@@ -191,6 +210,7 @@ fn apply_env(command: &mut assert_cmd::Command, install: &Install) {
             "ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE",
             "1",
         )
+        .env(PROBE_TIMEOUT_ENV, PROBE_BOUND_SECS.to_string())
         .env_remove("ORBIT_HOME")
         .env_remove("ORBIT_INSTALL_REPO")
         .env_remove("ORBIT_RELEASE_PUBLIC_KEY_FILE")
@@ -215,6 +235,7 @@ fn apply_std_env(command: &mut Command, install: &Install) {
             "ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE",
             "1",
         )
+        .env(PROBE_TIMEOUT_ENV, PROBE_BOUND_SECS.to_string())
         .env_remove("ORBIT_HOME")
         .env_remove("ORBIT_INSTALL_REPO")
         .env_remove("ORBIT_RELEASE_PUBLIC_KEY_FILE")
@@ -736,7 +757,7 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     let stderr_path = install._root.path().join("hung.stderr");
     let child = install
         .std_command()
-        .env(PROBE_TIMEOUT_ENV, "8")
+        .env(PROBE_TIMEOUT_ENV, HUNG_PROBE_BOUND_SECS.to_string())
         .arg("update")
         .stdout(File::create(install._root.path().join("hung.stdout")).expect("stdout"))
         .stderr(File::create(&stderr_path).expect("stderr"))
@@ -767,7 +788,10 @@ fn a_hanging_candidate_probe_times_out_without_holding_an_authority() {
     child.child = None;
     let stderr = fs::read_to_string(&stderr_path).expect("update stderr");
     assert_eq!(status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("did not finish within 8s"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("did not finish within {HUNG_PROBE_BOUND_SECS}s")),
+        "{stderr}"
+    );
     assert!(stderr.contains("nothing was replaced"), "{stderr}");
     install.assert_untouched("hung candidate");
     install.assert_no_backup("hung candidate");

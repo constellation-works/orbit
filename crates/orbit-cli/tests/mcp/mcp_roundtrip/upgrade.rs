@@ -438,7 +438,7 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    install_over(&candidate, &installed);
+    crate::generation_fixture::install_over(&candidate, &installed);
 
     // The coordinator notices at its next admission pass and execs in place.
     test_env::wait_until("the drain to hand over to the installed executable", || {
@@ -929,15 +929,6 @@ fn read_only_foreign_digest_refuses_when_store_schema_differs() {
     assert_eq!(generation_record(&workspace), format!("1:{FOREIGN}\n"));
 }
 
-/// Install `source`'s bytes at `installed` the way an installer does: write
-/// beside it, then rename over it, so the running inode is left untouched.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn install_over(source: &Path, installed: &Path) {
-    let staged = installed.with_extension("staged");
-    std::fs::copy(source, &staged).expect("stage replacement");
-    std::fs::rename(&staged, installed).expect("replace installation");
-}
-
 /// The source commit every local candidate here is attested to.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const CANDIDATE_COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
@@ -967,7 +958,10 @@ fn write_candidate_manifest(workspace: &McpWorkspace, candidate: &Path) -> PathB
 }
 
 /// Install `candidate` over `installed` with `orbit update --local-candidate`,
-/// run through the candidate itself as the runbook does.
+/// run through the candidate itself as the runbook does. The update probes the
+/// copy it stages, which macOS first assesses as a new executable while the
+/// probe's clock runs; on a loaded host that outlasted the 30 s default, so the
+/// probe bound here is only a hang guard.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn local_candidate_update(
     workspace: &McpWorkspace,
@@ -981,6 +975,10 @@ fn local_candidate_update(
         .env(
             "ORBIT_INSTALL_DIR",
             installed.parent().expect("install dir"),
+        )
+        .env(
+            orbit_cmd::update::converge::PROBE_TIMEOUT_ENV,
+            test_env::FIXTURE_STEP_DEADLINE.as_secs().to_string(),
         )
         .args(["update", "--local-candidate"])
         .arg(candidate)
@@ -1049,7 +1047,7 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    install_over(&candidate, &installed);
+    crate::generation_fixture::install_over(&candidate, &installed);
 
     // Hold the partial line across multiple lifecycle checks. The old image
     // must keep serving; yielding or handing over now would lose this call.
@@ -1164,7 +1162,7 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
 
     let candidate = distinct_candidate(&workspace);
     let new_digest = executable_generation(&candidate).expect("candidate digest");
-    install_over(&candidate, &installed);
+    crate::generation_fixture::install_over(&candidate, &installed);
 
     // The idle server notices within a lifecycle interval and execs itself.
     test_env::wait_until(

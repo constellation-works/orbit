@@ -31,6 +31,7 @@ pub(crate) fn running_digest(root: &Path, pid: u32) -> Option<String> {
     None
 }
 
+/// Copy `source` to `destination` as a distinct, [`assess`]ed candidate.
 pub(crate) fn distinct_copy(source: &Path, destination: &Path) {
     std::fs::copy(source, destination).expect("candidate copy");
     // Darwin names an image by its Mach-O UUID and rejects bytes appended after
@@ -52,6 +53,41 @@ pub(crate) fn distinct_copy(source: &Path, destination: &Path) {
         .expect("open candidate")
         .write_all(b"\nupgrade-regression-candidate\n")
         .expect("distinct executable");
+    assess(destination);
+}
+
+/// Install `source`'s bytes at `installed` the way an installer does: write
+/// beside it, then rename over it, so the running inode is left untouched.
+/// The staged copy is [`assess`]ed before the rename, as `orbit update`
+/// probes its staged release.
+pub(crate) fn install_over(source: &Path, installed: &Path) {
+    let staged = installed.with_extension("staged");
+    std::fs::copy(source, &staged).expect("stage replacement");
+    assess(&staged);
+    std::fs::rename(&staged, installed).expect("replace installation");
+}
+
+/// Run a freshly written executable once, so a later timed probe of it
+/// measures the program rather than the host admitting a new file.
+///
+/// macOS assesses each new executable file on its first exec and holds the
+/// process until that finishes: seconds for the debug `orbit` image, queued
+/// behind every other new image on the host. A long-lived process probes a
+/// replaced installation within ten seconds and keeps running the old image
+/// when the probe times out, so on a loaded host an unassessed replacement
+/// never took over. The assessment stays with the file across a rename. This
+/// run is bounded only as a hang guard.
+pub(crate) fn assess(executable: &Path) {
+    let mut command = assert_cmd::Command::new(executable);
+    command
+        .arg("--version")
+        .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE);
+    let output = launch(|| command.output()).expect("run the new executable");
+    assert!(
+        output.status.success(),
+        "{} --version: {output:?}",
+        executable.display()
+    );
 }
 
 /// Flip a byte of the image's `LC_UUID`, leaving every other byte intact.
