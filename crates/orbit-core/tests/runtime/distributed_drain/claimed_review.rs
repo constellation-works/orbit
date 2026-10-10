@@ -98,7 +98,9 @@ impl ReviewedLeaf {
         )
     }
 
-    fn admit_from(owner_config: &str, follower_config: &str) -> Self {
+    /// A leaf admitted from an owner whose workspace `config.toml` is
+    /// `owner_config`.
+    pub(super) fn admit_from(owner_config: &str, follower_config: &str) -> Self {
         let pair = Pair::with_configs(owner_config, follower_config, &[None]);
         let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());

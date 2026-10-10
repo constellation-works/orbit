@@ -74,6 +74,59 @@ fn before_pr_and_before_landing_both_on_fail_the_load_naming_both_keys() {
     );
 }
 
+/// [ORB-15192] `review.before_landing_hosts` resolves through the layers
+/// trimmed and deduplicated, refuses a label that is not a machine id, and
+/// fails the load beside `review.before_pr`, naming both keys: a listed
+/// host's claims would otherwise get two review layers before landing.
+#[test]
+fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+
+    write_config(
+        workspace.path(),
+        "[review]\nbefore_landing_hosts = [\" hm_mac \", \"hm_mac\", \"hm_linux-2\"]\n",
+    );
+    let policy = ResolvedConfig::load(&roots)
+        .expect("config loads")
+        .operation;
+    let hosts = &policy.review_before_landing_hosts;
+    assert_eq!(hosts.value, ["hm_mac", "hm_linux-2"]);
+    assert_eq!(hosts.source, OperationLayerSource::Workspace);
+    assert!(policy.reviews_before_landing_for(Some("hm_mac")));
+    assert!(!policy.reviews_before_landing_for(Some("hm_other")));
+    assert!(!policy.reviews_before_landing_for(None));
+    admit_settable_config_key("review.before_landing_hosts").expect("live key");
+
+    write_config(
+        workspace.path(),
+        "[review]\nbefore_landing_hosts = [\"mac\"]\n",
+    );
+    let error = ResolvedConfig::load(&roots)
+        .expect_err("a label that is not a machine id is refused")
+        .to_string();
+    assert!(error.contains("review.before_landing_hosts[0]"), "{error}");
+
+    write_config(global.path(), "[review]\nbefore_pr = true\n");
+    write_config(
+        workspace.path(),
+        "[review]\nbefore_landing_hosts = [\"hm_mac\"]\n",
+    );
+    let error = ResolvedConfig::load(&roots)
+        .expect_err("before-PR review beside listed hosts is refused")
+        .to_string();
+    assert!(
+        error.contains("review.before_pr (global)")
+            && error.contains("review.before_landing_hosts (workspace)"),
+        "{error}"
+    );
+
+    // An empty list states nothing to conflict with.
+    write_config(workspace.path(), "[review]\nbefore_landing_hosts = []\n");
+    ResolvedConfig::load(&roots).expect("before-PR review with no listed hosts loads");
+}
+
 #[test]
 fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
     let global = tempfile::tempdir().expect("global tempdir");

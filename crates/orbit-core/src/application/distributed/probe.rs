@@ -115,7 +115,7 @@ impl crate::OrbitRuntime {
                 "caller fingerprint {caller}; owner fingerprint {fingerprint}; deploy matching builds on both endpoints and restart their long-lived processes"
             )));
         }
-        let ship = self.owner_ship_contract();
+        let ship = self.owner_ship_contract_for(session_machine_id(session).as_deref());
         let mut diagnostics = Vec::new();
         let refusal = self.declared_contract_refusal(session, declared, &ship, &mut diagnostics)?;
         Ok(DrainProbeReport {

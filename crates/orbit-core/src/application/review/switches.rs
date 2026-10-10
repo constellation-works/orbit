@@ -2,7 +2,9 @@
 //!
 //! Before-PR review is `review.before_pr` and before-landing review is
 //! `review.before_landing` [ORB-14849], both with `review.minutes` and
-//! `operation.review_crew`; after-landing review is the
+//! `operation.review_crew`; an owner may also turn before-landing review on
+//! only for the claims of the machines `review.before_landing_hosts` lists
+//! [ORB-15192]. After-landing review is the
 //! `delivery-code-review` auto-task's `enabled` flag. `orbit config show`,
 //! `orbit doctor`, the dashboard and the drain probe all render this view, so
 //! they report the switches together and with the same provenance.
@@ -58,9 +60,18 @@ pub struct BeforeLandingSwitch {
     pub enabled: bool,
     /// Config layer that decided `review.before_landing`.
     pub source: String,
-    /// Why before-landing review cannot run here while it is on; empty when
-    /// it can or is off.
+    /// `review.before_landing_hosts`: machines whose claimed leaves review
+    /// before landing while `enabled` is off here.
+    pub hosts: Vec<String>,
+    /// Config layer that decided `review.before_landing_hosts`.
+    pub hosts_source: String,
+    /// Why before-landing review cannot run here while it is on, or for the
+    /// listed hosts' claims; empty when it can or is off.
     pub problems: Vec<String>,
+    /// A host list that does not do what it seems to: it names this owner,
+    /// whose own deliveries never read it, or `enabled` already covers every
+    /// machine.
+    pub warnings: Vec<String>,
     /// `review.before_landing` is on and automatic delivery uses the
     /// local-only route, which opens no PR. Omitted from JSON because
     /// `problems` and `healthy` carry it.
@@ -109,8 +120,17 @@ impl ReviewSwitches {
         } else {
             format!("unhealthy: {}; ", before_landing.problems.join("; "))
         };
+        let hosts = if before_landing.hosts.is_empty() || before_landing.enabled {
+            String::new()
+        } else {
+            format!(
+                "; on for claims from {} (review.before_landing_hosts, {})",
+                before_landing.hosts.join(", "),
+                before_landing.hosts_source,
+            )
+        };
         format!(
-            "{problems}{} (review.before_landing, {}); shares review.minutes and \
+            "{problems}{} (review.before_landing, {}){hosts}; shares review.minutes and \
              operation.review_crew with before-PR review",
             if before_landing.enabled { "on" } else { "off" },
             before_landing.source,
@@ -216,8 +236,45 @@ fn review_switches_under(
     if before_pr_on {
         before_pr_problems.extend(crew_problems.iter().cloned());
     }
+    let hosts = &policy.review_before_landing_hosts;
+    let mut before_landing_warnings = Vec::new();
     if before_landing_on {
         before_landing_problems.extend(crew_problems);
+        if !hosts.value.is_empty() {
+            before_landing_warnings.push(format!(
+                "review.before_landing_hosts ({}) is redundant: review.before_landing ({}) is \
+                 already on for every delivery",
+                hosts.source.label(),
+                policy.review_before_landing.source.label(),
+            ));
+        }
+    } else if !hosts.value.is_empty() {
+        // The listed hosts' claims are what reviews here, admitted under the
+        // owner's claim ship mode; a follower resolves the crew itself, but
+        // an unset one refuses every claim.
+        if runtime.owner_ship_contract().mode == "local" {
+            before_landing_problems.push(format!(
+                "review.before_landing_hosts ({}) lists machines, but this workspace ships \
+                 locally and opens no pull request to review, so their claims are refused",
+                hosts.source.label(),
+            ));
+        }
+        if policy.review_crew.value.is_none() {
+            before_landing_problems.push(
+                "operation.review_crew is unset, so every claim from a listed host is refused"
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(owner) = runtime.distributed_owner_machine_id()
+        && hosts.value.contains(&owner)
+    {
+        before_landing_warnings.push(format!(
+            "review.before_landing_hosts ({}) lists this owner ({owner}); its own deliveries \
+             never read the list, only claims it pulls from itself do, so set \
+             review.before_landing to review its own deliveries before landing",
+            hosts.source.label(),
+        ));
     }
     let (enabled, source) = after_landing_switch(runtime)?;
     let health = after_landing_health(runtime, now)?;
@@ -235,7 +292,10 @@ fn review_switches_under(
         before_landing: BeforeLandingSwitch {
             enabled: before_landing_on,
             source: policy.review_before_landing.source.label().to_string(),
+            hosts: hosts.value.clone(),
+            hosts_source: hosts.source.label().to_string(),
             problems: before_landing_problems,
+            warnings: before_landing_warnings,
             local_route_incompatible: before_landing_on && local_route,
         },
         after_landing: AfterLandingSwitch {
