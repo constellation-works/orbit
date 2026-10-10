@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setWorkspace, statusPill } = await import('./js/common.js');
+const { setHost, setWorkspace, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
@@ -78,6 +78,8 @@ window.confirm = message => { confirmations.push(message); return true; };
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  // A selected host reaches the same fixture through the serving host's forward.
+  url.pathname = url.pathname.replace(/^\/api\/on\/[^/]+\//, '/api/');
   const workspace = url.searchParams.get('workspace');
   const body = options.body ? JSON.parse(options.body) : null;
   requests.push({ method: options.method || 'GET', path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
@@ -473,7 +475,7 @@ await fetchAndRenderOperations();
 drainRunId = 'jrun-20260923-0400-a1';
 drainPhase = 'draining';
 await fetchAndRenderOperations();
-const liveLink = descendants(get('auto-drain-live')).find(node => String(node.href || '').includes('#runs/'));
+const liveLink = descendants(get('auto-drain-live')).find(node => String(node.getAttribute?.('href') || '').includes('#runs?run_id='));
 assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
 assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
 assert(get('auto-drain-live').querySelector('.drain-window-count').textContent.includes('This window: 1 running of 3 admitted'), 'live counts label this window separately from workspace slots');
@@ -487,6 +489,15 @@ approvalsFixture = { enabled: true, drain_run_id: drainRunId };
 await fetchAndRenderOperations();
 assert(get('auto-drain-live').querySelector('.drain-approvals').textContent === 'Approving proposed tasks', 'a payload without counts shows only the flag');
 approvalsFixture = { enabled: false };
+await fetchAndRenderOperations();
+// A non-serving host: every run link names that host and the workspace, so a
+// link opened in a new tab shows the same run on the same host.
+setHost('hostb');
+await fetchAndRenderOperations();
+const runLinks = Array.from(document.querySelectorAll('a[href*="#runs?run_id="]'));
+assert(runLinks.length >= 2 && runLinks.every(link => link.getAttribute('href').startsWith('?host=hostb&workspace=one#runs?run_id=')), `every run link names the selected host and workspace: ${runLinks.map(link => link.getAttribute('href')).join(' ')}`);
+assert(runLinks.some(link => link.getAttribute('href') === '?host=hostb&workspace=one#runs?run_id=jrun-20260923-0400-a1'), 'the Drain card links its live run on the selected host');
+setHost(null);
 await fetchAndRenderOperations();
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
