@@ -20,8 +20,8 @@ use crate::application::managed_assets::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout, ManagedAssetManifest,
     ManagedAssetOutcome, ManagedAssetReconcileMode, ManagedAssetReconciliation,
     ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION, RoutineAssetProvenance,
-    encode_managed_asset_manifest, load_managed_asset_manifest, preserve_modified_retired_asset,
-    record_managed_manifest_write, retired_preservation_path,
+    RoutineMaterializationBinding, encode_managed_asset_manifest, load_managed_asset_manifest,
+    preserve_modified_retired_asset, record_managed_manifest_write, retired_preservation_path,
 };
 
 /// Seed every entry in [`DEFAULT_ROUTINE_FILES`] under `routines_dir`,
@@ -91,11 +91,12 @@ pub(crate) fn reconcile_default_routines(
         .collect();
     // Create-only carries every recorded entry forward; only absent defaults
     // gain new ones.
-    let (mut next_assets, mut next_provenance) = match &previous {
-        Some(previous) if mode.creates_only() => {
-            (previous.assets.clone(), previous.routine_provenance.clone())
-        }
-        _ => (BTreeMap::new(), BTreeMap::new()),
+    let mut catalog = match &previous {
+        Some(previous) if mode.creates_only() => NextRoutineCatalog {
+            assets: previous.assets.clone(),
+            provenance: previous.routine_provenance.clone(),
+        },
+        _ => NextRoutineCatalog::default(),
     };
 
     if let Some(previous) = previous.as_ref().filter(|_| !mode.creates_only()) {
@@ -109,27 +110,16 @@ pub(crate) fn reconcile_default_routines(
                 // Keep tracking it so the retirement completes once the link
                 // is replaced by the definition it stands for.
                 refuse_unconfined_routine(&mut result, name, &path, &unconfined_detail(&path));
-                next_assets.insert(name.clone(), rendered_digest.clone());
-                if let Some(provenance) = previous.routine_provenance.get(name) {
-                    next_provenance.insert(name.clone(), provenance.clone());
-                }
+                catalog.carry(name, rendered_digest, previous.routine_provenance.get(name));
                 continue;
             }
             let mut retired_detail = None;
             if entry == CatalogEntry::Present {
-                let existing = fs::read_to_string(&path).map_err(|error| {
-                    OrbitError::Io(format!(
-                        "read retired managed routine '{}': {error}",
-                        path.display()
-                    ))
-                })?;
+                let existing = read_routine_text(&path, "retired managed routine")?;
                 let byte_exact = sha256_hex(existing.as_bytes()) == *rendered_digest;
                 if !byte_exact && !preservation_confined {
                     refuse_unconfined_preservation(&mut result, name, &path, routines_dir);
-                    next_assets.insert(name.clone(), rendered_digest.clone());
-                    if let Some(provenance) = previous.routine_provenance.get(name) {
-                        next_provenance.insert(name.clone(), provenance.clone());
-                    }
+                    catalog.carry(name, rendered_digest, previous.routine_provenance.get(name));
                     continue;
                 }
                 // Orbit deletes outright only bytes it can prove it wrote. A
@@ -147,43 +137,13 @@ pub(crate) fn reconcile_default_routines(
                         })?;
                     }
                 } else if shipped_shape_of(name, &existing).is_some() {
-                    let preserved = if mode == ManagedAssetReconcileMode::Apply {
-                        preserve_modified_retired_asset(
-                            routines_dir,
-                            "routine",
-                            ManagedAssetLayout::YamlStem,
-                            name,
-                            &path,
-                        )?
-                    } else {
-                        retired_preservation_path(
-                            routines_dir,
-                            "routine",
-                            ManagedAssetLayout::YamlStem,
-                            name,
-                        )
-                    };
+                    let preserved = preserved_retired_path(mode, routines_dir, name, &path)?;
                     retired_detail = Some(format!(
                         "retired a prior release's routine whose only differences were operator lifecycle settings; a copy is at '{}'",
                         preserved.display()
                     ));
                 } else {
-                    let preserved = if mode == ManagedAssetReconcileMode::Apply {
-                        preserve_modified_retired_asset(
-                            routines_dir,
-                            "routine",
-                            ManagedAssetLayout::YamlStem,
-                            name,
-                            &path,
-                        )?
-                    } else {
-                        retired_preservation_path(
-                            routines_dir,
-                            "routine",
-                            ManagedAssetLayout::YamlStem,
-                            name,
-                        )
-                    };
+                    let preserved = preserved_retired_path(mode, routines_dir, name, &path)?;
                     let detail = format!(
                         "retired managed routine '{}' was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
                         path.display(),
@@ -194,13 +154,7 @@ pub(crate) fn reconcile_default_routines(
                         },
                         preserved.display()
                     );
-                    result.warnings.push(detail.clone());
-                    result.actions.push(ManagedAssetAction {
-                        name: name.clone(),
-                        path: path.clone(),
-                        outcome: ManagedAssetOutcome::Preserved,
-                        detail: Some(detail),
-                    });
+                    refuse_unconfined_routine(&mut result, name, &path, &detail);
                 }
             }
             result.actions.push(ManagedAssetAction {
@@ -229,10 +183,9 @@ pub(crate) fn reconcile_default_routines(
                 // look missing and be "recreated" at its external target.
                 refuse_unconfined_routine(&mut result, name, &path, &unconfined_detail(&path));
                 if let Some(provenance) = previous_provenance {
-                    next_assets.insert((*name).to_string(), provenance.rendered_digest.clone());
-                    next_provenance.insert((*name).to_string(), provenance.clone());
+                    catalog.carry(name, &provenance.rendered_digest, Some(provenance));
                 } else if let Some(digest) = previous_digest {
-                    next_assets.insert((*name).to_string(), digest.clone());
+                    catalog.carry(name, digest, None);
                 }
                 continue;
             }
@@ -253,12 +206,7 @@ pub(crate) fn reconcile_default_routines(
             let rendered = render_routine_template(name, template, &binding)?;
             let rendered_digest = sha256_hex(rendered.as_bytes());
             if present {
-                let existing = fs::read_to_string(&path).map_err(|error| {
-                    OrbitError::Io(format!(
-                        "read managed routine '{}': {error}",
-                        path.display()
-                    ))
-                })?;
+                let existing = read_routine_text(&path, "managed routine")?;
                 let existing_digest = sha256_hex(existing.as_bytes());
                 if existing_digest != provenance.rendered_digest && !overwrite_bindings {
                     if let Some(outcome) = reconcile_lifecycle_variant(
@@ -271,8 +219,7 @@ pub(crate) fn reconcile_default_routines(
                         mode,
                         &mut result,
                     )? {
-                        next_assets.insert((*name).to_string(), outcome.rendered_digest.clone());
-                        next_provenance.insert((*name).to_string(), outcome);
+                        catalog.carry(name, &outcome.rendered_digest, Some(&outcome));
                         continue;
                     }
                     let detail = format!(
@@ -285,8 +232,7 @@ pub(crate) fn reconcile_default_routines(
                         outcome: ManagedAssetOutcome::Preserved,
                         detail: Some(detail),
                     });
-                    next_assets.insert((*name).to_string(), provenance.rendered_digest.clone());
-                    next_provenance.insert((*name).to_string(), provenance.clone());
+                    catalog.carry(name, &provenance.rendered_digest, Some(provenance));
                     continue;
                 }
                 if !overwrite_bindings && binding != requested_binding {
@@ -315,8 +261,7 @@ pub(crate) fn reconcile_default_routines(
                         outcome: ManagedAssetOutcome::Unchanged,
                         detail: None,
                     });
-                    next_assets.insert((*name).to_string(), provenance.rendered_digest.clone());
-                    next_provenance.insert((*name).to_string(), provenance.clone());
+                    catalog.carry(name, &provenance.rendered_digest, Some(provenance));
                     continue;
                 }
                 // The bytes are Orbit's, but `enabled` is the operator's: an
@@ -340,39 +285,21 @@ pub(crate) fn reconcile_default_routines(
                     outcome: ManagedAssetOutcome::Refreshed,
                     detail: Some("shipped routine template changed; preserved the recorded materialization binding".to_string()),
                 });
-                next_assets.insert((*name).to_string(), rendered_digest.clone());
-                next_provenance.insert(
-                    (*name).to_string(),
-                    RoutineAssetProvenance {
-                        template_digest,
-                        rendered_digest,
-                        binding,
-                    },
-                );
+                catalog.record_rendered(name, template_digest, rendered_digest, binding);
                 continue;
             } else {
-                if mode.writes() {
-                    write_confined_routine(&path, &rendered)?;
-                }
-                result.refreshed += 1;
-                result.actions.push(ManagedAssetAction {
-                    name: (*name).to_string(),
-                    path: path.clone(),
-                    outcome: ManagedAssetOutcome::Created,
-                    detail: Some(
+                record_created_routine(
+                    &mut result,
+                    mode,
+                    name,
+                    &path,
+                    &rendered,
+                    Some(
                         "recreated a missing managed routine with its recorded binding".to_string(),
                     ),
-                });
+                )?;
             }
-            next_assets.insert((*name).to_string(), rendered_digest.clone());
-            next_provenance.insert(
-                (*name).to_string(),
-                RoutineAssetProvenance {
-                    template_digest,
-                    rendered_digest,
-                    binding,
-                },
-            );
+            catalog.record_rendered(name, template_digest, rendered_digest, binding);
             continue;
         }
 
@@ -380,33 +307,11 @@ pub(crate) fn reconcile_default_routines(
             if !present {
                 let rendered = render_routine_template(name, template, &requested_binding)?;
                 let rendered_digest = sha256_hex(rendered.as_bytes());
-                if mode.writes() {
-                    write_confined_routine(&path, &rendered)?;
-                }
-                result.refreshed += 1;
-                result.actions.push(ManagedAssetAction {
-                    name: (*name).to_string(),
-                    path: path.clone(),
-                    outcome: ManagedAssetOutcome::Created,
-                    detail: None,
-                });
-                next_assets.insert((*name).to_string(), rendered_digest.clone());
-                next_provenance.insert(
-                    (*name).to_string(),
-                    RoutineAssetProvenance {
-                        template_digest,
-                        rendered_digest,
-                        binding: requested_binding,
-                    },
-                );
+                record_created_routine(&mut result, mode, name, &path, &rendered, None)?;
+                catalog.record_rendered(name, template_digest, rendered_digest, requested_binding);
                 continue;
             }
-            let existing = fs::read_to_string(&path).map_err(|error| {
-                OrbitError::Io(format!(
-                    "read legacy managed routine '{}': {error}",
-                    path.display()
-                ))
-            })?;
+            let existing = read_routine_text(&path, "legacy managed routine")?;
             if sha256_hex(existing.as_bytes()) != *legacy_digest {
                 if let Some(outcome) = reconcile_lifecycle_variant(
                     identity,
@@ -418,22 +323,15 @@ pub(crate) fn reconcile_default_routines(
                     mode,
                     &mut result,
                 )? {
-                    next_assets.insert((*name).to_string(), outcome.rendered_digest.clone());
-                    next_provenance.insert((*name).to_string(), outcome);
+                    catalog.carry(name, &outcome.rendered_digest, Some(&outcome));
                     continue;
                 }
                 let detail = format!(
                     "legacy managed routine '{}' no longer matches Orbit's recorded digest and was preserved; restore the recorded bytes or move/rename it, then rerun `orbit workspace sync`",
                     path.display()
                 );
-                result.warnings.push(detail.clone());
-                result.actions.push(ManagedAssetAction {
-                    name: (*name).to_string(),
-                    path: path.clone(),
-                    outcome: ManagedAssetOutcome::Preserved,
-                    detail: Some(detail),
-                });
-                next_assets.insert((*name).to_string(), legacy_digest.clone());
+                refuse_unconfined_routine(&mut result, name, &path, &detail);
+                catalog.carry(name, legacy_digest, None);
                 continue;
             }
             let definition = parse_routine_yaml(&existing).map_err(|error| {
@@ -467,27 +365,14 @@ pub(crate) fn reconcile_default_routines(
                         .to_string(),
                 ),
             });
-            next_assets.insert((*name).to_string(), rendered_digest.clone());
-            next_provenance.insert(
-                (*name).to_string(),
-                RoutineAssetProvenance {
-                    template_digest,
-                    rendered_digest,
-                    binding,
-                },
-            );
+            catalog.record_rendered(name, template_digest, rendered_digest, binding);
             continue;
         }
 
         let rendered = render_routine_template(name, template, &requested_binding)?;
         let rendered_digest = sha256_hex(rendered.as_bytes());
         if present {
-            let existing = fs::read_to_string(&path).map_err(|error| {
-                OrbitError::Io(format!(
-                    "read colliding routine '{}': {error}",
-                    path.display()
-                ))
-            })?;
+            let existing = read_routine_text(&path, "colliding routine")?;
             let existing_digest = sha256_hex(existing.as_bytes());
             if existing_digest != rendered_digest {
                 // A routines directory with no manifest at all predates managed
@@ -525,8 +410,7 @@ pub(crate) fn reconcile_default_routines(
                         &mut result,
                     )?
                 {
-                    next_assets.insert((*name).to_string(), outcome.rendered_digest.clone());
-                    next_provenance.insert((*name).to_string(), outcome);
+                    catalog.carry(name, &outcome.rendered_digest, Some(&outcome));
                     continue;
                 }
                 if previous.is_none()
@@ -540,28 +424,14 @@ pub(crate) fn reconcile_default_routines(
                             "adopted a pre-provenance routine using the binding parsed from that exact instance".to_string(),
                         ),
                     });
-                    next_assets.insert((*name).to_string(), existing_digest.clone());
-                    next_provenance.insert(
-                        (*name).to_string(),
-                        RoutineAssetProvenance {
-                            template_digest,
-                            rendered_digest: existing_digest,
-                            binding,
-                        },
-                    );
+                    catalog.record_rendered(name, template_digest, existing_digest, binding);
                     continue;
                 }
                 let detail = format!(
                     "user-authored routine '{}' collides with bundled default `{name}` and was preserved; move or rename it, then rerun `orbit workspace sync`",
                     path.display()
                 );
-                result.warnings.push(detail.clone());
-                result.actions.push(ManagedAssetAction {
-                    name: (*name).to_string(),
-                    path: path.clone(),
-                    outcome: ManagedAssetOutcome::Preserved,
-                    detail: Some(detail),
-                });
+                refuse_unconfined_routine(&mut result, name, &path, &detail);
                 continue;
             }
             result.actions.push(ManagedAssetAction {
@@ -573,26 +443,9 @@ pub(crate) fn reconcile_default_routines(
                 ),
             });
         } else {
-            if mode.writes() {
-                write_confined_routine(&path, &rendered)?;
-            }
-            result.refreshed += 1;
-            result.actions.push(ManagedAssetAction {
-                name: (*name).to_string(),
-                path: path.clone(),
-                outcome: ManagedAssetOutcome::Created,
-                detail: None,
-            });
+            record_created_routine(&mut result, mode, name, &path, &rendered, None)?;
         }
-        next_assets.insert((*name).to_string(), rendered_digest.clone());
-        next_provenance.insert(
-            (*name).to_string(),
-            RoutineAssetProvenance {
-                template_digest,
-                rendered_digest,
-                binding: requested_binding,
-            },
-        );
+        catalog.record_rendered(name, template_digest, rendered_digest, requested_binding);
     }
 
     // A definition targeting a retired job that neither loop above could
@@ -615,8 +468,8 @@ pub(crate) fn reconcile_default_routines(
     let next = ManagedAssetManifest {
         schema_version: ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
         asset_kind: "routine".to_string(),
-        assets: next_assets,
-        routine_provenance: next_provenance,
+        assets: catalog.assets,
+        routine_provenance: catalog.provenance,
         opted_out: Default::default(),
     };
     if mode.writes() && previous.as_ref() != Some(&next) {
@@ -691,13 +544,7 @@ fn reconcile_untracked_retired_routines(
                 "routine '{}' targets retired job '{job}' ({retirement}) but is not one Orbit wrote, so `orbit workspace sync` cannot retire it; delete the file or retarget it at a job this Orbit ships",
                 path.display()
             );
-            result.warnings.push(detail.clone());
-            result.actions.push(ManagedAssetAction {
-                name: stem.to_string(),
-                path,
-                outcome: ManagedAssetOutcome::Preserved,
-                detail: Some(detail),
-            });
+            refuse_unconfined_routine(result, stem, &path, &detail);
             continue;
         }
         if !preservation_confined {
@@ -705,17 +552,7 @@ fn reconcile_untracked_retired_routines(
             continue;
         }
 
-        let preserved = if mode == ManagedAssetReconcileMode::Apply {
-            preserve_modified_retired_asset(
-                routines_dir,
-                "routine",
-                ManagedAssetLayout::YamlStem,
-                stem,
-                &path,
-            )?
-        } else {
-            retired_preservation_path(routines_dir, "routine", ManagedAssetLayout::YamlStem, stem)
-        };
+        let preserved = preserved_retired_path(mode, routines_dir, stem, &path)?;
         result.actions.push(ManagedAssetAction {
             name: stem.to_string(),
             path,
@@ -842,6 +679,96 @@ fn unconfined_detail(path: &Path) -> String {
         "routine catalog path '{}' is a symbolic link or not the expected regular file or directory; Orbit did not read, create, overwrite, or retire anything through it. Replace it with a regular entry inside the workspace, then rerun `orbit workspace sync`",
         path.display()
     )
+}
+
+/// Next manifest entries. The asset digest is not always `provenance.rendered_digest`.
+#[derive(Default)]
+struct NextRoutineCatalog {
+    assets: BTreeMap<String, String>,
+    provenance: BTreeMap<String, RoutineAssetProvenance>,
+}
+
+impl NextRoutineCatalog {
+    /// `binding` is the local binding or the workspace's requested binding.
+    fn record_rendered(
+        &mut self,
+        name: &str,
+        template_digest: String,
+        rendered_digest: String,
+        binding: RoutineMaterializationBinding,
+    ) {
+        let name = name.to_string();
+        self.assets.insert(name.clone(), rendered_digest.clone());
+        self.provenance.insert(
+            name,
+            RoutineAssetProvenance {
+                template_digest,
+                rendered_digest,
+                binding,
+            },
+        );
+    }
+
+    /// Carry an asset digest forward, copying provenance when it is `Some`.
+    fn carry(&mut self, name: &str, digest: &str, provenance: Option<&RoutineAssetProvenance>) {
+        self.assets.insert(name.to_string(), digest.to_string());
+        if let Some(provenance) = provenance {
+            self.provenance.insert(name.to_string(), provenance.clone());
+        }
+    }
+}
+
+/// `detail` is `Some` only when recreating a file from its recorded binding.
+fn record_created_routine(
+    result: &mut ManagedAssetReconciliation,
+    mode: ManagedAssetReconcileMode,
+    name: &str,
+    path: &Path,
+    rendered: &str,
+    detail: Option<String>,
+) -> Result<(), OrbitError> {
+    if mode.writes() {
+        write_confined_routine(path, rendered)?;
+    }
+    result.refreshed += 1;
+    result.actions.push(ManagedAssetAction {
+        name: name.to_string(),
+        path: path.to_path_buf(),
+        outcome: ManagedAssetOutcome::Created,
+        detail,
+    });
+    Ok(())
+}
+
+/// `Apply` moves the file aside; every other mode only names that path.
+fn preserved_retired_path(
+    mode: ManagedAssetReconcileMode,
+    routines_dir: &Path,
+    name: &str,
+    path: &Path,
+) -> Result<PathBuf, OrbitError> {
+    if mode == ManagedAssetReconcileMode::Apply {
+        preserve_modified_retired_asset(
+            routines_dir,
+            "routine",
+            ManagedAssetLayout::YamlStem,
+            name,
+            path,
+        )
+    } else {
+        Ok(retired_preservation_path(
+            routines_dir,
+            "routine",
+            ManagedAssetLayout::YamlStem,
+            name,
+        ))
+    }
+}
+
+/// `label` is the noun in the read error, unchanged from each former call site.
+fn read_routine_text(path: &Path, label: &str) -> Result<String, OrbitError> {
+    fs::read_to_string(path)
+        .map_err(|error| OrbitError::Io(format!("read {label} '{}': {error}", path.display())))
 }
 
 fn refuse_unconfined_routine(
