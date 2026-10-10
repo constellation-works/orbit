@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{BatchAttempt, CoverageClass, SourceRevision};
 
+/// The [`CoverageEvidence`] schema settlement accepts. Version 1 named the
+/// examined commits and deliveries only; it still decodes, so receipts
+/// accepted under it keep reading, but settlement refuses new version-1 bytes.
+pub const COVERAGE_EVIDENCE_SCHEMA_VERSION: u32 = 2;
+
 /// Worker-submitted structured evidence, attached through orbit.task.artifact.put.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +27,10 @@ pub struct CoverageEvidence {
     pub examined_commits: Vec<String>,
     pub examined_deliveries: Vec<String>,
     pub examination_complete: bool,
+    /// One record per frozen delivery: the changed paths read, the verdict
+    /// and why. Absent from version-1 evidence.
+    #[serde(default)]
+    pub delivery_examinations: Vec<DeliveryExamination>,
     /// Concrete commands/checks and their observations. Findings may remain open.
     pub checks: Vec<ExaminationCheck>,
     pub findings: Vec<String>,
@@ -33,6 +42,39 @@ pub struct ExaminationCheck {
     pub subject: String,
     pub method: String,
     pub observation: String,
+}
+
+/// What a reviewer examined in one frozen delivery and what it concluded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryExamination {
+    /// The frozen delivery's key.
+    pub delivery: String,
+    /// Paths of the delivery's `before..after` diff the reviewer read.
+    pub examined_paths: Vec<String>,
+    /// Paths of that diff deliberately not read, each with its reason.
+    #[serde(default)]
+    pub skipped_paths: Vec<SkippedPath>,
+    pub verdict: DeliveryVerdict,
+    /// Why the verdict holds for this delivery's change.
+    pub rationale: String,
+}
+
+/// A changed path a reviewer did not read, such as a generated golden.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkippedPath {
+    pub path: String,
+    pub reason: String,
+}
+
+/// A reviewer's conclusion about one delivery: `"clean"`, or
+/// `{"findings": ["<finding task id>", ...]}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryVerdict {
+    Clean,
+    Findings(Vec<String>),
 }
 
 /// Immutable accepted bytes and provenance, independent of artifact replacement.
@@ -56,10 +98,11 @@ pub struct EvidenceSubmission {
     pub run_id: String,
 }
 
-/// Shape supplied with a frozen batch. Workers fill checks/findings and attest completion.
+/// Shape supplied with a frozen batch. Workers fill each delivery's
+/// examination, the checks and findings, and attest completion.
 pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
     CoverageEvidence {
-        schema_version: 1,
+        schema_version: COVERAGE_EVIDENCE_SCHEMA_VERSION,
         batch_id: attempt.batch.id.clone(),
         consumer: attempt.batch.consumer.clone(),
         epoch: attempt.batch.epoch.clone(),
@@ -80,6 +123,18 @@ pub fn evidence_template(attempt: &BatchAttempt) -> CoverageEvidence {
             .map(|d| d.key.clone())
             .collect(),
         examination_complete: false,
+        delivery_examinations: attempt
+            .batch
+            .deliveries
+            .iter()
+            .map(|d| DeliveryExamination {
+                delivery: d.key.clone(),
+                examined_paths: vec![],
+                skipped_paths: vec![],
+                verdict: DeliveryVerdict::Clean,
+                rationale: String::new(),
+            })
+            .collect(),
         checks: vec![],
         findings: vec![],
     }

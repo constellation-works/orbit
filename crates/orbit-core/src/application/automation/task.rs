@@ -5,12 +5,16 @@ use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
     AutomationError,
-    delivery::{ActionOutcome, digest, evidence, evidence::EvidenceFacts},
+    delivery::{
+        ActionOutcome, digest, evidence,
+        evidence::{EvidenceFacts, MIN_RATIONALE_CHARS},
+    },
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{EXECUTION_SUMMARY_DERIVED_EVENT, Task, TaskStatus};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
+use std::collections::BTreeMap;
 
 pub(super) fn mint(
     runtime: &OrbitRuntime,
@@ -32,6 +36,9 @@ pub(super) fn mint(
 
     params.description.push_str(&format!(
         "\n\nFrozen automation input (inspect these exact revisions):\n```json\n{frozen_input}\n```\nSubmit versioned coverage evidence as {COVERAGE_ARTIFACT} with orbit.task.artifact.put. Examination, including findings, must be complete before setting examination_complete=true. Task completion alone does not certify coverage."
+    ));
+    params.description.push_str(&format!(
+        "\n\nGive every frozen delivery one delivery_examinations entry. Its examined_paths and skipped_paths (each with a reason) must together be exactly the paths `git diff --name-only --no-renames <before.commit> <after.commit>` lists for that delivery. Its verdict is \"clean\" or {{\"findings\": [\"<finding task ID>\", ...]}}, and its rationale (at least {MIN_RATIONALE_CHARS} characters, different for each delivery) says why the verdict holds for that change. Persist an execution summary of what you examined: a review whose agent records none leaves its batch owed."
     ));
     params.description.push_str(&format!(
         "\n\nEvidence template (replace action_id with this task ID and fill actual checks/findings):\n```json\n{evidence_template}\n```"
@@ -57,10 +64,27 @@ pub(super) fn mint(
         .map(|task| task.id)
 }
 
+/// [ORB-15186] Settlement reason for a review task that closed while its
+/// agent had persisted no execution summary of its own.
+const REVIEW_WITHOUT_EXECUTION_SUMMARY: &str = "review_closed_without_execution_summary";
+
+/// The admitted task's outcome as settlement sees it.
 pub(super) fn outcome(
     runtime: &OrbitRuntime,
     source: &Source<'_>,
     attempt: &BatchAttempt,
+) -> Result<ActionOutcome, AutomationError> {
+    task_outcome(runtime, source, attempt, true)
+}
+
+/// `settling` also requires the agent's own execution summary. Without it,
+/// this is the evidence alone, which lets delivery derive a summary from
+/// coverage the batch would otherwise accept.
+fn task_outcome(
+    runtime: &OrbitRuntime,
+    source: &Source<'_>,
+    attempt: &BatchAttempt,
+    settling: bool,
 ) -> Result<ActionOutcome, AutomationError> {
     let Some(id) = attempt.action_id.as_deref() else {
         return Ok(ActionOutcome::Pending);
@@ -91,6 +115,20 @@ pub(super) fn outcome(
 
         if let Some(provenance) = provenance {
             let owner = evidence_owner(runtime, &task, &provenance.sha256)?;
+            let verified = source_verified(source, &attempt.batch)?;
+            // Commit ids alone can be produced without reading anything. A
+            // closed review whose agent wrote no summary is that stamp; an
+            // open one may still write it.
+            if settling && agent_summary_missing(runtime, &task)? {
+                return Ok(if stopped {
+                    ActionOutcome::Failed {
+                        retryable: true,
+                        reason: REVIEW_WITHOUT_EXECUTION_SUMMARY.into(),
+                    }
+                } else {
+                    ActionOutcome::Pending
+                });
+            }
             return Ok(ActionOutcome::Evidence(EvidenceFacts {
                 bytes: artifact.content,
                 reference: format!("task:{id}/artifacts/{COVERAGE_ARTIFACT}"),
@@ -99,8 +137,9 @@ pub(super) fn outcome(
                     .unwrap_or_else(|| provenance.created_by.clone()),
                 artifact_digest: provenance.sha256.clone(),
                 authorized: owner.is_some(),
-                source_verified: source_verified(source, &attempt.batch)?,
+                source_verified: verified,
                 action_stopped: stopped,
+                changed_paths: changed_paths(source, &attempt.batch, verified)?,
             }));
         }
     }
@@ -125,7 +164,9 @@ const RECEIPT_LIMIT: usize = 100;
 /// receipt names the task, or the admitted attempt that names it holds an
 /// `automation-coverage.json` that passes the same validation settlement
 /// applies, checked against existing refs without fetching. Anything else,
-/// including incomplete or mismatched evidence, is `None`.
+/// including incomplete or mismatched evidence, is `None`. Settlement also
+/// requires the agent's own execution summary, which this does not, so a
+/// summary derived from this evidence still leaves the batch owed.
 pub(crate) fn accepted_action_coverage(
     runtime: &OrbitRuntime,
     task_id: &str,
@@ -180,7 +221,7 @@ fn validated_evidence(
     now: DateTime<Utc>,
 ) -> Result<Option<Vec<u8>>, OrbitError> {
     let source = Source::read_only(&runtime.paths().repo_root);
-    let facts = match outcome(runtime, &source, attempt) {
+    let facts = match task_outcome(runtime, &source, attempt, false) {
         Ok(ActionOutcome::Evidence(facts)) => facts,
         Ok(_) => return Ok(None),
         Err(error) => {
@@ -258,14 +299,16 @@ pub(super) fn job_outcome(
         {
             let bytes =
                 serde_json::to_vec(value).map_err(|e| AutomationError::Evidence(e.to_string()))?;
+            let verified = source_verified(source, &attempt.batch)?;
             return Ok(ActionOutcome::Evidence(EvidenceFacts {
                 artifact_digest: digest(&bytes),
                 bytes,
                 reference: format!("run:{id}/step:{}", step.step_index),
                 submitted_by: format!("run:{id}"),
                 authorized: true,
-                source_verified: source_verified(source, &attempt.batch)?,
+                source_verified: verified,
                 action_stopped: stopped,
+                changed_paths: changed_paths(source, &attempt.batch, verified)?,
             }));
         }
     }
@@ -291,9 +334,34 @@ fn source_verified(source: &Source<'_>, batch: &CoverageBatch) -> Result<bool, A
     }
 }
 
+/// The frozen deliveries' changed paths. An unverified source settles as
+/// `source_unverifiable` first, so it is not read.
+fn changed_paths(
+    source: &Source<'_>,
+    batch: &CoverageBatch,
+    verified: bool,
+) -> Result<BTreeMap<String, Vec<String>>, AutomationError> {
+    if !verified {
+        return Ok(BTreeMap::new());
+    }
+    source.delivery_changed_paths(batch)
+}
+
+/// [ORB-15186] The review's agent persisted no execution summary: the task
+/// has none, or Orbit derived the one it carries.
+fn agent_summary_missing(runtime: &OrbitRuntime, task: &Task) -> Result<bool, AutomationError> {
+    if task.execution_summary.trim().is_empty() {
+        return Ok(true);
+    }
+    Ok(runtime
+        .get_task_history(&task.id)?
+        .iter()
+        .any(|entry| entry.event == EXECUTION_SUMMARY_DERIVED_EVENT))
+}
+
 fn evidence_owner(
     runtime: &OrbitRuntime,
-    task: &orbit_types::task::Task,
+    task: &Task,
     artifact_digest: &str,
 ) -> Result<Option<String>, AutomationError> {
     let Some(artifact) = runtime.get_task_artifact(&task.id, EVIDENCE_AUTHORITY_ARTIFACT)? else {

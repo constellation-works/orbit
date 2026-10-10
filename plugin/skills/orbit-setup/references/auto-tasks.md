@@ -250,7 +250,10 @@ plugin being removed.
   `full-code-review`;
   a clean area is a successful no-op.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
-  records typed coverage evidence. Hands-on QA of recent changes is
+  records typed coverage evidence: for each delivery, the changed paths it
+  examined (or skipped, with a reason) matching the frozen diff, a verdict and
+  a rationale. A review whose agent persists no execution summary leaves its
+  batch owed. Hands-on QA of recent changes is
   `qa-sweep`; a full pre-release sign-off is `qa-full-sweep` when that
   workspace definition is present.
 - **`doc-duties`** (`low`) — daily. Validates a small batch of the

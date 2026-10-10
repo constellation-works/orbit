@@ -84,18 +84,12 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
         "ORB-90001: unchecked error in fixture.txt, introduced by ORB-90000".to_string(),
         "ORB-90002: duplicate of an open finding, not refiled".to_string(),
     ];
-    let mut complete = orbit_types::workflow::automation::evidence_template(&attempt);
-    complete.examination_complete = true;
-    complete.checks = vec![ExaminationCheck {
-        subject: "frozen range".into(),
-        method: "review".into(),
-        observation: "examined the commits named by the batch".into(),
-    }];
+    let mut complete = complete_evidence(&attempt);
     complete.findings = findings.clone();
 
     // Evidence the automation would refuse derives nothing, so the guard
     // refuses as it does for any unsummarized clean task.
-    let mismatches: [Mismatch; 4] = [
+    let mismatches: [Mismatch; 5] = [
         ("incomplete examination", |evidence| {
             evidence.examination_complete = false;
         }),
@@ -107,6 +101,9 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
         }),
         ("another input", |evidence| {
             evidence.input_digest = "another-input".into();
+        }),
+        ("unexamined delivery", |evidence| {
+            evidence.delivery_examinations[0].examined_paths.clear();
         }),
     ];
     for (case, mismatch) in mismatches {
@@ -178,4 +175,78 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
     for finding in &findings {
         assert!(summary.contains(finding.as_str()), "{finding}: {summary}");
     }
+}
+
+/// A review whose agent persisted no execution summary still commits on a
+/// summary Orbit derives from its evidence, but that summary does not pay
+/// for the batch: settlement records the typed reason, spends the retry and
+/// leaves the obligation owed [ORB-15186].
+#[test]
+fn a_derived_summary_leaves_the_batch_owed() {
+    const TEST: &str =
+        "delivery_remote_source::review_commit::a_derived_summary_leaves_the_batch_owed";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let (runtime, attempt, run_id) = admitted_action(&fixture, 1, REVIEW_CONSUMER);
+    let action_id = attempt.action_id.clone().expect("admitted action");
+    let before = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    put_coverage(
+        &fixture,
+        &runtime,
+        &action_id,
+        &run_id,
+        &complete_evidence(&attempt),
+    );
+    let worktree = clean_worktree(&fixture, "review");
+    git_commit(&runtime, &run_id, &worktree).expect("derived summary commits");
+    let summary = runtime.get_task(&action_id).unwrap().execution_summary;
+    assert!(
+        summary.contains("Delivery verdicts (1):"),
+        "the derived summary describes the evidence: {summary}"
+    );
+
+    // An open review may still write its own summary, so nothing settles.
+    with_pull_lookup(&fixture, || {
+        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+    })
+    .expect("evaluate the open review");
+    assert_eq!(
+        named_consumer_state(&runtime, REVIEW_CONSUMER).active,
+        before.active
+    );
+
+    fixture.json(&[
+        "task", "update", &action_id, "--status", "done", "--force", "--json",
+    ]);
+    with_pull_lookup(&fixture, || {
+        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+    })
+    .expect("evaluate the closed review");
+    let state = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    assert_eq!(state.covered, before.covered, "{state:#?}");
+    let active = state.active.as_ref().expect("the batch stays owed");
+    assert_eq!(active.attempt, 2, "{active:#?}");
+    assert_eq!(
+        active.reason.as_deref(),
+        Some("review_closed_without_execution_summary")
+    );
+    assert!(
+        runtime
+            .automation_store()
+            .unwrap()
+            .automation_receipts(&state.consumer, 10)
+            .unwrap()
+            .is_empty()
+    );
+
+    let shown = fixture.json(&["auto-task", "show", REVIEW_CONSUMER, "--json"]);
+    assert_eq!(
+        shown["automation"]["state"]["active"]["reason"], "review_closed_without_execution_summary",
+        "{shown}"
+    );
 }

@@ -43,7 +43,15 @@ fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, Automat
         method: "fixture examination".into(),
         observation: "complete".into(),
     });
-    let bytes = serde_json::to_vec(&evidence).unwrap();
+    // Stored as version 1 evidence, accepted before per-delivery examination
+    // was required.
+    let mut stored = serde_json::to_value(&evidence).unwrap();
+    stored["schema_version"] = json!(1);
+    stored
+        .as_object_mut()
+        .unwrap()
+        .remove("delivery_examinations");
+    let bytes = serde_json::to_vec(&stored).unwrap();
     let receipt = AcceptedCoverage {
         batch_id: active.batch.id.clone(),
         action_id: evidence.action_id.clone(),
@@ -484,4 +492,29 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
             "a live retry overrides its predecessor's failure"
         );
     }
+}
+
+/// A receipt accepted under evidence schema 1 stays settled and still reads
+/// as the task's accepted coverage [ORB-15186].
+#[test]
+fn version_one_receipts_still_read_as_accepted_coverage() {
+    const TEST: &str =
+        "claimed_delivery_recovery::version_one_receipts_still_read_as_accepted_coverage";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    let (_fixture, runtime, before, _) = claimed(true);
+    let receipts = runtime
+        .automation_store()
+        .unwrap()
+        .automation_receipts(&before.consumer, 100)
+        .unwrap();
+    assert_eq!(receipts.len(), 1);
+    let evidence =
+        orbit_engine::RuntimeHost::accepted_automation_coverage(&runtime, &receipts[0].action_id)
+            .unwrap()
+            .expect("version 1 coverage reads");
+    assert_eq!(evidence.schema_version, 1);
+    assert!(evidence.delivery_examinations.is_empty());
+    assert!(evidence.examination_complete);
 }

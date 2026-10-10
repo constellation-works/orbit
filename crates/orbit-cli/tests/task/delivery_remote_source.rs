@@ -13,7 +13,8 @@ use chrono::{Duration, Utc};
 use orbit_core::application::automation::evaluate_auto_task;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::workflow::automation::{
-    AutomationState, BatchAttempt, BatchState, EVIDENCE_AUTHORITY_ARTIFACT, ExaminationCheck,
+    AutomationState, BatchAttempt, BatchState, CoverageEvidence, EVIDENCE_AUTHORITY_ARTIFACT,
+    ExaminationCheck, evidence_template,
 };
 use serde_json::{Value, json};
 
@@ -550,9 +551,43 @@ fn inspect_without_fetch(fixture: &Fixture, args: &[&str]) -> Value {
     })
 }
 
+/// The evidence template completed for the fixture's landings, each of which
+/// changes only `fixture.txt`.
+fn complete_evidence(attempt: &BatchAttempt) -> CoverageEvidence {
+    let mut evidence = evidence_template(attempt);
+    evidence.examination_complete = true;
+    evidence.checks = vec![ExaminationCheck {
+        subject: "frozen range".into(),
+        method: "review".into(),
+        observation: "examined the commits named by the batch".into(),
+    }];
+    for examination in &mut evidence.delivery_examinations {
+        examination.examined_paths = vec!["fixture.txt".into()];
+        examination.rationale = format!(
+            "{} rewrites fixture.txt in full and nothing reads its old contents",
+            examination.delivery
+        );
+    }
+    evidence
+}
+
+/// Records an execution summary as the review agent's own.
+fn persist_agent_summary(runtime: &orbit_core::OrbitRuntime, action_id: &str) {
+    RuntimeHost::apply_task_automation_update(
+        runtime,
+        action_id,
+        TaskAutomationUpdate {
+            execution_summary: Some("Read fixture.txt in the frozen delivery; no defects.".into()),
+            ..TaskAutomationUpdate::default()
+        },
+    )
+    .expect("persist the agent's summary");
+}
+
 /// Lands one remote commit, admits its batch, attaches coverage from that
-/// batch's executor run, and rejects the review task. `retries` is the
-/// trigger budget, so a spent retry is visible when it is at least 1.
+/// batch's executor run, and rejects the review task after its agent
+/// persisted a summary. `retries` is the trigger budget, so a spent retry is
+/// visible when it is at least 1.
 fn stopped_action_with_coverage(
     fixture: &Fixture,
     retries: u32,
@@ -561,18 +596,83 @@ fn stopped_action_with_coverage(
 ) -> (orbit_core::OrbitRuntime, BatchAttempt) {
     let (runtime, attempt, run_id) = admitted_action(fixture, retries, name);
     let action_id = attempt.action_id.clone().expect("admitted action");
-    let mut evidence = orbit_types::workflow::automation::evidence_template(&attempt);
+    let mut evidence = complete_evidence(&attempt);
     evidence.examination_complete = examination_complete;
-    evidence.checks = vec![ExaminationCheck {
-        subject: "frozen range".into(),
-        method: "review".into(),
-        observation: "examined the commits named by the batch".into(),
-    }];
     put_coverage(fixture, &runtime, &action_id, &run_id, &evidence);
+    persist_agent_summary(&runtime, &action_id);
     fixture.json(&[
         "task", "update", &action_id, "--status", "rejected", "--force", "--json",
     ]);
     (runtime, attempt)
+}
+
+/// Evidence naming only the frozen commits and deliveries, as a reviewer can
+/// write without reading anything, never settles; evidence whose examined
+/// paths miss the frozen diff does not either. Each refusal is recorded on
+/// the attempt, and complete evidence then settles the batch [ORB-15186].
+#[test]
+fn stamp_coverage_is_refused_and_per_delivery_evidence_settles() {
+    const TEST: &str =
+        "delivery_remote_source::stamp_coverage_is_refused_and_per_delivery_evidence_settles";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let (runtime, attempt, run_id) = admitted_action(&fixture, 1, REVIEW_CONSUMER);
+    let action_id = attempt.action_id.clone().expect("admitted action");
+    persist_agent_summary(&runtime, &action_id);
+    let before = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    let complete = complete_evidence(&attempt);
+
+    let mut stamp = complete.clone();
+    stamp.schema_version = 1;
+    stamp.delivery_examinations.clear();
+    let mut unexamined = complete.clone();
+    unexamined.delivery_examinations.clear();
+    let mut wrong_paths = complete.clone();
+    wrong_paths.delivery_examinations[0].examined_paths = vec!["src/elsewhere.rs".into()];
+    for (reason, evidence) in [
+        ("unsupported_schema_version", stamp),
+        ("missing_delivery_examination", unexamined),
+        ("examined_paths_mismatch", wrong_paths),
+    ] {
+        put_coverage(&fixture, &runtime, &action_id, &run_id, &evidence);
+        let diagnostic = with_pull_lookup(&fixture, || {
+            let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+            evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        })
+        .expect("evaluate the refused evidence");
+        assert!(diagnostic.receipts.is_empty(), "{reason}: {diagnostic:#?}");
+        let state = named_consumer_state(&runtime, REVIEW_CONSUMER);
+        assert_eq!(state.covered, before.covered, "{reason}");
+        let active = state.active.expect("the batch stays owed");
+        assert_eq!(active.action_id.as_deref(), Some(action_id.as_str()));
+        assert!(
+            active
+                .reason
+                .as_deref()
+                .is_some_and(|recorded| recorded.ends_with(reason)),
+            "{reason}: {active:#?}"
+        );
+    }
+
+    put_coverage(&fixture, &runtime, &action_id, &run_id, &complete);
+    with_pull_lookup(&fixture, || {
+        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        evaluate_auto_task(&runtime, &definition, false, Utc::now())
+    })
+    .expect("evaluate complete evidence");
+    let state = named_consumer_state(&runtime, REVIEW_CONSUMER);
+    assert_eq!(state.covered, attempt.batch.through_inclusive, "{state:#?}");
+    assert!(state.active.is_none(), "{state:#?}");
+    let receipts = runtime
+        .automation_store()
+        .unwrap()
+        .automation_receipts(&state.consumer, 10)
+        .unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].action_id, action_id);
 }
 
 /// Lands one remote commit, admits its batch, and binds the minted action to

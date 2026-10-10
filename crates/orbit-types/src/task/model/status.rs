@@ -20,6 +20,11 @@ pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
 /// [ORB-14338].
 pub const CANDIDATE_RESUME_EVENT: &str = "candidate_resume";
 
+/// Task history event recorded when Orbit, not the executing agent, wrote the
+/// task's execution summary. Delivery automation reads it to tell a review
+/// whose agent persisted no summary from one that did [ORB-15186].
+pub const EXECUTION_SUMMARY_DERIVED_EVENT: &str = "execution_summary_derived";
+
 /// Operator-facing projection for a valid task reference whose prefix is not
 /// represented in this machine's coordination registry.
 pub const TASK_REFERENCE_NOT_VERIFIABLE_HERE: &str = "not verifiable here";
