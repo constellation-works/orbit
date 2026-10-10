@@ -91,8 +91,18 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                 log_excerpt,
                 failure_region_note: regions.then(|| {
                     let unit = &failure["diagnostic_unit"];
+                    // Same marker diagnostic.rs emits. Absent, the sentence
+                    // below is unchanged from the pre-cut note.
+                    let cut = unit["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("[... output block cut;"));
+                    let cut_sentence = if cut {
+                        " A block cut short of its end is marked in the text and is not complete context."
+                    } else {
+                        ""
+                    };
                     format!(
-                        "_Failure regions from a completely scanned command; the full command was not retained. {} of {} source bytes omitted, including {} assertion payload bytes. All {} recognized failure anchors and bounded context are retained (64 KiB selection limit)._\n\n",
+                        "_Failure regions from a completely scanned command; the full command was not retained. {} of {} source bytes omitted, including {} assertion payload bytes. All {} recognized failure anchors and bounded context are retained (64 KiB selection limit).{cut_sentence}_\n\n",
                         unit["omitted_bytes"], unit["command_bytes"],
                         unit["assertion_payload_omitted_bytes"], unit["failure_anchor_count"],
                     )

@@ -183,13 +183,21 @@ its nonzero process completion, up to 256 KiB (`kind: runner_command`,
 supply `kind: runner_failure_regions`, `complete: false`, with
 `command_complete: true` and `selection_complete: true`: the command boundaries
 and every recognized failure anchor were scanned, but the command was not fully
-retained. Regions keep the command header, anchored test failures, panics,
-assertions and compiler errors, their next 11 context lines, summaries and exit.
-Gaps carry byte-omission markers; large left/right assertion payloads retain a
-512-byte prefix and explicitly count omitted payload bytes. The structured
-`command_bytes`, `retained_source_bytes`, `omitted_bytes`,
-`assertion_payload_omitted_bytes` and `failure_anchor_count` make these limits
-auditable. A failure-anchor count includes repeated reports of the same test.
+retained. Regions keep the command header, every recognized failure anchor, summaries
+and the process exit. A failing test keeps its captured output from the anchor
+through the stdout/stderr block until the next test status line, the
+captured-output section end, or the summary. Compiler diagnostics and other
+`error:` anchors keep their next 11 context lines. The selection is bounded by
+64 KiB. When that bound cuts inside a failure block, the text marks the cut
+(`[... output block cut; N bytes not retained ...]`) so a reader cannot treat it
+as an ordinary gap between anchors. Regions that still cannot fit under the cap
+are withheld, as before. Gaps between retained regions carry byte-omission
+markers. Large left/right assertion payloads retain a 512-byte prefix.
+`assertion_payload_omitted_bytes` counts only those left/right payloads, not
+block cuts or ordinary gaps. The structured `command_bytes`,
+`retained_source_bytes`, `omitted_bytes`, `assertion_payload_omitted_bytes` and
+`failure_anchor_count` make these limits auditable. A failure-anchor count
+includes repeated reports of the same test.
 The standalone log tool exposes this alternative as `failure_regions`.
 
 Exactly one failing command and one known failed step are required; all primary
