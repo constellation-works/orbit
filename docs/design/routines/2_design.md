@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Accepted
 feature: routines
 doc_role: design
@@ -104,6 +104,23 @@ The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
 from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
 immutable batches and separate successful-coverage checkpoints. It is proposed
 and unimplemented; existing scheduling and action semantics remain current.
+
+The dashboard's Automation › Routines rows show the ten most recent fires as
+outcome dots, oldest to newest. Each dispatched fire links to its run; a
+dispatch error without a run shows its outcome without a link. Consecutive
+failures include failed runs, timeouts and dispatch errors, and show their
+count and starting slot. A success, skipped slot or in-flight fire resets the
+streak. Cron retries count once per scheduled slot, using the latest attempt.
+State- and delivery-triggered routines include their automation-admitted runs,
+merged with retained cron fires when the trigger has changed.
+
+Three or more consecutive failures produce a warning above the routine rows
+and a badge in the Health rail for the selected workspace and host. The badge
+refreshes from every tab and clears on a host/workspace switch. History reads
+are bounded to 100 records per source; a streak that reaches that boundary is
+shown as “at least” the retained count, with a start time that may be earlier.
+The HTTP routine payload retains `last_fire` and adds `recent_fires` (newest
+first) and `failure_streak` (`count`, `since`, `truncated`).
 
 ## 1. Routine Definition
 

@@ -154,6 +154,13 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
 .operation-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-mute); flex: 0 0 auto; }
 .operation-dot.ok { background: var(--state-success); }
 .operation-dot.failed { background: var(--state-failed); }
+.operation-dot.running { background: var(--state-running); }
+.routine-fire-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.routine-fire { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 24px; border-radius: 4px; }
+a.routine-fire:hover { background: var(--bg-elev); }
+a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.routine-failure-streak { color: var(--state-failed); }
+.routine-failures { margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--state-failed); border-radius: var(--radius); color: var(--state-failed); font: 12px/1.5 var(--font-sans); overflow-wrap: anywhere; }
 .operation-run-link,
 .operation-task-link,
 .operation-job-link,

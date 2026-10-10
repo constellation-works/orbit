@@ -12,7 +12,7 @@ import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from '
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, getRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
@@ -1312,6 +1312,10 @@ function activeRefreshJobs() {
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
   void peekDoctor().catch(error => console.error(error));
+  // Routines and Jobs already read this status in their active-panel request.
+  if (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate) {
+    void peekRoutineFailures().catch(error => console.error(error));
+  }
   const jobs = [];
   const add = (panel, request) => jobs.push({ panel, request });
   const subpanel = (group, name) => {

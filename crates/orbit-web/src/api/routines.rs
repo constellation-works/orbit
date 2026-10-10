@@ -533,6 +533,12 @@ fn status_json(status: &RoutineStatus) -> Value {
             status.next_due.clone(),
         ),
         "last_fire": status.last_fire.as_ref().map(fire_json),
+        "recent_fires": status.recent_fires.iter().map(fire_json).collect::<Vec<_>>(),
+        "failure_streak": {
+            "count": status.failure_streak.count,
+            "since": status.failure_streak.since,
+            "truncated": status.failure_streak.truncated,
+        },
     })
 }
 
