@@ -51,7 +51,8 @@ export async function assertRunTaskLabels(page, evidence) {
     await page.setViewportSize({ width: 390, height: 900 });
     if (!await link.isVisible() || await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('Task links must fit mobile run cards');
     const taskFilter = () => page.evaluate(() => ({
-      chips: [...document.querySelectorAll('#task-filter .chip.active')].map(chip => chip.textContent),
+      // The label, not the whole chip: a chip's count follows the task list.
+      chips: [...document.querySelectorAll('#task-filter .chip.active')].map(chip => (chip.querySelector('.chip-label') || chip).textContent),
       search: document.getElementById('task-search').value,
     }));
     const filterBefore = await taskFilter();

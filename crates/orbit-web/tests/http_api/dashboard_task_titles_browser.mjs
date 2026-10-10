@@ -176,6 +176,9 @@ export async function assertTaskTitleLayout(page, evidence) {
     if (!writes.some(write => write.status === 'in-progress') || !writes.some(write => write.crew === 'sol')) {
       throw new Error(`Keyboard edits must reach the task mutation boundary: ${JSON.stringify(writes)}`);
     }
+    // The edits' Undo feedback expires with a redraw in this fixture's
+    // context; let it land here rather than in a later scenario.
+    await page.waitForFunction(() => !document.querySelector('#tasks-body .mutation-feedback'), undefined, { timeout: 15000 });
     fs.writeFileSync(path.join(evidence, 'task-titles-result.json'), JSON.stringify({ passed: true, measurements, writes }, null, 2));
   } finally {
     await page.evaluate(() => { globalThis.fetch = globalThis.taskTitleFixture.priorFetch; delete globalThis.taskTitleFixture; });

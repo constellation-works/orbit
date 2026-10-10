@@ -27,7 +27,17 @@ export async function assertPullRequestLinks(page, evidence) {
       statusOrder: ['in-progress', 'review'],
       replaceTask: updated => Object.assign(tasks.find(task => task.id === updated.id), updated),
     };
-    globalThis.pullRequestLinkFixture = { render: () => renderTasks(tasks, context) };
+    globalThis.pullRequestLinkFixture = { priorFetch: globalThis.fetch, render: () => renderTasks(tasks, context) };
+    // A refresh during the test (the 30s poll, or the hash change a tab switch
+    // makes) reads these rows back instead of replacing them.
+    const json = payload => new Response(JSON.stringify(payload), { status: 200 });
+    globalThis.fetch = async (url, options) => {
+      const { pathname } = new URL(url, window.location.href);
+      if (pathname === '/api/tasks') return json({ items: tasks, total: tasks.length, limit: 50, truncated: false });
+      const task = tasks.find(task => pathname === `/api/tasks/${task.id}`);
+      if (task && !options?.method) return json(task);
+      return globalThis.pullRequestLinkFixture.priorFetch(url, options);
+    };
     globalThis.pullRequestLinkFixture.render();
   });
   try {
@@ -69,6 +79,6 @@ export async function assertPullRequestLinks(page, evidence) {
     }
     fs.writeFileSync(path.join(evidence, 'pull-request-links-result.json'), JSON.stringify({ passed: true, rows, linked, unlinked }, null, 2));
   } finally {
-    await page.evaluate(() => { delete globalThis.pullRequestLinkFixture; });
+    await page.evaluate(() => { globalThis.fetch = globalThis.pullRequestLinkFixture.priorFetch; delete globalThis.pullRequestLinkFixture; });
   }
 }
