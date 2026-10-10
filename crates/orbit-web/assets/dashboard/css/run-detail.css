@@ -48,6 +48,34 @@
 .run-hold strong { color: var(--state-held); }
 .run-hold-message { border-color: #3c2c55; background: #0d0914; color: #dac8fa; }
 .run-hold p { margin: 0; font-size: 13px; line-height: 1.55; }
+.run-cancelled { border-color: var(--state-cancelled); }
+.run-cancelled .run-failure-head { color: var(--state-cancelled); }
+.run-cancelled-reason,
+.run-failure-root {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.run-cancelled-reason { color: #e7c7c2; }
+.run-failure-root { color: #ffd9d4; }
+button.failure-id-link,
+a.failure-id-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+button.failure-id-link:focus-visible,
+a.failure-id-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .run-meta-grid .value { color: var(--fg); }
 .run-meta-grid .duration { white-space: nowrap; }
 .run-meta-task { grid-column: 1 / -1; }

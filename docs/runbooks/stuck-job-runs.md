@@ -196,6 +196,11 @@ incident, the leaf when it is listed, and the CASCADED column (`--json`: `cascad
 counts the parents folded into it. A parent whose waited-on children were all cancelled ends
 `cancelled`, not `failed`.
 
+The dashboard's run detail follows that same child-dispatch chain in one response.
+The failure box links every run id and task id in the message and adds a Root cause
+line for the deepest failed or cancelled descendant. Opening a cancelled run names
+who cancelled it, when, and the recorded reason, or says `no reason recorded`.
+
 An auto drain dispatches its leaves detached and never observes their outcomes, so the drain's
 own `State: success` only means the coordinator ran. `orbit run show <drain-run-id>` adds a
 `Leaves:` line (admitted, succeeded, failed, running, cancelled), a `WARNING:` with each failed

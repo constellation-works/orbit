@@ -957,6 +957,7 @@
         "tests/dashboard_assets.rs::dashboard_markdown_call_sites_use_sanitizing_wrapper",
         "tests/dashboard_assets.rs::dashboard_routes_emit_csp",
         "tests/dashboard_assets.rs::host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_states",
+        "tests/dashboard_assets.rs::run_detail_failure_chain_links_root_cause_and_names_a_cancellation",
         "tests/dashboard_assets.rs::runs_view_executes_load_more_live_duration_actions_header_and_cancel_style",
         "tests/dashboard_assets.rs::settings_hosts_view_executes_rows_freshness_load_banner_and_inline_mutations",
         "tests/dashboard_assets.rs::settings_system_view_executes_render_provenance_override_edit_and_refused_write",
