@@ -12,7 +12,13 @@ fn unreadable_glob_subtree_does_not_abort_profile_and_sibling_match_stays_pinned
     }
 
     let fixture = tempfile::tempdir().expect("fixture tempdir");
-    let workspace = fixture.path().join("workspace");
+    // The compiler pins resolved paths, which is what Seatbelt matches; on
+    // macOS the temp root is under the `/var` -> `/private/var` symlink.
+    let root = fixture
+        .path()
+        .canonicalize()
+        .expect("canonical fixture root");
+    let workspace = root.join("workspace");
     let unreadable = workspace.join("unreadable");
     let sibling = workspace.join("sibling");
     std::fs::create_dir_all(&unreadable).expect("unreadable directory");
