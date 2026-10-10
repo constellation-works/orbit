@@ -247,6 +247,16 @@ export function notifyScopeChange() {
   if (scopeChangeListener) scopeChangeListener();
 }
 
+// The workspace and window the address names. Scope writers keep `addressScope`
+// at what they last wrote, so `restoreScopeFromUrl` can tell a traversal into
+// another scope from a move between hashes (which also fires popstate).
+function addressScopeKey() {
+  const query = new URLSearchParams(window.location.search);
+  return `${query.get("workspace")}|${query.get("window")}`;
+}
+
+let addressScope = addressScopeKey();
+
 // Mirror workspace + window into the query string without a navigation.
 // Hash routes still own view/filter history; this keeps reload-safe scope.
 export function persistScopeToUrl() {
@@ -261,6 +271,7 @@ export function persistScopeToUrl() {
   if (url.href !== window.location.href) {
     history.replaceState(null, "", url);
   }
+  addressScope = addressScopeKey();
 }
 
 function windowTabs(selector) {
@@ -513,6 +524,45 @@ export function taskHref(taskId, { host = selectedRunHost(), workspace = current
   return scopedHref(`#tasks?open=${encodeURIComponent(taskId)}`, { host, workspace });
 }
 
+function syncWorkspaceSelector() {
+  const selector = document.getElementById("workspace-select");
+  if (selector) selector.value = currentWorkspace || "";
+}
+
+/// Bring the in-memory scope in line with the address after Back or Forward.
+/// Every scope change writes its own entry's address, so the address is the
+/// scope that entry was left in. An address without a workspace names none and
+/// leaves the scope alone, as does a move that keeps the address's scope. The
+/// router refreshes the view after a traversal, so this only restores state.
+export function restoreScopeFromUrl() {
+  const key = addressScopeKey();
+  if (key === addressScope) return;
+  addressScope = key;
+  const href = window.location.href;
+  const query = new URLSearchParams(window.location.search);
+  const linked = query.get("workspace");
+  if (linked === ALL_WORKSPACES_TOKEN) {
+    if (multiWorkspace) {
+      aggregateLinked = true;
+      setWorkspace(null);
+    }
+  } else if (linked) {
+    setWorkspace(linked);
+  }
+  // Scope listeners reset their view state, and one clears the open task from
+  // the address. The entry's address is what Back and Forward restore: put it
+  // back for the router to read.
+  if (window.location.href !== href) history.replaceState(history.state, "", href);
+  const linkedWindow = parseDashboardWindow(query.get("window"));
+  if (linkedWindow) setWindow(linkedWindow);
+  syncWorkspaceSelector();
+  syncWindowSelectors();
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("popstate", restoreScopeFromUrl);
+}
+
 /// Make `link` open task `taskId` on the Tasks tab. The href is `taskHref`, so
 /// a new tab, a copy or a modified click lands on the same task. A plain click
 /// stays in the page, in `workspace`, and adds one history entry: the scope
@@ -525,10 +575,19 @@ export function bindTaskLink(link, taskId, { workspace = currentWorkspace } = {}
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     if (workspace && workspace !== currentWorkspace) {
-      setWorkspace(workspace);
+      // The source entry keeps its own scope: write it down as it is, change
+      // scope in memory (its listeners clear any open task, so before the
+      // destination names one), then push the destination as the one new entry.
+      // Back and Forward re-read the scope from each entry
+      // (`restoreScopeFromUrl`). No hashchange follows a pushState, so the
+      // router is told by hand.
       persistScopeToUrl();
-      const selector = document.getElementById("workspace-select");
-      if (selector) selector.value = workspace;
+      setWorkspace(workspace);
+      syncWorkspaceSelector();
+      history.pushState(null, "", taskHref(taskId, { workspace }));
+      addressScope = addressScopeKey();
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      return;
     }
     window.location.hash = `#tasks?open=${encodeURIComponent(taskId)}`;
   });
