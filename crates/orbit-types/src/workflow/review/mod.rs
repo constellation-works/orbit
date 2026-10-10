@@ -34,8 +34,8 @@ pub use history::{
     ReviewReportHistory, ReviewReportRevision,
 };
 pub use ledger::{
-    ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewReservation, ReviewResetDecision,
-    ReviewerInvocation, ReviewerInvocationEvent, seconds_between,
+    REVIEW_ABANDONED_MARKER, ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewReservation,
+    ReviewResetDecision, ReviewerInvocation, ReviewerInvocationEvent, seconds_between,
 };
 pub use records::{RecordGap, RetiredValidation, record_gap};
 pub use report::{FindingDisposition, ReviewFinding, ReviewReport};

@@ -161,3 +161,171 @@ fn failure_handoff(fixture: &Fixture, failed_step: &str, message: &str) -> Value
     )
     .unwrap()
 }
+
+/// The ledger the fixture's admitted attempt reserved in, and whether its
+/// candidate already had its one review.
+fn candidate_reviewed(fixture: &Fixture) -> (orbit_types::workflow::ReviewLedger, bool) {
+    let ledger = fixture
+        .runtime
+        .review_store()
+        .unwrap()
+        .review_ledger(
+            &fixture.runtime.workspace_id().unwrap(),
+            fixture.input["admission"]["lineage_key"].as_str().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let attempt = ledger.attempts.last().unwrap();
+    let reviewed = ledger.reviewed(&attempt.candidate, &attempt.task_meaning_digest);
+    (ledger, reviewed)
+}
+
+fn report(fixture: &Fixture, summary: &str, validation: Value, escalation: Value) -> Value {
+    json!({
+        "schema_version": REVIEW_CONTRACT_VERSION,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "incomplete", "summary": summary,
+        "findings": [], "validation": validation, "escalation": escalation,
+    })
+}
+
+/// A reviewer that exits cleanly with only the placeholder it persisted first
+/// produced no verdict [ORB-15130]. Its attempt is released with a typed
+/// refusal, so the candidate's one review stays unspent and the same run can
+/// admit a fresh reviewer; the failure handoff states the open PR and the task
+/// status the store holds.
+#[test]
+fn a_reviewer_that_leaves_only_its_initial_report_does_not_spend_the_review() {
+    if !super::dispatch_admission::isolated(
+        "review_before_landing::a_reviewer_that_leaves_only_its_initial_report_does_not_spend_the_review",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::before_landing();
+    published(&fixture);
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+    let first_attempt = fixture.input["admission"]["attempt_id"].clone();
+    fixture.put_report(&report(
+        &fixture,
+        "Review still running; validation not yet complete.",
+        json!([]),
+        Value::Null,
+    ));
+
+    let refused = fixture
+        .settle()
+        .expect_err("an abandoned review is not an approval")
+        .to_string();
+    assert!(
+        refused.contains(orbit_types::workflow::REVIEW_ABANDONED_MARKER)
+            && refused.contains("stays open and unmerged"),
+        "{refused}"
+    );
+    let (ledger, reviewed) = candidate_reviewed(&fixture);
+    assert!(
+        ledger.attempts[0].released_at.is_some(),
+        "the abandoned attempt is released, not settled"
+    );
+    assert!(
+        !reviewed,
+        "an abandoned attempt is not the candidate's review"
+    );
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(
+                &fixture.task_id,
+                orbit_types::workflow::REVIEW_GATE_ARTIFACT
+            )
+            .unwrap()
+            .is_none(),
+        "no certificate records a verdict nobody reached"
+    );
+    assert_eq!(status(&fixture), TaskStatus::Review);
+
+    let handoff = failure_handoff(&fixture, "landing_review_gate_settle", &refused);
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["reason"], "review_abandoned", "{handoff}");
+
+    // The same run admits a reviewer again: the candidate's review is not
+    // spent, so the released attempt resumes instead of being refused.
+    fixture.admit();
+    assert_eq!(fixture.input["admission"]["applies"], true);
+    assert_eq!(fixture.input["admission"]["attempt_id"], first_attempt);
+    fixture.put_report(&report(
+        &fixture,
+        "Checked the published PR.",
+        json!([]),
+        json!("The change is wrong."),
+    ));
+    fixture
+        .settle()
+        .expect_err("a genuine incomplete stops delivery");
+    assert!(
+        candidate_reviewed(&fixture).1,
+        "the resumed attempt's own verdict is the candidate's review"
+    );
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    let verdict = comments
+        .iter()
+        .rfind(|comment| {
+            comment
+                .message
+                .starts_with("before-landing review settled attempt")
+        })
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        verdict.message.contains("PR #42 stays open and unmerged")
+            && verdict.message.contains("the task stays `review`")
+            && !verdict.message.contains("no PR is opened")
+            && !verdict.message.contains("the task is blocked"),
+        "{}",
+        verdict.message
+    );
+}
+
+/// Anything the reviewer decided or revised is a real review, however
+/// incomplete: a reason, a recorded check or a revision past the first
+/// settles the attempt and spends the candidate's review as before.
+#[test]
+fn an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts() {
+    if !super::dispatch_admission::isolated(
+        "review_before_landing::an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts",
+    ) {
+        return;
+    }
+    let record = json!([{
+        "id": "V1", "command": "fixture check", "outcome": "passed", "role": "required",
+    }]);
+    for case in ["escalation", "validation record", "second revision"] {
+        let mut fixture = Fixture::before_landing();
+        published(&fixture);
+        fixture.input["before_landing"] = json!(true);
+        fixture.admit();
+        let placeholder = "Review still running; validation not yet complete.";
+        match case {
+            "escalation" => fixture.put_report(&report(
+                &fixture,
+                placeholder,
+                json!([]),
+                json!("Missing evidence."),
+            )),
+            "validation record" => {
+                fixture.put_report(&report(&fixture, placeholder, record.clone(), Value::Null));
+            }
+            _ => {
+                fixture.put_report(&report(&fixture, placeholder, json!([]), Value::Null));
+                fixture.put_report(&report(&fixture, "Still reading.", json!([]), Value::Null));
+            }
+        }
+        let refused = fixture
+            .settle()
+            .expect_err("an incomplete review stops delivery")
+            .to_string();
+        assert!(refused.contains("review_gate_blocked"), "{case}: {refused}");
+        let (ledger, reviewed) = candidate_reviewed(&fixture);
+        assert!(reviewed, "{case}: a settled incomplete is the review");
+        assert!(ledger.attempts[0].released_at.is_none(), "{case}");
+    }
+}

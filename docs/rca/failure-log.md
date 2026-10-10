@@ -40,7 +40,8 @@ entries.
   contradicts it;
   (b) `review_timeout_incomplete` at exactly 3600 s;
   (c) the reviewer exits 0 well inside its budget, and its only report is the
-  initial placeholder ("Review still running; validation not yet complete.").
+  initial placeholder ("Review still running; validation not yet complete."),
+  so the candidate's review was counted as spent.
 - **Cause:** (a) Reviewer environment failures inside the managed run: Mac load
   flakes in orbit-cli process/mcp targets, or a Python 3.9 login PATH on the Mac
   (fixed in `~/.zprofile` on 2026-10-10). The host's base rerun of
@@ -48,12 +49,21 @@ entries.
   still counts as a pass (F2026-10-211, F2026-10-222). (b) The reviewer process
   is bounded by `min(review.minutes, agent_review_repair
   wall_clock_timeout_seconds 3600)`, while its manifest advertises the full
-  120 minutes (F2026-10-214). (c) Settlement counts the placeholder as the
-  candidate's one review, so re-admission needs an operator `review-reset`
-  (F2026-10-224).
+  120 minutes (F2026-10-214). (c) The headless reviewer ran `make ci-fast` in the
+  foreground, detached the long gates with `nohup … &`, said it would poll in
+  15 minutes and ended its turn. `claude -p` has no later turn, so the session
+  ended with the placeholder as its only report (F2026-10-224, seen again on
+  ORB-15118). The Bash tool caps a foreground command at
+  `BASH_MAX_TIMEOUT_MS` (600000 ms by default), which pushes the model to
+  detach. Settlement now releases such an attempt with a `review_abandoned:`
+  refusal instead of settling it, so the review stays unspent and no
+  `review-reset` is needed; the before-landing settlement comment names the
+  real PR and task status.
 - **Fix:** ORB-15122 (open) for (a), by rerunning the disputed command on the
   candidate. ORB-15131 (open) for (a), by making the base rerun comparable.
-  ORB-15094 (open) for (b). ORB-15130 (open) for (c).
+  ORB-15094 (open) for (b). For (c), the operator's agent-side change (raise
+  `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS`, and tell the reviewer
+  never to detach a command) is open; the settlement side landed with ORB-15130.
 - **Tasks:** ORB-15050 (PR #3962), ORB-15043 (PR #3969), ORB-15057 (PR #4006),
   ORB-15058 (PR #4009), ORB-14916 (PR #3966, timeout), ORB-14934 (PR #3972, timeout),
   ORB-14929 (PR #4016, timeout), ORB-15119 (PR #4030, placeholder report). All landed by
