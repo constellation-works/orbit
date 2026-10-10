@@ -119,6 +119,10 @@ body {
   padding-top: 2rem;
 }
 
+.sl-markdown-content .sl-heading-wrapper.level-h2 + :is(.orbit-card-grid, table, blockquote, .starlight-aside, pre, .expressive-code) {
+  margin-block-start: 1em;
+}
+
 .sl-markdown-content :is(p, li) {
   color: var(--sl-color-gray-2);
 }
