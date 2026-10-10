@@ -43,9 +43,12 @@ pub(super) fn code_duplicate_candidate(key: &str, alert: &Value) -> DuplicateCan
     let rule = field(alert, "rule_id");
     let path = field(alert, "path");
     let alert_anchor = format!("alert {number}");
-    // The rejected-owner fingerprint is the same alert/rule/location evidence
-    // an owner records, so a changed rule or location stops matching and the
-    // alert is filed afresh.
+    // Alert number and location are one bullet in a grouped ledger. They are
+    // colocated so a rejected group cannot suppress an alert whose location
+    // moved onto a sibling's recorded line. The rule is one per group and is
+    // read from the task as a whole. A changed rule or location stops
+    // matching and the alert is filed afresh. A single-alert body has no
+    // ledger, so those two anchors still match across the whole task text.
     let fields = vec![
         CoverageAnchor::new("alert_number", alert_anchor),
         CoverageAnchor::new("rule", format!("rule {rule}")),
@@ -64,10 +67,10 @@ pub(super) fn code_duplicate_candidate(key: &str, alert: &Value) -> DuplicateCan
             CoverageFingerprint::new("code_scanning_fields", fields.clone()),
         ],
     )
-    .with_rejected_owner_fingerprint(CoverageFingerprint::new(
-        "code_scanning_unchanged_after_rejection",
-        fields,
-    ))
+    .with_rejected_owner_fingerprint(
+        CoverageFingerprint::new("code_scanning_unchanged_after_rejection", fields)
+            .with_colocated_fields(&["alert_number", "location"]),
+    )
 }
 
 pub(super) fn secret_duplicate_candidate(key: &str, alert: &Value) -> DuplicateCandidate {

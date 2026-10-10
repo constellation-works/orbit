@@ -11,6 +11,9 @@
 //! that was rejected on its own merits then suppresses the candidate for as
 //! long as that fingerprint still matches the rejected task's text, so a
 //! finding an implementer correctly refused is not re-filed unchanged.
+//! Anchors the fingerprint marks as colocated must come from one bullet of a
+//! per-alert evidence ledger when the rejected description has one, so a
+//! grouped owner cannot satisfy a changed alert with a sibling's location.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
@@ -169,6 +172,9 @@ impl DuplicateCandidate {
 pub(in crate::adapter::engine_host::v2_host) struct CoverageFingerprint {
     name: &'static str,
     anchors: Vec<CoverageAnchor>,
+    /// Anchor `field` names that a rejected-owner match must satisfy together
+    /// from one per-alert ledger bullet. Empty keeps whole-text matching.
+    colocated_fields: &'static [&'static str],
 }
 
 impl CoverageFingerprint {
@@ -176,7 +182,23 @@ impl CoverageFingerprint {
         name: &'static str,
         anchors: Vec<CoverageAnchor>,
     ) -> Self {
-        Self { name, anchors }
+        Self {
+            name,
+            anchors,
+            colocated_fields: &[],
+        }
+    }
+
+    /// Require `fields` to co-occur in one ledger bullet when the rejected
+    /// task records a per-alert ledger. A body without that ledger, such as
+    /// a single-alert record, still matches these anchors across the whole
+    /// task text.
+    pub(in crate::adapter::engine_host::v2_host) fn with_colocated_fields(
+        mut self,
+        fields: &'static [&'static str],
+    ) -> Self {
+        self.colocated_fields = fields;
+        self
     }
 }
 
@@ -289,7 +311,7 @@ where
         if covering_owner_from_comments(&task.id, &comments).is_some() {
             continue;
         }
-        if !fingerprint_matches(&searchable_task_text(task, &comments), fingerprint) {
+        if !rejected_owner_fingerprint_matches(task, &comments, fingerprint) {
             continue;
         }
         let mut anchors = vec![CoverageAnchor::new("rejected_task_id", task.id.as_str())];
@@ -427,7 +449,79 @@ fn validate_candidate(candidate: &DuplicateCandidate) -> Result<(), OrbitError> 
 }
 
 fn fingerprint_matches(searchable: &str, fingerprint: &CoverageFingerprint) -> bool {
-    fingerprint.anchors.iter().all(|anchor| {
+    anchors_match(searchable, fingerprint.anchors.iter())
+}
+
+/// Persisted heading written by `append_alert_ledger`. Rejected grouped tasks
+/// already store these bytes; matching a renamed heading would stop binding
+/// an alert to its own location and restore cross-alert suppression.
+const PER_ALERT_LEDGER_HEADING: &str = "Per-alert evidence ledger";
+
+fn rejected_owner_fingerprint_matches(
+    task: &Task,
+    comments: &[TaskComment],
+    fingerprint: &CoverageFingerprint,
+) -> bool {
+    let searchable = searchable_task_text(task, comments);
+    if fingerprint.colocated_fields.is_empty() {
+        return fingerprint_matches(&searchable, fingerprint);
+    }
+    // A binding that names an anchor this fingerprint does not carry cannot
+    // be checked, so it must not suppress.
+    if fingerprint.colocated_fields.iter().any(|field| {
+        !fingerprint
+            .anchors
+            .iter()
+            .any(|anchor| anchor.field == *field)
+    }) {
+        return false;
+    }
+    let (colocated, rest): (Vec<&CoverageAnchor>, Vec<&CoverageAnchor>) = fingerprint
+        .anchors
+        .iter()
+        .partition(|anchor| fingerprint.colocated_fields.contains(&anchor.field));
+    if !anchors_match(&searchable, rest.iter().copied()) {
+        return false;
+    }
+    match per_alert_ledger_bullets(&task.description) {
+        Some(bullets) => bullets
+            .iter()
+            .any(|bullet| anchors_match(&canonical_text(bullet), colocated.iter().copied())),
+        None => anchors_match(&searchable, colocated.iter().copied()),
+    }
+}
+
+/// Bullets under the per-alert ledger, or `None` when the description has no
+/// such section. `Some` of an empty list means the heading was present and
+/// nothing may satisfy a colocated binding.
+fn per_alert_ledger_bullets(description: &str) -> Option<Vec<&str>> {
+    let mut bullets = None;
+    for line in description.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            if bullets.is_some() {
+                break;
+            }
+            if heading.trim() == PER_ALERT_LEDGER_HEADING {
+                bullets = Some(Vec::new());
+            }
+            continue;
+        }
+        if let Some(found) = bullets.as_mut()
+            && let Some(bullet) = trimmed.strip_prefix("- ")
+            && !bullet.is_empty()
+        {
+            found.push(trimmed);
+        }
+    }
+    bullets
+}
+
+fn anchors_match<'a>(
+    searchable: &str,
+    anchors: impl IntoIterator<Item = &'a CoverageAnchor>,
+) -> bool {
+    anchors.into_iter().all(|anchor| {
         let needle = canonical_text(&anchor.value);
         searchable.contains(&needle)
     })
