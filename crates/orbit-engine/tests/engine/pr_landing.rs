@@ -1692,6 +1692,81 @@ fn a_missing_validation_tool_is_an_environment_failure() {
     );
 }
 
+/// The owner validates outside any agent sandbox, so a required command that
+/// exits zero after printing a `DEFERRED:` notice never ran its sandbox-confined
+/// path before delivery. Both validation steps refuse that pass as the
+/// environment's failure, which no recovery repairs, and keep the notice in the
+/// log. The refusal is narrow: a real failure stays the candidate's, and a
+/// `DEFERRED:` that does not lead a line is ordinary output [ORB-15287].
+#[test]
+fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
+    isolated(
+        "a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let notice = orbit_exec::bwrap_deferral_notice(
+                "sandboxed_path",
+                "bwrap: No permissions to create a new namespace",
+            );
+            let remote_before = fx.remote_tip(BRANCH);
+
+            host.require_commands(&[&format!("echo '{notice}' >&2")]);
+            let error = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("a deferred sandbox path is not a validation pass");
+            let message = error.to_string();
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&message))
+                    && message.contains(&notice)
+                    && message.contains(&fx.candidate),
+                "typed as the environment's failure, naming the notice: {message}"
+            );
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["exit_code"], 0, "the process itself succeeded");
+            assert_eq!(log["failure_kind"], "environment");
+            assert_eq!(log["deferred_notice"], notice.as_str());
+            assert_eq!(fx.remote_tip(BRANCH), remote_before, "nothing was pushed");
+
+            // The claimed path validates before publication the same way.
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            let input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+            });
+            let claim = action(&host, "claim_validate", &input)
+                .expect_err("a claim must not publish a deferred pass");
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(
+                    None,
+                    Some(&claim.to_string())
+                ) && claim.to_string().contains(&notice),
+                "{claim}"
+            );
+
+            // A real failure alongside the notice stays the candidate's: the
+            // base lacks src/feature.txt, so it passes the same command.
+            host.require_commands(&[&format!("echo '{notice}' >&2; test ! -e src/feature.txt")]);
+            let failed = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("a nonzero exit fails whatever else it printed");
+            let failed = failed.to_string();
+            assert!(
+                !orbit_types::workflow::is_validation_environment_failure(None, Some(&failed))
+                    && failed.contains("passes this command, so the candidate introduced"),
+                "a failing gate with a notice is the candidate's failure: {failed}"
+            );
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["failure_kind"], "candidate");
+
+            // A notice that does not lead its line is not a deferral.
+            host.require_commands(&[&format!("echo 'saw {notice}'")]);
+            let validated = action(&host, "candidate_validate", &fx.validate_input())
+                .expect("only a line that starts with the prefix is a deferral");
+            assert_eq!(validated["decision"], "passed");
+        },
+    );
+}
+
 /// An implementer blocker arrives before commit, so the worktree may be dirty.
 /// The handoff blocks the task with the kind, leaves the uncommitted file and
 /// the head where they are, and opens no `[BLOCKED]` PR.

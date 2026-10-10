@@ -101,6 +101,9 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
                 &run,
             ));
         }
+        if let Some(failure) = run.deferral_failure(&candidate.candidate.commit) {
+            return Err(failure);
+        }
         require_clean_candidate(&workspace_path, &candidate)?;
         results.push((run.command, run.output));
     }

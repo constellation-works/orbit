@@ -409,6 +409,13 @@ deferred test as `host_sandbox_test` evidence instead. A result from a host
 that executed the path, such as owner fulfilment below, stands in for the
 record and clears its notices.
 
+The implementer lane follows the same reading [ORB-15287]. A required gate
+that exits 0 with only these notices, a failing nested-namespace probe in the
+same run and executed tests is handed off with the notices recorded as
+`not_run`, not failed. The owner's `candidate_validate` and `claim_validate`
+run it outside the agent sandbox and refuse an exit-0 pass carrying a line that
+starts `DEFERRED:` as a `validation_environment` failure.
+
 A negative control is bound to more than its label [ORB-14192]: an
 `expected_failure` record names its `control` kind — `pre_fix` (the
 reproduction on the pre-fix tree), `superseded_assertion` or

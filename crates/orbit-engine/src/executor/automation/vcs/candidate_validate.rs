@@ -147,6 +147,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "output": run.output,
             "validation_env": validation_env,
             "failure_kind": if red { json!("baseline_red") } else { run.failure_kind() },
+            "deferred_notice": run.deferred_notice,
             "missing_tool": run.missing_tool_name(),
             "network_retries": run.network_retries,
             "summary": run.summary,
@@ -189,6 +190,10 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 baseline.as_ref(),
                 &evidence,
             ));
+        }
+        if let Some(failure) = run.deferral_failure(&candidate) {
+            attach_logs(host, &task_ids, &run_id, &logs)?;
+            return Err(failure);
         }
         require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
         passed.push(run.command);

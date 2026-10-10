@@ -247,6 +247,19 @@ pass without executing their confined path. The reviewer copies each notice
 into the record's `deferred`, and such a pass never counts as running that
 path: settlement reads it as `not_run` (`validation_incomplete`).
 
+The same holds earlier, for the implementer [ORB-15287]. A required
+affected-test gate that exits 0 with only `DEFERRED:` notices, a failing
+nested-namespace probe in the same run and executed tests does not fail the
+implementation step: the implementer hands off, recording the command, the
+count and text of each notice and the probe output as `not_run` coverage. The
+owner's `candidate_validate` (and a claim's `claim_validate`) then runs the
+command outside the agent sandbox and refuses an exit-0 pass that still prints
+a `DEFERRED:` line as a `validation_environment` failure, so the path runs
+natively before delivery or the candidate is held. Real failures, `SKIP:` or
+`skipping` notices, empty gates, notices with no failing probe and the other
+required commands are not deferrable
+([development guide](../DEVELOPMENT.md#test-process-environment)).
+
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
 `host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside
 the agent sandbox when it settles

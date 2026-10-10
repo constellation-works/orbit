@@ -263,6 +263,22 @@ spec:
        exact command, denial, and uncertainty. Return success only for a
        complete deliverable when workspace policy permits deferring the
        check; otherwise report the validation blocker.
+       One deferral is sanctioned: a required affected-test gate that exits
+       0 but prints `DEFERRED:` notices for sandbox-confined fixtures, because
+       the agent sandbox refuses the nested sandbox they need. The owner's
+       candidate validation reruns every required command outside the agent
+       sandbox and refuses a pass that still deferred, so do not fail the step
+       for it; hand off when ALL hold: the gate exited 0 and executed tests on
+       the pinned base; every notice is a `DEFERRED:` line; and, in this run,
+       a nested-sandbox probe failed with the sandbox's own refusal. Record in
+       the execution summary the exact command, the count and text of each
+       notice, and the probe command and output, and mark that coverage
+       `not_run`, never as a completed pass. Nothing else is deferrable:
+       a nonzero exit, a `SKIP:` or `skipping` notice, a gate that ran no
+       tests or selected nothing, a notice with no failing probe, a Seatbelt
+       `sandbox_apply` denial, a host-required criterion, a `baseline_red`
+       command, and every other required command (formatting, lint, goldens,
+       static-analysis extraction) keep their ordinary handling above.
        Run only gates named by workspace policy. When a gate fails outside the
        delivery scope, reproduce it once on the unmodified baseline (the same
        command at the base commit or with your diff reverted). A failure there
