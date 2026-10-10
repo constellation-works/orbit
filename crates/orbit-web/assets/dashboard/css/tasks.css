@@ -103,8 +103,8 @@
   display: grid;
   grid-template-columns: 76px minmax(140px, 1fr) 104px 72px 72px;
   gap: 8px;
-  min-height: 58px;
-  padding: 8px 12px;
+  min-height: 42px;
+  padding: 0 12px;
   margin: 0;
   border-radius: 0;
   align-items: center;
@@ -131,23 +131,11 @@
 .row .title {
   color: var(--fg);
   overflow: hidden;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  /* Reserve both lines even for a short title so rows stay aligned. */
-  height: 40px;
-  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 450;
   font-size: 13.5px;
   min-width: 0;
-}
-/* Inline badges must fit the title's line box so both lines remain visible. */
-.row .title :is(.os-badge, .readiness-badge, .ws-badge) {
-  line-height: 14px;
-  vertical-align: baseline;
 }
 .status-cell {
   display: grid;
@@ -503,7 +491,6 @@
   background: transparent;
   border-bottom: none;
   min-height: 32px;
-  padding-block: 0;
   pointer-events: none;
 }
 .row.header:hover {
@@ -523,7 +510,6 @@
   text-overflow: ellipsis;
   /* text-align + grid-area (in narrow) inherited from .row.* + @media rules so columns align with data rows */
 }
-.row.header .title { display: block; height: auto; }
 
 main.tasks-layout {
   align-items: stretch;
