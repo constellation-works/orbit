@@ -318,7 +318,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `protocol_skew` | Caller and owner request fingerprints differ (or the owner predates fingerprints); refused before pull, with both fingerprints in the diagnosis |
 | `protocol_mismatch` | Legacy probe report for differing integer revisions; current followers surface typed `protocol_skew` |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
-| `before_pr_unsupported` | Owner has `review.before_pr` on and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
+| `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.before_pr`, `review.before_landing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now for the calling machine; replays keep their stored contract |
