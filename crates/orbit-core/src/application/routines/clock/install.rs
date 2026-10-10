@@ -111,6 +111,37 @@ pub struct ClockInstallReport {
     /// Follow-up commands to run manually when activation failed or was
     /// unavailable (e.g. no user systemd session).
     pub manual_steps: Vec<String>,
+    /// The owner-only file `orbit clock tick` reads operator credentials from
+    /// [ORB-15154]. The unit never contains them: launchd and systemd start the
+    /// tick with no login environment, so the tick loads the names
+    /// `execution.env.pass` lists from this file.
+    pub env_file: PathBuf,
+    /// True when this install created the (comment-only) file.
+    pub env_file_created: bool,
+}
+
+const CLOCK_ENV_TEMPLATE: &str = "\
+# Operator credentials for `orbit clock tick`, which launchd or systemd starts with no
+# login environment. One NAME=value per line. Only names listed in the effective
+# `[execution.env] pass` are loaded, and the tick refuses this file unless it is
+# readable by its owner alone (chmod 600).
+#
+# Dedicated Claude worker token (create it with `claude setup-token`):
+# CLAUDE_CODE_OAUTH_TOKEN=
+";
+
+/// Create the comment-only `clock.env` when absent; never touch an existing
+/// one. Returns its path and whether this call created it.
+fn ensure_clock_env_file(global_root: &Path) -> Result<(PathBuf, bool), OrbitError> {
+    let path = orbit_common::security::operator_env::clock_env_file_path(global_root);
+    match orbit_common::fs::io::write_new_private_text(&path, CLOCK_ENV_TEMPLATE) {
+        Ok(()) => Ok((path, true)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok((path, false)),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to create '{}': {error}",
+            path.display()
+        ))),
+    }
 }
 
 /// Render and install the platform clock unit for the current user, then try
@@ -141,10 +172,11 @@ pub(super) fn install_clock_with(
     runner: &dyn ClockCommandRunner,
     home: &Path,
 ) -> Result<ClockInstallReport, OrbitError> {
-    let report = match platform {
+    let mut report = match platform {
         ClockPlatform::Launchd => install_launchd(global_root, orbit_bin, settings, runner, home)?,
         ClockPlatform::Systemd => install_systemd(orbit_bin, settings, runner, home)?,
     };
+    (report.env_file, report.env_file_created) = ensure_clock_env_file(global_root)?;
     if report.activated {
         clear_clock_reload_pending(global_root)?;
     }
@@ -164,6 +196,8 @@ fn install_launchd(
         manual_steps: launchd_manual_steps(activated, &plist_path),
         files_written: vec![plist_path],
         activated,
+        env_file: PathBuf::new(),
+        env_file_created: false,
     })
 }
 
@@ -266,6 +300,8 @@ fn install_systemd(
         manual_steps: systemd_manual_steps(activated),
         files_written,
         activated,
+        env_file: PathBuf::new(),
+        env_file_created: false,
     })
 }
 

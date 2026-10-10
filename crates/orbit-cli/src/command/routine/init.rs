@@ -49,6 +49,11 @@ impl RoutineInitArgs {
         for file in &report.files_written {
             text.push_str(&format!("\nwrote {}", file.display()));
         }
+        text.push_str(&format!(
+            "\n{} {} (owner-only; the clock loads the `execution.env.pass` names listed here, e.g. CLAUDE_CODE_OAUTH_TOKEN)",
+            if report.env_file_created { "created" } else { "kept" },
+            report.env_file.display()
+        ));
         if report.activated {
             text.push_str(
                 "\nclock unit active: `orbit clock tick` runs on this machine's clock cadence (`orbit clock status`)",
@@ -71,6 +76,8 @@ impl RoutineInitArgs {
                         .map(|file| file.display().to_string())
                         .collect::<Vec<_>>(),
                     "manual_steps": report.manual_steps,
+                    "env_file": report.env_file.display().to_string(),
+                    "env_file_created": report.env_file_created,
                 },
             }),
             text,

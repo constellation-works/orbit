@@ -208,6 +208,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
         doctor_check_host_shutdown(runtime)
     }),
     DoctorProbe::one("env-pass", |runtime, _| doctor_check_env_pass(runtime)),
+    DoctorProbe::one("claude-worker-token", |runtime, _| {
+        super::worker_token::doctor_check_claude_worker_token(runtime)
+    }),
     DoctorProbe::one("validation-env", |runtime, _| {
         doctor_check_validation_env(runtime)
     }),

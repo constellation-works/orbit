@@ -445,6 +445,17 @@ pub trait RuntimeHost: Send + Sync {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&[], required_env_vars)
     }
+    /// Whether a Claude activity must be launched with its own credential
+    /// (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`) rather than start on
+    /// the login the Claude Desktop app shares [ORB-15154].
+    ///
+    /// The Desktop revokes that shared login when it refreshes, so an
+    /// unattended run that starts on it fails with a 401 mid-way. The default
+    /// is `false` so a host that owns no such login (tests, embedded hosts)
+    /// is unaffected; `OrbitRuntime` answers `true` on macOS.
+    fn requires_claude_worker_credential(&self) -> bool {
+        false
+    }
     /// The environment owner-side repository tooling runs in: required
     /// validation and `local_shell` steps [ORB-13987].
     ///

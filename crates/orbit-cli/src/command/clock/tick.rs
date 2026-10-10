@@ -263,5 +263,6 @@ fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {
             "message": error.message,
         })).collect::<Vec<_>>(),
         "no_workspace_loaded": outcome.no_workspace_loaded,
+        "clock_env_loaded": outcome.clock_env_loaded,
     })
 }

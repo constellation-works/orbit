@@ -332,11 +332,20 @@ pub(crate) fn run_sweep_at_with_providers_at(
                 .collect(),
             auto_task_reports: Vec::new(),
             load_errors,
+            clock_env_loaded: Vec::new(),
             no_workspace_loaded,
             deadline_exceeded: Instant::now() >= deadline,
             skipped_workspaces: skipped_workspaces.into_iter().collect(),
         });
     }
+
+    // [ORB-15154] The OS clock gives this process no login environment, so
+    // operator credentials the runs below need come from the clock env file.
+    let clock_env_loaded = if options.dry_run {
+        Vec::new()
+    } else {
+        export_clock_env_for(global_root, &discovered.entries, &mut load_errors)
+    };
 
     let dispatch = RuntimeDispatch {
         runtimes: discovered
@@ -607,10 +616,40 @@ pub(crate) fn run_sweep_at_with_providers_at(
         reports,
         auto_task_reports,
         load_errors,
+        clock_env_loaded,
         no_workspace_loaded,
         deadline_exceeded,
         skipped_workspaces: skipped_workspaces.into_iter().collect(),
     })
+}
+
+/// Export the `clock.env` values any discovered workspace's effective
+/// `execution.env.pass` lists. A refused or unreadable file is a load error
+/// row, not a failed tick: runs still start, and a Claude activity without its
+/// token then fails fast with an actionable error.
+fn export_clock_env_for(
+    global_root: &Path,
+    entries: &[(Workspace, OrbitRuntime)],
+    load_errors: &mut Vec<RoutineLoadError>,
+) -> Vec<String> {
+    let pass: BTreeSet<String> = entries
+        .iter()
+        .flat_map(|(_, runtime)| runtime.env_pass_names())
+        .collect();
+    let pass: Vec<String> = pass.into_iter().collect();
+    match orbit_common::security::operator_env::export_clock_env(global_root, &pass) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            let path = orbit_common::security::operator_env::clock_env_file_path(global_root);
+            load_errors.push(RoutineLoadError {
+                source_workspace: orbit_common::security::operator_env::CLOCK_ENV_FILE_NAME
+                    .to_string(),
+                path: Some(path),
+                message: error.to_string(),
+            });
+            Vec::new()
+        }
+    }
 }
 
 fn tick_allows_workspace(

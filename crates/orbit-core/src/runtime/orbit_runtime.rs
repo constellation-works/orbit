@@ -798,6 +798,11 @@ impl OrbitRuntime {
         self.execution_env_policy().unset_pass_names()
     }
 
+    /// The `execution.env.pass` names this workspace's agents may receive.
+    pub fn env_pass_names(&self) -> Vec<String> {
+        self.execution_env_policy().pass_names().to_vec()
+    }
+
     /// The warning for [`Self::unset_env_pass_names`], for drain/ship starts
     /// and `orbit doctor`. `None` when every pass-listed variable is set.
     pub fn unset_env_pass_warning(&self) -> Option<String> {
