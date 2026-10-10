@@ -157,7 +157,7 @@ fn publish_complete_marker(marker: &Path, identity: &str) -> io::Result<()> {
                 }
             })?;
         file.write_all(identity.as_bytes())?;
-        file.sync_all()?;
+        orbit_common::fs::io::sync_file(&file)?;
     }
     fs::hard_link(&staging, marker)?;
     let parent = marker.parent().ok_or_else(|| {

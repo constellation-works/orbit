@@ -81,6 +81,8 @@ fn run_isolated_test(test_name: &str) -> bool {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
+    // Crash-recovery coverage keeps real durability syncs in its child.
+    command.env_remove(orbit_common::fs::io::RELAXED_DURABILITY_ENV);
     let output = command
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env(CHILD, test_name)
@@ -328,7 +330,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         deadline: Utc::now() + chrono::Duration::seconds(60),
     };
     serde_json::to_writer(&pending_file, &switch).unwrap();
-    pending_file.sync_all().unwrap();
+    orbit_common::fs::io::sync_file(&pending_file).unwrap();
     assert!(pending_switch(&ctx.global).is_some());
 
     // Clock tick during pending generation switch must NOT resume anything.

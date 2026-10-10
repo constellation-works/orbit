@@ -59,7 +59,13 @@ impl TaskRegistryStore {
         // low-write (≈one commit per task create/bind/unregister), so the extra
         // fsync cost is negligible. Scoped to this connection only — the shared
         // Store::open stays at NORMAL for higher-write stores.
-        if !read_only && let Err(error) = conn.pragma_update(None, "synchronous", "FULL") {
+        if !read_only
+            && let Err(error) = conn.pragma_update(
+                None,
+                "synchronous",
+                orbit_common::fs::io::sqlite_synchronous("FULL"),
+            )
+        {
             if is_readonly_or_access_sqlite_error(&error) {
                 orbit_common::tracing::warn!(
                     target: "orbit.store.task_registry",

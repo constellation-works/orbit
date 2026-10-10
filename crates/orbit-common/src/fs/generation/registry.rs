@@ -199,7 +199,7 @@ pub(super) fn register(root: &Path, record: &ParticipantRecord) -> Option<Regist
         FileExt::try_lock_exclusive(&file).ok()?;
         let encoded = serde_json::to_vec(record).ok()?;
         file.write_all(&encoded).ok()?;
-        file.sync_data().ok()?;
+        crate::fs::io::sync_file_data(&file).ok()?;
         std::fs::rename(&staged, &path).ok()?;
         Some(Registration {
             file: file.try_clone().ok()?,
@@ -352,7 +352,7 @@ pub(super) struct PendingClaim {
 impl Drop for PendingClaim {
     fn drop(&mut self) {
         let _ = self.file.set_len(0);
-        let _ = self.file.sync_data();
+        let _ = crate::fs::io::sync_file_data(&self.file);
         let _ = FileExt::unlock(&self.file);
     }
 }
@@ -395,7 +395,7 @@ pub(super) fn claim_pending(
     file.seek(SeekFrom::Start(0)).map_err(refusal)?;
     file.write_all(&encoded).map_err(refusal)?;
     file.set_len(encoded.len() as u64).map_err(refusal)?;
-    file.sync_data().map_err(refusal)?;
+    crate::fs::io::sync_file_data(&file).map_err(refusal)?;
     Ok(claim)
 }
 

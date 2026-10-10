@@ -298,7 +298,7 @@ impl GenerationUpdate {
             .write_all(format!("1:{digest}\n").as_bytes())
             .map_err(refusal)?;
         self.generation.file.set_len(67).map_err(refusal)?;
-        self.generation.file.sync_all().map_err(refusal)?;
+        crate::fs::io::sync_file(&self.generation.file).map_err(refusal)?;
         FileExt::lock_shared(&self.generation.file).map_err(refusal)?;
         let guard = GenerationGuard::holding(self.generation, false);
         let guard = match participant {

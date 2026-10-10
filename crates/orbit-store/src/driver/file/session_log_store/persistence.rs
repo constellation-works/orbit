@@ -133,7 +133,7 @@ fn append_entry(path: &Path, entry: &SessionLogEntry) -> Result<(), OrbitError> 
     let mut file = open_log_for_write(path, OpenOptions::new().create(true).append(true))?;
     file.write_all(&encoded)
         .map_err(|error| OrbitError::Io(format!("append {}: {error}", path.display())))?;
-    file.sync_data()
+    orbit_common::fs::io::sync_file_data(&file)
         .map_err(|error| OrbitError::Io(format!("sync {}: {error}", path.display())))?;
     if !existed {
         let parent = path.parent().ok_or_else(|| {
@@ -316,7 +316,7 @@ fn truncate_log(path: &Path, truncate_at: usize) -> Result<(), OrbitError> {
     let file = open_log_for_write(path, OpenOptions::new().write(true))?;
     file.set_len(truncate_at as u64)
         .map_err(|error| OrbitError::Io(format!("truncate {}: {error}", path.display())))?;
-    file.sync_all()
+    orbit_common::fs::io::sync_file(&file)
         .map_err(|error| OrbitError::Io(format!("sync {}: {error}", path.display())))
 }
 
@@ -324,7 +324,7 @@ fn append_trailing_newline(path: &Path) -> Result<(), OrbitError> {
     let mut file = open_log_for_write(path, OpenOptions::new().append(true))?;
     file.write_all(b"\n")
         .map_err(|error| OrbitError::Io(format!("append {}: {error}", path.display())))?;
-    file.sync_data()
+    orbit_common::fs::io::sync_file_data(&file)
         .map_err(|error| OrbitError::Io(format!("sync {}: {error}", path.display())))
 }
 

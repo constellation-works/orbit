@@ -118,6 +118,32 @@ pub fn bulk_write_temp_dir() -> std::path::PathBuf {
     default
 }
 
+/// Restore real durability syncs, process-wide, until the returned guard drops.
+///
+/// Test runs set [`RELAXED_DURABILITY_ENV`](crate::fs::io::RELAXED_DURABILITY_ENV),
+/// so `fs::io::sync_file`, `sync_file_data` and `sqlite_synchronous` skip
+/// their flush. A test whose subject is the sync itself, or a durability or
+/// crash-recovery path that should exercise the real call, holds this guard.
+/// It is process-wide because a sync can run on another thread, so tests
+/// running beside it only pay for real syncs again. A SQLite connection keeps
+/// the level it was opened with, so take the guard before opening the store.
+/// An `orbit` child the test spawns reads its own environment: remove the
+/// variable from that child's command instead.
+#[must_use = "real syncs last only while the guard lives"]
+pub fn require_durable_syncs() -> DurableSyncs {
+    crate::fs::io::DURABLE_SYNC_HOLDS.fetch_add(1, Ordering::SeqCst);
+    DurableSyncs(())
+}
+
+/// Guard from [`require_durable_syncs`].
+pub struct DurableSyncs(());
+
+impl Drop for DurableSyncs {
+    fn drop(&mut self) {
+        crate::fs::io::DURABLE_SYNC_HOLDS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// The variables an `orbit-engine` managed run exports into every spawned
 /// activity (see `orbit-engine/src/context/env.rs`): job/task/session
 /// identity plus the "this is a managed run" marker. A test that asserts

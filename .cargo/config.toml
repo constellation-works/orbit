@@ -11,3 +11,8 @@ rustc-wrapper = "./scripts/rustc-compiler-cache.sh"
 # machine running the tests; `orbit init` honors this opt-out.
 [env]
 ORBIT_SKIP_HOST_PREREQUISITES = "1"
+# Test runs skip durability syncs (fsync, F_FULLFSYNC, SQLite synchronous):
+# on macOS each one flushes the whole drive. Only debug builds honor it, and a
+# value already in the environment wins, so `=0` restores real syncs.
+# See docs/DEVELOPMENT.md#fixtures-on-a-loaded-host.
+ORBIT_TEST_RELAXED_DURABILITY = "1"

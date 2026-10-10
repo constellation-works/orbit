@@ -16,10 +16,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::file_lock::acquire_shared_file_lock;
@@ -134,7 +136,7 @@ pub fn write_new_private_text(path: &Path, content: &str) -> io::Result<()> {
     }
     let mut file = create_new_private_file(path)?;
     file.write_all(content.as_bytes())?;
-    file.sync_all()
+    sync_file(&file)
 }
 
 /// Atomically write `content` to `path` without fsyncing the parent.
@@ -211,7 +213,7 @@ impl StagedTextFile {
 
         write(&mut file)?;
         if durable {
-            file.sync_all()?;
+            sync_file(&file)?;
         }
         drop(file);
 
@@ -345,7 +347,91 @@ fn temp_path_for(target_path: &Path) -> PathBuf {
 /// trusted filesystem boundary instead of resolving a caller-provided path in
 /// this synchronization primitive.
 pub fn sync_parent_dir(parent_dir: &File) -> io::Result<()> {
-    parent_dir.sync_all()
+    sync_file(parent_dir)
+}
+
+// ---------------------------------------------------------------------------
+// Durability syncs
+// ---------------------------------------------------------------------------
+
+/// Set to `1` to make durability syncs no-ops in a debug build's test run.
+///
+/// `.cargo/config.toml` sets it for every process Cargo launches, so test
+/// binaries and the `orbit` children they spawn inherit it. On macOS each
+/// sync is an `F_FULLFSYNC` that flushes the whole drive's write cache, and
+/// concurrent suites queue behind each other's flushes. A test process loses
+/// nothing by skipping them: only a power loss or kernel crash can observe a
+/// missing sync. Release builds ignore the variable.
+pub const RELAXED_DURABILITY_ENV: &str = "ORBIT_TEST_RELAXED_DURABILITY";
+
+static RELAXED_DURABILITY: OnceLock<bool> = OnceLock::new();
+
+/// Live [`crate::test_env::require_durable_syncs`] guards. Any one of them
+/// restores real syncs process-wide.
+pub(crate) static DURABLE_SYNC_HOLDS: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether a [`RELAXED_DURABILITY_ENV`] value relaxes durability in a build
+/// that does (`debug_build`) or does not carry debug assertions.
+///
+/// Only an exact `1` in a debug build relaxes, so a release or installed
+/// binary always syncs whatever its environment says.
+#[doc(hidden)]
+pub fn relaxed_durability_requested(value: Option<&OsStr>, debug_build: bool) -> bool {
+    debug_build && value == Some(OsStr::new("1"))
+}
+
+/// Whether durability syncs are currently skipped. The variable is read once.
+pub fn durability_syncs_relaxed() -> bool {
+    let relaxed = *RELAXED_DURABILITY.get_or_init(|| {
+        relaxed_durability_requested(
+            std::env::var_os(RELAXED_DURABILITY_ENV).as_deref(),
+            cfg!(debug_assertions),
+        )
+    });
+    relaxed && DURABLE_SYNC_HOLDS.load(Ordering::SeqCst) == 0
+}
+
+/// Flush `file`'s data and metadata to stable storage (`File::sync_all`).
+///
+/// Every durability sync in Orbit goes through here or [`sync_file_data`];
+/// clippy's `disallowed-methods` rejects direct calls in production code. In a
+/// relaxed test run ([`RELAXED_DURABILITY_ENV`]) it returns `Ok` without
+/// syncing.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the single durability-sync site; callers route through it so test runs can relax it"
+)]
+pub fn sync_file(file: &File) -> io::Result<()> {
+    if durability_syncs_relaxed() {
+        return Ok(());
+    }
+    file.sync_all()
+}
+
+/// Flush `file`'s data to stable storage (`File::sync_data`), relaxed in test
+/// runs like [`sync_file`].
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the single durability-sync site; callers route through it so test runs can relax it"
+)]
+pub fn sync_file_data(file: &File) -> io::Result<()> {
+    if durability_syncs_relaxed() {
+        return Ok(());
+    }
+    file.sync_data()
+}
+
+/// The SQLite `synchronous` level to set where a store wants `durable`
+/// (`"NORMAL"` or `"FULL"`): `"OFF"` in a relaxed test run, else `durable`.
+///
+/// Every `synchronous` pragma takes its level from here;
+/// `scripts/check-durability-syncs.py` rejects one that does not.
+pub fn sqlite_synchronous(durable: &'static str) -> &'static str {
+    if durability_syncs_relaxed() {
+        "OFF"
+    } else {
+        durable
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -219,7 +219,7 @@ pub fn write_candidate_manifest(
             ))
         })?;
     std::io::Write::write_all(&mut file, document.as_bytes())
-        .and_then(|()| file.sync_all())
+        .and_then(|()| orbit_common::fs::io::sync_file(&file))
         .map_err(|error| {
             OrbitError::Io(format!(
                 "failed to write the manifest '{}': {error}",

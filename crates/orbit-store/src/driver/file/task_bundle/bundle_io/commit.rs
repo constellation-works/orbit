@@ -285,7 +285,7 @@ pub(crate) fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitErro
         Ok(file) => {
             file.set_len(len)
                 .map_err(|err| OrbitError::from_write_io(path, err))?;
-            file.sync_all()
+            orbit_common::fs::io::sync_file(&file)
                 .map_err(|err| OrbitError::from_write_io(path, err))?;
             Ok(())
         }

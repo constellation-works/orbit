@@ -115,10 +115,7 @@ pub(super) fn write_archive(
 
     let encoder = builder.into_inner().map_err(map_io("finalize tar"))?;
     encoder.finish().map_err(map_io("finalize zstd"))?;
-    staged
-        .as_file()
-        .sync_all()
-        .map_err(map_io("sync archive"))?;
+    orbit_common::fs::io::sync_file(staged.as_file()).map_err(map_io("sync archive"))?;
     staged.persist(out_path).map_err(|e| {
         OrbitError::Io(format!(
             "failed to replace archive '{}': {}",

@@ -124,6 +124,6 @@ fn write_executable(path: &Path, bytes: &[u8]) -> Result<(), OrbitError> {
     }
     let mut file = options.open(path).map_err(stage_error)?;
     file.write_all(bytes)
-        .and_then(|()| file.sync_all())
+        .and_then(|()| orbit_common::fs::io::sync_file(&file))
         .map_err(stage_error)
 }
