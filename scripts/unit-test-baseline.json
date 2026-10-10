@@ -805,6 +805,7 @@
         "driver/sqlite/task_registry/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
         "driver/sqlite/task_registry/tests/relations.rs::relation_cycle_through_another_workspace_is_rejected",
         "driver/sqlite/task_reservation_store/tests/workspace_claim.rs::persisted_workspace_claim_is_not_group_or_world_readable",
+        "driver/sqlite/v2_audit_store/tests/mod.rs::delayed_insert_during_tail_read_keeps_snapshot_ranks_and_the_newest_event",
         "fs/lock/tests/file_lock.rs::crash_holder_child",
         "fs/lock/tests/file_lock.rs::sigkilled_holder_releases_lock",
         "repository/task/coordination/tests/admission.rs::a_candidate_changed_after_selection_is_never_admitted_from_the_selection",

@@ -27,7 +27,9 @@ use super::routine::{
     RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutinePauseRecord,
 };
 use super::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
-use super::v2_audit::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow};
+use super::v2_audit::{
+    V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
+};
 
 use crate::contracts::incident::{FailureIncidentQuery, FailureIncidentReport};
 use crate::contracts::{
@@ -562,6 +564,17 @@ pub trait V2AuditStoreBackend: Send + Sync {
         filter: &V2AuditEventFilter,
     ) -> Result<Vec<V2AuditEventRow>, OrbitError>;
     fn count_v2_audit_events(&self, filter: &V2AuditEventFilter) -> Result<i64, OrbitError>;
+    /// Filtered total and one chronological tail page from a single read snapshot.
+    ///
+    /// `filter.limit` and `filter.offset` are the tail window: `offset` counts
+    /// backward from the newest matching row, and the returned rows are oldest
+    /// first inside that window. `oldest_first` is ignored. An offset at or
+    /// past the end yields an empty page and the snapshot's total. A row that
+    /// commits after the count cannot change the page relative to that total.
+    fn list_v2_audit_event_tail(
+        &self,
+        filter: &V2AuditEventFilter,
+    ) -> Result<V2AuditEventTailPage, OrbitError>;
     /// Newest matching envelope rows for each run, capped independently so a
     /// busy earlier run cannot consume a page-wide LIMIT.
     fn list_v2_audit_events_for_runs_partitioned(
