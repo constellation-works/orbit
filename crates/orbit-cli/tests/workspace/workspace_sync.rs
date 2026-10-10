@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use assert_cmd::assert::OutputAssertExt;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::Value;
@@ -24,8 +25,20 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env_remove("ORBIT_HOME");
-    command.timeout(std::time::Duration::from_secs(30));
+    command.timeout(test_env::FIXTURE_STEP_DEADLINE);
     command
+}
+
+/// Run `command` to completion. A command killed at its
+/// [`test_env::FIXTURE_STEP_DEADLINE`] guard fails naming `what` and the host
+/// load, not as an interrupted failure of the command under test.
+fn run(command: &mut assert_cmd::Command, what: &str) -> assert_cmd::assert::Assert {
+    let started = std::time::Instant::now();
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("run `{what}`: {error}"));
+    test_env::assert_step_finished(what, started.elapsed(), &output.status);
+    output.assert()
 }
 
 fn write_machine_identity(home: &Path) {
@@ -59,10 +72,11 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
         let repo = home.path().join("upgraded-workspace");
         git_repo::init(&repo);
         write_machine_identity(home.path());
-        orbit(&repo, home.path())
-            .args(["workspace", "init", "--name", "upgraded-workspace"])
-            .assert()
-            .success();
+        run(
+            orbit(&repo, home.path()).args(["workspace", "init", "--name", "upgraded-workspace"]),
+            "orbit workspace init",
+        )
+        .success();
         let root = repo.join(".orbit");
         for (directory, definition) in [
             ("routines", "task_pilot.yaml"),
@@ -111,13 +125,14 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
             sha256_hex(&retired_auto_before),
             "the historical fixture's delivery-qa digest must match its bytes"
         );
-        let output = orbit(&repo, home.path())
-            .args(["workspace", "sync", "--json"])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
+        let output = run(
+            orbit(&repo, home.path()).args(["workspace", "sync", "--json"]),
+            "orbit workspace sync",
+        )
+        .success()
+        .get_output()
+        .stdout
+        .clone();
         let report: Value = serde_json::from_slice(&output).unwrap();
         let actions = report["actions"].as_array().unwrap();
         assert!(
@@ -182,13 +197,19 @@ fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() 
                     && a["outcome"] == "migrated"),
                 "{report}"
             );
-            let output = orbit(&repo, home.path())
-                .args(["auto-task", "show", "friction-curation", "--json"])
-                .assert()
-                .success()
-                .get_output()
-                .stdout
-                .clone();
+            let output = run(
+                orbit(&repo, home.path()).args([
+                    "auto-task",
+                    "show",
+                    "friction-curation",
+                    "--json",
+                ]),
+                "orbit auto-task show",
+            )
+            .success()
+            .get_output()
+            .stdout
+            .clone();
             let effective: Value = serde_json::from_slice(&output).unwrap();
             assert_eq!(effective["schedule"]["cron"], "45 7 * * *");
             assert_eq!(

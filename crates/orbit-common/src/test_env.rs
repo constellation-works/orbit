@@ -392,6 +392,54 @@ pub fn host_load() -> String {
 pub const FIXTURE_PHASE_DEADLINE: std::time::Duration =
     CHILD_TEST_DEADLINE.saturating_sub(std::time::Duration::from_secs(30));
 
+/// How long one fixture step, a readiness wait, a single CLI command or HTTP
+/// request, may take before the fixture treats it as hung.
+///
+/// A hang guard, not a speed budget, for the reason [`CHILD_TEST_DEADLINE`]
+/// gives: a handover, server start or `orbit workspace init` that takes
+/// seconds on an idle host took over a minute on a saturated one, where fixed
+/// 5-, 30- and 60-second step bounds failed passing fixtures (ORB-15238).
+/// Inside [`FIXTURE_PHASE_DEADLINE`], so a step in an isolated child fails
+/// with its own message before the parent kills the child.
+pub const FIXTURE_STEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Poll `ready` until it holds.
+///
+/// Past [`FIXTURE_STEP_DEADLINE`] the fixture fails naming `what` it waited
+/// for, how long, and the host load, so a wait that overran on a saturated
+/// host is told apart from one that can never succeed.
+pub fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !ready() {
+        let waited = started.elapsed();
+        assert!(
+            waited < FIXTURE_STEP_DEADLINE,
+            "timed out after {waited:.1?} waiting for {what} ({})",
+            host_load()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Fail a fixture whose command `what` was killed at its
+/// [`FIXTURE_STEP_DEADLINE`] guard after running for `elapsed`.
+///
+/// Call it before asserting on the command's outcome: a killed command
+/// reports an interrupted status and empty output, which would otherwise read
+/// as a refusal or crash of the command under test.
+pub fn assert_step_finished(
+    what: &str,
+    elapsed: std::time::Duration,
+    status: &std::process::ExitStatus,
+) {
+    assert!(
+        status.success() || elapsed < FIXTURE_STEP_DEADLINE,
+        "`{what}` was still running at its {FIXTURE_STEP_DEADLINE:?} hang guard ({elapsed:.1?}, \
+         {}); killed with {status}",
+        host_load()
+    );
+}
+
 /// Phase progress for a large fixture, such as one that seeds thousands of
 /// tasks before it measures anything.
 ///

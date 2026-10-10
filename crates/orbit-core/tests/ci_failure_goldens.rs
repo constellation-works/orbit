@@ -1055,6 +1055,10 @@ fn ci_failure_fixture_goldens() {
         serde_json::from_str(&std::fs::read_to_string(fixtures().join("parsed.json")).unwrap())
             .unwrap()
     };
+    // Each case files through a fresh runtime. All of them can outlast the
+    // child's hang guard on a saturated host; name the case reached.
+    let mut progress = orbit_common::test_env::FixtureProgress::start("CI log goldens");
+    progress.phase("cases", cases.len());
     let mut rendered = serde_json::Map::new();
     for case in cases {
         let actual = if case["collect"] == true {
@@ -1070,7 +1074,9 @@ fn ci_failure_fixture_goldens() {
             );
         }
         rendered.insert(name.to_string(), actual);
+        progress.advance();
     }
+    progress.finish();
     if update {
         std::fs::write(
             fixtures().join("parsed.json"),
