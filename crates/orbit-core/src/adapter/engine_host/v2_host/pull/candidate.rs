@@ -69,7 +69,8 @@ pub(super) fn first_incomplete_step(run: &JobRun, state: &PipelineState) -> Opti
 /// `None` before its commit.
 ///
 /// A PR leaf's is the branch it pushed — last by a before-landing reviewer's
-/// fix — with the pull request it opened for it. Before its push, it is the branch tip its failure hook carried to a
+/// fix — with the pull request it opened for it, or the one an earlier claim
+/// opened on the branch it continued [ORB-15308]. Before its push, it is the branch tip its failure hook carried to a
 /// durable ref — or could not, and why — else the branch it synchronized
 /// onto the base, or, when synchronization itself stopped it, the branch it
 /// prepared. A claimed-local leaf's is its worktree branch at the commit it
@@ -90,10 +91,15 @@ pub(super) fn preserved_candidate(
     let both = |output: Option<&serde_json::Value>, branch: &str, head: &str| {
         Some((text(output, branch)?, text(output, head)?))
     };
+    // [ORB-15308] A leaf that continued an earlier claim's branch carries
+    // that claim's pull request until its own `pr_open` reuses it, so the
+    // next claim still reuses or supersedes it.
+    let continued = text(step("resume_candidate"), "reused_branch")
+        .and_then(|_| text(step("resume_candidate"), "prior_pull_request"));
     let mut candidate = ClaimCandidateRef {
         branch: String::new(),
         head_sha: String::new(),
-        pull_request: text(step("pr_open"), "pr_number"),
+        pull_request: text(step("pr_open"), "pr_number").or(continued),
         source_run_id: Some(run.run_id.clone()),
         failed_step_id: first_incomplete_step(run, state).map(str::to_string),
         published: false,

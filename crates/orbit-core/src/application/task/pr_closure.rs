@@ -6,9 +6,12 @@
 //! calls [`OrbitRuntime::close_task_prs_after_transition`] after its write.
 //! Only a transition *into* done, rejected or archived closes anything: a new
 //! run, a block or a requeue never does, because a re-run resumes from the
-//! `[BLOCKED]` candidate. Leaving done never closes anything either: the done
-//! transition already settled which PRs close, and archiving a done task must
-//! not close the landing it deliberately kept open.
+//! `[BLOCKED]` candidate. A claimed re-run reuses its earlier claim's pull
+//! request; when it cannot, its own `pr_open` closes that one, naming its
+//! replacement, rather than this pass [ORB-15308]. Leaving done never closes
+//! anything either: the done transition already settled which PRs close, and
+//! archiving a done task must not close the landing it deliberately kept
+//! open.
 //!
 //! A PR qualifies only when all of these hold:
 //! - its head branch is `orbit/<TASK-ID>-…`;

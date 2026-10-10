@@ -110,6 +110,39 @@ pub(super) fn pr_view(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "pull_request": pull_request }))
 }
 
+/// [ORB-15308] Close one pull request of this repository, by number, with a
+/// comment saying why. Single-shot: a retry after an ambiguous failure could
+/// post the comment twice.
+pub(super) fn pr_close(input: &Value) -> Result<Value, OrbitError> {
+    let number = required_string(input, "pr")?;
+    let comment = required_string(input, "comment")?;
+    let workspace_path = required_string(input, "workspace_path")?;
+    if !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "invalid private automation VCS PR close selector '{number}'; expected a pull \
+             request number in the workspace repository"
+        )));
+    }
+    let args = vec![
+        "pr".to_string(),
+        "close".to_string(),
+        number.to_string(),
+        "--comment".to_string(),
+        comment.to_string(),
+    ];
+    let result = execute(
+        "gh",
+        args,
+        Some(Path::new(workspace_path)),
+        DEFAULT_TIMEOUT_MS,
+        "PR close",
+    )?;
+    Ok(json!({
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }))
+}
+
 pub(super) fn pr_merge(input: &Value) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
     let workspace_path = required_string(input, "workspace_path")?;

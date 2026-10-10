@@ -322,6 +322,11 @@ pub(super) fn output(outcome: &Outcome, candidate: Option<&Candidate>, base_sha:
         "source_branch": candidate.map(|candidate| candidate.branch.as_str()),
         "source_sha": candidate.map(|candidate| candidate.head_sha.as_str()),
         "base_sha": base_sha,
+        // [ORB-15308] Set by a claimed leaf whose candidate has a pull request.
+        "prior_pull_request": null,
+        "reused_branch": null,
+        "reused_head_sha": null,
+        "branch_reuse_refused": null,
     })
 }
 

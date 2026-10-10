@@ -53,7 +53,10 @@
 //! The claimed implementer always runs, because the handoff carries its
 //! summary: a clean apply is `resumed_repaired` with trigger `continuation`
 //! (or `review` when the before-PR review refused it), and the leaf's own
-//! validation judges the result.
+//! validation judges the result. [ORB-15308] When the earlier claim pushed
+//! that candidate and opened a pull request for it, the leaf also continues
+//! on its branch, so it republishes through the same pull request (see
+//! `adopt`); when it cannot, its `pr_open` closes that pull request instead.
 //!
 //! [ORB-14603] When the task's prior run is one another machine executed — a
 //! claim's leaf, handed in as `prior_foreign_run` with that machine — its id
@@ -78,6 +81,7 @@
 //! the moved base. If that candidate cannot be restored, the leaf fails
 //! closed instead of implementing fresh and silently dropping its work.
 
+mod adopt;
 mod apply;
 mod lookup;
 
@@ -167,6 +171,10 @@ struct Candidate {
     /// [ORB-14603] The claim whose settlement the owner kept it from, and
     /// the machine that claim executed on, for an owner-local run's resume.
     claim: Option<ClaimSource>,
+    /// [ORB-15308] Whether its branch reached `origin` at `head_sha`.
+    published: bool,
+    /// [ORB-15308] The pull request a claim's leaf opened for it.
+    pull_request: Option<String>,
 }
 
 impl Candidate {

@@ -71,9 +71,12 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
     let workspace_path = Path::new(&workspace_path);
     // The branch the leaf synchronized, or prepared, or set up: its tip is
     // the candidate, with any review fix committed after synchronization.
-    // An interrupted rebase leaves the ref at its pre-rebase commit.
+    // An interrupted rebase leaves the ref at its pre-rebase commit. A leaf
+    // that continued an earlier claim's branch renamed its own to it
+    // [ORB-15308].
     let Some(branch) = step("sync_base", "head")
         .or_else(|| step("prepare_branch", "head"))
+        .or_else(|| step("resume_candidate", "reused_branch"))
         .or_else(|| step("worktree", "head_ref"))
     else {
         return Ok(none("the leaf recorded no candidate branch"));
