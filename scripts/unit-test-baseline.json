@@ -547,6 +547,7 @@
     },
     "orbit-engine": {
       "test_function_paths": [
+        "activity_job/cli_runner/orchestrator/tests/completion.rs::print_timeout_is_spent_only_at_or_after_the_budget_without_an_envelope",
         "activity_job/cli_runner/supervisor/tests/capture.rs::output_capture_redacts_boundary_tokens_before_blob_storage",
         "activity_job/cli_runner/supervisor/tests/output.rs::a_running_childs_output_is_sampled_before_it_exits",
         "activity_job/cli_runner/supervisor/tests/output.rs::spawn_with_timeout_kills_grandchild_holding_output_pipes",
