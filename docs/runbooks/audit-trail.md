@@ -139,6 +139,19 @@ the column tooltip explains `unverified`, `unknown`, agent names,
 `admin`, and `hook`. Tool calls use one tool/command column, with the invocation
 command on hover, and leave the target blank when it repeats the tool.
 
+Audit Events shows the newest 50 rows and a **Load older events** button that
+pages back through the whole selected window. The header reads
+`50 of 19,749 in 24h` (rows shown against the window's event count from
+`/api/audit/summary`); with a status, search or other filter active the window
+count is unfiltered, so it reads `50 shown · 19,749 in 24h`, then `7 matching`
+once the filtered list is exhausted. Pages use a keyset cursor: `GET /api/audit`
+accepts `before=<id>` and answers `x-audit-next-before` while more may exist,
+and every page keeps the active filters. The **hide unconfirmed successes**
+chip (`hide_unverified=1` in the URL, `hide_unverified=true` on the API) drops
+successful calls from the `unverified` caller, the probe and federated-read
+traffic that otherwise fills the list; that caller's failures and denials stay
+visible. It is off by default so drill-downs still show every row.
+
 Audit Summary tables fit their card width. Compact cards omit secondary total
 and unexpected counts in the tool-failures table, and other/internal counts
 in Role split; hover the row label to read all values. Wider cards show those

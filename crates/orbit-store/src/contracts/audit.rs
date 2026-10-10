@@ -57,6 +57,12 @@ pub struct AuditEventFilter {
     pub mcp_call_id: Option<String>,
     pub job_run_id: Option<String>,
     pub lease_id: Option<String>,
+    /// Keyset cursor: only rows with `id` below this value. Stable while newer
+    /// rows are appended, unlike `offset`.
+    pub before_id: Option<i64>,
+    /// Drop successful rows recorded by the `unverified` caller. Failures and
+    /// denials from that caller stay listed.
+    pub exclude_unverified_success: bool,
     pub limit: usize,
     /// Rows to skip after ordering (newest first). Pushed into SQL so a
     /// caller can page past the first `limit` rows without prefetching the

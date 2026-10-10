@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Query, State};
+use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::job::JobRunListParams;
@@ -128,6 +129,8 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         mcp_call_id: q.mcp_call.filter(|value| !value.is_empty()),
         job_run_id: q.job_run_id.filter(|value| !value.is_empty()),
         lease_id: q.lease.filter(|value| !value.is_empty()),
+        before_id: q.before,
+        exclude_unverified_success: q.hide_unverified.unwrap_or(false),
         limit,
         offset,
     };
@@ -161,25 +164,54 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
     };
 
     match blocking("audit list", move || {
-        let events = if let Some(ids) = event_ids.as_deref() {
-            runtime.list_audit_events_by_ids(ids, filter.workspace_id.as_deref())?
+        let page = if let Some(ids) = event_ids.as_deref() {
+            AuditPage {
+                events: runtime.list_audit_events_by_ids(ids, filter.workspace_id.as_deref())?,
+                next_before: None,
+            }
         } else if post_filter.is_empty() {
             // Every requested predicate has a column, so the page is exactly the
             // SQL window: no prefetch, no Rust-side slicing.
-            runtime.list_audit_events_filtered(&filter)?
+            let events = runtime.list_audit_events_filtered(&filter)?;
+            let next_before = if events.len() >= limit {
+                events.last().map(|event| event.id)
+            } else {
+                None
+            };
+            AuditPage {
+                events,
+                next_before,
+            }
         } else {
             scan_audit_page(&runtime, &mut filter, &post_filter, offset, limit)?
         };
-        Ok(events)
+        Ok(page)
     })
     .await
     {
         Ok(page) => {
-            let page: Vec<Value> = page.iter().map(audit_event_to_json).collect();
-            Json(Value::Array(page)).into_response()
+            let rows: Vec<Value> = page.events.iter().map(audit_event_to_json).collect();
+            let mut response = Json(Value::Array(rows)).into_response();
+            if let Some(next_before) = page.next_before {
+                response
+                    .headers_mut()
+                    .insert(AUDIT_NEXT_BEFORE_HEADER, HeaderValue::from(next_before));
+            }
+            response
         }
         Err(response) => *response,
     }
+}
+
+/// Response header carrying the `?before=` value that resumes the listing
+/// just past this page. Absent once the window is exhausted. A bare array body
+/// cannot say whether a short page is the end or a capped scan, so the server
+/// states it.
+const AUDIT_NEXT_BEFORE_HEADER: &str = "x-audit-next-before";
+
+struct AuditPage {
+    events: Vec<orbit_core::AuditEvent>,
+    next_before: Option<i64>,
 }
 
 fn parse_audit_event_ids(raw: &str) -> Result<Vec<i64>, String> {
@@ -272,38 +304,53 @@ const AUDIT_POST_FILTER_SCAN_CAP: usize = 10_000;
 /// Walk the SQL window in `HISTORY_MAX_LIMIT` batches, keeping rows that pass
 /// `post_filter`, until `offset + limit` matches are in hand, the store runs
 /// dry, or the scan cap is reached. `filter.limit`/`filter.offset` are used
-/// as scratch for the batch window.
+/// as scratch for the batch window. `next_before` resumes after the last row
+/// examined, so a capped scan can be continued instead of looking finished.
 fn scan_audit_page(
     runtime: &OrbitRuntime,
     filter: &mut AuditEventFilter,
     post_filter: &AuditPostFilter,
     offset: usize,
     limit: usize,
-) -> Result<Vec<orbit_core::AuditEvent>, OrbitError> {
+) -> Result<AuditPage, OrbitError> {
     let mut to_skip = offset;
-    let mut page = Vec::new();
+    let mut events = Vec::new();
     let mut scanned = 0usize;
+    let mut last_scanned_id = None;
+    let mut exhausted = false;
     filter.limit = HISTORY_MAX_LIMIT;
     filter.offset = 0;
-    while page.len() < limit && scanned < AUDIT_POST_FILTER_SCAN_CAP {
+    while events.len() < limit && scanned < AUDIT_POST_FILTER_SCAN_CAP {
         let batch = OrbitRuntime::list_audit_events_filtered(runtime, filter)?;
         let fetched = batch.len();
         scanned += fetched;
+        last_scanned_id = batch.last().map(|event| event.id).or(last_scanned_id);
         // Keep only the requested page; matches before `offset` are counted,
         // not buffered.
         for event in batch.into_iter().filter(|e| post_filter.matches(e)) {
             if to_skip > 0 {
                 to_skip -= 1;
-            } else if page.len() < limit {
-                page.push(event);
+            } else if events.len() < limit {
+                events.push(event);
             }
         }
         if fetched < HISTORY_MAX_LIMIT {
+            exhausted = true;
             break;
         }
         filter.offset += fetched;
     }
-    Ok(page)
+    let next_before = if events.len() >= limit {
+        events.last().map(|event| event.id)
+    } else if exhausted {
+        None
+    } else {
+        last_scanned_id
+    };
+    Ok(AuditPage {
+        events,
+        next_before,
+    })
 }
 
 /// Best-effort match of a stringified `arguments_json` payload against a

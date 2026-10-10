@@ -133,6 +133,98 @@ fn row(id: &str, tool: Option<&str>, status: AuditEventStatus) -> AuditEventInse
 }
 
 #[test]
+fn audit_list_pages_through_the_window_by_cursor_and_keeps_filters() {
+    isolated(
+        "audit::audit_list_pages_through_the_window_by_cursor_and_keeps_filters",
+        || {
+            let fixture = Fixture::new();
+            use AuditEventStatus::{Failure, Success};
+            // Oldest first: probe traffic from the unconfirmed caller, a few
+            // of its failures, then agent calls newer than all of it.
+            let seeded: Vec<(String, &str, AuditEventStatus)> = (0..12)
+                .map(|i| (format!("probe-{i}"), "orbit.drain.probe", Success))
+                .chain((0..3).map(|i| (format!("probe-fail-{i}"), "orbit.drain.probe", Failure)))
+                .chain((0..20).map(|i| (format!("agent-{i}"), "orbit.task.show", Success)))
+                .collect();
+            for (id, tool, status) in &seeded {
+                let mut event = row(id, Some(tool), *status);
+                if id.starts_with("probe") {
+                    event.role = "unverified".into();
+                }
+                fixture.runtime.record_audit_event(&event).unwrap();
+            }
+            let server = fixture.server(false);
+            // Follows `x-audit-next-before` until the server stops offering
+            // one, returning every page's execution ids in order.
+            let walk = |query: &str, limit: usize| {
+                let mut ids = Vec::new();
+                let mut pages = 0;
+                let mut before: Option<String> = None;
+                loop {
+                    let cursor = before
+                        .as_deref()
+                        .map(|value| format!("&before={value}"))
+                        .unwrap_or_default();
+                    let response = server.get(&format!(
+                        "/api/audit?workspace=ws_http_fixture&since=24h&limit={limit}&{query}{cursor}"
+                    ));
+                    before = response
+                        .headers()
+                        .get("x-audit-next-before")
+                        .map(|value| value.to_str().unwrap().to_string());
+                    let page = json_ok(response);
+                    let page = page.as_array().unwrap();
+                    assert!(page.len() <= limit);
+                    ids.extend(
+                        page.iter()
+                            .map(|event| event["execution_id"].as_str().unwrap().to_string()),
+                    );
+                    pages += 1;
+                    assert!(pages < 50, "cursor must make progress");
+                    if before.is_none() {
+                        return ids;
+                    }
+                }
+            };
+            let expected = |keep: &dyn Fn(&str, AuditEventStatus) -> bool| {
+                seeded
+                    .iter()
+                    .rev()
+                    .filter(|(id, _, status)| keep(id, *status))
+                    .map(|(id, _, _)| id.clone())
+                    .collect::<Vec<_>>()
+            };
+
+            assert_eq!(walk("", 8), expected(&|_, _| true), "the whole window");
+            assert_eq!(walk("", 200).len(), 35, "a page larger than the window");
+            assert_eq!(
+                walk("hide_unverified=true", 8),
+                expected(&|id, status| !id.starts_with("probe") || status != Success),
+                "only unconfirmed-caller successes are hidden"
+            );
+            assert_eq!(
+                walk("status=success&hide_unverified=true", 5),
+                expected(&|id, _| id.starts_with("agent")),
+            );
+            assert_eq!(
+                walk("status=failure", 2),
+                expected(&|_, status| status == Failure),
+                "a status filter holds on every page"
+            );
+            assert_eq!(
+                walk("q=probe", 4),
+                expected(&|id, _| id.starts_with("probe")),
+                "free text is a Rust-side predicate and still pages"
+            );
+            assert_eq!(
+                walk("q=probe&hide_unverified=true", 4),
+                expected(&|id, _| id.starts_with("probe-fail")),
+            );
+        },
+    );
+}
+
+#[test]
 fn scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging() {
     isolated(
         "audit::scoreboard_family_drilldown_includes_model_roles_and_denials_before_paging",

@@ -725,6 +725,12 @@ export function makeCopyButton(value, { class: className = "", text = value, tit
 }
 
 export async function fetchJson(path) {
+  return (await fetchJsonPage(path)).body;
+}
+
+// Like fetchJson, for an endpoint that also answers in response headers (a
+// paging cursor). `header(name)` reads one; most callers never need it.
+export async function fetchJsonPage(path) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
@@ -743,7 +749,7 @@ export async function fetchJson(path) {
       if (code) error.code = code;
       throw error;
     }
-    return await res.json();
+    return { body: await res.json(), header: (name) => res.headers.get(name) };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
     // Fetch and response-body transport failures are TypeErrors; HTTP and JSON
