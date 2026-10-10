@@ -128,8 +128,10 @@ Rules for the page:
   is illustrative.
 - Advertise no unlanded feature and publish no live metric; captured numbers
   carry their capture date.
-- Keep scripts to the shared theme script and the Menu's Escape and breakpoint
-  close. Nothing delays the readable state.
+- Scripts stay small and serve only the page's documented interactions: the
+  shared theme script, the Menu's Escape and breakpoint close, the copy
+  buttons, and pausing the hero video under reduced motion. Nothing delays the
+  readable state.
 
 ---
 
