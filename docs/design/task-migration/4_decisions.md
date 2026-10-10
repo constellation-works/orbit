@@ -2,7 +2,7 @@
 title: Task Migration — Decisions
 owner: claude
 last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_validated: 2026-10-10
 status: Draft
 feature: task-migration
 doc_role: decisions

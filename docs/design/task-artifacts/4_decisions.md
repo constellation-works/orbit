@@ -3,8 +3,8 @@ summary: "Task Artifacts — Decisions"
 type: design
 title: "Task Artifacts — Decisions"
 owner: codex
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: task-artifacts
 doc_role: decisions
@@ -221,7 +221,7 @@ Add two cross-artifact relation types to the task envelope: `produces` for artif
 
 - Agents get one typed provenance surface for task-created and task-closed artifacts without migrating historical ADR, learning, or friction fields.
 - Frictions can close automatically as part of approval while dangling friction references stay audit-visible instead of blocking task completion.
-- Learning citation work can depend on explicit `produces -> L...` edges rather than regex-scanning task prose.
+- The proposed learning-citation path through explicit `produces -> L...` edges was not retained: current relation validation accepts task, friction, and ADR IDs, while retired learning IDs are invalid targets.
 - Cost: the relation validator now has a cross-artifact branch and a task-only branch, so tests must protect legacy relation strictness.
 - Cost: `task_bundle_relations.target_task_id` now stores non-task IDs for `produces` / `resolves`; task-target inverse lookups must continue validating callers that expect task IDs.
 

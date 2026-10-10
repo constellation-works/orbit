@@ -3,8 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -187,7 +187,7 @@ The top-level nav is exactly Tasks, Audit, Diagnostics, Operations, Knowledge (p
 The dashboard Tasks tab was read-only for the operator two most common actions: dispatching a backlog task and leaving a note on one. Both are writes against live state, so the question was how much configuration to expose and whose identity to record.
 
 ### Decision
-Ship is one click with no configuration UI: the dashboard posts only the task id. The crew comes from the task record and the mode from the workspace registry binding, so the ship endpoint omitted-mode default changes from a hard-coded pr to that binding ship mode. Duplicate dispatch is refused server-side with 409 ship_run_in_flight when the task already has a non-terminal run. Comments post to POST /api/tasks/:id/comments, writing into the task existing review-thread structure and forcing a human author.
+Ship is one click with no configuration UI: the dashboard posts only the task id. The crew comes from the task record and the mode from the workspace registry binding, so the ship endpoint omitted-mode default changes from a hard-coded pr to that binding ship mode. Duplicate dispatch is refused server-side with 409 ship_run_in_flight when the task already has a non-terminal run. Comments post to POST /api/tasks/:id/comments, append to the task's `comments.jsonl` sidecar through the task-update API, and force a human author.
 
 ### Consequences
 - Triage, dispatch and annotation complete inside the dashboard.
