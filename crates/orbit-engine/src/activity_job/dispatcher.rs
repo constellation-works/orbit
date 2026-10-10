@@ -91,22 +91,26 @@ pub struct ResolvedSandbox {
     /// Linux runtime grants whose host objects were opened by the resolving
     /// host. Empty for other backends and ordinary policy-derived grants.
     pub runtime_write_authority: Vec<LinuxRuntimeWriteAuthority>,
-    /// Host directories the sandboxed process may neither read nor write,
-    /// applied after every other rule of the profile. `None` for explicit off
-    /// and for a host that masks nothing.
+    /// Host directories and files the sandboxed process may neither read nor
+    /// write, applied after every other rule of the profile. `None` for
+    /// explicit off and for a host that masks nothing.
     pub mask: Option<SandboxMask>,
 }
 
-/// Directories hidden from a sandboxed process, whatever its profile grants.
+/// Directories and files hidden from a sandboxed process, whatever its
+/// profile grants.
 ///
-/// The host that resolves the sandbox creates every path here before it
-/// returns it. On Linux each target is replaced by the read-only `sentinel`
-/// directory; on macOS the profile denies reads and writes beneath each
-/// target and `sentinel` is unused.
+/// The host that resolves the sandbox creates `sentinel` and every target
+/// directory before it returns them. On Linux each target is replaced by the
+/// read-only `sentinel` directory and each existing file by `/dev/null`; on
+/// macOS the profile denies reads and writes beneath each target and of each
+/// file, present or not, and `sentinel` is unused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxMask {
     pub sentinel: PathBuf,
     pub targets: Vec<PathBuf>,
+    /// Single files, such as a credential file beside readable siblings.
+    pub files: Vec<PathBuf>,
 }
 
 /// Input bundle for a single v2 activity dispatch.

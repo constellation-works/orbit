@@ -9,10 +9,10 @@ use orbit_exec::bwrap_program_for_audit;
 use orbit_exec::{
     BwrapProbeOutcome, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
     LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest,
-    UnsatisfiedWriteGrant, append_macos_subpath_mask, compile_linux_bwrap_argv_with_authority,
-    compile_macos_sandbox_profile, prepare_linux_bwrap_write_grants, probe_bwrap,
-    sandbox_exec_available, sandbox_exec_unavailable_message, spawn_under_linux_bwrap,
-    spawn_under_macos_sandbox,
+    UnsatisfiedWriteGrant, append_macos_file_mask, append_macos_subpath_mask,
+    compile_linux_bwrap_argv_with_authority, compile_macos_sandbox_profile,
+    prepare_linux_bwrap_write_grants, probe_bwrap, sandbox_exec_available,
+    sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
 use tempfile::NamedTempFile;
@@ -356,11 +356,13 @@ fn linux_bwrap_mount_authority(sandbox: &ResolvedSandbox) -> Vec<LinuxBwrapMount
         .collect()
 }
 
-/// The host's mask as Bubblewrap mounts it: its sentinel over each target.
+/// The host's mask as Bubblewrap mounts it: its sentinel over each target,
+/// `/dev/null` over each file.
 pub(crate) fn linux_bwrap_mask(sandbox: &ResolvedSandbox) -> Option<LinuxBwrapMask> {
     sandbox.mask.as_ref().map(|mask| LinuxBwrapMask {
         sentinel: mask.sentinel.clone(),
         targets: mask.targets.clone(),
+        files: mask.files.clone(),
     })
 }
 
@@ -483,6 +485,7 @@ fn spawn_macos_sandboxed(
     // Last, so the host's mask outranks every allow compiled above.
     if let Some(mask) = &sandbox.mask {
         append_macos_subpath_mask(&mut profile_text, &mask.targets);
+        append_macos_file_mask(&mut profile_text, &mask.files);
     }
     let child_env = prepare_macos_codex_ca_environment_with(
         provider,

@@ -81,3 +81,4 @@
 (deny file-read* (regex "^<ROOT>/[Rr][Ee][Pp][Oo]/\\.[Oo][Rr][Bb][Ii][Tt]/[Ss][Tt][Aa][Tt][Ee]/[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss]/[Oo][Rr][Bb][Ii][Tt]-[Jj][Rr][Uu][Nn]-[Gg][Oo][Ll][Dd][Ee][Nn]/([^/]+/)*[^/]*\\.[Ee][Nn][Vv]\\.[^/]*$"))
 (deny file-read* file-write* (subpath "<HOME>/.orbit/state/plugins"))
 (deny file-read* file-write* (subpath "<HOME>/.orbit/state/plugin-secrets"))
+(deny file-read* file-write* (literal "<HOME>/.orbit/clock.env"))

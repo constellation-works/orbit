@@ -156,6 +156,7 @@ fn sandbox_fixture() {
     let mask = LinuxBwrapMask {
         sentinel: prepared.sentinel,
         targets: prepared.trees,
+        files: Vec::new(),
     };
     let provider = root.join("provider.py");
     fs::write(&provider, PROVIDER).expect("sandbox provider");

@@ -238,8 +238,8 @@ pub(super) fn compile_plan_with_credentials(
 /// closed because the runtime authority would otherwise be silently unused.
 ///
 /// `mask`, when given, is mounted after every other mount of the plan; a
-/// masked directory the child could also reach through another path refuses
-/// the plan (see [`LinuxBwrapMask`]).
+/// masked directory or file the child could also reach through another path
+/// refuses the plan (see [`LinuxBwrapMask`]).
 pub fn compile_linux_bwrap_argv_with_authority(
     profile: &ResolvedFsProfile,
     program: &str,

@@ -37,9 +37,9 @@ pub(crate) mod test_support;
 mod tests;
 
 pub use compile::{
-    MacosLoginKeychainAccess, MacosNetworkAccess, append_macos_network_access,
-    append_macos_read_boundary, append_macos_subpath_mask, compile_macos_sandbox_profile,
-    macos_login_keychain_access,
+    MacosLoginKeychainAccess, MacosNetworkAccess, append_macos_file_mask,
+    append_macos_network_access, append_macos_read_boundary, append_macos_subpath_mask,
+    compile_macos_sandbox_profile, macos_login_keychain_access,
 };
 pub use provider_dirs::claude_state_dir_from_env;
 pub use spawn::{

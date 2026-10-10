@@ -1147,6 +1147,7 @@ impl Confined {
         let mask = orbit_exec::LinuxBwrapMask {
             sentinel: prepared.sentinel,
             targets: prepared.trees,
+            files: Vec::new(),
         };
         let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
             profile,
