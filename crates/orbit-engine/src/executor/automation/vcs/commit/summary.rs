@@ -18,21 +18,22 @@
 //! summary restates that evidence, which the host validates against the
 //! frozen batch. Incomplete or mismatched evidence derives nothing.
 //!
+//! ORB-15186: a derived summary describes the review but does not pay for
+//! it. Settlement treats a review whose agent persisted no summary as a stamp
+//! and leaves the batch owed, so this module only explains the evidence.
+//!
 //! ADR-0326 records the decision and the alternatives it rejected.
 
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::Task;
-use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, CoverageEvidence};
+use orbit_types::task::{EXECUTION_SUMMARY_DERIVED_EVENT, Task};
+use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, CoverageEvidence, DeliveryVerdict};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::git::git_output_raw;
 use super::super::pr::meaningful_execution_summary;
-
-/// Task event recorded when Orbit, not an agent, authored the summary.
-const DERIVED_SUMMARY_EVENT: &str = "execution_summary_derived";
 
 /// Cap on individually named files; the remainder is reported as a count.
 const MAX_LISTED_FILES: usize = 25;
@@ -82,7 +83,7 @@ pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
         &task.id,
         TaskAutomationUpdate {
             execution_summary: Some(summary.clone()),
-            status_event: Some(DERIVED_SUMMARY_EVENT.to_string()),
+            status_event: Some(EXECUTION_SUMMARY_DERIVED_EVENT.to_string()),
             status_note: Some(note),
             ..TaskAutomationUpdate::default()
         },
@@ -223,9 +224,26 @@ fn render_coverage_summary(task_id: &str, run_id: &str, evidence: &CoverageEvide
     for finding in &evidence.findings {
         lines.push(format!("- {}", finding.trim()));
     }
+    lines.push(format!(
+        "Delivery verdicts ({}):",
+        evidence.delivery_examinations.len()
+    ));
+    for examination in &evidence.delivery_examinations {
+        let verdict = match &examination.verdict {
+            DeliveryVerdict::Clean => "clean".to_string(),
+            DeliveryVerdict::Findings(ids) => format!("findings {}", ids.join(", ")),
+        };
+        lines.push(format!(
+            "- {}: {verdict} ({} path(s) examined, {} skipped)",
+            examination.delivery,
+            examination.examined_paths.len(),
+            examination.skipped_paths.len()
+        ));
+    }
     lines.push(String::new());
     lines.push(format!(
-        "This restates {COVERAGE_ARTIFACT} and asserts nothing beyond it."
+        "This restates {COVERAGE_ARTIFACT} and asserts nothing beyond it. A review whose agent \
+         persisted no execution summary does not settle its batch, which stays owed."
     ));
     lines.join("\n")
 }

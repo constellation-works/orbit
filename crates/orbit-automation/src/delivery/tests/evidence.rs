@@ -52,6 +52,15 @@ pub(super) fn landing(n: usize) -> Delivery {
     }
 }
 
+/// The paths each fixture delivery's diff changes: one source file and a
+/// lockfile that complete evidence skips with a reason.
+pub(super) fn changed_paths(delivery: &Delivery) -> Vec<String> {
+    vec![
+        format!("src/{}.rs", delivery.after.commit),
+        "Cargo.lock".into(),
+    ]
+}
+
 pub(super) struct Host {
     pub(super) page: Mutex<SourcePage>,
     pub(super) actions: Mutex<BTreeMap<String, String>>,
@@ -121,7 +130,7 @@ impl Host {
     pub(super) fn evidence(&self, attempt: &BatchAttempt) {
         let batch = &attempt.batch;
         *self.evidence.lock().unwrap() = Some(CoverageEvidence {
-            schema_version: 1,
+            schema_version: COVERAGE_EVIDENCE_SCHEMA_VERSION,
             batch_id: batch.id.clone(),
             consumer: batch.consumer.clone(),
             epoch: batch.epoch.clone(),
@@ -134,6 +143,23 @@ impl Host {
             examined_commits: batch.commits.clone(),
             examined_deliveries: batch.deliveries.iter().map(|d| d.key.clone()).collect(),
             examination_complete: true,
+            delivery_examinations: batch
+                .deliveries
+                .iter()
+                .map(|d| DeliveryExamination {
+                    delivery: d.key.clone(),
+                    examined_paths: vec![format!("src/{}.rs", d.after.commit)],
+                    skipped_paths: vec![SkippedPath {
+                        path: "Cargo.lock".into(),
+                        reason: "generated lockfile".into(),
+                    }],
+                    verdict: DeliveryVerdict::Clean,
+                    rationale: format!(
+                        "{} keeps its error paths typed and its tests exercise them",
+                        d.key
+                    ),
+                })
+                .collect(),
             checks: vec![ExaminationCheck {
                 subject: "complete captured range".into(),
                 method: "cargo test".into(),
@@ -195,7 +221,7 @@ impl DeliveryHost for Host {
         Ok(id)
     }
 
-    fn outcome(&self, _: &BatchAttempt) -> Result<ActionOutcome, AutomationError> {
+    fn outcome(&self, attempt: &BatchAttempt) -> Result<ActionOutcome, AutomationError> {
         if self.failed.load(Ordering::SeqCst) {
             return Ok(ActionOutcome::Failed {
                 retryable: true,
@@ -216,6 +242,12 @@ impl DeliveryHost for Host {
             authorized: true,
             source_verified: true,
             action_stopped: self.stopped.load(Ordering::SeqCst),
+            changed_paths: attempt
+                .batch
+                .deliveries
+                .iter()
+                .map(|d| (d.key.clone(), changed_paths(d)))
+                .collect(),
         }))
     }
 }
@@ -287,12 +319,61 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
     let mut e = valid.clone();
     e.checks.clear();
     variants.push(e);
+    // Each refusal names its typed reason on the attempt.
+    let mut typed = vec![];
+    // A stamp: the commit and delivery lists alone, as version 1 accepted.
+    let mut e = valid.clone();
+    e.schema_version = 1;
+    e.delivery_examinations.clear();
+    typed.push(("unsupported_schema_version", e));
+    let mut e = valid.clone();
+    e.delivery_examinations.clear();
+    typed.push(("missing_delivery_examination", e));
+    let mut e = valid.clone();
+    e.delivery_examinations.pop();
+    typed.push(("missing_delivery_examination", e));
+    let mut e = valid.clone();
+    let duplicate = e.delivery_examinations[0].clone();
+    e.delivery_examinations[1] = duplicate;
+    typed.push(("duplicate_delivery_examination", e));
+    // A changed source path neither examined nor skipped.
+    let mut e = valid.clone();
+    e.delivery_examinations[0].examined_paths.clear();
+    typed.push(("examined_paths_mismatch", e));
+    // A path outside the frozen diff.
+    let mut e = valid.clone();
+    e.delivery_examinations[0]
+        .examined_paths
+        .push("src/unrelated.rs".into());
+    typed.push(("examined_paths_mismatch", e));
+    let mut e = valid.clone();
+    e.delivery_examinations[0].skipped_paths[0].reason = " ".into();
+    typed.push(("skipped_path_without_reason", e));
+    let mut e = valid.clone();
+    e.delivery_examinations[0].verdict = DeliveryVerdict::Findings(vec![]);
+    typed.push(("invalid_verdict", e));
+    let mut e = valid.clone();
+    e.delivery_examinations[0].rationale = "looks good".into();
+    typed.push(("trivial_rationale", e));
+    let mut e = valid.clone();
+    let rationale = e.delivery_examinations[0].rationale.clone();
+    e.delivery_examinations[1].rationale = rationale;
+    typed.push(("trivial_rationale", e));
     host.page(2, 2);
     for e in variants {
         *host.evidence.lock().unwrap() = Some(e);
         let result = evaluate(store.as_ref(), &host, &trigger, true);
         assert_eq!(result.state.unwrap().covered, revision(0));
         assert!(result.receipts.is_empty());
+    }
+    for (reason, e) in typed {
+        *host.evidence.lock().unwrap() = Some(e);
+        let result = evaluate(store.as_ref(), &host, &trigger, true);
+        let state = result.state.unwrap();
+        assert_eq!(state.covered, revision(0), "{reason}");
+        assert!(result.receipts.is_empty(), "{reason}");
+        let recorded = state.active.unwrap().reason.unwrap_or_default();
+        assert!(recorded.ends_with(reason), "{reason}: {recorded}");
     }
     let bytes = serde_json::to_vec(&valid).unwrap();
     let mut facts = EvidenceFacts {
@@ -303,12 +384,25 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
         authorized: false,
         source_verified: true,
         action_stopped: false,
+        changed_paths: attempt
+            .batch
+            .deliveries
+            .iter()
+            .map(|d| (d.key.clone(), changed_paths(d)))
+            .collect(),
     };
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
     facts.authorized = true;
     facts.source_verified = false;
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
     facts.source_verified = true;
+    let mut findings = valid.clone();
+    findings.delivery_examinations[0].verdict = DeliveryVerdict::Findings(vec!["task-c".into()]);
+    facts.bytes = serde_json::to_vec(&findings).unwrap();
+    facts.artifact_digest = delivery::digest(&facts.bytes);
+    assert!(delivery::evidence::validate(&attempt, &facts, now()).is_ok());
+    facts.changed_paths.clear();
+    assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
     facts.bytes = b"{}".to_vec();
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
 }

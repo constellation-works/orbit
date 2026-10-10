@@ -576,6 +576,34 @@ impl<'a> Source<'a> {
 
         Ok(())
     }
+
+    /// Every path each frozen delivery's `before..after` diff changes, keyed
+    /// by delivery key: the paths its coverage evidence must account for
+    /// [ORB-15186]. Renames list both sides, independent of `diff.renames`.
+    pub(in crate::application::automation) fn delivery_changed_paths(
+        &self,
+        batch: &CoverageBatch,
+    ) -> Result<BTreeMap<String, Vec<String>>, AutomationError> {
+        batch
+            .deliveries
+            .iter()
+            .map(|delivery| {
+                let paths = self.git_matching_paths(
+                    &[
+                        "diff",
+                        "--name-only",
+                        "--no-renames",
+                        "-z",
+                        &delivery.before.commit,
+                        &delivery.after.commit,
+                        "--",
+                    ],
+                    |_| true,
+                )?;
+                Ok((delivery.key.clone(), paths))
+            })
+            .collect()
+    }
 }
 
 /// Frozen-batch mismatches. Operational failures, including a prefixed

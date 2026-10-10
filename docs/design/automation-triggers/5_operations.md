@@ -209,17 +209,46 @@ replace the action ID placeholder with the current task ID, and attach:
 orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":"./automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
-The version-1 schema has these required fields:
+The version-2 schema has these required fields:
 
 | Fields | Required meaning |
 | --- | --- |
-| `schema_version`, `batch_id`, `consumer`, `epoch`, `input_digest` | Exact frozen identity; version is 1. |
+| `schema_version`, `batch_id`, `consumer`, `epoch`, `input_digest` | Exact frozen identity; version is 2. |
 | `action_id`, `attempt`, `coverage` | This admitted action and examination class. |
 | `from_exclusive`, `through_inclusive` | Exact objects, each with `commit` and `tree`. |
 | `examined_commits`, `examined_deliveries` | Complete ordered lists from the input. |
 | `examination_complete` | True only when all obligations were examined. |
+| `delivery_examinations` | One entry per frozen delivery, described below. |
 | `checks` | Nonempty array of nonempty `subject`, `method`, `observation` objects. |
 | `findings` | Array of finding references/descriptions; it may be empty. |
+
+Each `delivery_examinations` entry names its `delivery` key and records what
+the reviewer read:
+
+| Field | Required meaning |
+| --- | --- |
+| `examined_paths` | Changed paths of the delivery that were read. |
+| `skipped_paths` | Changed paths not read, each `{path, reason}` with a nonblank reason. |
+| `verdict` | `"clean"`, or `{"findings": [<finding task IDs>]}` with at least one ID. |
+| `rationale` | Why the verdict holds: at least 40 characters, different for each delivery. |
+
+Examined and skipped paths together must be exactly the paths `git diff
+--name-only --no-renames <before.commit> <after.commit>` lists for that
+delivery, which the owner reads from the verified source at settlement. A
+missing, duplicated or extra path, or a missing entry, is refused with a typed
+reason (`missing_delivery_examination`, `duplicate_delivery_examination`,
+`examined_paths_mismatch`, `skipped_path_without_reason`, `invalid_verdict`,
+`trivial_rationale`). Version-1 evidence named commits only, which a reviewer
+can write without reading anything: settlement refuses new version-1 bytes as
+`unsupported_schema_version`, while receipts accepted under version 1 stay
+settled and still read.
+
+A review task must also carry its agent's own execution summary. While the
+task is open, evidence waits for it; once the task closes with no summary, or
+only the summary Orbit derived from its evidence at delivery, the attempt
+settles as `review_closed_without_execution_summary`: coverage stays owed and
+the retry budget applies. `orbit auto-task show` reports the reason on the
+active attempt.
 
 `orbit.task.artifact.put` — and any task update attaching
 `automation-coverage.json` — refuses a file that does not parse as this schema
@@ -231,7 +260,8 @@ completeness and authority are validated when the action settles.
 Unknown fields, changed identities, partial membership, empty checks, unavailable
 source objects or false completion cannot advance coverage. Findings may remain
 open after complete examination. Skipped required checks mean incomplete evidence.
-Task `done`, process success, summary prose and ordinary attachments are insufficient.
+Task `done`, process success, summary prose and ordinary attachments are insufficient
+on their own.
 
 Authority comes from the transport-supplied executor run, its persisted task
 assignment and the task's assigned run ID. A self-reported model name is attribution,
