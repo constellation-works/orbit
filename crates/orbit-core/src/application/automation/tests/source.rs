@@ -771,6 +771,7 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
             anchor: "anchor-not-yet-observed".into(),
             reference: "https://github.com/example/repo/pull/1".into(),
             landed_at: chrono::DateTime::UNIX_EPOCH,
+            head: None,
         }),
     );
     state.associations.insert(history.new[1].clone(), None);

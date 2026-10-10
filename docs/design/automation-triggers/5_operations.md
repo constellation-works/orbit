@@ -653,7 +653,12 @@ When observation first sees a landing, Core looks up passed certificates
 whose final tree equals the landed tree, verifies that the certificate's
 objects still exist and every task still has the reviewed meaning, and asks
 `orbit_automation::review::exclusion` for the decision: same base tree, same
-final tree, no contradicting managed landing record. A `landed_code_review_v1`
+final tree, no contradicting managed landing record. When the provider
+reports the landed pull request's head as a certificate's final candidate
+commit, a landing on a base that moved after review is also excluded, with
+assurance `rebased_clean`, if a conflict-free merge of the reviewed change
+onto the actual base reproduces the landed tree exactly ([review gate
+§7](../review-gate/2_design.md#7-delivery-coverage)). A `landed_code_review_v1`
 consumer moves an accepted landing into its `excluded` list; it does not
 count toward the threshold, is absent from `examined_deliveries`, and does
 not mint an examination receipt. An exclusively excluded prefix advances the
@@ -662,7 +667,7 @@ still be observed. Interleaved exclusions travel with the next frozen batch
 as readable context (`exclusions`) and retire with that examined range.
 A decoded `integrated_qa_v1` record ignores exclusions entirely. New definitions
 cannot select that coverage. A different base
-tree, any later edit, an unreviewed conflict repair, task drift, missing
+tree outside that rule, any later edit, an unreviewed conflict repair, task drift, missing
 objects, or an external landing race keeps the landing an ordinary
 obligation. Inspection surfaces and the dashboard list
 excluded landings with their certificate and assurance label.
