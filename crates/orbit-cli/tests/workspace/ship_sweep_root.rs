@@ -140,7 +140,11 @@ fn orbit(cwd: &Path, home: &Path, root_env: Option<&Path>, args: &[&str]) -> Vec
     command
         .current_dir(cwd)
         .env("HOME", home)
-        .env("USERPROFILE", home);
+        .env("USERPROFILE", home)
+        // The host-global tracing feed creates HOME/.orbit/state/logs on
+        // the first enabled event, including warnings on a loaded host.
+        // Keep the empty-HOME guard focused on registry fallback.
+        .env("RUST_LOG", "off");
     if let Some(root) = root_env {
         command.env("ORBIT_ROOT", root);
     }
