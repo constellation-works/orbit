@@ -168,7 +168,8 @@ fn bounded_run_enforces_deadline_while_a_stream_stays_readable() {
 
 /// A writer that survives the owned-group signal must not hold the post-exit
 /// drain open. `setsid` leaves the process group, so group teardown does not
-/// stop it; the drain's own bound has to.
+/// stop it; the drain's own bound has to. macOS ships no `setsid` binary, so
+/// the fixture falls back to perl's `POSIX::setsid`.
 #[cfg(unix)]
 #[test]
 fn bounded_run_bounds_post_exit_drain_while_a_detached_writer_continues() {
@@ -254,6 +255,11 @@ fn write_flood_script(
 ) {
     let redirect = if stderr { " >&2" } else { "" };
     let mut body = String::from("#!/bin/sh\n");
+    if detach {
+        body.push_str(
+            "detach() {\n  if command -v setsid >/dev/null 2>&1; then\n    setsid \"$@\"\n  else\n    perl -MPOSIX -e 'POSIX::setsid() != -1 or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\"' -- \"$@\"\n  fi\n}\n",
+        );
+    }
     body.push_str(&format!(
         "echo $$ > {}\n",
         quote_posix_arg(&leader.display().to_string())
@@ -264,7 +270,7 @@ fn write_flood_script(
         if detach {
             let inner = format!("echo $$ > {quoted_pid}; exec cat /dev/zero {quoted_pid}");
             body.push_str(&format!(
-                "setsid sh -c {}{redirect} &\n",
+                "detach sh -c {}{redirect} &\n",
                 quote_posix_arg(&inner)
             ));
         } else {

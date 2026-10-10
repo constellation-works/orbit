@@ -236,14 +236,14 @@ fn a_partition_wait_names_its_exclusive_holder() {
 
 #[test]
 fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
-    let (_root, boundary) = boundary(FileLockOptions {
+    let (_root, overdue) = boundary(FileLockOptions {
         warn_held_after: Some(Duration::from_millis(30)),
         ..contending()
     });
     let held_for = Duration::from_millis(80);
 
     let (_, events) = lock_events(|| {
-        boundary.enter_ordinary(|| {
+        overdue.enter_ordinary(|| {
             std::thread::sleep(held_for);
             Ok(())
         })
@@ -274,8 +274,13 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
         "the report carries the held duration: {report:?}"
     );
 
-    // A section inside its threshold says nothing.
-    let (_, events) = lock_events(|| boundary.enter_ordinary(|| Ok(())));
+    // A section inside its threshold says nothing. The margin is wide so a
+    // scheduling stall on a loaded host cannot push an empty section past it.
+    let (_root, patient) = boundary(FileLockOptions {
+        warn_held_after: Some(Duration::from_secs(60)),
+        ..contending()
+    });
+    let (_, events) = lock_events(|| patient.enter_ordinary(|| Ok(())));
     assert!(
         events
             .iter()
