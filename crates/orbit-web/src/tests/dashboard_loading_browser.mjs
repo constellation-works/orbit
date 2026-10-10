@@ -301,7 +301,7 @@ async function assertRowKeyboard(page) {
       if (new URL(path, window.location.href).pathname !== '/api/tasks' || !response.ok) return response;
       const payload = await response.json();
       payload.items = payload.items.map(task => ({ ...task, title: `${task.title} (refreshed)` }));
-      return { ...response, json: async () => payload, text: async () => JSON.stringify(payload) };
+      return new Response(JSON.stringify(payload), { status: response.status, headers: response.headers });
     };
     document.getElementById('refresh-btn').click();
   });
@@ -780,7 +780,7 @@ async function assertNarrowTableLayouts(page) {
   await page.evaluate(async () => {
     const now = Date.now();
     const iso = (minutes) => new Date(now - minutes * 60000).toISOString();
-    const response = payload => ({ ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) });
+    const response = (payload, status = 200, headers = {}) => new Response(JSON.stringify(payload), { status, headers });
     const runs = ['failed', 'success', 'running'].map((state, index) => ({
       run_id: `jrun-20261007-0717-c${index}-with-a-long-identifier`, job_id: `a-job-with-a-long-name-${index}`, state,
       created_at: iso(index + 1), duration_ms: 90000,
@@ -798,12 +798,21 @@ async function assertNarrowTableLayouts(page) {
       ts: iso(index + 1), step: `step-with-a-long-name-${index}`, actor_identity: 'claude-sonnet-5-5',
       token_usage: 123456, tool_invocations: 77, step_duration_ms: 456000, retry_count: 1,
     }));
+    const olderAuditEvents = [{ ...events[0], id: 8998, timestamp: iso(3), target_id: 'TASK-OLDER' }];
+    const auditPageRequests = [];
     const fixtureFetch = globalThis.fetch;
     globalThis.narrowTableFixtureFetch = fixtureFetch;
+    globalThis.narrowAuditPageRequests = auditPageRequests;
     globalThis.fetch = async (path, options) => {
       const url = new URL(path, window.location.href);
       if (url.pathname === '/api/job-runs') return response({ items: runs, total: runs.length, limit: 50, truncated: false });
-      if (url.pathname === '/api/audit') return response(events);
+      if (url.pathname === '/api/audit') {
+        const cursor = url.searchParams.get('before');
+        auditPageRequests.push(cursor);
+        return cursor
+          ? response(olderAuditEvents)
+          : response(events, 200, { 'x-audit-next-before': 'older-audit-page' });
+      }
       if (url.pathname === '/api/diagnostics/errors') return response({ items: errors, since: iso(24 * 60), coverage_since: iso(24 * 60) });
       if (url.pathname === '/api/diagnostics/metrics') return response(metrics);
       return fixtureFetch(path, options);
@@ -916,6 +925,19 @@ async function assertNarrowTableLayouts(page) {
   if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Audit events must not scroll sideways at 375px');
   await assertVisible(['tr.audit-row .c-status', 'tr.audit-row .c-command', 'tr.audit-row .c-time'], '#audit-body', 'Audit events', 375);
   await page.screenshot({ path: path.join(evidence, 'audit-375.png'), fullPage: true });
+  await page.locator('#audit-body .audit-more-btn').click();
+  await page.locator('#audit-body .audit-more-end').waitFor({ state: 'visible', timeout: 5000 });
+  const auditPaging = await page.evaluate(() => ({
+    requestCursors: globalThis.narrowAuditPageRequests,
+    rows: document.querySelectorAll('#audit-body tr.audit-row').length,
+  }));
+  const requestedOlderCursor = auditPaging.requestCursors.at(-1) === 'older-audit-page';
+  const requestedHeadPage = auditPaging.requestCursors.some(cursor => cursor === null);
+  if (!requestedHeadPage || !requestedOlderCursor || auditPaging.rows !== 3) {
+    throw new Error(`Audit paging must request the cursor and render its terminal page: ${JSON.stringify(auditPaging)}`);
+  }
+  if (await scrolls('audit-body') || await pageOverflow()) throw new Error('Paged audit events must not scroll sideways at 375px');
+  await assertVisible(['tr.audit-row .c-status', 'tr.audit-row .c-command', 'tr.audit-row .c-time'], '#audit-body', 'Paged audit events', 375);
 
   await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('diagnostics/errors'));
   await refresh();
