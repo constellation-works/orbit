@@ -1,6 +1,23 @@
 /* Audit tab: event rows and their detail, the policy view, summary cards
    (also used by Health), and the failures-by-tool cards. */
 
+@media (min-width: 901px) {
+  .tab-pane[data-tab="audit"] > main.tasks-layout {
+    align-items: stretch;
+  }
+  #audit-pane {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+  #audit-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
 .audit-status {
   font-size: 12.5px;
 }
