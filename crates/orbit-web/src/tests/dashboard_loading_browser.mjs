@@ -555,9 +555,12 @@ async function assertStillWaiting(page) {
     for (const expected of [
       '3 backlog tasks have recorded wait reasons (1 deferred, 2 excluded)',
       '9 additional admissible tasks were not started and are not listed below',
-      'Task ORB-101: context_lock_conflict blocked-by=ORB-900',
-      'Task ORB-103: dependency_not_done blocked-by=ORB-901',
-      'Task ORB-104: host_os_mismatch (waits for a linux host',
+      // Reasons render as plain wording, not raw codes (f67c654d2): a lock
+      // conflict reads "waits on lock", a host mismatch "needs <os> host", and
+      // blockers follow a "blocked by" link instead of the old blocked-by= form.
+      'Task ORB-101: waits on lock · lock · blocked by ORB-900',
+      'Task ORB-103: dependency not done · blocked by ORB-901',
+      'Task ORB-104: needs linux host (waits for a linux host',
       'idle: 17 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds',
     ]) {
       if (!text.includes(expected)) throw new Error(`Still-waiting panel missing "${expected}" at ${width}px: ${text}`);
