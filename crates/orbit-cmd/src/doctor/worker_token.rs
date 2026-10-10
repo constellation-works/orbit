@@ -27,10 +27,13 @@ const CREDENTIALS: [&str; 2] = [OAUTH_TOKEN, API_KEY];
 pub(super) enum ClockCredentials {
     /// No clock unit is installed, so no unattended tick needs the token.
     NoClock,
-    /// `clock.env` holds a credential.
+    /// `clock.env` holds a credential this workspace's pass admits.
     Provided,
     /// `clock.env` is absent or names no credential.
     Missing,
+    /// `clock.env` holds credentials, but the workspace's pass admits none of
+    /// them, so the tick exports nothing a run here would receive. Names only.
+    Mismatched(Vec<String>),
     /// `clock.env` exists but the tick would refuse it.
     Refused(String),
 }
@@ -92,6 +95,18 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
                  (mode 600; `orbit routine init --install-clock` creates it)."
             ));
         }
+        ClockCredentials::Mismatched(held) => {
+            let held = held.join(", ");
+            problems.push(format!(
+                "the clock's environment holds {held}, but `execution.env.pass` does not admit \
+                 it, so clock-started runs never receive it"
+            ));
+            fixes.push(format!(
+                "Add {held} to `[execution.env] pass` in the global or workspace config.toml, or \
+                 put {OAUTH_TOKEN} or {API_KEY} in ~/.orbit/{CLOCK_ENV_FILE_NAME} under a name the \
+                 pass admits."
+            ));
+        }
         ClockCredentials::Refused(reason) => {
             problems.push(format!(
                 "the clock cannot use {CLOCK_ENV_FILE_NAME}: {reason}"
@@ -124,18 +139,33 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
     )
 }
 
-fn clock_credentials(global_root: &Path) -> ClockCredentials {
+/// Classifies the credentials `clock.env` holds against the workspace's
+/// effective pass. The tick exports only names the pass admits, so a held
+/// credential under a name the pass omits never reaches a run here.
+pub(super) fn classify_clock_credentials(
+    file: Result<Option<Vec<String>>, String>,
+    pass: &[String],
+) -> ClockCredentials {
+    match file {
+        Err(reason) => ClockCredentials::Refused(reason),
+        Ok(None) => ClockCredentials::Missing,
+        Ok(Some(held)) if held.is_empty() => ClockCredentials::Missing,
+        Ok(Some(held)) if held.iter().any(|name| pass.contains(name)) => ClockCredentials::Provided,
+        Ok(Some(held)) => ClockCredentials::Mismatched(held),
+    }
+}
+
+fn clock_credentials(global_root: &Path, pass: &[String]) -> ClockCredentials {
     let installed = inspect_clock_unit()
         .is_ok_and(|inspection| inspection.verdict != ClockUnitVerdict::NoUnitInstalled);
     if !installed {
         return ClockCredentials::NoClock;
     }
     let names: Vec<String> = CREDENTIALS.iter().map(|name| (*name).to_string()).collect();
-    match clock_env_file_names(global_root, &names) {
-        Ok(Some(held)) if !held.is_empty() => ClockCredentials::Provided,
-        Ok(_) => ClockCredentials::Missing,
-        Err(error) => ClockCredentials::Refused(error.to_string()),
-    }
+    classify_clock_credentials(
+        clock_env_file_names(global_root, &names).map_err(|error| error.to_string()),
+        pass,
+    )
 }
 
 /// The `claude-worker-token` row for this workspace and host.
@@ -155,14 +185,16 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
                     })
                 })
             });
+    let pass = runtime.env_pass_names();
+    let clock = if macos {
+        clock_credentials(&global_root, &pass)
+    } else {
+        ClockCredentials::NoClock
+    };
     worker_token_row(&WorkerTokenFacts {
         macos,
         claude_routed,
-        pass: runtime.env_pass_names(),
-        clock: if macos {
-            clock_credentials(&global_root)
-        } else {
-            ClockCredentials::NoClock
-        },
+        pass,
+        clock,
     })
 }
