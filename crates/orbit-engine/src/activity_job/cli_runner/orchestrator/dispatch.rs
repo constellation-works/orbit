@@ -139,6 +139,7 @@ pub(crate) fn run_cli_backend_for_step(
         tools: activity_tools.effective_tools.clone(),
         tool_policy: Some(tool_policy),
         tool_disallow_list: tool_disallow_list.clone(),
+        omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
     });
 
     let task_ctx = host.task_context_for_agent_input(input)?;

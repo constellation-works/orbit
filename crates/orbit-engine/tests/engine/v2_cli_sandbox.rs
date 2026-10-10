@@ -239,6 +239,7 @@ impl RuntimeHost for RecordingHost {
         Ok(ResolvedActivityTools {
             requested_tools: Vec::new(),
             effective_tools: Vec::new(),
+            omitted_requirement_notes: Vec::new(),
         })
     }
 

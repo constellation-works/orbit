@@ -728,10 +728,15 @@ pub trait RuntimeHost: Send + Sync {
     /// Resolve a deny-mode activity's callable tools for one agent launch.
     ///
     /// `effective_tools` is every registered agent-facing tool the disallow
-    /// list does not cover. Selected tasks' `required_tools` are admitted as
-    /// in allowlist mode, and one the disallow list covers refuses dispatch
-    /// naming the tool and `activity`. A host without a tool registry cannot
-    /// compute the set, so it refuses rather than guessing.
+    /// list does not cover. A requirement never overrides that list.
+    /// `agent_implement`, and any activity that is not a shipped
+    /// non-implementer, admits `required_tools` fail-closed: unknown,
+    /// inactive, malformed and denied requirements refuse dispatch, naming
+    /// the tool and `activity`. Final recovery, step recovery, reviewers and
+    /// the other shipped non-implementers drop a covered requirement from
+    /// `requested_tools` and record why on `omitted_requirement_notes`.
+    /// A host without a tool registry cannot compute the set, so it refuses
+    /// rather than guessing.
     fn resolve_activity_tool_denials(
         &self,
         _task_ids: &[String],
@@ -753,6 +758,7 @@ pub trait RuntimeHost: Send + Sync {
         Ok(ResolvedActivityTools {
             requested_tools: Vec::new(),
             effective_tools: baseline_tools.to_vec(),
+            omitted_requirement_notes: Vec::new(),
         })
     }
 

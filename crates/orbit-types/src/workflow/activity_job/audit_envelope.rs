@@ -232,6 +232,11 @@ pub enum V2AuditEventKind {
         /// A deny-mode activity's `tool_disallow_list`; absent in allow mode.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tool_disallow_list: Option<Vec<String>>,
+        /// Required tools a non-implementer dropped because its disallow list
+        /// covers them. Each entry is the admission note. Empty, and omitted
+        /// from older records, when nothing was dropped. [ORB-15162]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        omitted_requirement_notes: Vec<String>,
     },
     /// [ORB-11354] An operator-admitted provider subprocess is about to run
     /// **outside** the executor's filesystem sandbox.

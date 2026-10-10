@@ -3,8 +3,8 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_updated: 2026-10-10
+last_validated: 2026-10-10
 status: Draft
 feature: activity-job
 doc_role: decisions
@@ -1629,6 +1629,35 @@ Tasks still reach `blocked` on paths no pipeline hook sees: run finalization of 
 - Opt out with `workflow.final_recovery_crews = []`, which also disables in-pipeline final recovery.
 - A field-only edit records no actor, so any unattributed write after the block holds the episode for a human, whoever made it. That includes Orbit's own field-only writes. Once a run is dispatched, the applier's revision check refuses its decision if the task changed.
 - `Cost:` at most one frontier-model session per block episode, two at a time.
+
+## Required tools bind the implementing activity
+
+**Recorded:** 2026-10-10 · [ORB-15162]
+**Amends:** point 5 of [Shipped activities move from tool allowlists to disallow lists](#shipped-activities-move-from-tool-allowlists-to-disallow-lists-allowlists-stay-for-custom-jobs)
+**Paths:** `crates/orbit-core/src/application/job/activity_tool_requirements.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs`, `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`
+
+### Context
+
+`required_tools` name what the implementing activity needs. Deny-mode admission applied that list to every activity bound to the task. `final_recovery` disallows `orbit.task.add`, `orbit.task.update` and `orbit.task.artifact.put`, and so do reviewers, task pilot and `agent_invoke`. A review or auto-task that requires those tools, which the seeded families do, therefore never reached final recovery: admission returned `RequiredToolAdmission` before the agent ran (ORB-15156, `jrun-20261010-0544-c3`).
+
+### Decision
+
+1. A requirement never overrides an activity's disallow list. The callable set stays the registered agent-facing tools minus the list.
+2. `agent_implement` keeps fail-closed admission. Unknown, inactive, malformed, non-agent-facing and denied requirements still refuse the invocation and name the task, the tool and the activity. Any activity name outside the non-implementer set below, including a custom implementer and the `implement_one` step id, does too.
+3. The shipped non-implementers are `final_recovery`, `step_failure_recovery`, `pr_conflict_recovery`, `agent_review_repair`, `review_reconciliation_review`, `task_pilot` and `agent_invoke`. For those, a required tool the disallow list covers is dropped from `requested_tools`. Each drop is a note on the resolution and on `ToolAllowlistHarnessDelegated.omitted_requirement_notes`, and a warning in the run log. Requirements the list does not cover are still admitted. Unknown, inactive, malformed and non-agent-facing requirements still fail closed.
+4. A new shipped recovery or review activity joins that set in `crates/orbit-core/src/application/job/activity_tool_requirements.rs`. The application owns this classification policy; the runtime-host adapter delegates it. Leaving it out keeps today's refusal, which is the safe default for an implementer.
+
+### Rejected alternatives
+
+- *A per-activity `applies_task_required_tools` flag, default true.* Authors of every new recovery activity would have to remember to set it false, which is how this hole comes back. The class is "not the implementer", and the shipped set is closed and named.
+- *Treat every activity except `agent_implement` as a non-consumer, including custom activities.* A custom implementer that disallows a tool its task requires would start without that tool. Fail-closed remains the default outside the shipped set.
+- *Let `required_tools` re-grant a disallowed tool.* The disallow list is still the activity author's hard boundary.
+
+### Consequences
+
+- Final recovery, step recovery and the named reviewers start for a task whose implementer requires `orbit.task.add` or `orbit.task.artifact.put`. The agent cannot call the dropped tool.
+- `agent_implement` still refuses to launch when its own disallow list covers a requirement.
+- `Cost:` a non-implementer that should have failed because the task cannot be recovered without a disallowed tool now starts and must notice the missing tool itself. The note names the tool and the activity.
 
 ## Task References
 

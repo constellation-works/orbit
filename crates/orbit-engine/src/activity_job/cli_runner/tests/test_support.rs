@@ -84,6 +84,7 @@ impl RuntimeHost for TestHost {
                 disallow_list,
                 TEST_REGISTERED_TOOLS.iter().copied(),
             ),
+            omitted_requirement_notes: Vec::new(),
         })
     }
 
