@@ -9,7 +9,7 @@ pub(crate) const FEATURE: &str = "automation";
 
 /// Append-only schema registry for this feature.
 pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
-    FeatureMigration::new(1, "consumer_checkpoints_and_coverage", |conn| {
+    FeatureMigration::breaking(1, "consumer_checkpoints_and_coverage", |conn| {
         conn.execute_batch("CREATE TABLE automation_consumers (consumer TEXT PRIMARY KEY, generation INTEGER NOT NULL, state_json TEXT NOT NULL);
             CREATE TABLE automation_coverage (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, receipt_json TEXT NOT NULL, accepted_at TEXT NOT NULL);
             CREATE INDEX automation_coverage_consumer ON automation_coverage(consumer, accepted_at);
@@ -19,25 +19,29 @@ pub(crate) const MIGRATIONS: &[FeatureMigration] = &[
             CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));")
                     .map_err(|e| OrbitError::Store(e.to_string()))
     }),
-    FeatureMigration::new(2, "retry_lineage_index", |conn| {
+    FeatureMigration::breaking(2, "retry_lineage_index", |conn| {
         conn.execute_batch(
                     "CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id)",
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))
     }),
-    FeatureMigration::new(3, "consumer_recovery_records", |conn| {
+    FeatureMigration::breaking(3, "consumer_recovery_records", |conn| {
         conn.execute_batch(
                     "CREATE TABLE automation_recoveries (record_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, recorded_at TEXT NOT NULL, record_json TEXT NOT NULL);
             CREATE INDEX automation_recoveries_consumer ON automation_recoveries(consumer, recorded_at);",
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))
     }),
-    FeatureMigration::new(
+    FeatureMigration::breaking(
         4,
         "release_stale_source_failures",
         super::members::release_stale_source_failures,
     ),
-    FeatureMigration::new(
+    // Rewrites member state rows into the shape older binaries already read
+    // and write, and advances each repaired consumer's generation, so an
+    // older writer holding the old snapshot is refused rather than misread
+    // [ORB-15260].
+    FeatureMigration::data_only(
         5,
         "release_misread_pilot_failures",
         super::members::release_misread_pilot_failures,

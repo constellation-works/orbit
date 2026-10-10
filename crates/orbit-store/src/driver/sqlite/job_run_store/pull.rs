@@ -25,7 +25,7 @@ use crate::driver::sqlite::migration::FeatureMigration;
 pub(crate) const FEATURE: &str = "local_pull";
 
 /// Append-only schema registry for this feature.
-pub(crate) const MIGRATIONS: &[FeatureMigration] = &[FeatureMigration::new(
+pub(crate) const MIGRATIONS: &[FeatureMigration] = &[FeatureMigration::breaking(
     1,
     "pending_requests_and_unique_leaves",
     |conn| {

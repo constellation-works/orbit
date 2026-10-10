@@ -483,6 +483,7 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
                 row.message.push_str(&format!("; {issue}"));
                 row.remediation = Some("Inspect `orbit clock status` and the sweep service log, then run `orbit clock repair`.".into());
             }
+            add_clock_hold(&mut row, global_root);
             row
         }
         Err(error) => WorkspaceDoctorResult {
@@ -495,6 +496,53 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
                     .to_string(),
             ),
         },
+    }
+}
+
+/// Clock ticks upgrade admission refused since the clock last ran
+/// [ORB-15260]. A tick refused outright, because a breaking migration cannot
+/// run beside the live processes, stops routines and worktree GC until they
+/// exit; one held behind another live generation resumes on its own.
+fn add_clock_hold(row: &mut WorkspaceDoctorResult, global_root: &std::path::Path) {
+    let hold = match orbit_common::fs::generation::clock_generation_hold(global_root) {
+        Ok(Some(hold)) => hold,
+        Ok(None) => return,
+        Err(error) => {
+            if row.status == WorkspaceDoctorStatus::Ok {
+                row.status = WorkspaceDoctorStatus::Warning;
+            }
+            row.message
+                .push_str(&format!("; could not read the clock hold record: {error}"));
+            return;
+        }
+    };
+    let run = format!(
+        "{} clock tick(s) since {} (latest {})",
+        hold.refused_ticks,
+        hold.started_at.to_rfc3339(),
+        hold.last_refused_at.to_rfc3339()
+    );
+    match hold.refusal {
+        Some(refusal) => {
+            row.status = WorkspaceDoctorStatus::Error;
+            row.message.push_str(&format!(
+                "; upgrade admission refused {run}, so scheduled routines and worktree GC are \
+                 not running: {refusal}"
+            ));
+            row.remediation = Some(
+                "Let the Orbit processes the refusal names finish, or stop them through their \
+                 owners (cancel a drain's run); the next tick then runs this binary."
+                    .into(),
+            );
+        }
+        None => {
+            if row.status != WorkspaceDoctorStatus::Error {
+                row.status = WorkspaceDoctorStatus::Warning;
+            }
+            row.message.push_str(&format!(
+                "; {run} waited behind another live executable generation"
+            ));
+        }
     }
 }
 

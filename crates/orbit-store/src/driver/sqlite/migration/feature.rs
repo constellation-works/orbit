@@ -4,34 +4,84 @@
 //! ledger. A feature crate owns its migration callbacks and invokes
 //! [`Store::apply_feature_migrations`] before exposing its persistence API.
 //! Feature versions are independent of Store's global schema version.
+//!
+//! Each migration declares whether older binaries survive it
+//! ([`FeatureMigration::additive`], [`FeatureMigration::data_only`] or
+//! [`FeatureMigration::breaking`]). Whenever a binary applies one, it leaves a
+//! [`CompatibilityRecord`] for the feature in `schema_meta`, so an older
+//! binary that meets a newer feature schema keeps working when nothing above
+//! its own registry is breaking, and otherwise refuses naming the first
+//! breaking migration it lacks. Upgrade admission reads the same declarations
+//! (`compose::compiled_compatibility`).
 
 use orbit_common::OrbitError;
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::Store;
+use crate::contracts::{
+    CompatibilityRecord, MigrationCompatibility, StateComponent, evaluate_newer_state,
+};
 
 const FEATURE_IDENTIFIER_MAX_BYTES: usize = 128;
 const MIGRATION_NAME_MAX_BYTES: usize = 128;
+
+/// `schema_meta` key prefix of each feature's forward-compatibility record,
+/// outside the `migration.v` namespace the store ledger scans.
+const COMPAT_KEY_PREFIX: &str = "feature.compat.";
 
 /// One append-only migration in a feature-owned schema registry.
 #[derive(Clone, Copy)]
 pub struct FeatureMigration {
     version: u32,
     name: &'static str,
+    compat: MigrationCompatibility,
     apply: fn(&Connection) -> Result<(), OrbitError>,
 }
 
 impl FeatureMigration {
-    /// Define one feature migration. Registries must start at version 1 and
-    /// contain every version exactly once in ascending order.
-    pub const fn new(
+    /// A migration older binaries cannot run beside: it removes, renames or
+    /// reinterprets state they read or write. Registries must start at
+    /// version 1 and contain every version exactly once in ascending order.
+    /// Declare this when in doubt.
+    pub const fn breaking(
         version: u32,
         name: &'static str,
+        apply: fn(&Connection) -> Result<(), OrbitError>,
+    ) -> Self {
+        Self::declared(version, name, MigrationCompatibility::Breaking, apply)
+    }
+
+    /// A migration that only adds state an older binary neither reads nor
+    /// violates when it writes: a new table or index, or a nullable column.
+    pub const fn additive(
+        version: u32,
+        name: &'static str,
+        apply: fn(&Connection) -> Result<(), OrbitError>,
+    ) -> Self {
+        Self::declared(version, name, MigrationCompatibility::Additive, apply)
+    }
+
+    /// A one-time rewrite of existing rows into a shape older binaries
+    /// already read and write, with no table or column change. Rows an older
+    /// binary writes afterwards must stay correct for this one.
+    pub const fn data_only(
+        version: u32,
+        name: &'static str,
+        apply: fn(&Connection) -> Result<(), OrbitError>,
+    ) -> Self {
+        Self::declared(version, name, MigrationCompatibility::Additive, apply)
+    }
+
+    const fn declared(
+        version: u32,
+        name: &'static str,
+        compat: MigrationCompatibility,
         apply: fn(&Connection) -> Result<(), OrbitError>,
     ) -> Self {
         Self {
             version,
             name,
+            compat,
             apply,
         }
     }
@@ -42,6 +92,11 @@ impl FeatureMigration {
 
     pub fn name(self) -> &'static str {
         self.name
+    }
+
+    /// Whether a binary without this migration must not run beside it.
+    pub fn is_breaking(self) -> bool {
+        self.compat.is_breaking()
     }
 }
 
@@ -75,8 +130,10 @@ impl Store {
     /// Each migration callback and its ledger row commit in one `BEGIN
     /// IMMEDIATE` transaction. Earlier successful migrations remain committed
     /// when a later migration fails, while that failing migration leaves
-    /// neither partial schema nor a ledger row. A newer on-disk feature schema,
-    /// a gap, or a changed migration name fails closed before a callback runs.
+    /// neither partial schema nor a ledger row. A gap, a changed migration
+    /// name, or a newer on-disk feature schema whose compatibility record
+    /// names a breaking migration this binary lacks fails closed before a
+    /// callback runs; a newer schema with none is left as it is.
     pub fn apply_feature_migrations(
         &self,
         feature: &str,
@@ -103,7 +160,7 @@ impl Store {
                 self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 let conn = tx.connection();
                 let applied = read_applied_migrations(conn, feature)?;
-                validate_applied_ledger(feature, migrations, &applied)?;
+                validate_applied_ledger(conn, feature, migrations, &applied)?;
 
                 let current_version = applied.last().map_or(0, |entry| entry.version);
                 if current_version >= migration.version {
@@ -138,6 +195,7 @@ impl Store {
                         migration.version, migration.name
                     ))
                 })?;
+                write_compat_record(conn, feature, migrations, migration.version)?;
                 Ok(true)
             })?;
 
@@ -165,7 +223,7 @@ impl Store {
         validate_registry(feature, migrations)?;
         self.with_read_connection(|conn| {
             let applied = read_applied_migrations(conn, feature)?;
-            validate_applied_ledger(feature, migrations, &applied)?;
+            validate_applied_ledger(conn, feature, migrations, &applied)?;
             let current_version = applied.last().map_or(0, |entry| entry.version);
             let pending = migrations
                 .iter()
@@ -247,6 +305,7 @@ fn validate_registry(feature: &str, migrations: &[FeatureMigration]) -> Result<(
 }
 
 fn validate_applied_ledger(
+    conn: &Connection,
     feature: &str,
     migrations: &[FeatureMigration],
     applied: &[AppliedFeatureMigration],
@@ -267,11 +326,7 @@ fn validate_applied_ledger(
             )));
         }
         let Some(known) = migrations.get(index) else {
-            let supported = migrations.last().map_or(0, |migration| migration.version);
-            return Err(OrbitError::Migration(format!(
-                "feature schema '{feature}' version {} is newer than the newest version this binary supports ({supported}); upgrade orbit to open this feature schema",
-                entry.version
-            )));
+            continue;
         };
         if entry.name != known.name {
             return Err(OrbitError::Migration(format!(
@@ -280,6 +335,85 @@ fn validate_applied_ledger(
             )));
         }
     }
+    let supported = migrations.last().map_or(0, |migration| migration.version);
+    match applied.last() {
+        Some(newest) if newest.version > supported => {
+            evaluate_newer_feature(conn, feature, newest.version, supported)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Decide a feature schema a newer binary advanced past this one, from the
+/// record it left: only migrations older binaries survive may lie above.
+fn evaluate_newer_feature(
+    conn: &Connection,
+    feature: &str,
+    state_version: u32,
+    supported: u32,
+) -> Result<(), OrbitError> {
+    let decision = read_compat_record(conn, feature).and_then(|record| {
+        evaluate_newer_state(
+            StateComponent::FeatureSchema,
+            state_version,
+            supported,
+            record,
+            false,
+        )
+    });
+    match decision {
+        Ok(_) => Ok(()),
+        Err(refusal) => Err(OrbitError::Migration(format!(
+            "feature schema '{feature}' version {state_version} is newer than the newest version this binary supports ({supported}), and {refusal}; upgrade orbit to open this feature schema"
+        ))),
+    }
+}
+
+fn compat_key(feature: &str) -> String {
+    format!("{COMPAT_KEY_PREFIX}{feature}")
+}
+
+/// Read `feature`'s forward-compatibility record. A missing row is a feature
+/// schema advanced by a binary that predates the record, not an error.
+fn read_compat_record(
+    conn: &Connection,
+    feature: &str,
+) -> Result<Option<CompatibilityRecord>, crate::contracts::CompatibilityRefusal> {
+    conn.query_row(
+        "SELECT value FROM schema_meta WHERE key = ?1",
+        [compat_key(feature)],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| crate::contracts::CompatibilityRefusal::CorruptRecord(error.to_string()))?
+    .map(|raw| CompatibilityRecord::decode(raw.trim()))
+    .transpose()
+}
+
+/// Record what this binary knows about `feature`'s migrations at `version`,
+/// in the transaction that commits the migration it describes.
+fn write_compat_record(
+    conn: &Connection,
+    feature: &str,
+    migrations: &[FeatureMigration],
+    version: u32,
+) -> Result<(), OrbitError> {
+    let record = CompatibilityRecord::for_registry(
+        version,
+        migrations
+            .iter()
+            .map(|migration| (migration.version, migration.name, migration.compat)),
+    );
+    conn.execute(
+        "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![compat_key(feature), record.encode()?, crate::now_string()],
+    )
+    .map_err(|error| {
+        OrbitError::Migration(format!(
+            "failed to record feature schema compatibility for '{feature}' at v{version}: {error}"
+        ))
+    })?;
     Ok(())
 }
 
