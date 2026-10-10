@@ -8,9 +8,7 @@ use serde_json::Value;
 
 use crate::workflow::JobRunState;
 use crate::workflow::JobRunTrigger;
-use crate::workflow::child_dispatch::{
-    ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
-};
+use crate::workflow::child_dispatch::{ChildCancellation, ChildDispatch, ChildDispatchPhase};
 
 use super::{
     ActivityCrewDraw, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
@@ -589,15 +587,6 @@ impl PipelineState {
         dispatch.updated_at = Utc::now();
         self.updated_at = Utc::now();
         true
-    }
-
-    /// The child run ids a terminalizing parent must cancel, per each
-    /// dispatch's own [`ChildCancellationPolicy`].
-    pub fn cascade_cancellation_targets(&self) -> Vec<String> {
-        self.open_child_dispatches()
-            .filter(|dispatch| dispatch.cancellation_policy() == ChildCancellationPolicy::Cascade)
-            .map(|dispatch| dispatch.child_run_id.clone())
-            .collect()
     }
 }
 

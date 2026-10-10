@@ -400,24 +400,6 @@ impl Provider {
     pub fn has_cli_runtime(self) -> bool {
         !matches!(self, Provider::OpenaiCompat)
     }
-
-    /// Whether the model-neutral Worker leaf executor can execute this
-    /// provider. Worker only wires the four shared CLI agent families;
-    /// `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, `ollama`, and
-    /// `openai_compat` are Orbit-canonical capabilities Worker does not run.
-    /// Preserving this distinction is an explicit ORB-10091 constraint — Orbit
-    /// keeps the wider set even though Worker cannot execute all of it.
-    ///
-    /// [ORB-10946] `copilot` returning `false` here is the stable
-    /// unavailable diagnostic, not a fallback: a Worker-routed step naming
-    /// `copilot` is refused by identity rather than silently re-pointed at
-    /// another family.
-    pub fn is_worker_executable(self) -> bool {
-        matches!(
-            self,
-            Provider::Claude | Provider::Codex | Provider::Gemini | Provider::Grok
-        )
-    }
 }
 
 impl fmt::Display for Provider {

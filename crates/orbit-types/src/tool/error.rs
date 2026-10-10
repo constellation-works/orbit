@@ -1,11 +1,5 @@
 use thiserror::Error;
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum ToolError {
-    #[error("{0}")]
-    Invalid(String),
-}
-
 /// A managed worker's runtime binding, or a call that strays outside it.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WorkerBindingError {

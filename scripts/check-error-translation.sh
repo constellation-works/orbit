@@ -76,7 +76,6 @@ from_registry=(
   "ReviewHistoryError:orbit-types"
   "ReviewReportError:orbit-types"
   "TaskError:orbit-types"
-  "ToolError:orbit-types"
   "WorkerBindingError:orbit-types"
   "WorkflowError:orbit-types"
 )

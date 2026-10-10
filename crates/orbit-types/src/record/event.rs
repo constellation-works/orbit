@@ -31,24 +31,6 @@ pub enum OrbitEvent {
     PluginDisabled {
         name: String,
     },
-    JobAdded {
-        job_id: String,
-    },
-    JobUpdated {
-        job_id: String,
-    },
-    JobPaused {
-        job_id: String,
-    },
-    JobResumed {
-        job_id: String,
-    },
-    JobDeleted {
-        job_id: String,
-    },
-    JobTriggered {
-        job_id: String,
-    },
     JobRunStarted {
         job_id: String,
         run_id: String,
@@ -67,15 +49,6 @@ pub enum OrbitEvent {
         job_id: String,
         run_id: String,
         attempt: u32,
-        reason: String,
-    },
-    JobProtocolViolation {
-        job_id: String,
-        run_id: String,
-        message: String,
-    },
-    JobSkipped {
-        job_id: String,
         reason: String,
     },
     JobRunArchived {
@@ -169,41 +142,11 @@ pub enum OrbitEvent {
     TaskDeleted {
         id: String,
     },
-    SkillAdded {
-        name: String,
-    },
-    SkillUpdated {
-        name: String,
-    },
-    SkillDeleted {
-        name: String,
-    },
-    SkillAttached {
-        task_id: String,
-        skill_name: String,
-    },
-    SkillDetached {
-        task_id: String,
-        skill_name: String,
-    },
-    ActivityAdded {
-        id: String,
-    },
-    ActivityUpdated {
-        id: String,
-    },
-    ActivityDisabled {
-        id: String,
-    },
     ActivityRunStarted {
         id: String,
     },
     ActivityRunCompleted {
         id: String,
         state: String,
-    },
-    ActivityProtocolViolation {
-        id: String,
-        message: String,
     },
 }

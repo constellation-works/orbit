@@ -350,8 +350,6 @@ pub mod refusal {
     pub const COVERAGE_CHANGED: &str = "coverage_changed";
     /// Nothing proves which examination contract the retained debt was for.
     pub const COVERAGE_UNVERIFIABLE: &str = "coverage_unverifiable";
-    /// This host may not admit work for the definition.
-    pub const OWNED_ELSEWHERE: &str = "owned_elsewhere";
     /// Adoption was requested but the configured identity already matches.
     pub const SETTINGS_UNCHANGED: &str = "settings_unchanged";
     /// A reissue was requested with no settled unevidenced action to reissue.
