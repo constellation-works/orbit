@@ -21,6 +21,8 @@
 //!   (git/PR/worktree/task-update) v2 job steps invoke
 //! - [`ci_log_signature`] — the normalized CI error signature, shared by
 //!   collection's reproduction check and `orbit-core`'s CI failure filing
+//! - [`ci_run_event`] — which run events build their branch's own commit,
+//!   shared the same way
 //!
 //! # Dependency direction
 //! orbit-common, orbit-agent, orbit-exec, orbit-store, orbit-tools
@@ -55,6 +57,7 @@ pub use context::{
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
 pub use executor::automation::ci::log_signature as ci_log_signature;
+pub use executor::automation::ci::run_event as ci_run_event;
 pub use executor::automation::execute_action as execute_deterministic_action;
 pub use executor::automation::vcs::claim::{
     observe_candidate, observe_no_diff_candidate, observe_published_candidate,

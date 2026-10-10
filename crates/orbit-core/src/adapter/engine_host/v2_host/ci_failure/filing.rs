@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_engine::ci_run_event::is_branch_event;
 use orbit_types::task::{
     TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id,
 };
@@ -679,8 +680,9 @@ where
     }))
 }
 
-/// Pushes may describe an older landing commit; PR/queue checkouts must match
-/// a currently observed landing tip. Never substitute the PR's source SHA.
+/// Branch-event runs (push, schedule or dispatch) may describe an older
+/// landing commit; PR/queue checkouts must match a currently observed landing
+/// tip. Never substitute the PR's source SHA.
 fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
     let Some(checkout) = failure["actual_checkout_shas"]
         .as_array()
@@ -697,7 +699,7 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
         .any(|head| {
             matches!(head["kind"].as_str(), Some("integration" | "release"))
                 && (head["current_head_sha"].as_str() == Some(checkout)
-                    || (failure["event"] == "push"
+                    || (failure["event"].as_str().is_some_and(is_branch_event)
                         && head["branch"].as_str().is_some()
                         && head["branch"] == failure["head_branch"]
                         && failure["event_reported_head_sha"].as_str() == Some(checkout)))
