@@ -19,7 +19,12 @@ spec:
     the fast path, then a shared high-confidence material coverage check finds
     untagged still-open tasks. Skips name the covering task and bounded match
     evidence; closed historical tasks and superficial similarities do not
-    suppress a current alert. Duplicate-check failures are bounded retryable
+    suppress a current alert. The exception is a Code scanning alert whose
+    exact-key task was rejected: while the alert's number, rule and location
+    still match what that task recorded, the sweep reports a `rejected_owner`
+    skip naming the rejected task instead of re-filing it, and files it again
+    once the rule or location changes. A rejection that names a covering task
+    is a duplicate verdict and does not suppress. Duplicate-check failures are bounded retryable
     errors and happen before any task is filed. Filed tasks require no tools.
   input_schema_json:
     type: object
@@ -72,7 +77,7 @@ spec:
               type: string
             match_kind:
               type: string
-              enum: [exact_key, material_coverage]
+              enum: [exact_key, material_coverage, rejected_owner]
             match_evidence:
               type: object
       skipped_dependabot_pr:

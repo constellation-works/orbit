@@ -43,6 +43,14 @@ pub(super) fn code_duplicate_candidate(key: &str, alert: &Value) -> DuplicateCan
     let rule = field(alert, "rule_id");
     let path = field(alert, "path");
     let alert_anchor = format!("alert {number}");
+    // The rejected-owner fingerprint is the same alert/rule/location evidence
+    // an owner records, so a changed rule or location stops matching and the
+    // alert is filed afresh.
+    let fields = vec![
+        CoverageAnchor::new("alert_number", alert_anchor),
+        CoverageAnchor::new("rule", format!("rule {rule}")),
+        CoverageAnchor::new("location", format!("location {path}{}", line_suffix(alert))),
+    ];
     DuplicateCandidate::new(
         format!("{CODE_KEY_PREFIX}{key}"),
         vec![
@@ -50,22 +58,16 @@ pub(super) fn code_duplicate_candidate(key: &str, alert: &Value) -> DuplicateCan
                 "code_scanning_title_and_alert",
                 vec![
                     CoverageAnchor::new("rule_and_path", format!("fix {rule} in {path}")),
-                    CoverageAnchor::new("alert_number", &alert_anchor),
+                    CoverageAnchor::new("alert_number", format!("alert {number}")),
                 ],
             ),
-            CoverageFingerprint::new(
-                "code_scanning_fields",
-                vec![
-                    CoverageAnchor::new("alert_number", alert_anchor),
-                    CoverageAnchor::new("rule", format!("rule {rule}")),
-                    CoverageAnchor::new(
-                        "location",
-                        format!("location {path}{}", line_suffix(alert)),
-                    ),
-                ],
-            ),
+            CoverageFingerprint::new("code_scanning_fields", fields.clone()),
         ],
     )
+    .with_rejected_owner_fingerprint(CoverageFingerprint::new(
+        "code_scanning_unchanged_after_rejection",
+        fields,
+    ))
 }
 
 pub(super) fn secret_duplicate_candidate(key: &str, alert: &Value) -> DuplicateCandidate {
