@@ -215,7 +215,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         package_flags = [argument for name in self.core_dependents for argument in ("-p", name)]
-        runtime = ["nextest", "run", "--no-fail-fast", *package_flags, "--lib", "--bins", "--tests"]
+        runtime = ["nextest", "run", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--lib", "--bins", "--tests"]
         docs = ["test", "--no-fail-fast", *package_flags, "--doc"]
         calls = self.calls()
         self.assertEqual(calls[1:], [["nextest", "--version"],
@@ -329,6 +329,68 @@ os.execvp(sys.argv[2], sys.argv[2:])
         result = self.gate()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.log.exists())
+
+
+def nextest_available():
+    try:
+        return subprocess.run(["cargo", "nextest", "--version"], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except OSError:
+        return False
+
+
+@unittest.skipUnless(nextest_available(), "the transport under test is real cargo-nextest")
+class NextestOutputTransportTests(unittest.TestCase):
+    """[ORB-15161] Run the gate over a real crate under real nextest.
+
+    The host that verifies a required check judges the gate's complete output.
+    nextest hides a passing test's output, so a test that returned without
+    running its sandboxed path (`DEFERRED: ...`) must still reach that output.
+    """
+
+    NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace"
+
+    def run_gate(self, test_body):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name) / "repo"
+        (root / "scripts").mkdir(parents=True)
+        (root / "crates/suite/src").mkdir(parents=True)
+        (root / "crates/suite/tests").mkdir()
+        shutil.copy2(SCRIPTS / "ci-test-affected.py", root / "scripts/ci-test-affected.py")
+        (root / "Cargo.toml").write_text('[workspace]\nresolver = "2"\nmembers = ["crates/suite"]\n')
+        (root / "crates/suite/Cargo.toml").write_text(
+            '[package]\nname = "suite"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / "crates/suite/src/lib.rs").write_text("// before\n")
+        (root / "crates/suite/tests/fixture.rs").write_text(test_body)
+        (root / ".gitignore").write_text("Cargo.lock\n")
+        environment = {name: value for name, value in os.environ.items()
+                       if not name.startswith(("GIT_", "ORBIT_", "CI_TEST_"))}
+        environment.update(CARGO_TARGET_DIR=str(Path(temporary.name) / "target"), CARGO_NET_OFFLINE="true",
+                           BUILD_BUDGET="env", CI_TEST_BASE="HEAD")
+        for arguments in (("init", "--initial-branch=main"), ("add", "."), ("commit", "-m", "base")):
+            subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                            "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *arguments],
+                           cwd=root, env=environment, capture_output=True, check=True)
+        (root / "crates/suite/src/lib.rs").write_text("// changed\n")
+        result = subprocess.run(["python3", str(root / "scripts/ci-test-affected.py")], cwd=root,
+                                env=environment, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout + result.stderr
+
+    def notices(self, output):
+        return [line.strip() for line in output.splitlines() if line.lstrip().startswith("DEFERRED:")]
+
+    def test_a_passing_tests_deferral_notice_reaches_the_gate_output(self):
+        for stream in ("eprintln", "println"):
+            with self.subTest(stream=stream):
+                output = self.run_gate(f'#[test]\nfn deferred() {{ {stream}!("{self.NOTICE}"); }}\n')
+                self.assertEqual(self.notices(output), [self.NOTICE], output)
+
+    def test_a_fully_executed_passing_gate_reports_no_deferral(self):
+        output = self.run_gate("#[test]\nfn executed() { assert_eq!(1 + 1, 2); }\n")
+        self.assertEqual(self.notices(output), [], output)
+        self.assertIn("1 test run: 1 passed", output)
 
 
 if __name__ == "__main__":
