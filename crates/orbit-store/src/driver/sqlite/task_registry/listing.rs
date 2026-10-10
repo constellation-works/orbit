@@ -35,7 +35,7 @@ impl TaskRegistryStore {
             .prepare(
                 "SELECT i.task_id, i.status, i.priority, i.job_run_id, i.created_at, i.updated_at, t.tag
                  FROM task_bundle_index i
-                 LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND t.workspace_id = i.workspace_id
+                 LEFT JOIN task_bundle_tags t ON t.task_id = i.task_id AND +t.workspace_id = i.workspace_id
                  WHERE i.workspace_id = ?1",
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
