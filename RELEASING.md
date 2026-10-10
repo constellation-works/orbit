@@ -6,7 +6,7 @@ How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, si
 
 - `agent-main` is the dev branch. Releases are prepared and tagged here.
 - `main` is the production branch. It only receives release merges and hotfixes.
-- Every release ends with `agent-main → main` promotion and a `main → agent-main` back-merge, in the same session.
+- Every release ends with a fast-forward promotion of `agent-main` to `main` and a check that the two agree, in the same session.
 
 ## Before you start
 
@@ -219,55 +219,32 @@ git push origin v<X.Y.Z>      # branch first, so CI resolves the tag against a p
 
 ### 10b. Promote to `main`
 
-After release CI is green, open the promotion PR. First trial-merge `origin/main` into a throwaway checkout of `agent-main`. If `website/package.json` (the js-yaml pin) conflicts, keep `agent-main`'s tighter constraint.
+After release CI is green, fast-forward `main` to the release commit. A fast-forward adds no merge commit to either branch, so the tag stays reachable from `main` and `agent-main` needs no back-merge. [10c](#10c-confirm-main-and-agent-main-agree) only checks the result.
 
 ```sh
-gh pr create --base main --head agent-main \
-  --title "release: v<X.Y.Z>" --body "Promotes v<X.Y.Z>. See CHANGELOG.md."
-gh pr merge <N> --merge --admin
+git fetch origin
+git merge-base --is-ancestor origin/main origin/agent-main   # must exit 0
+git push origin origin/agent-main:refs/heads/main
 ```
 
-Always use a merge commit, never squash or rebase, so the tag stays reachable from `main`. If GitHub says merge commits aren't allowed, turn them on for this merge, then off again:
+Why a fast-forward: the `agent-main` ruleset says "This branch must not contain merge commits". The old flow merged `agent-main` into `main` with a promotion-PR merge commit, then back-merged `main` into `agent-main` with `git merge --no-ff`. That back-merge (v0.28.1, `02b2e0aa2`) only landed because the pusher bypassed the rule. GitHub offers no PR merge method that fast-forwards, so promote with a direct push. A direct push to `main` needs the same release-operator rights the old `gh pr merge --admin` step already used. If the push is refused, don't push anything else to `agent-main`. Ask a repository admin to push, or to adjust the `main` ruleset for the release operator.
+
+If `is-ancestor` exits non-zero, `main` holds commits `agent-main` lacks, which is the case after a [hotfix](#hotfix-flow) whose back-merge was skipped. Don't force-push `main`. Complete the [hotfix back-merge](#hotfix-flow) first, then promote.
+
+Never promote with a squash or rebase PR: it rewrites SHAs, so the release tag isn't reachable from `main`.
+
+### 10c. Confirm `main` and `agent-main` agree
+
+Do this in the same session:
 
 ```sh
-gh api -X PATCH repos/constellation-works/orbit -f allow_merge_commit=true
-gh pr merge <N> --merge --admin
-gh api -X PATCH repos/constellation-works/orbit -f allow_merge_commit=false
+git fetch origin
+git merge-base --is-ancestor origin/main origin/agent-main && echo in-sync
 ```
 
-### 10c. Post-merge: back-merge to `agent-main`
+`in-sync` means `main` is the release commit or an ancestor of `agent-main`, so the next promotion is again a fast-forward. If it prints nothing, `main` holds commits `agent-main` lacks. Follow the [hotfix back-merge](#hotfix-flow), and never force-push either branch to make them match.
 
-Do this right away, in the same session:
-
-```sh
-git checkout agent-main
-git pull --ff-only origin agent-main
-git merge --no-ff origin/main -m "chore: back-merge main into agent-main after v<X.Y.Z>"
-git push origin agent-main
-```
-
-If a back-merge was skipped, run the same commands. They resolve cleanly however far behind `agent-main` is. If `agent-main` has no in-flight work, you can reset it instead with `git push origin origin/main:refs/heads/agent-main --force-with-lease`.
-
-Branch protection on `agent-main` exists only to block deletion. It never gates merges on CI, and the `qa-sweep` auto-task picks up CI failures. If `agent-main` goes missing from origin, recreate it and restore the protection:
-
-```sh
-git push origin origin/main:refs/heads/agent-main
-cat <<'EOF' | gh api -X PUT repos/constellation-works/orbit/branches/agent-main/protection --input -
-{
-  "required_status_checks": null,
-  "enforce_admins": false,
-  "required_pull_request_reviews": null,
-  "restrictions": null,
-  "required_linear_history": false,
-  "allow_force_pushes": true,
-  "allow_deletions": false,
-  "block_creations": false,
-  "required_conversation_resolution": false,
-  "lock_branch": false,
-  "allow_fork_syncing": false
-}
-EOF
-```
+The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and doesn't gate on CI. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
 
 ### 11. Mark the Orbit task done
 
@@ -322,12 +299,15 @@ Use this for a critical fix on a released `main` that can't wait for the next cy
 
 2. Open a PR against `main` with the smallest possible fix. No refactors.
 3. Cut a patch release on `main` with checklist steps 1–10, using `main` as the branch: `git push origin main && git push origin v<X.Y.Z+1>`. Skip 10b, because the fix is already on `main`.
-4. Back-merge in the same session, so the next promotion doesn't overwrite the fix:
+4. Back-merge in the same session, so the next promotion doesn't overwrite the fix and `main` is an ancestor of `agent-main` again:
 
    ```sh
    git checkout agent-main
+   git pull --ff-only origin agent-main
    git merge --no-ff main
    git push origin agent-main
    ```
+
+   This is the one release step that must create a merge commit on `agent-main`. The ruleset refuses it unless the pusher can bypass it, so the push needs a repository admin or a release operator with bypass rights. A "Bypassed rule violations" notice on the push is expected here. When the fix can wait for the next cycle, prefer landing it on `agent-main` by an ordinary PR and releasing through 10b, which needs no bypass.
 
 5. Resolve conflicts with in-flight `agent-main` work in the back-merge. Don't rebase agent branches onto the new tip.
