@@ -235,6 +235,17 @@ th,
   line-height: inherit;
   cursor: copy;
 }
+/* The glyph marks the control as copy, not navigation, wherever the same
+   mono ID is also a link elsewhere (Runs, Errors, Jobs). */
+.copy-id::after {
+  content: " \29C9";
+  opacity: 0.45;
+  font-size: 0.85em;
+}
+.copy-id:hover::after,
+.copy-id:focus-visible::after {
+  opacity: 1;
+}
 .copy-id:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

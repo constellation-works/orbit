@@ -200,7 +200,7 @@ for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot
 }
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
 const blockedLinks = descendants(drainBody).filter(node => String(node.href || '').includes('#tasks?'));
-assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-14488')), 'blocked-by links stay workspace-qualified');
+assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('open=ORB-14488')), 'blocked-by links stay workspace-qualified');
 assert(get('auto-drain-live').textContent === 'idle', 'no live window reads idle');
 // With no live window Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
@@ -770,7 +770,7 @@ assert(requests.filter(r => r.path === '/api/auto-tasks/mint').length === 1, 'mi
 assert(get('auto-task-operation-feedback').textContent.includes('Minting'), 'mint pending feedback');
 assert(confirmations.at(-1).includes('An open instance already exists'), 'duplicate is clearly acknowledged');
 releasePost(); await tick(); await tick();
-const link = descendants(get('auto-task-operation-feedback')).find(node => String(node.href || '').includes('q=TEST-1'));
+const link = descendants(get('auto-task-operation-feedback')).find(node => String(node.href || '').includes('open=TEST-1'));
 assert(link && String(link.href).includes('workspace=one'), 'mint links to task in originating workspace');
 assert(requests.find(r => r.path.endsWith('/mint')).body.acknowledge_unconditional === true, 'mint acknowledges unconditional semantics');
 assert(!requests.some(r => r.path.includes('/ship')), 'mint never dispatches');

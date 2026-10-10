@@ -431,7 +431,11 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // A bookmarked legacy hash is rewritten in place so the address bar and any
   // copied link name the current route, without a second hashchange — and so
   // Back does not land on the legacy hash and redirect forward again.
-  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute) && typeof window.history?.replaceState === "function";
+  // A task link (`#tasks?open=ID`) is normalized the same way: pushing the
+  // full filter hash after it would leave two entries, and Back from the second
+  // would land on the first and push again.
+  const taskLink = top === "tasks" && query.has("open");
+  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute || taskLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
     window.history.replaceState(null, "", hash);
   } else if (hashChanged && shouldUpdateHash) {

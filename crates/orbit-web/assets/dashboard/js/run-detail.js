@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -459,10 +459,7 @@ const IDLE_SUMMARY_PASSES = 3;
 
 function waitingTaskLink(taskId, workspaceId) {
   const link = el("a", { class: "waiting-task-link", text: taskId, title: `Open ${taskId}` });
-  const url = new URL(window.location.href);
-  url.searchParams.set("workspace", workspaceId || getWorkspace() || "");
-  url.hash = `tasks?status=all&q=${encodeURIComponent(taskId)}`;
-  link.href = `${url.search}${url.hash}`;
+  bindTaskLink(link, taskId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 
@@ -568,10 +565,7 @@ function failureRunLink(runId) {
 
 function failureTaskLink(taskId, workspaceId) {
   const link = el("a", { class: "failure-id-link", text: taskId, title: `Open ${taskId}` });
-  const url = new URL(window.location.href);
-  url.searchParams.set("workspace", workspaceId || getWorkspace() || "");
-  url.hash = `tasks?status=all&q=${encodeURIComponent(taskId)}`;
-  link.href = `${url.search}${url.hash}`;
+  bindTaskLink(link, taskId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 

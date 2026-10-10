@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindTaskLink } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1139,11 +1139,7 @@ export function runTaskLinks(run) {
       el("span", { class: "run-task-id", text: task.id }),
       task.title ? el("span", { class: "run-task-title", text: task.title }) : null,
     ]);
-    const url = new URL(window.location.href);
-    url.searchParams.set("workspace", run.workspace_id || getWorkspace() || "");
-    url.hash = `tasks?status=all&q=${encodeURIComponent(task.id)}`;
-    link.href = `${url.search}${url.hash}`;
-    link.addEventListener("click", event => event.stopPropagation());
+    bindTaskLink(link, task.id, { workspace: run.workspace_id || getWorkspace() });
     cell.appendChild(link);
   }
   return cell;

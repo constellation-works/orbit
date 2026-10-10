@@ -121,6 +121,7 @@ const window = { location: { search: '', hash: '' }, confirm: () => true };
 class Event { constructor(type) { this.type = type; } }
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, document, window, Node, Event,
+  requestAnimationFrame: () => 0,
   fetch: () => new Promise(() => {}),
 });
 const modules = new Map();
@@ -140,7 +141,7 @@ const linker = async specifier => {
 const tasksModule = load('tasks.js');
 await tasksModule.link(linker);
 await tasksModule.evaluate();
-const { renderTasks } = tasksModule.namespace;
+const { renderTasks, applyTasksHashQuery, buildTasksHash } = tasksModule.namespace;
 const common = modules.get('common.js').namespace;
 
 // A matching set of 65 tasks read in pages of 50, as /api/tasks serves them.
@@ -353,3 +354,37 @@ assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'anoth
 assert.ok(!groupHintText().includes('eligible'), 'and the hint stops counting');
 stopListening();
 common.setWorkspace('ws_orbit');
+
+// A task link names only the task: it opens under the operator's own filter
+// instead of replacing it, and the open task is what a copied URL carries.
+let statuses = new Set(['review']);
+let search = 'zzz';
+const hashContext = {
+  getActiveStatuses: () => statuses,
+  setActiveStatuses: value => { statuses = value; },
+  getSearchQuery: () => search,
+  setSearchQuery: value => { search = value; },
+  statusOrder: ['in-progress', 'review', 'done'],
+  defaultActiveStatuses: ['in-progress', 'review'],
+};
+applyTasksHashQuery(new URLSearchParams('open=ORB-9'), hashContext);
+assert.deepEqual([...statuses], ['review'], 'a task link keeps the operator\'s status chips');
+assert.equal(search, 'zzz', 'a task link keeps the operator\'s search');
+assert.equal(buildTasksHash(hashContext), '#tasks?status=review&q=zzz&open=ORB-9', 'the normalized hash carries the filter and the open task');
+applyTasksHashQuery(new URLSearchParams('status=done&open=ORB-9'), hashContext);
+assert.deepEqual([...statuses], ['done'], 'a hash that names a filter still sets it');
+assert.equal(search, '', 'a hash that names a status resets the omitted search');
+assert.equal(buildTasksHash(hashContext), '#tasks?status=done&open=ORB-9');
+applyTasksHashQuery(new URLSearchParams('status=done&open=%3Cscript%3E'), hashContext);
+assert.equal(buildTasksHash(hashContext), '#tasks?status=done', 'a malformed task id is ignored');
+applyTasksHashQuery(new URLSearchParams('status=done'), hashContext);
+assert.equal(buildTasksHash(hashContext), '#tasks?status=done', 'a hash without open names no task');
+
+// The next render expands a named task the list holds.
+applyTasksHashQuery(new URLSearchParams('open=ORB-7'), taskContext);
+paint({ total: 2, limit: 50, offset: 0, next_cursor: null }, [task(6), task(7)]);
+assert.deepEqual(
+  byId['tasks-body'].querySelectorAll('.row.expanded').map(row => row.dataset.key),
+  ['task-ORB-7'],
+  'only the task the link names is expanded',
+);

@@ -13,6 +13,12 @@ let lastCrewPayload = { default_crew: null, crews: [] };
 let expandedTaskIds = new Set();
 let taskActionNotice = null;
 let pinnedExternalTask = null;
+// The task the Tasks hash names with `open=`: the one opened last and still
+// open, so a copied URL reopens it. `pendingOpenTaskId` is a hash-named task
+// that has not been shown yet; the next render expands it from the list or
+// pins it when the operator's filter hides it.
+let openTaskId = null;
+let pendingOpenTaskId = null;
 // ORB-10874: per-task inline-edit feedback for the status/crew selects. Each
 // entry is `{ kind: 'pending'|'success'|'error', text, undo }`, where `undo`
 // (when present) is `{ previousValue, expiresAt }` — a bounded window in which
@@ -57,6 +63,9 @@ onWorkspaceChange(() => {
   taskActionNotice = null;
   quickActionState.clear();
   expandedTaskIds.clear();
+  // The initial workspace selection also lands here; a task the URL named but
+  // no render has shown yet must survive it.
+  if (!pendingOpenTaskId) setOpenTask(null);
   statusFeedback.clear();
   crewFeedback.clear();
   complexityFeedback.clear();
@@ -488,7 +497,12 @@ export function openVisibleTask(taskId, context) {
     return;
   }
   expandedTaskIds.add(taskId);
+  setOpenTask(taskId);
   renderTasks(taskList(context), context);
+  revealTaskRow(taskId);
+}
+
+function revealTaskRow(taskId) {
   requestAnimationFrame(() => {
     const row = findTaskRow(taskId);
     if (!row) return;
@@ -496,6 +510,71 @@ export function openVisibleTask(taskId, context) {
     row.classList.add("data-changed");
     setTimeout(() => row.classList.remove("data-changed"), 1200);
   });
+}
+
+// Task ids in a hash are untrusted input: keep only id-shaped values.
+function parseOpenTaskId(value) {
+  const id = (value || "").trim();
+  return /^[\w.-]{1,64}$/.test(id) ? id : null;
+}
+
+// Mirror the open task into the current `#tasks` entry. The entry is replaced,
+// not pushed, so toggling a row never adds a Back step.
+function writeOpenTaskToUrl(taskId) {
+  const hash = window.location.hash || "";
+  const split = hash.indexOf("?");
+  const route = split < 0 ? hash : hash.slice(0, split);
+  if (route !== "#tasks" || typeof window.history?.replaceState !== "function") return;
+  const params = new URLSearchParams(split < 0 ? "" : hash.slice(split + 1));
+  if (taskId) params.set("open", taskId);
+  else params.delete("open");
+  const query = params.toString();
+  const next = query ? `#tasks?${query}` : "#tasks";
+  if (next !== hash) window.history.replaceState(null, "", next);
+}
+
+function setOpenTask(taskId) {
+  openTaskId = taskId;
+  writeOpenTaskToUrl(taskId);
+}
+
+// Every path that closes a task detail goes through here so the URL stops
+// naming a task the page no longer shows.
+function collapseTask(taskId) {
+  expandedTaskIds.delete(taskId);
+  if (openTaskId === taskId) setOpenTask(null);
+}
+
+// Show the task a hash names, once the list that may contain it has rendered.
+// A task the filter or page hides is fetched and pinned instead, so following
+// a link never rewrites the saved status or search filter.
+function resolvePendingOpenTask(tasks, context) {
+  const taskId = pendingOpenTaskId;
+  if (!taskId) return;
+  pendingOpenTaskId = null;
+  if (filterTasks(tasks, context).some((task) => task.id === taskId)) {
+    expandedTaskIds.add(taskId);
+    revealTaskRow(taskId);
+  } else if (!(pinnedExternalTask && pinnedExternalTask.id === taskId)) {
+    pinOpenTask(taskId, context);
+  }
+}
+
+async function pinOpenTask(taskId, context) {
+  const visit = captureWorkspaceVisit();
+  const superseded = () => !visit.isCurrent() || openTaskId !== taskId;
+  try {
+    const task = await fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`);
+    if (superseded()) return;
+    if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
+    pinnedExternalTask = { task, id: taskId };
+  } catch (error) {
+    if (superseded()) return;
+    taskActionNotice = error && error.status === 404
+      ? `${taskId} not found`
+      : `Could not open ${taskId}: ${(error && error.message) || error}`;
+  }
+  renderTasks(taskList(context), context);
 }
 
 /* Global ID resolver support (ORB-00211): allow rendering detail for a task that
@@ -506,9 +585,11 @@ export function openVisibleTask(taskId, context) {
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
   pinnedExternalTask = { task, id: task.id };
+  setOpenTask(task.id);
 }
 
 export function clearPinnedExternalTask(context) {
+  if (pinnedExternalTask && openTaskId === pinnedExternalTask.id) setOpenTask(null);
   pinnedExternalTask = null;
   if (context) renderTasks(taskList(context), context);
 }
@@ -548,11 +629,19 @@ export function buildTasksHash(context) {
   if (notReadyOnly) sp.set("ready", "not");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
+  if (openTaskId) sp.set("open", openTaskId);
   const qs = sp.toString();
   return qs ? `#tasks?${qs}` : "#tasks";
 }
 
 export function applyTasksHashQuery(query, context) {
+  const open = parseOpenTaskId(query.get("open"));
+  openTaskId = open;
+  pendingOpenTaskId = open;
+  // A link that only names a task (`#tasks?open=ID`) opens it under whatever
+  // filter the operator already has; reading it as "no filter" would reset
+  // the chips and search to their defaults.
+  if (open && !["status", "q", "ready"].some((key) => query.has(key))) return;
   if (context && typeof context.resetTaskPagination === "function") {
     context.resetTaskPagination();
   }
@@ -2499,7 +2588,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
     statusFeedback.set(task.id, feedback);
-    expandedTaskIds.delete(task.id);
+    collapseTask(task.id);
   } catch (error) {
     if (!visit.isCurrent()) return;
     statusFeedback.set(task.id, {
@@ -2609,7 +2698,7 @@ async function shipTask(task, detail, btnNode, context) {
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
     taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
-    expandedTaskIds.delete(task.id);
+    collapseTask(task.id);
     await refreshTasks(context);
   } catch (error) {
     if (!dispatched) shipInFlightTaskIds.delete(dispatchKey);
@@ -2788,7 +2877,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     }
     accepted = true;
     if (!visit.isCurrent()) return;
-    if (opts.collapseOnSuccess !== false) expandedTaskIds.delete(task.id);
+    if (opts.collapseOnSuccess !== false) collapseTask(task.id);
     if (opts.successNotice) taskActionNotice = opts.successNotice;
     await refreshTasks(context);
   } catch (err) {
@@ -2874,6 +2963,7 @@ function buildPinnedTask(ptask, context) {
   dismiss.addEventListener("click", (ev) => {
     ev.stopPropagation();
     pinnedExternalTask = null;
+    if (openTaskId === ptask.id) setOpenTask(null);
     renderTasks(taskList(context), context);
   });
   let actions = detail.querySelector(".actions");
@@ -3112,8 +3202,10 @@ export function renderTasks(tasks, context) {
     const p = pinnedExternalTask.task;
     if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
       pinnedExternalTask = null;
+      if (openTaskId === p.id) expandedTaskIds.add(p.id);
     }
   }
+  resolvePendingOpenTask(tasks, context);
 
   // Collected as a plain array rather than a document fragment: a fragment
   // would detach every reused node from the panel, and moving a node is what
@@ -3240,12 +3332,13 @@ export function renderTasks(tasks, context) {
           onToggle: () => {
             const toggle = () => {
               if (expandedTaskIds.has(t.id)) {
-                expandedTaskIds.delete(t.id);
+                collapseTask(t.id);
                 // Reopening re-reads the detail, which is also the retry for a
                 // read that failed.
                 forgetTaskDetailLoad(t.id);
               } else {
                 expandedTaskIds.add(t.id);
+                setOpenTask(t.id);
               }
               renderTasks(taskList(context), context);
             };
