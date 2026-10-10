@@ -209,7 +209,7 @@ fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
 
 /// Re-scope the task to `criterion` and apply one assessment of it carrying
 /// the agent findings in `findings`.
-fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
+pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
     let task_id = &pair.tasks[0];
     pair.wire
         .owner

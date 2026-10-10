@@ -549,7 +549,7 @@ impl OrbitRuntime {
 
     /// The single spelling of the admissible set, shared by the read-only gate
     /// and the compare-and-set the mutating admission writes with.
-    fn workflow_admissible_statuses() -> [TaskStatus; 2] {
+    pub(crate) fn workflow_admissible_statuses() -> [TaskStatus; 2] {
         [TaskStatus::Backlog, TaskStatus::InProgress]
     }
 

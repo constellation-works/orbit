@@ -29,6 +29,10 @@ use super::action_failed;
 ///   may not start from between admission and now. The gate reports a
 ///   non-success child so `release_reservation` frees the reservation and
 ///   `require_child_success` then fails the run with the reason attached.
+/// - **admission refused** — the task is still `backlog` / `in-progress` but
+///   admission refuses it (pilot hold, native-OS wait, unreadable pilot
+///   receipt). Gate behavior matches withdrawn; the reason quotes the
+///   admission error instead of claiming a status change.
 /// - **claimed elsewhere** ([ORB-13918]) — a distributed pull claimed the task
 ///   after the drain admitted it. The claim is the one execution; the bundle
 ///   succeeds having launched nothing, exactly like a stale no-op, so the
@@ -78,6 +82,7 @@ pub(super) fn gate_admission_stop(
     let mut stale_statuses = Vec::new();
     let mut withdrawn_statuses = Vec::new();
     let mut claimed_statuses = Vec::new();
+    let mut refused = Vec::new();
     let mut admission_errors = Vec::new();
 
     for task_id in &task_ids {
@@ -111,6 +116,12 @@ pub(super) fn gate_admission_stop(
                     }));
                     if matches!(status, TaskStatus::Review | TaskStatus::Done) {
                         stale_statuses.push((task_id.clone(), status.to_string()));
+                    } else if OrbitRuntime::workflow_admissible_statuses().contains(&status) {
+                        // The status never left the admissible set, so the
+                        // refusal is the admission check's own: a pilot hold,
+                        // a native-OS wait or an unreadable pilot receipt.
+                        // Keep its text; "the status changed" would be false.
+                        refused.push((task_id.clone(), status.to_string(), error.to_string()));
                     } else {
                         // [ORB-11305] The task still exists, a human just moved
                         // it somewhere automation may not start from. That is a
@@ -157,6 +168,36 @@ pub(super) fn gate_admission_stop(
             input,
             "failed",
             "withdrawn",
+            &reason,
+            &task_statuses,
+        )));
+    }
+
+    // A hold or admission error on a task that is still admissible is not a
+    // withdrawal either, but it fails the gate the same way: the child never
+    // launches and `release_reservation` still runs before the run fails.
+    if !refused.is_empty() {
+        let detail = refused
+            .iter()
+            .map(|(task_id, status, error)| format!("{task_id}={status}: {error}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let reason = format!(
+            "task_gate_pipeline ineligible: workflow admission for '{workflow}' refused child dispatch: {detail}"
+        );
+        record_gate_admission_stop(
+            runtime,
+            action,
+            input,
+            &task_ids,
+            &task_statuses,
+            &reason,
+            "admission_refused",
+        )?;
+        return Ok(Some(gate_admission_stop_output(
+            input,
+            "failed",
+            "admission_refused",
             &reason,
             &task_statuses,
         )));
@@ -267,7 +308,9 @@ fn parent_run_id_or_unknown(input: &Value) -> &str {
 
 /// Audit an admission stop before the gate acts on it. `outcome` is
 /// `stale_noop` (already-shipped work), `withdrawn` (a human moved the task
-/// out of automation's reach [ORB-11305]) or `claimed_elsewhere` (a live
+/// out of automation's reach [ORB-11305]), `admission_refused` (the task kept
+/// an admissible status but admission refused it, e.g. a pilot hold; the
+/// reason carries the admission error) or `claimed_elsewhere` (a live
 /// distributed claim is executing it [ORB-13918]); each is recorded so a run
 /// that launched nothing is still explainable from the audit log alone.
 fn record_gate_admission_stop(
