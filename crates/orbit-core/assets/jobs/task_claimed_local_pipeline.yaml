@@ -112,6 +112,9 @@ spec:
               task_id: "{{ item }}"
               workspace_path: "{{ steps.worktree.output.workspace_path }}"
               repo_root: "{{ steps.worktree.output.workspace_path }}"
+              # ORB-15287: the pinned delivery base a deferred sandbox
+              # validation must name.
+              base_sha: "{{ steps.worktree.output.base_sha }}"
               # Claimed mode: the injected envelope is the task, the agent
               # writes no owner task state, and it returns its execution
               # summary in its output for the handoff to carry.
@@ -143,6 +146,8 @@ spec:
         base_sha: "{{ steps.worktree.output.base_sha }}"
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         already_landed_checkpoint: "{{ steps.commit.output }}"
+        # ORB-15287: replays a gate the implementer's sandbox deferred.
+        implementation: "{{ steps.implement_one.output }}"
 
     - id: handoff
       target: activity:claim_handoff

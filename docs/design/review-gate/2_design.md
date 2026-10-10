@@ -409,6 +409,16 @@ deferred test as `host_sandbox_test` evidence instead. A result from a host
 that executed the path, such as owner fulfilment below, stands in for the
 record and clears its notices.
 
+The implementer lane follows the same reading [ORB-15287]. An affected-test
+gate that exits 0 with only Bubblewrap `DEFERRED:` notices is handed off as a
+typed `deferred_sandbox_validation` record, which the implement step checks
+before commit: one of the owner's validation gates, exit 0, executed tests on
+the pinned base, only Bubblewrap notices and a failing namespace probe in the
+same run. The owner's `candidate_validate`, or a claim's `claim_validate`,
+replays that gate outside the agent sandbox before delivery and refuses a
+replay that defers again (`validation_environment`) or reports no executed
+tests. The implementer's own pass stays `not_run`.
+
 A negative control is bound to more than its label [ORB-14192]: an
 `expected_failure` record names its `control` kind — `pre_fix` (the
 reproduction on the pre-fix tree), `superseded_assertion` or

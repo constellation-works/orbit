@@ -22,6 +22,15 @@
 //! cannot drop the stderr failure before that classification, and the end of
 //! the recorded text still holds it.
 //!
+//! A command that exits zero after printing a `DEFERRED:` notice returned
+//! without running a sandbox-confined path, because the host it ran on could
+//! not apply the sandbox. Both validation steps run on the owner, outside any
+//! agent sandbox, so a deferral there means the path was never executed
+//! before delivery. [`RequiredCommandRun::deferral_failure`] refuses that
+//! pass as the validation environment's failure. A command replayed for an
+//! implementer's Bubblewrap deferral must also report executed tests
+//! ([`RequiredCommandRun::replay_failure`]) [ORB-15287].
+//!
 //! A command may also say what it ran [ORB-15131]. Every run gets
 //! [`VALIDATION_SUMMARY_ENV`], naming a fresh file outside the checkout; a
 //! command that writes a [`ValidationSummary`] there reports the selection it
@@ -40,7 +49,8 @@ use orbit_exec::{
     run_process,
 };
 use orbit_types::workflow::{
-    HostEvidenceRefusal, HostSandboxCommand, VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
+    HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
+    VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -72,6 +82,9 @@ pub(super) struct RequiredCommandRun {
     pub(super) output: String,
     /// Why a successful host run cannot count as passing evidence.
     pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
+    /// The first `DEFERRED:` line a successful run printed: a test returned
+    /// without running its sandbox-confined path.
+    pub(super) deferred_notice: Option<String>,
     /// The environment the command ran in.
     pub(super) environment: ValidationEnvironment,
     /// Set when the command failed because a tool was missing.
@@ -160,15 +173,54 @@ impl RequiredCommandRun {
         ))
     }
 
+    /// The refusal for a command that exited zero but printed a `DEFERRED:`
+    /// notice, so a sandbox-confined path never ran on the host that validates
+    /// the candidate. Only a `DEFERRED:` line counts: `SKIP:` and `skipping`
+    /// lines are common in other tools' output and stay with the host judge.
+    /// Typed as the validation environment's failure, which no recovery
+    /// repairs: the candidate was not judged.
+    pub(super) fn deferral_failure(&self, candidate: &str) -> Option<OrbitError> {
+        let notice = self.deferred_notice.as_ref().filter(|_| self.passed)?;
+        Some(OrbitError::Execution(format!(
+            "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' exited zero on candidate \
+             {candidate} but deferred a sandbox-confined path, so it never ran before delivery \
+             (`{notice}`). The candidate was not judged: this host cannot create the namespaces \
+             the path needs. Run the command on a Linux owner host outside any agent sandbox, \
+             then resume the run.",
+            self.command
+        )))
+    }
+
+    /// The refusal for a replayed deferral [ORB-15287] whose native run did
+    /// not report executing a test, so it replayed nothing: the command is
+    /// not an affected-test gate, or it selected nothing on this candidate.
+    pub(super) fn replay_failure(&self, candidate: &str) -> Option<OrbitError> {
+        let executed = self.summary.as_ref().and_then(|summary| summary.tests_run);
+        (executed.unwrap_or(0) == 0).then(|| {
+            OrbitError::PolicyDenied(format!(
+                "required validation '{}' was handed off to replay the Bubblewrap tests an \
+                 agent sandbox deferred, but its native run on candidate {candidate} reported \
+                 {} through `{VALIDATION_SUMMARY_ENV}`, so it replayed nothing. Only an \
+                 affected-test gate that reports what it executed can carry a deferral.",
+                self.command,
+                executed.map_or_else(
+                    || "no executed-test count".to_string(),
+                    |_| { "0 executed tests".to_string() }
+                )
+            ))
+        })
+    }
+
     /// How the environment was resolved, as recorded on logs and step output.
     pub(super) fn environment_record(&self) -> Value {
         environment_record(&self.environment)
     }
 
-    /// `environment` when the command lacked a tool, `candidate` when it
-    /// otherwise failed, `null` when it passed.
+    /// `environment` when the command lacked a tool or deferred a path,
+    /// `candidate` when it otherwise failed, `null` when it passed.
     pub(super) fn failure_kind(&self) -> Value {
         match (&self.missing_tool, self.passed) {
+            (_, true) if self.deferred_notice.is_some() => json!("environment"),
             (_, true) => Value::Null,
             (Some(_), false) => json!("environment"),
             (None, false) => json!("candidate"),
@@ -273,6 +325,16 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             .err()
         })
         .flatten();
+    let deferred_notice = passed
+        .then(|| {
+            outcome
+                .stdout
+                .lines()
+                .chain(outcome.stderr.lines())
+                .find(|line| line.trim_start().starts_with(HOST_TEST_DEFERRED_PREFIX))
+                .map(|line| line.trim().to_string())
+        })
+        .flatten();
     let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
@@ -291,6 +353,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         passed,
         output,
         host_output_refusal,
+        deferred_notice,
         environment,
         missing_tool,
         network_retries: 0,

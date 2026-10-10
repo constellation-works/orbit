@@ -14,6 +14,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::baseline::{
     baseline_red_failure, candidate_failure, compare_with_base, run_validation_command,
 };
+use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::git::normalize_base_branch;
 use super::super::required_command::RequiredCommandRun;
 use super::input::{refused, required_workspace};
@@ -46,6 +47,12 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 /// `revalidate` is true — the reviewer committed a fix — that output is
 /// returned unchanged, so the pin step always reads one step. With a fix the
 /// commands run on the new head, still unpublished, before it is pushed.
+///
+/// [ORB-15287] When this attempt's implementer, handed in as
+/// `implementation`, deferred Bubblewrap tests in a gate, that gate runs
+/// after the required commands, here outside the agent sandbox, and must
+/// report executed tests. The pre-publication output names it in
+/// `replayed`, which the pin step expects among the results.
 pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -85,9 +92,11 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     };
     require_clean_candidate(&workspace_path, &candidate)?;
 
+    let replays = claimed_deferred_replays(host, input)?;
+    let commands = with_replays(context.required_commands.clone(), &replays);
     let mut results = Vec::new();
     let mut validation_env = Value::Null;
-    for (index, command) in context.required_commands.iter().enumerate() {
+    for (index, command) in commands.iter().enumerate() {
         let run = run_validation_command(host, &workspace_path, command, None)?;
         validation_env = run.environment_record();
         if !run.passed {
@@ -100,6 +109,15 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
                 index,
                 &run,
             ));
+        }
+        let commit = &candidate.candidate.commit;
+        if let Some(failure) = run.deferral_failure(commit).or_else(|| {
+            replays
+                .contains(&run.command)
+                .then(|| run.replay_failure(commit))
+                .flatten()
+        }) {
+            return Err(failure);
         }
         require_clean_candidate(&workspace_path, &candidate)?;
         results.push((run.command, run.output));
@@ -122,15 +140,16 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
             "tested_head": candidate.candidate.commit,
             "validated_base": candidate.base.commit,
             "validation_env": validation_env,
+            "replayed": replays,
         });
-        if context.required_commands.is_empty() {
+        if commands.is_empty() {
             output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
             output["note"] = json!(NO_REQUIRED_COMMANDS_NOTE);
         }
         return Ok(output);
     }
     let references = attach_handoff_logs(host, &context, &candidate, &results)?;
-    passed_output(&context, &candidate, &references, results, validation_env)
+    passed_output(&candidate, &references, results, validation_env)
 }
 
 /// Pin a pre-publication validation onto the published candidate: the
@@ -184,18 +203,26 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
                 "prevalidated results must each carry a command and its output".to_string(),
             )
         })?;
-    let required = context
-        .required_commands
-        .iter()
-        .map(|command| command.trim())
-        .collect::<Vec<_>>();
+    let replayed = prevalidated
+        .get("replayed")
+        .and_then(Value::as_array)
+        .map(|replayed| {
+            replayed
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let expected = with_replays(context.required_commands.clone(), &replayed);
     if results
         .iter()
         .map(|(command, _)| command.as_str())
-        .ne(required)
+        .ne(expected.iter().map(|command| command.trim()))
     {
         return Err(refused(
-            "the prevalidated commands are not the owner's required commands; rerun validation",
+            "the prevalidated commands are not the owner's required commands and the \
+             deferrals they replay; rerun validation",
         ));
     }
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
@@ -203,7 +230,7 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
         .get("validation_env")
         .cloned()
         .unwrap_or(Value::Null);
-    passed_output(context, &candidate, &references, results, validation_env)
+    passed_output(&candidate, &references, results, validation_env)
 }
 
 /// Attach one typed log per passed command to the owner's task.
@@ -241,12 +268,12 @@ pub(super) fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
 }
 
 pub(super) fn passed_output(
-    context: &ClaimExecutionContext,
     candidate: &HandoffCandidate,
     references: &[HandoffArtifactRef],
     results: Vec<(String, String)>,
     validation_env: Value,
 ) -> Result<Value, OrbitError> {
+    let skipped = results.is_empty();
     let mut output = json!({
         "decision": "passed",
         "candidate": serde_json::to_value(candidate)
@@ -259,7 +286,7 @@ pub(super) fn passed_output(
         "validation_env": validation_env,
         "no_diff_evidence": null,
     });
-    if context.required_commands.is_empty() {
+    if skipped {
         output["decision"] = json!(SKIPPED_NO_REQUIRED_COMMANDS);
         output["note"] = json!(NO_REQUIRED_COMMANDS_NOTE);
     }

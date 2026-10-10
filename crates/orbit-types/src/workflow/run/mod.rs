@@ -1,5 +1,6 @@
 mod agent_blocker;
 mod baseline;
+mod deferred_sandbox;
 mod delivery;
 mod forge_hold;
 mod held_candidate;
@@ -19,6 +20,10 @@ pub use agent_blocker::{
 pub use baseline::{
     BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedHold,
     is_baseline_red_failure,
+};
+pub use deferred_sandbox::{
+    BUBBLEWRAP_NAMESPACE_PROBE, DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact,
+    DeferredSandboxValidation, NamespaceProbe, deferred_sandbox_validation,
 };
 pub use delivery::{
     CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, DeliveryEvidenceProvenance,

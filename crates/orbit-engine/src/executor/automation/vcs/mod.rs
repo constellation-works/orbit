@@ -7,6 +7,7 @@ mod candidate_resume;
 mod candidate_validate;
 pub mod claim;
 mod commit;
+mod deferred_sandbox;
 mod delivery_marker;
 mod failure;
 mod freshness;
@@ -34,6 +35,7 @@ pub use commit::validate_claim_new_paths;
 pub(crate) use commit::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };
+pub(crate) use deferred_sandbox::accept_implementer_deferral;
 pub(super) use failure::pr_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;

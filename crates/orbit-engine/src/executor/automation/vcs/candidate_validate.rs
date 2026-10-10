@@ -16,6 +16,13 @@
 //! fails like any other deterministic step, so a workflow can attach
 //! `step_failure_recovery` to repair the candidate (for example commit a
 //! formatting fix) before the one post-recovery attempt reruns every command.
+//!
+//! [ORB-15287] An implementer whose affected-test gate passed with only
+//! Bubblewrap deferrals hands the gate off instead of failing, and the task
+//! keeps that record (see [`super::deferred_sandbox`]). The gate then runs
+//! here after the required commands, outside any agent sandbox: it is judged
+//! like them, a pass that still defers is the validation environment's
+//! failure, and one that reports no executed tests is refused.
 
 use std::collections::BTreeSet;
 
@@ -37,6 +44,7 @@ use super::claim::{
     NO_REQUIRED_COMMANDS_NOTE, SKIPPED_NO_REQUIRED_COMMANDS, require_clean_checkout,
 };
 use super::commit::attribute_candidate_paths;
+use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::git::{git_command_success, git_output};
 use super::handoff::completed_task_ids_from_input;
 
@@ -62,7 +70,11 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         Some(ownership_base) => Some(attribute_reviewed_paths(host, input, &ownership_base)?),
         None => None,
     };
-    let commands = host.required_validation_commands();
+    let replays = match completed_task_ids_from_input(input) {
+        Some(task_ids) => deferred_replays(host, &task_ids)?,
+        None => Vec::new(),
+    };
+    let commands = with_replays(host.required_validation_commands(), &replays);
     if commands.is_empty() {
         let mut output = json!({
             "phase": "validate",
@@ -147,6 +159,8 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "output": run.output,
             "validation_env": validation_env,
             "failure_kind": if red { json!("baseline_red") } else { run.failure_kind() },
+            "deferred_notice": run.deferred_notice,
+            "deferred_sandbox_replay": replays.contains(&run.command),
             "missing_tool": run.missing_tool_name(),
             "network_retries": run.network_retries,
             "summary": run.summary,
@@ -189,6 +203,15 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 baseline.as_ref(),
                 &evidence,
             ));
+        }
+        if let Some(failure) = run.deferral_failure(&candidate).or_else(|| {
+            replays
+                .contains(&run.command)
+                .then(|| run.replay_failure(&candidate))
+                .flatten()
+        }) {
+            attach_logs(host, &task_ids, &run_id, &logs)?;
+            return Err(failure);
         }
         require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
         passed.push(run.command);

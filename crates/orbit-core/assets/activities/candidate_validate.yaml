@@ -26,7 +26,11 @@ spec:
     commit is first attributed to the delivered tasks; a path no selector owns
     widens a task's selectors with review provenance rather than failing. An
     empty requirement list runs nothing and records
-    `skipped_no_required_commands`.
+    `skipped_no_required_commands`. A gate a delivered task's implementer
+    handed off with Bubblewrap deferrals (the task's
+    `deferred-sandbox-validation.json`) runs after the required commands,
+    outside any agent sandbox, and must report executed tests; one that
+    still defers is a `validation_environment` failure.
   input_schema_json:
     type: object
     required: [job_run_id, workspace_path, completed_task_ids]
