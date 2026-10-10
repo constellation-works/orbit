@@ -417,12 +417,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_invocation_provider,
     },
+    // Windowed reads of one v2 event type (the audit summary's policy
+    // denials) had no index over both the type and the window. Index-only,
+    // which an older binary neither names nor needs.
+    Migration {
+        version: 43,
+        name: "v2_audit_event_type_ts_index",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_v2_audit_event_type_ts_index,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 42;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 43;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

@@ -273,6 +273,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0042".to_string(),
                 "invocation_provider".to_string()
             ),
+            (
+                "migration.v0043".to_string(),
+                "v2_audit_event_type_ts_index".to_string()
+            ),
         ]
     );
 }

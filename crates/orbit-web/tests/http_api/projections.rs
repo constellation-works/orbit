@@ -4,6 +4,7 @@ use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
 use orbit_core::V2AuditEventInsertParams;
+use orbit_core::application::task::TaskAddParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
@@ -705,6 +706,39 @@ fn policy_kpi_counts_decisions_and_preserves_refusal_evidence() {
             );
             let raw = json_ok(server.get("/api/audit?status=denied&workspace=ws_http_fixture"));
             assert_eq!(raw.as_array().unwrap().len(), RAW_DENIED_COUNT as usize);
+        },
+    );
+}
+
+#[test]
+fn scoreboard_notable_completion_excerpts_the_done_task_summary() {
+    isolated(
+        "projections::scoreboard_notable_completion_excerpts_the_done_task_summary",
+        || {
+            let fixture = Fixture::new();
+            let task = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Notable fixture".into(),
+                    description: "Scoreboard excerpt fixture".into(),
+                    priority: TaskPriority::High,
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                })
+                .unwrap();
+            let server = fixture.server(false);
+            json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{}?workspace=ws_http_fixture", task.id),
+                json!({"execution_summary": "Shipped   the\nfixture."}),
+            ));
+            let board = json_ok(server.get("/api/scoreboard?window=24h&workspace=ws_http_fixture"));
+            let items = board["notable_completions"]["items"].as_array().unwrap();
+            let item = items
+                .iter()
+                .find(|item| item["task_id"] == task.id.as_str())
+                .expect("the done task is a notable completion");
+            assert_eq!(item["summary_excerpt"], "Shipped the fixture.");
         },
     );
 }

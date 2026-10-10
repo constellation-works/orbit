@@ -27,6 +27,7 @@ use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,
     apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_tool_call_index,
     apply_invocation_audit_context, apply_trusted_mcp_audit_provenance,
+    apply_v2_audit_event_type_ts_index,
 };
 use baseline::apply_baseline_schema;
 use feature::apply_feature_schema_ledger;

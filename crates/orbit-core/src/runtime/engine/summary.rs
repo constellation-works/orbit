@@ -103,11 +103,22 @@ impl OrbitRuntime {
         )?;
         orbit_store::scoreboard_summary::fill_notable_summary_excerpts(
             &mut summary.notable_completions,
-            |task_id| match self.get_task(task_id) {
-                Ok(task) => Ok(task.execution_summary),
-                // Deleted since the listing: no summary to excerpt.
-                Err(OrbitError::NotFound { .. }) => Ok(String::new()),
-                Err(error) => Err(error),
+            |task_id| {
+                if self.worker_invocation().is_some() {
+                    return match self.get_task(task_id) {
+                        Ok(task) => Ok(task.execution_summary),
+                        Err(OrbitError::NotFound { .. }) => Ok(String::new()),
+                        Err(error) => Err(error),
+                    };
+                }
+                // The listed (envelope-only) read, as for the `tasks` slice
+                // above: the canonical read hashed every artifact of each
+                // notable task on each dashboard poll. Deleted or mid-commit
+                // since the listing: no summary to excerpt.
+                Ok(self
+                    .get_listed_task_row(task_id)?
+                    .map(|row| row.task.execution_summary)
+                    .unwrap_or_default())
             },
         )?;
         Ok(summary)
