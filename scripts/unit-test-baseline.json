@@ -791,6 +791,7 @@
         "driver/sqlite/migration/tests/ledger.rs::invocation_workspace_backfill_attributes_only_unambiguous_runs",
         "driver/sqlite/migration/tests/ledger.rs::legacy_db_adopts_versioned_ledger",
         "driver/sqlite/migration/tests/ledger.rs::v1_upgrade_and_fresh_database_have_identical_columns",
+        "driver/sqlite/task_registry/tests/mod.rs::fresh_open_through_symlinked_root_matches_reopen_by_canonical_root",
         "driver/sqlite/task_registry/tests/relations.rs::relation_cycle_through_another_workspace_is_rejected",
         "driver/sqlite/task_reservation_store/tests/workspace_claim.rs::persisted_workspace_claim_is_not_group_or_world_readable",
         "fs/lock/tests/file_lock.rs::crash_holder_child",

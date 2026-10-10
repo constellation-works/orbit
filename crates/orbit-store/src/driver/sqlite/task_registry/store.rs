@@ -12,6 +12,19 @@ use super::schema::{
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
+/// Root of the per-workspace bundle trees, derived from the canonical
+/// registry directory. `workspaces/` is created lazily, so normalizing it
+/// directly would keep a symlinked spelling on a fresh root and canonicalize
+/// it once the directory exists. The task repair gate keys on this path, so
+/// every open of one root must produce the same spelling.
+fn workspaces_dir_of(path: &Path) -> PathBuf {
+    let registry_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    normalize_path(&registry_dir).join("workspaces")
+}
+
 /// Task registry handle: one writer connection behind a mutex plus a
 /// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
 /// readers on their own connections never queue behind the writer, so a
@@ -31,12 +44,8 @@ pub struct TaskRegistryStore {
 
 impl TaskRegistryStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
-        let registry_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let workspaces_dir = normalize_path(&registry_dir.join("workspaces"));
         let opened = orbit_common::storage::sqlite::open_private(path)?;
+        let workspaces_dir = workspaces_dir_of(path);
         let mut conn = opened.connection;
         let read_only = opened.read_only;
         if !read_only {
@@ -96,11 +105,7 @@ impl TaskRegistryStore {
     /// Open an existing registry without creating files, applying schema, or
     /// taking a writer connection. Used by a differing-generation read-only join.
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
-        let registry_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let workspaces_dir = normalize_path(&registry_dir.join("workspaces"));
+        let workspaces_dir = workspaces_dir_of(path);
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
         assert_readable_schema(&conn, path)?;
