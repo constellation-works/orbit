@@ -163,16 +163,23 @@
           <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
             <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
               <header>
-                <span class="drain-title"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-title">Auto-drain</span></span>
-                <span class="drain-live" id="auto-drain-live">—</span>
+                <h2 class="drain-title" id="auto-drain-title">Auto-drain</h2>
+                <span class="drain-phase" id="auto-drain-phase"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-phase-label">—</span></span>
               </header>
               <div class="body" id="auto-drain-body">
                 <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
               </div>
               <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
             </section>
+            <section class="panel drain-start-card" id="auto-drain-start" aria-labelledby="auto-drain-start-title" hidden>
+              <header>
+                <h2 class="drain-title" id="auto-drain-start-title">Start a window</h2>
+                <span class="drain-start-sub" id="auto-drain-start-sub"></span>
+              </header>
+              <div class="body" id="auto-drain-start-body"></div>
+            </section>
             <section class="panel" id="locks-panel">
-              <header><span>Locked files</span><span class="count" id="locks-count">0 files / 0 tasks</span></header>
+              <header><h2 class="drain-title">Locked files</h2><span class="count" id="locks-count">0 files / 0 tasks</span></header>
               <div class="body" id="locks-body"></div>
             </section>
           </div>

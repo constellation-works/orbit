@@ -1,137 +1,155 @@
-/* The auto-drain card in the Tasks dock. Loaded after automation.css
+/* The auto-drain cards in the Tasks dock. Loaded after automation.css
    because it refines .operation-button. */
 
-/* ORB-12898: the auto-drain card, first in the Tasks dock's Drain pane.
-   It keeps its natural height and Locked files below takes the rest;
-   a dock too short for both scrolls as one pane. Every row is sized to
-   fit the dock's 336px minimum width without horizontal scroll. */
+/* ORB-12898: the Drain pane stacks three cards: the auto-drain status, Start
+   a window (hidden in a read-only view), then Locked files, which takes the
+   rest. A dock too short for all three scrolls as one pane. Every row is
+   sized to fit the dock's 336px minimum width without horizontal scroll. */
 .dock-pane[data-pane="drain"] { overflow-y: auto; }
-.dock-pane > .panel.drain-card { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
+.dock-pane > .panel.drain-card,
+.dock-pane > .panel.drain-start-card { flex: 0 0 auto; }
+.dock-pane > .panel[hidden] { display: none; }
 .dock-pane[data-pane="drain"] > #locks-panel { min-height: 160px; }
-.drain-card > header { flex-wrap: wrap; gap: 6px 10px; padding: 14px 16px 0; border-bottom: 0; }
-.drain-card[data-drain-state="draining"] { box-shadow: inset 3px 0 var(--state-running); }
-.drain-card[data-drain-state="winding_down"] { box-shadow: inset 3px 0 var(--priority-medium); }
-.drain-title { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.drain-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-mute); }
-.drain-dot.draining, [data-drain-state="draining"] > .drain-dot { background: var(--state-running); animation: drain-pulse 1.5s ease-in-out infinite; }
-.drain-dot.winding_down, [data-drain-state="winding_down"] > .drain-dot { background: var(--priority-medium); }
-@keyframes drain-pulse { 50% { box-shadow: 0 0 0 5px var(--state-running); opacity: .55; } }
-@media (prefers-reduced-motion: reduce) { .drain-dot.draining, [data-drain-state="draining"] > .drain-dot { animation: none; } }
-.drain-live {
-  display: flex; flex-direction: column; gap: 3px; min-width: 0; width: 100%; overflow-wrap: anywhere;
-  color: var(--fg-dim); font: 400 12.5px var(--font-sans); letter-spacing: 0; text-transform: none;
+.drain-card > header, .drain-start-card > header, #locks-panel > header {
+  flex-wrap: wrap; gap: 6px 10px; padding: 14px 16px 0; border-bottom: 0;
 }
-.drain-state-label { color: var(--state-running); font-weight: 600; }
-.drain-card[data-drain-state="winding_down"] .drain-state-label { color: var(--priority-medium); }
-.drain-live-detail { min-width: 0; overflow-wrap: anywhere; }
-.drain-idle { color: var(--fg-dim); }
-.dock-drain-state { color: var(--state-running); font-size: 10px; }
-.dock-seg[data-drain-state="winding_down"] .dock-drain-state { color: var(--priority-medium); }
-.global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: var(--radius); background: var(--bg); color: var(--state-running); padding: 5px 8px; cursor: pointer; font: 600 12px var(--font-sans); }
-.global-drain-state[hidden] { display: none; }
-.global-drain-state[data-drain-state="winding_down"] { color: var(--priority-medium); border-color: var(--priority-medium); }
-.global-drain-state[data-drain-state="pulling"] { color: var(--accent); border-color: var(--accent); border-style: dashed; }
-.global-drain-state[data-drain-state="pulling"] > .drain-dot { background: var(--accent); }
-.global-drain-state[data-drain-state="per-workspace"] { color: var(--fg-dim); border-color: var(--border); }
+#locks-panel > header { padding-bottom: 10px; border-bottom: 1px solid var(--hair); }
+.drain-title { margin: 0; color: var(--fg-strong); font: 600 13px var(--font-sans); letter-spacing: 0; }
+
+/* The phase pill: a dot and a word, tinted by state. */
+.drain-phase {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 22px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-control);
+  color: var(--fg-dim); font: 500 12px var(--font-sans);
+}
+.drain-phase[data-drain-state="draining"] { color: var(--state-running); border-color: color-mix(in srgb, var(--state-running) 40%, transparent); background: color-mix(in srgb, var(--state-running) 10%, var(--bg-elev)); }
+.drain-phase[data-drain-state="winding_down"] { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-wash); }
+.drain-phase[data-drain-state="pulling"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); border-style: dashed; }
+.drain-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-mute); flex: 0 0 auto; }
+.drain-dot.draining, [data-drain-state="draining"] > .drain-dot { background: var(--state-running); animation: drain-pulse 1.5s ease-in-out infinite; }
+.drain-dot.winding_down, [data-drain-state="winding_down"] > .drain-dot { background: var(--warn-fg); }
+.drain-dot.pulling, [data-drain-state="pulling"] > .drain-dot { background: var(--accent); }
+@keyframes drain-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--state-running) 25%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .drain-dot.draining, [data-drain-state="draining"] > .drain-dot { animation: none; } }
+
+.dock-drain-state { color: var(--state-running); font-size: 11px; }
+.dock-seg[data-drain-state="winding_down"] .dock-drain-state { color: var(--warn-fg); }
 .dock-seg[data-drain-state="per-workspace"] .dock-drain-state { color: var(--fg-dim); }
+.global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: 999px; background: color-mix(in srgb, var(--state-running) 10%, var(--bg)); color: var(--state-running); padding: 5px 11px; cursor: pointer; font: 600 12px var(--font-sans); white-space: nowrap; }
+.global-drain-state[hidden] { display: none; }
+.global-drain-state[data-drain-state="winding_down"] { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-wash); }
+.global-drain-state[data-drain-state="winding_down"] > .drain-dot { background: var(--warn-fg); }
+.global-drain-state[data-drain-state="pulling"] { color: var(--accent); border-color: var(--accent); border-style: dashed; background: var(--bg); }
+.global-drain-state[data-drain-state="pulling"] > .drain-dot { background: var(--accent); }
+.global-drain-state[data-drain-state="per-workspace"] { color: var(--fg-dim); border-color: var(--border); background: var(--bg); }
+.global-drain-running { color: var(--fg-dim); font-weight: 400; }
+.global-drain-running:empty { display: none; }
 .global-drain-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .global-drain-state.refresh-stale { border-style: dashed; }
 .global-drain-state.refresh-stale > .drain-dot { animation: none; box-shadow: none; }
-#auto-drain-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
+
+#auto-drain-body, #auto-drain-start-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
 
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;
    only the first load and a failed refresh show. */
 #auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
 #auto-drain-body .operations-readonly-note { margin: 0; }
-.drain-durations {
-  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; padding: 3px;
-  border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
+
+/* The live window: three figures, then its run and deadline. */
+.drain-live { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.drain-window-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 0; }
+.drain-window-stat {
+  display: flex; flex-direction: column-reverse; gap: 2px; min-width: 0; padding: 9px 10px;
+  border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-well);
 }
+.drain-window-stat dt { color: var(--fg-mute); font: 500 11.5px var(--font-sans); }
+.drain-window-stat dd { margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.drain-window-stat-detail { margin-left: 6px; color: var(--warn-fg); font-size: 12px; font-weight: 500; }
+.drain-run-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; min-width: 0; font-size: 12.5px; }
+.drain-run-line a { font-family: var(--font-mono); font-size: 12px; }
+.drain-run-when { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+
+/* Workspace leaf slots: the count, a bar of one segment per slot (or one
+   fill past 24), what that means for a new window, and the pipelines. */
+.drain-capacity { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.drain-capacity-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; }
+.drain-capacity-label { color: var(--fg-soft); font-weight: 500; margin-right: auto; }
+.drain-capacity-count { color: var(--fg); font-size: 12px; }
+.drain-capacity-free { color: var(--fg-dim); font-size: 12px; white-space: nowrap; }
+.drain-capacity-free.full { color: var(--warn-fg); }
+.drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--bg-well); overflow: hidden; }
+.drain-capacity-bar.segmented { background: transparent; }
+.drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: var(--bg-control); box-shadow: inset 0 0 0 1px var(--hair); }
+.drain-capacity-seg.used { background: var(--state-running); box-shadow: none; }
+.drain-capacity-seg.over, .drain-capacity-over { background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); box-shadow: none; }
+.drain-capacity-used { background: var(--state-running); border-radius: 3px; }
+.drain-capacity-over { border-radius: 3px; }
+.drain-slots { margin: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.drain-pipeline-occupancy { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.drain-pipeline {
+  padding: 1px 7px; border: 1px solid var(--hair); border-radius: 4px; background: var(--bg-well);
+  color: var(--fg-dim); font-size: 11px; line-height: 18px; overflow-wrap: anywhere;
+}
+
+/* Holds the operator cannot clear from here: amber boxes. */
+.drain-throttle-note, .drain-provider-limit-note {
+  margin: 0; padding: 9px 11px; border: 1px solid var(--warn-line); border-radius: 8px;
+  background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere;
+}
+
+.drain-stop-block { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); }
+.drain-stop-note { margin: 0; font-size: 12px; line-height: 1.5; }
+.drain-stop-note.disabled-reason { color: var(--warn-fg); }
+.drain-stop-note[hidden] { display: none; }
+
+/* Start a window. */
+.drain-start-sub { color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; }
+.drain-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.drain-field-label { color: var(--fg-soft); font: 500 12px var(--font-sans); }
+.drain-field-hint { margin: 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
+.drain-field-hint.warn { color: var(--warn-fg); }
+.drain-durations, .drain-completion {
+  display: grid; gap: 2px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
+}
+.drain-durations { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.drain-completion { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .drain-duration {
   min-width: 0; min-height: 28px; padding: 0; border: 0; border-radius: 6px;
   background: transparent; color: var(--fg-dim); font: 12.5px var(--font-sans); cursor: pointer;
 }
-.drain-duration:hover { color: var(--fg); }
-.drain-duration.selected { background: #1f1f26; color: var(--fg); font-weight: 600; }
+.drain-duration:hover, .drain-completion-option:hover { color: var(--fg); }
+.drain-duration.selected, .drain-completion-option.selected { background: var(--bg-selected); color: var(--fg-strong); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
 .drain-duration:focus-visible, .drain-step:focus-visible, .drain-stepper-value:focus-visible,
 .drain-completion-option:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
-.drain-form { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--hair); }
-.drain-settings { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: end; }
-.drain-field-approve { grid-column: 1 / -1; }
-.drain-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.drain-field-label { color: var(--fg-dim); font: 500 12px var(--font-sans); }
+.drain-completion-option {
+  position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; height: 28px;
+  border-radius: 6px; color: var(--fg-dim); font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.drain-completion-option input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.drain-completion-option span { overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
+.drain-completion-option.done.selected { background: var(--warn-wash); color: var(--warn-fg); box-shadow: inset 0 0 0 1px var(--warn-line); }
+.drain-completion-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+
+/* Parallel tasks sits on one row: its label, then the stepper. */
+.drain-field:has(> .drain-stepper) { flex-direction: row; align-items: center; justify-content: space-between; }
 .drain-stepper {
   display: inline-flex; align-items: stretch; height: 30px; overflow: hidden;
-  border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
 }
 .drain-step { width: 30px; padding: 0; border: 0; background: transparent; color: var(--fg-dim); font: 15px var(--font-sans); cursor: pointer; }
-.drain-step:hover { color: var(--fg); background: var(--bg-elev); }
+.drain-step:hover { color: var(--fg); background: var(--bg-control); }
 .drain-stepper-value {
-  width: 34px; min-width: 0; padding: 0; border: 0;
+  width: 40px; min-width: 0; padding: 0; border: 0; border-inline: 1px solid var(--hair);
   background: transparent; color: var(--fg); font-size: 13px; text-align: center; appearance: textfield; -moz-appearance: textfield;
 }
 .drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .drain-stepper-value::placeholder { color: var(--fg-dim); }
-.drain-completion {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 3px;
-  border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
-}
-.drain-completion-option {
-  position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; height: 24px;
-  border-radius: 5px; color: var(--fg-dim); font-size: 12.5px; cursor: pointer; white-space: nowrap;
-}
-.drain-completion-option input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
-.drain-completion-option span { overflow: hidden; text-overflow: ellipsis; }
-.drain-completion-option:hover { color: var(--fg); }
-.drain-completion-option.selected { background: #1f1f26; color: var(--fg); font-weight: 600; }
-.drain-completion-option.done.selected { background: #2a1f0e; color: #f7cf94; }
-.drain-completion-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
-.drain-actions { display: flex; gap: 8px; min-width: 0; }
-.drain-stop-note { margin: 0; font-size: 12px; }
-.drain-stop-note.disabled-reason { color: #f2c38b; }
-.drain-throttle-note { margin: 0; color: #f2c38b; }
-.drain-provider-limit-note { margin: 0; color: #f2c38b; overflow-wrap: anywhere; }
-.drain-wait-reason { color: var(--state-pending); }
-.drain-capacity { display: flex; flex-direction: column; gap: 8px; }
-.drain-capacity-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 8px; font-size: 13px; color: #c4c4cc; }
-.drain-capacity-free { font-size: 12.5px; color: var(--fg-dim); white-space: nowrap; }
-.drain-capacity-free.full { color: #f2c38b; }
-.drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; }
-.drain-capacity-used { background: var(--state-running); border-radius: 3px; }
-.drain-capacity-over { border-radius: 3px; background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); }
-.drain-slots { margin: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
-.drain-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.drain-stat {
-  display: flex; flex-direction: column-reverse; gap: 2px; min-width: 0; padding: 9px 10px;
-  border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
-}
-.drain-stat-label {
-  display: flex; align-items: center; gap: 6px; min-width: 0;
-  color: var(--fg-dim); font: 12px var(--font-sans);
-}
-.drain-stat-label span:last-child { min-width: 0; overflow-wrap: anywhere; }
-.drain-stat-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
-.drain-stat.eligible .drain-stat-dot { background: var(--state-success); }
-.drain-stat.locks .drain-stat-dot { background: var(--priority-medium); }
-.drain-stat.capacity .drain-stat-dot { background: var(--state-running); }
-.drain-stat.other .drain-stat-dot { background: var(--fg-dim); }
-.drain-stat-value { color: var(--fg); font: 600 20px var(--font-sans); line-height: 1.2; }
-.drain-stat.locks.nonzero .drain-stat-value { color: var(--priority-medium); }
-.drain-blocked { display: flex; flex-direction: column; gap: 7px; min-width: 0; margin: 0; padding: 0; list-style: none; }
-.drain-blocked-row { min-width: 0; padding-left: 8px; border-left: 2px solid var(--priority-medium); }
-.drain-blocked-line { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; min-width: 0; font-size: 11.5px; }
-.drain-blocked-who { min-width: 0; overflow-wrap: anywhere; }
-.drain-blocked-who a { display: inline-block; white-space: nowrap; }
-.drain-blocked-state { flex: 0 0 auto; color: var(--fg-dim); font-size: 11px; }
-.drain-blocked-state.running { color: var(--state-running); }
-.drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); font-size: 11px; }
-.drain-blocked-more { color: var(--fg-dim); font-size: 11px; }
-.drain-blocked-more-toggle { padding: 0; border: 0; background: none; color: var(--fg-dim); font: inherit; cursor: pointer; }
-.drain-blocked-more-toggle:hover { color: var(--fg); text-decoration: underline; }
-.drain-blocked-more-toggle:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 2px; }
-.drain-muted { color: var(--fg-dim); }
-.drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }
+#auto-drain-concurrency-problem { margin-top: -6px; }
+#auto-drain-concurrency-problem[hidden] { display: none; }
+#auto-drain-start-body > .operation-button.drain-start { width: 100%; }
+
+.drain-card > .operation-feedback { min-height: 0; padding: 8px 16px; border-top: 1px solid var(--hair); border-bottom: 0; }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.drain-stop-note[hidden] { display: none; }
