@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -3027,6 +3027,35 @@ async function runQuickAction(task, kind, context) {
   }
 }
 
+// ORB-15216: a pull replica holds no tasks of its own; they live on its owner
+// host. The serving host's `/api/hosts` row lists each checkout's role, so this
+// reads what the host picker already has. A remote host's row lists checkouts
+// only after a probe, so replicas on a remote host are not named here.
+function replicaOwner() {
+  const workspaceId = getWorkspace();
+  if (!workspaceId) return null;
+  const row = getHost() ? findRegisteredHost(getHost()) : getRegisteredHosts().find((host) => host.local);
+  const checkout = (row?.workspaces || []).find((workspace) => workspace.id === workspaceId);
+  if (checkout?.role !== "replica") return null;
+  const owner = findRegisteredHost(checkout.owner_machine_id);
+  return {
+    name: owner ? owner.name : checkout.owner_machine_id || "an unknown host",
+    // Only a registered remote host has an entry in the picker to switch to.
+    switchable: Boolean(owner && !owner.local),
+  };
+}
+
+function showOnOwnerButton(name) {
+  const button = el("button", { class: "ghost", type: "button", text: `Show on ${name}` });
+  button.addEventListener("click", () => {
+    const picker = document.getElementById("host-select");
+    if (!picker) return;
+    picker.value = name;
+    picker.dispatchEvent(new Event("change"));
+  });
+  return button;
+}
+
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -3089,10 +3118,12 @@ export function renderTasks(tasks, context) {
   }
   renderFilterSummary(context);
   if (filtered.length === 0 && nodes.length === 0) {
+    const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
     const emptyState = el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: defaultText })
+      el("div", { class: "text", text: replica ? `This checkout is a pull replica of ${replica.name}; its tasks live on the owner.` : defaultText }),
+      replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
     syncNodes(body, notice ? [notice, emptyState] : [emptyState]);
     return;

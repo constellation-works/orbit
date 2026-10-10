@@ -54,6 +54,7 @@ class Node {
     const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
     for (const fn of this.listeners[type] || []) fn(event);
   }
+  dispatchEvent(event) { for (const fn of this.listeners[event.type] || []) fn(event); return true; }
   removeChild(child) {
     const index = this.children.indexOf(child);
     if (index >= 0) this.children.splice(index, 1);
@@ -106,7 +107,7 @@ function matchesChain(path, chain) {
   return true;
 }
 
-const ids = ['tasks-body', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status'];
+const ids = ['tasks-body', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'host-select'];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
   activeElement: null,
@@ -117,8 +118,9 @@ const document = {
   getElementById: id => byId[id] || null,
 };
 const window = { location: { search: '', hash: '' }, confirm: () => true };
+class Event { constructor(type) { this.type = type; } }
 const context = vm.createContext({
-  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, document, window, Node,
+  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, document, window, Node, Event,
   fetch: () => new Promise(() => {}),
 });
 const modules = new Map();
@@ -266,3 +268,34 @@ common.setWorkspace('ws_orbit');
 served = null;
 renderTasks(matching.slice(0, 3).map(index => task(index)), taskContext);
 assert.equal(rail.textContent, '3', 'without metadata the rail counts the rows it has');
+
+// ORB-15216: a replica workspace with no local tasks names its owner and
+// switches the host picker to it. Any other empty workspace keeps the plain text.
+const picker = byId['host-select'];
+const emptyPage = { total: 0, limit: 50, offset: 0, next_cursor: null };
+const emptyText = () => byId['tasks-body'].querySelector('.empty-state .text').textContent;
+const hostRows = (role, ownerMachineId, ownerRegistered = true) => [
+  { name: 'box-a', machine_id: 'hm_local', local: true, workspaces: [{ id: 'ws_orbit', name: 'orbit', role, owner_machine_id: ownerMachineId, status: 'active' }] },
+  ...(ownerRegistered ? [{ name: 'dk-server-2', machine_id: 'hm_owner', local: false, reachable: true }] : []),
+];
+const pickerChanges = [];
+picker.addEventListener('change', () => pickerChanges.push(picker.value));
+
+common.setRegisteredHosts(hostRows('replica', 'hm_owner'));
+paint(emptyPage, []);
+assert.equal(emptyText(), 'This checkout is a pull replica of dk-server-2; its tasks live on the owner.');
+const showOnOwner = byId['tasks-body'].querySelector('.empty-state button');
+assert.equal(showOnOwner.textContent, 'Show on dk-server-2', 'a registered owner gets a switch control');
+showOnOwner.dispatch('click');
+assert.equal(picker.value, 'dk-server-2', 'the control switches the host picker to the owner');
+assert.deepEqual(pickerChanges, ['dk-server-2'], 'the picker change is what the host switcher acts on');
+
+common.setRegisteredHosts(hostRows('replica', 'hm_gone', false));
+paint(emptyPage, []);
+assert.equal(emptyText(), 'This checkout is a pull replica of hm_gone; its tasks live on the owner.', 'an unregistered owner is named by machine id');
+assert.equal(byId['tasks-body'].querySelector('.empty-state button'), null, 'no picker entry exists to switch to');
+
+common.setRegisteredHosts(hostRows('owner', 'hm_local'));
+paint(emptyPage, []);
+assert.equal(emptyText(), 'No tasks available.', 'a non-replica workspace keeps the plain empty state');
+assert.equal(byId['tasks-body'].querySelector('.empty-state button'), null);

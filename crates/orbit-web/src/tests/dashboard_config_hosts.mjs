@@ -222,7 +222,7 @@ assert.deepEqual(rows().map(node => node.dataset.key), ['hm_local', 'hm_alpha', 
 assert.match(textOf(body, 'host-scope')[0], /edits the host file of box-a: \/home\/op\/\.orbit\/hosts\.toml/);
 assert.match(row('hm_local').textContent, /local · edited here/);
 assert.equal(named(row('hm_local'), 'host-rename').length, 0, 'the local host is renamed through machine.name, not here');
-assert.match(textOf(row('hm_local'), 'host-workspace')[0], /orbit \(replica of hm_alpha\)/);
+assert.match(textOf(row('hm_local'), 'host-workspace')[0], /orbit \(replica of alpha\)/, 'a replica names its owner by registered name [ORB-15216]');
 assert.equal(textOf(row('hm_alpha'), 'host-reach')[0], 'yes');
 assert.equal(textOf(row('hm_alpha'), 'host-version')[0], '1.4.0');
 assert.equal(textOf(row('hm_alpha'), 'host-protocol')[0], 'abcdef012345');
