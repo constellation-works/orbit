@@ -18,6 +18,7 @@ use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
     git_stdout, git_stdout_bytes, nul_paths,
 };
+use super::rebase_repairs::{earlier_companion_paths, unrepaired_conflict_paths};
 use super::recovery::safe_relative_path;
 use super::{DispatchError, WorktreeBoundaryGuard};
 
@@ -152,6 +153,7 @@ impl WorktreeBoundaryGuard {
             if read("head-name").ok().as_deref() != Some(expected_ref.as_str())
                 || read("orig-head").ok().as_deref() != Some(original)
                 || read("onto").ok().as_deref() != Some(target)
+                || !stopped_head_on_pin(&self.assigned_root, target)?
             {
                 return Err(invalid());
             }
@@ -308,10 +310,10 @@ impl WorktreeBoundaryGuard {
             ));
         }
         let changed = changed_paths(&self.assigned_root, &self.assigned_before, &after_agent);
-        if checkpoint
-            .conflicting_paths
-            .iter()
-            .any(|path| !changed.contains(path))
+        // A conflict file counts as repaired when this invocation changed it,
+        // or when an earlier actor (final recovery) already did [F2026-10-237].
+        if !unrepaired_conflict_paths(&self.assigned_root, &checkpoint.conflicting_paths, &changed)?
+            .is_empty()
         {
             return Err(invalid(
                 "one or more authorized conflict files were not repaired",
@@ -319,20 +321,25 @@ impl WorktreeBoundaryGuard {
         }
         // A resolution may need companion edits beyond the conflict set (a
         // re-export for a moved module, a caller of a renamed item). Every
-        // other path the provider changed joins the continued commit; only
-        // host-owned `.orbit/` state, and a pre-existing untracked file the
-        // provider removed, stay out of it.
-        let companion_paths = changed
-            .iter()
-            .filter(|path| !checkpoint.conflicting_paths.contains(path))
-            .filter(|path| !is_host_owned_path(path))
-            .filter(|path| {
-                after_agent.path_states.get(*path).is_none_or(|state| {
-                    state.worktree_present || state.index_entry_sha256.is_some()
+        // other path the provider changed joins the continued commit, as do
+        // unstaged tracked repairs made before it; only host-owned `.orbit/`
+        // state, a pre-existing untracked file the provider removed, and
+        // untracked payloads that predate the invocation stay out of it.
+        let mut companion_paths =
+            earlier_companion_paths(&self.assigned_before, &checkpoint.conflicting_paths);
+        companion_paths.extend(
+            changed
+                .iter()
+                .filter(|path| !checkpoint.conflicting_paths.contains(path))
+                .filter(|path| !is_host_owned_path(path))
+                .filter(|path| {
+                    after_agent.path_states.get(*path).is_none_or(|state| {
+                        state.worktree_present || state.index_entry_sha256.is_some()
+                    })
                 })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+                .cloned(),
+        );
+        let companion_paths = companion_paths.into_iter().collect::<Vec<_>>();
         self.validate_rebase_checkpoint(checkpoint, &invalid)?;
         if unmerged_paths(&self.assigned_root)? != checkpoint.conflicting_paths {
             return Err(invalid(
@@ -880,6 +887,16 @@ fn completion_recovery_base_ref(prepared: &Value) -> Option<String> {
         )),
         Some(_) => None,
     }
+}
+
+/// Whether HEAD still has the shape a stopped rebase gives it: detached, on
+/// `onto` or a pick replayed onto it. Earlier repairs are adopted only from
+/// file edits; an actor that re-attached or moved HEAD is not continued.
+fn stopped_head_on_pin(root: &Path, onto: &str) -> Result<bool, DispatchError> {
+    Ok(
+        !git_output_raw(root, &["symbolic-ref", "--quiet", "HEAD"])?.success
+            && git_output_raw(root, &["merge-base", "--is-ancestor", onto, "HEAD"])?.success,
+    )
 }
 
 fn unmerged_paths(root: &Path) -> Result<Vec<String>, DispatchError> {

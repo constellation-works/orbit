@@ -11,6 +11,7 @@ mod cwd;
 mod declared_pair;
 pub(crate) mod fingerprint;
 mod rebase_recovery;
+mod rebase_repairs;
 mod recovery;
 
 #[cfg(test)]

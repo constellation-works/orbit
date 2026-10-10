@@ -33,8 +33,8 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, RebaseRecoveryAttemptScope, ResolvedCliExecutor, RuntimeHost,
-    TaskAutomationUpdate, V2AuditWriter, V2DispatchInput, WorktreeGcTaskLookup,
-    dispatch_v2_activity, execute_deterministic_action,
+    StepRecoveryAdmission, TaskAutomationUpdate, V2AuditWriter, V2DispatchInput,
+    WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
 };
 use orbit_store::contracts::{ClaimCandidateRef, KeptClaimCandidate};
 use orbit_types::task::{
@@ -56,6 +56,8 @@ const BASE: &str = "agent-main";
 
 #[cfg(unix)]
 mod absorbed_candidate;
+#[cfg(unix)]
+mod conflict_adoption;
 #[cfg(unix)]
 mod declared_reclaim;
 
@@ -3585,13 +3587,6 @@ impl PreparedRebase {
     /// A candidate of one commit per `candidate` file write, prepared against
     /// a base advanced by one commit per `base` file write.
     fn with_commits(run_id: &str, candidate: &[(&str, &str)], base: &[(&str, &str)]) -> Self {
-        let fixture = Fixture::new();
-        let host = LifecycleHost::new(&fixture.repo);
-        host.add_task("T-REBASE", TaskStatus::Backlog);
-        let setup = action(&host, "worktree_setup", &setup_input(&["T-REBASE"], run_id))
-            .expect("worktree setup");
-        let checkout = Checkout::from_setup(&setup);
-        let base_sha = setup["base_sha"].as_str().unwrap().to_string();
         let commit_all = |repo: &Path, writes: &[(&str, &str)]| {
             writes
                 .iter()
@@ -3600,8 +3595,29 @@ impl PreparedRebase {
                 })
                 .expect("at least one commit")
         };
-        let candidate = commit_all(&checkout.path, candidate);
-        let target = commit_all(&fixture.repo, base);
+        Self::with_edits(
+            run_id,
+            |checkout| commit_all(checkout, candidate),
+            |repo| commit_all(repo, base),
+        )
+    }
+
+    /// A candidate committed by `candidate` in the run's checkout, prepared
+    /// against a base `base` advanced in the primary; each returns its tip.
+    fn with_edits(
+        run_id: &str,
+        candidate: impl FnOnce(&Path) -> String,
+        base: impl FnOnce(&Path) -> String,
+    ) -> Self {
+        let fixture = Fixture::new();
+        let host = LifecycleHost::new(&fixture.repo);
+        host.add_task("T-REBASE", TaskStatus::Backlog);
+        let setup = action(&host, "worktree_setup", &setup_input(&["T-REBASE"], run_id))
+            .expect("worktree setup");
+        let checkout = Checkout::from_setup(&setup);
+        let base_sha = setup["base_sha"].as_str().unwrap().to_string();
+        let candidate = candidate(&checkout.path);
+        let target = base(&fixture.repo);
         let common = json!({
             "workspace_path": checkout.path,
             "job_run_id": run_id,
@@ -3764,6 +3780,10 @@ struct LifecycleHost {
     final_recovery_admissions: Mutex<Vec<FinalRecoveryAdmissionRequest>>,
     /// Final recovery decisions handed to the host, in order.
     final_recovery_applications: Mutex<Vec<FinalRecoveryApplication>>,
+    /// Why the live run/task/worktree no longer owns a step recovery.
+    recovery_owner_refusal: Mutex<Option<String>>,
+    /// Why step recovery authorization was revoked.
+    recovery_revocation: Mutex<Option<String>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -4170,7 +4190,21 @@ impl RuntimeHost for LifecycleHost {
         _task_ids: &[String],
         _workspace_path: &Path,
     ) -> Result<(), OrbitError> {
-        Ok(())
+        match self.recovery_owner_refusal.lock().unwrap().clone() {
+            Some(reason) => Err(OrbitError::Execution(reason)),
+            None => Ok(()),
+        }
+    }
+
+    fn authorize_step_recovery(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<StepRecoveryAdmission, OrbitError> {
+        Ok(match self.recovery_revocation.lock().unwrap().clone() {
+            Some(reason) => StepRecoveryAdmission::Denied { reason },
+            None => StepRecoveryAdmission::Allowed,
+        })
     }
 
     fn run_deterministic(
