@@ -148,7 +148,8 @@ function view(payload) {
   list.setAttribute("role", "table");
   list.setAttribute("aria-label", "Registered hosts");
   list.appendChild(headRow());
-  for (const row of hosts) list.appendChild(hostRow(row));
+  const names = new Map(hosts.map((host) => [host.machine_id, host.name]));
+  for (const row of hosts) list.appendChild(hostRow(row, names));
   nodes.push(list);
   return nodes;
 }
@@ -175,7 +176,7 @@ function headRow() {
   return head;
 }
 
-function hostRow(row) {
+function hostRow(row, names) {
   const node = el("div", { class: `host-row${row.local ? " local" : ""}${row.reachable === false ? " unreachable" : ""}` });
   node.dataset.key = row.machine_id;
   const cells = el("div", { class: "host-grid" }, [
@@ -188,7 +189,7 @@ function hostRow(row) {
       title: row.protocol_fingerprint || "not probed",
     }),
     skewCell(row),
-    workspacesCell(row),
+    workspacesCell(row, names),
     actionsCell(row),
   ]);
   cells.setAttribute("role", "row");
@@ -231,14 +232,16 @@ function skewCell(row) {
   return el("span", { class: "host-skew warn", text: `skew: ${(row.skew_fields || []).join(", ")}` });
 }
 
-function workspacesCell(row) {
+// `names` maps each host's machine id to its registered name, so a replica
+// names its owner as the host file does; an unregistered owner keeps its id.
+function workspacesCell(row, names) {
   const workspaces = row.workspaces || [];
   if (!workspaces.length) return el("span", { class: "host-workspaces", text: NO_VALUE });
   return el("span", { class: "host-workspaces" }, workspaces.map((workspace) =>
     el("span", {
       class: "host-workspace",
       text: workspace.role === "replica"
-        ? `${workspace.name} (replica of ${workspace.owner_machine_id || "unknown"})`
+        ? `${workspace.name} (replica of ${names.get(workspace.owner_machine_id) || workspace.owner_machine_id || "unknown"})`
         : `${workspace.name} (owner)`,
       title: workspace.id,
     }),
