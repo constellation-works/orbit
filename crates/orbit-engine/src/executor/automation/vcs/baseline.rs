@@ -817,9 +817,10 @@ pub struct BaseFailureCheck {
 /// the candidate checked out in `workspace_path` [ORB-14434].
 ///
 /// Settlement never takes the claim on trust. The command runs again on the
-/// candidate first: a pass there is `CandidatePasses` unless its summary
-/// shows it executed no counted test, which leaves the claim inconclusive
-/// [ORB-15122]. A failure there is checked on the base through
+/// candidate first: a pass there is `CandidatePasses` unless its output shows
+/// deferred, skipped, or unavailable-sandbox evidence, or its summary shows
+/// it executed no counted test; those leave the claim inconclusive [ORB-15122].
+/// A failure there is checked on the base through
 /// `compare_with_base`, whose `(base, command)` result cache is the same one
 /// delivery validation fills, so a gate-step `baseline_red` run of the same
 /// command on the same base is reused rather than repeated. The base run is
@@ -840,6 +841,12 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
     run_id: &str,
 ) -> Result<BaseFailureCheck, OrbitError> {
     let run = run_validation_command(host, workspace_path, command, None)?;
+    let host_output_refusal = run.host_output_refusal.as_ref().map(|refusal| {
+        json!({
+            "reason": refusal.reason.as_str(),
+            "detail": refusal.detail,
+        })
+    });
     let candidate_log = json!({
         "schema_version": 1,
         "role": "candidate",
@@ -850,6 +857,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         "passed": run.passed,
         "network_retries": run.network_retries,
         "output": run.output,
+        "host_output_refusal": host_output_refusal,
         "validation_env": run.environment_record(),
         "summary": run.summary,
     });
@@ -862,13 +870,21 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         base_log,
     };
     if run.passed {
-        let verdict = match executed_no_tests(run.summary.as_ref()) {
-            Some(reason) => BaseFailureVerdict::Inconclusive(format!(
-                "the host's run of `{}` on the candidate {reason}",
-                run.command
+        let verdict = match &run.host_output_refusal {
+            Some(refusal) => BaseFailureVerdict::Inconclusive(format!(
+                "the host's run of `{}` on the candidate was refused as {}: {}",
+                run.command,
+                refusal.reason.as_str(),
+                refusal.detail
             )),
-            None => BaseFailureVerdict::CandidatePasses {
-                tests_run: run.summary.as_ref().and_then(|summary| summary.tests_run),
+            None => match executed_no_tests(run.summary.as_ref()) {
+                Some(reason) => BaseFailureVerdict::Inconclusive(format!(
+                    "the host's run of `{}` on the candidate {reason}",
+                    run.command
+                )),
+                None => BaseFailureVerdict::CandidatePasses {
+                    tests_run: run.summary.as_ref().and_then(|summary| summary.tests_run),
+                },
             },
         };
         return Ok(checked(verdict, Value::Null));
