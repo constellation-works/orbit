@@ -185,7 +185,9 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // the only evidence: `agy` ends at its budget with a `SUCCESS` wrapper of
     // progress text. Orbit's spawn clock starts no later than the provider's, so
     // an earlier exit cannot match. It fails whatever the activity's envelope
-    // flags say, because the run was cut off rather than finished.
+    // flags say, because the run was cut off rather than finished, and it is
+    // reported as a timeout like the wall-clock kill it stands in for.
+    // [ORB-15206]
     let print_timeout_reached = completion_envelope_error.is_some()
         && print_timeout.is_some_and(|budget| duration >= budget);
     // [ORB-10733] Protocol termination and control-plane outcome are distinct:
@@ -555,7 +557,25 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             "duration_ms",
             serde_json::json!(duration.as_millis() as u64),
         ),
-        ("timed_out", Value::Bool(timed_out)),
+        ("timed_out", Value::Bool(timed_out || print_timeout_reached)),
+        // [ORB-15206] What bounded the run, so an incident is attributable
+        // from the run alone: the provider budget injected into argv (null
+        // for a provider without one) and the deadline Orbit enforced, the
+        // runtime plus the build-admission credit the run earned.
+        (
+            "print_timeout_ms",
+            print_timeout.map_or(Value::Null, |budget| {
+                serde_json::json!(budget.as_millis() as u64)
+            }),
+        ),
+        (
+            "effective_deadline_ms",
+            serde_json::json!(
+                timeout_seconds
+                    .saturating_mul(1000)
+                    .saturating_add(build_budget_waits.deadline_extension_ms)
+            ),
+        ),
         (
             "response_envelope_required",
             Value::Bool(spec.require_response_envelope),

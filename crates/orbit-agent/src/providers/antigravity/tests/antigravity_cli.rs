@@ -21,6 +21,14 @@ fn antigravity_reports_the_print_timeout_it_put_in_argv() {
                 .any(|pair| pair == ["--print-timeout", "30s"])
         );
 
+        // [ORB-15206] The budget is the deadline Orbit enforces minus the 30 s
+        // margin, not a multiple of the runtime.
+        let mut hour = args(&[]);
+        let chosen =
+            apply_antigravity_print_timeout(provider, &mut hour, Duration::from_secs(3600));
+        assert_eq!(chosen, Some(Duration::from_secs(3570)));
+        assert_eq!(hour, args(&["--print-timeout", "59m30s"]));
+
         let mut shorter = args(&["--print-timeout=10s"]);
         let chosen =
             apply_antigravity_print_timeout(provider, &mut shorter, Duration::from_secs(600));

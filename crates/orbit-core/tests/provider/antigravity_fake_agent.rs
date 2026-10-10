@@ -79,21 +79,6 @@ impl Harness {
             .collect()
     }
 
-    fn with_print_timeout(self, value: &str) -> Self {
-        let mut executor = self
-            .runtime
-            .get_executor_def("antigravity")
-            .expect("read executor")
-            .expect("configured executor");
-        executor
-            .args
-            .extend(["--print-timeout".to_string(), value.to_string()]);
-        self.runtime
-            .upsert_executor_def(&executor)
-            .expect("set custom provider budget");
-        self
-    }
-
     fn stdin(&self) -> String {
         std::fs::read_to_string(&self.stdin_path).expect("fake agent recorded stdin")
     }
@@ -210,8 +195,8 @@ fn command_construction_matches_the_shipped_headless_contract() {
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--print"));
     assert!(
         argv.windows(2)
-            .any(|args| args == ["--print-timeout", "1m30s"]),
-        "60s runtime plus capped 60s admission credit minus 30s margin: {argv:?}"
+            .any(|args| args == ["--print-timeout", "30s"]),
+        "60s runtime minus 30s margin: {argv:?}"
     );
     assert_eq!(
         argv.iter()
@@ -307,8 +292,8 @@ esac
     let argv = harness.argv();
     assert!(
         argv.windows(2)
-            .any(|args| args == ["--print-timeout", "5h59m30s"]),
-        "3h runtime plus capped admission credit must raise --print-timeout above 5m: {argv:?}"
+            .any(|args| args == ["--print-timeout", "2h59m30s"]),
+        "a 3h runtime must raise --print-timeout above 5m: {argv:?}"
     );
 }
 
@@ -372,8 +357,8 @@ printf '%s\n' '{"event":"progress","message":"Background command still running"}
 printf '%s\n' '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Background command still running; waiting for it to finish.","usage":{"total_tokens":17}}}'"#
 }
 
-/// These fixtures explicitly request a 1 s print-timeout, below the activity's
-/// runtime plus queue allowance, so provider exhaustion is independently reachable.
+/// The injected print-timeout is the runtime minus the 30 s margin, so a 31 s
+/// activity gives `agy` a 1 s budget and provider exhaustion is reachable.
 const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
 
 /// [ORB-14683] `agy` at its print-timeout exits 0 with a `SUCCESS` wrapper of
@@ -381,7 +366,7 @@ const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
 #[test]
 fn success_wrapper_without_envelope_at_print_timeout_is_reported_as_spent_budget() {
     let body = format!("sleep 2\n{}\nexit 0", progress_only_success_body());
-    let harness = Harness::new(&body).with_print_timeout("1s");
+    let harness = Harness::new(&body);
     let outcome = dispatch(&harness, spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
 
     assert!(!outcome.success, "a spent budget must not succeed");
@@ -403,7 +388,16 @@ fn success_wrapper_without_envelope_at_print_timeout_is_reported_as_spent_budget
         "diagnostic must name the elapsed time: {message}"
     );
     assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
-    assert_eq!(outcome.output["timed_out"], serde_json::Value::Bool(false));
+    assert_eq!(
+        outcome.output["timed_out"],
+        serde_json::Value::Bool(true),
+        "a spent print budget is a timeout, not a missing envelope"
+    );
+    assert_eq!(outcome.output["print_timeout_ms"], serde_json::json!(1000));
+    assert_eq!(
+        outcome.output["effective_deadline_ms"],
+        serde_json::json!(SHORT_PRINT_TIMEOUT_SPEC_SECONDS * 1000)
+    );
     assert_eq!(
         outcome.output["completion_envelope_satisfied"],
         serde_json::Value::Bool(false)
@@ -426,7 +420,7 @@ fn print_timeout_without_envelope_fails_even_when_envelopes_are_not_required() {
     let mut lenient = spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS);
     lenient.require_response_envelope = false;
     lenient.require_completion_envelope = false;
-    let outcome = dispatch(&Harness::new(&body).with_print_timeout("1s"), lenient);
+    let outcome = dispatch(&Harness::new(&body), lenient);
     assert!(!outcome.success);
     assert!(
         outcome
@@ -441,11 +435,13 @@ fn success_wrapper_without_envelope_before_print_timeout_keeps_the_envelope_mess
     let body = format!("{}\nexit 0", progress_only_success_body());
     let mut completion_only = spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS);
     completion_only.require_response_envelope = false;
-    let outcome = dispatch(
-        &Harness::new(&body).with_print_timeout("1s"),
-        completion_only,
-    );
+    let outcome = dispatch(&Harness::new(&body), completion_only);
     assert!(!outcome.success);
+    assert_eq!(
+        outcome.output["timed_out"],
+        serde_json::Value::Bool(false),
+        "below the print budget a missing envelope stays a failure, not a timeout"
+    );
     let message = outcome.message.unwrap_or_default();
     assert!(
         message.contains("agent step did not complete: the provider exited 0")
@@ -457,10 +453,7 @@ fn success_wrapper_without_envelope_before_print_timeout_keeps_the_envelope_mess
 #[test]
 fn valid_envelope_at_print_timeout_still_succeeds() {
     let body = format!("sleep 2\n{}", success_body());
-    let outcome = dispatch(
-        &Harness::new(&body).with_print_timeout("1s"),
-        spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS),
-    );
+    let outcome = dispatch(&Harness::new(&body), spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
     assert!(outcome.output["duration_ms"].as_u64().expect("duration_ms") >= 1000);
 }
@@ -470,10 +463,7 @@ fn error_terminal_after_print_timeout_keeps_the_terminal_error_message() {
     let body = r#"sleep 2
 printf '%s\n' '{"event":"result","result":{"status":"ERROR","response":"","error":"timeout waiting for response"}}'
 exit 1"#;
-    let outcome = dispatch(
-        &Harness::new(body).with_print_timeout("1s"),
-        spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS),
-    );
+    let outcome = dispatch(&Harness::new(body), spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
     assert!(!outcome.success);
     let message = outcome.message.unwrap_or_default();
     assert!(

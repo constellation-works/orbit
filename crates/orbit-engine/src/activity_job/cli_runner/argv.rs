@@ -147,7 +147,7 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
     }
 }
 
-/// Per-invocation argv fixups that depend on the remaining spawn deadline.
+/// Per-invocation argv fixups that depend on the spawn deadline.
 ///
 /// Today this only merges Antigravity `--print-timeout` so `agy`'s documented
 /// 5m default cannot cut off a longer Orbit activity budget. [ORB-11337]
