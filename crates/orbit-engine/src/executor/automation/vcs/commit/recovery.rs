@@ -8,7 +8,7 @@
 //! widening applies; a repair that fails one is refused before the index is
 //! touched.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use orbit_common::fs::selector::claim_new_path_is_safe;
 
@@ -18,7 +18,7 @@ use super::git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, stage_paths,
     staged_changed_files,
 };
-use super::scope::{NewPathPolicy, task_candidate_paths};
+use super::scope::{NewPathPolicy, irregular_candidate_paths, task_candidate_paths};
 
 /// Prefix of a step failure whose recovery repair Orbit refused to commit.
 const RECOVERY_COMMIT_REFUSED: &str = "recovery_commit_refused";
@@ -121,7 +121,7 @@ pub(crate) fn commit_recovery_repair(
             request.workspace_path.display()
         ))
     })?;
-    let paths = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)
+    let paths = task_candidate_paths(&workspace_path, NewPathPolicy::Recovery)
         .map_err(uncommittable)?
         .into_iter()
         .collect::<Vec<_>>();
@@ -144,11 +144,7 @@ pub(crate) fn commit_recovery_repair(
     if !protected.is_empty() {
         return Err(RecoveryCommitRefusal::ProtectedPath(protected));
     }
-    let irregular = paths
-        .iter()
-        .filter(|path| !regular_or_removed(&workspace_path, path))
-        .cloned()
-        .collect::<Vec<_>>();
+    let irregular = irregular_candidate_paths(&workspace_path, &paths);
     if !irregular.is_empty() {
         return Err(RecoveryCommitRefusal::OutsideFootprint(irregular));
     }
@@ -167,15 +163,6 @@ pub(crate) fn commit_recovery_repair(
         commit_sha,
         paths: staged,
     })
-}
-
-/// A removed path, or a regular file. Directories here are untracked nested
-/// repositories or gitlinks, which Git lists as one path.
-fn regular_or_removed(workspace_path: &Path, path: &str) -> bool {
-    match std::fs::symlink_metadata(PathBuf::from(workspace_path).join(path)) {
-        Ok(metadata) => metadata.file_type().is_file(),
-        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-    }
 }
 
 fn message(request: &RecoveryCommitRequest<'_>) -> String {

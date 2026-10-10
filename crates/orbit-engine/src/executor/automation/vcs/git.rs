@@ -263,6 +263,8 @@ fn git_environment() -> Vec<(String, String)> {
 fn git_args(args: &[&str]) -> Vec<String> {
     // Command-line configuration wins over tracked hooksPath configuration.
     // Disable automatic maintenance too: it may launch additional Git children.
+    // Porcelain status and diff never recurse into a gitlink's checkout, whose
+    // own repository config (a filter, fsmonitor or hook) an agent could plant.
     let mut secured = vec![
         "-c".to_string(),
         "core.hooksPath=/dev/null".to_string(),
@@ -270,6 +272,8 @@ fn git_args(args: &[&str]) -> Vec<String> {
         "core.fsmonitor=false".to_string(),
         "-c".to_string(),
         "gc.auto=0".to_string(),
+        "-c".to_string(),
+        "diff.ignoreSubmodules=all".to_string(),
     ];
     if let Some((command, rest)) = args.split_first()
         && matches!(*command, "commit" | "push")

@@ -1,5 +1,6 @@
 //! Task commit boundary contracts: staged rename delivery and refusal of
-//! unknown fields for no-diff and already-landed evidence [ORB-13881].
+//! unknown fields for no-diff and already-landed evidence [ORB-13881], and
+//! refusal of nested repositories that would deliver as gitlinks [ORB-15265].
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -958,4 +959,114 @@ fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evi
         fs::read_to_string(repo.join("README.md")).unwrap(),
         "drift corrected\n"
     );
+}
+
+/// Plant a nested repository at `sub/` whose own config runs a clean filter
+/// that creates `marker`, as a sandboxed agent can inside its worktree.
+fn plant_filtering_nested_repo(repo: &Path, marker: &Path) -> PathBuf {
+    let sub = repo.join("sub");
+    fs::create_dir_all(&sub).expect("create nested repo");
+    let git = |args: &[&str]| git_output(&sub, args);
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Agent"]);
+    git(&["config", "user.email", "agent@example.invalid"]);
+    let hooks = sub.join(".git").join("orbit-test-empty-hooks");
+    fs::create_dir_all(&hooks).expect("create empty hooks dir");
+    git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    fs::write(sub.join("f.txt"), "hi\n").expect("write nested file");
+    fs::write(sub.join(".gitattributes"), "* filter=pwn\n").expect("write attributes");
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "nested"]);
+    git(&[
+        "config",
+        "filter.pwn.clean",
+        &format!("touch '{}' && cat", marker.display()),
+    ]);
+    make_nested_stat_stale(&sub);
+    sub
+}
+
+/// Give the nested file a stat its index does not record, so any status
+/// inside the nested repository re-hashes it through the clean filter.
+fn make_nested_stat_stale(sub: &Path) {
+    fs::File::options()
+        .write(true)
+        .open(sub.join("f.txt"))
+        .expect("open nested file")
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(978_307_200))
+        .expect("set nested mtime");
+}
+
+/// ORB-15265: owner delivery refuses an agent-planted nested repository,
+/// which `git add` would commit as a gitlink, and leaves the index unchanged.
+/// With a gitlink already in history, delivery's host status and diff never
+/// recurse into it, so the nested repository's filter never runs on the host.
+#[test]
+fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let outside = tempdir().expect("create marker dir");
+    let marker = outside.path().join("MARKER");
+    let mut task = fixture_task();
+    task.execution_summary = "Outcome: success\n\nEdited the readme.".to_string();
+    let host = VerifierHost::new(repo, task);
+    let sub = plant_filtering_nested_repo(repo, &marker);
+    fs::write(repo.join("README.md"), "edited\n").expect("write README");
+    let head = git_head(repo);
+    let index = git_output(repo, &["ls-files", "--stage"]);
+    let input = json!({
+        "scope": "all",
+        "job_run_id": RUN_ID,
+        "workspace_path": repo,
+    });
+
+    let error = action(&host, &input)
+        .expect_err("a nested repository must not be delivered as a gitlink")
+        .to_string();
+    assert!(
+        error.contains("\"sub/\""),
+        "refusal names the path: {error}"
+    );
+    assert_eq!(git_head(repo), head);
+    assert_eq!(
+        git_output(repo, &["ls-files", "--stage"]),
+        index,
+        "the refusal leaves the index unchanged"
+    );
+    assert!(!marker.exists(), "the nested filter ran during the refusal");
+
+    // A gitlink already in history, as owner delivery committed it before
+    // this refusal existed.
+    git_output(repo, &["add", "--", "sub"]);
+    git_output(repo, &["commit", "-q", "-m", "gitlink", "--", "sub"]);
+    assert!(
+        git_output(repo, &["ls-tree", "HEAD", "sub"]).starts_with("160000 "),
+        "the fixture commits a gitlink"
+    );
+    make_nested_stat_stale(&sub);
+    let delivered = action(&host, &input).expect("the tracked edit delivers");
+    assert_eq!(delivered["decision"], "performed");
+    assert_eq!(
+        git_output(repo, &["show", "--format=", "--name-only", "HEAD"]),
+        "README.md"
+    );
+    assert!(
+        !marker.exists(),
+        "host Git ran the nested repository's filter"
+    );
+
+    // Control: plain status without Orbit's host policy does run the filter,
+    // so the assertions above observe a real execution path.
+    make_nested_stat_stale(&sub);
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .expect("run git status");
+    assert!(status.status.success());
+    assert!(marker.exists(), "the fixture's filter must be reachable");
 }
