@@ -196,7 +196,13 @@ impl Scratch {
             .iter()
             .find_map(|(key, path)| (*key == RESULT_ENV).then_some(*path))
             .expect("broker client result sentinel");
-        let mut assignments = format!("{CLIENT_ENV}=1");
+        // The provider starts from the runner's cleared environment, so the
+        // child half would not inherit the scrub marker and its pre-`main`
+        // scrub would remove the `ORBIT_PLUGIN_BROKER` the runner exported.
+        let mut assignments = format!(
+            "{CLIENT_ENV}=1 {}=1",
+            orbit_common::test_env::SCRUBBED_MARKER_ENV
+        );
         for (key, value) in env {
             assignments.push_str(&format!(" {key}={}", quote(value)));
         }
