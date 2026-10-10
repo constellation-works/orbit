@@ -29,7 +29,12 @@ const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled"
 // Run detail module-scoped state (was in app.js)
 let activeRunId = null;
 let activeRunDetail = null;
+let activeRunDetailError = null;
+let activeRunDetailLoading = false;
 let activeRunEvents = [];
+let activeRunEventsTotal = 0;
+let activeRunEventsOffset = 0;
+let activeRunEventsLoading = false;
 let activeRunEventsError = null;
 let activeRunLogs = [];
 let activeRunLogsError = null;
@@ -129,6 +134,7 @@ function bumpRunDetailFetches() {
 }
 
 export function beginRunDetailFetch(channel) {
+  if (channel === "detail") activeRunDetailLoading = true;
   return {
     runId: activeRunId,
     workspace: getWorkspace(),
@@ -151,13 +157,19 @@ export function runDetailFetchCurrent(channel, token) {
 function retireRunDetailView() {
   bumpRunDetailFetches();
   activeRunDetail = null;
+  activeRunDetailError = null;
+  activeRunDetailLoading = !!activeRunId;
   activeRunEvents = [];
+  activeRunEventsTotal = 0;
+  activeRunEventsOffset = 0;
+  activeRunEventsLoading = false;
   activeRunEventsError = null;
   activeRunLogs = [];
   activeRunLogsError = null;
   expandedStepIndices = new Set();
   if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
     renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.", { preserveFeedback: false });
+    renderRunSteps();
   }
 }
 
@@ -171,13 +183,22 @@ export function setActiveRunId(v) {
 onWorkspaceChange(retireRunDetailView);
 
 export function getActiveRunDetail() { return activeRunDetail; }
-export function setActiveRunDetail(v) { activeRunDetail = v; }
+export function setActiveRunDetail(v) { activeRunDetail = v; activeRunDetailError = null; activeRunDetailLoading = false; }
+export function setActiveRunDetailError(v) {
+  activeRunDetailError = v;
+  if (v) activeRunDetailLoading = false;
+}
 
 export function getActiveRunEvents() { return activeRunEvents; }
 export function setActiveRunEvents(v) {
-  activeRunEvents = v || [];
+  activeRunEvents = Array.isArray(v) ? v : (v?.events || []);
+  activeRunEventsTotal = Array.isArray(v) ? v.length : (v?.total || 0);
+  activeRunEventsOffset = Array.isArray(v) ? 0 : (v?.offset || 0);
+  activeRunEventsLoading = false;
   activeRunEventsError = null;
 }
+export function getActiveRunEventsOffset() { return activeRunEventsOffset; }
+export function setActiveRunEventsLoading(v) { activeRunEventsLoading = v; }
 
 export function setActiveRunEventsError(v) { activeRunEventsError = v || null; }
 
@@ -738,6 +759,16 @@ function buildChildDispatches(run) {
 export function renderRunSteps() {
   const body = $("run-steps-body");
   if (!body) return;
+  if (!activeRunDetail || activeRunDetailLoading || activeRunDetailError) {
+    if (activeRunDetailError || !activeRunId) {
+      syncNodes(body, [el("div", { class: "empty-state", text: activeRunDetailError || "No run selected." })]);
+    } else {
+      syncNodes(body, [el("div", { class: "skeleton-state", role: "status", "aria-label": "Loading steps" }, [
+        ...Array.from({ length: 3 }, () => el("div", { class: "skeleton skeleton-row", "aria-hidden": "true" })),
+      ])]);
+    }
+    return;
+  }
   const notices = activeRunLogsError ? [el("div", {
     class: "action-error",
     role: "alert",
@@ -1169,9 +1200,25 @@ export function renderRunEvents() {
   if (events.length === 0) {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: "No v2 envelope events for this run." }),
+      el("div", { class: "text", role: "status", text: activeRunEventsLoading ? "Loading events…" : `Showing 0 of ${activeRunEventsTotal} events.` }),
     ])]);
     return;
+  }
+  const start = Math.max(0, activeRunEventsTotal - activeRunEventsOffset - events.length) + 1;
+  const end = Math.max(0, activeRunEventsTotal - activeRunEventsOffset);
+  const controls = el("div", { class: "run-detail-actions run-events-pagination" }, [
+    el("span", { role: "status", text: `Showing events ${start}–${end} of ${activeRunEventsTotal}` }),
+  ]);
+  for (const [label, offset, disabled] of [
+    ["Load earlier", activeRunEventsOffset + events.length, start <= 1],
+    ["Newest events", 0, activeRunEventsOffset === 0],
+  ]) {
+    const button = el("button", { class: "back-action", text: label });
+    button.disabled = disabled || activeRunEventsLoading;
+    button.addEventListener("click", () => {
+      _runDetailCtx?.fetchAndRenderRunEvents(offset).catch(() => {});
+    });
+    controls.appendChild(button);
   }
   let table = body.querySelector("table.scoreboard-table");
   let tbody;
@@ -1186,16 +1233,22 @@ export function renderRunEvents() {
     table.appendChild(thead);
     tbody = el("tbody");
     table.appendChild(tbody);
-    syncNodes(body, [table]);
   } else {
     tbody = table.querySelector("tbody");
   }
+  syncNodes(body, [controls, table]);
   const frag = document.createDocumentFragment();
+  let previousDay = null;
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     const summary = summarizeEvent(ev);
     const tr = el("tr");
-    tr.appendChild(el("td", { text: fmtTimestamp(ev.ts), title: ev.ts ? fmtAbsTime(ev.ts) : "" }));
+    const date = new Date(ev.ts);
+    const day = Number.isFinite(date.getTime()) ? date.toLocaleDateString() : null;
+    const clock = formatClock(ev.ts);
+    const time = day && day !== previousDay ? `${day} ${clock}` : (clock || "-");
+    previousDay = day;
+    tr.appendChild(el("td", { text: time, title: ev.ts || "" }));
     tr.appendChild(el("td", { text: ev.body_kind || "-" }));
     tr.appendChild(el("td", { text: ev.event_type || "-" }));
     tr.appendChild(el("td", { text: ev.agent_identity || "-" }));
@@ -1204,7 +1257,7 @@ export function renderRunEvents() {
     td.textContent = summary.text;
     tr.appendChild(td);
     tr.dataset.key = `runev-${ev.event_id || i}`;
-    tr.dataset.hash = `${ev.event_id || i}-${ev.body_kind}`;
+    tr.dataset.hash = `${ev.event_id || i}-${ev.body_kind}-${time}`;
     frag.appendChild(tr);
   }
   syncNodes(tbody, Array.from(frag.children));

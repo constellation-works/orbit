@@ -116,6 +116,9 @@ pub(super) struct DenialsQuery {
 
 #[derive(Deserialize, Default)]
 pub(super) struct RunEventsQuery {
+    /// Opt into a counted page from the end of the run, in chronological order.
+    #[serde(default)]
+    pub(super) tail: bool,
     #[serde(default)]
     pub(super) kind: Option<String>,
     #[serde(default)]

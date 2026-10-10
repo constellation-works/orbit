@@ -30,9 +30,12 @@ import {
   setActiveRunId,
   getActiveRunDetail,
   setActiveRunDetail,
+  setActiveRunDetailError,
   getActiveRunEvents,
   setActiveRunEvents,
   setActiveRunEventsError,
+  getActiveRunEventsOffset,
+  setActiveRunEventsLoading,
   getActiveRunLogs,
   setActiveRunLogs,
   setActiveRunLogsError,
@@ -295,6 +298,7 @@ function runDetailContext() {
     clearExpandedStepIndices,
     toggleExpandedStepIndex,
     // callbacks the run-detail renderers invoke (Gantt click handler etc.)
+    fetchAndRenderRunEvents,
     setRunDetailSubtab,
     // formatters (the shared clock lives in common.js)
     fmtTimestamp,
@@ -1491,6 +1495,8 @@ function fetchAndRenderRunDetail() {
   const runId = getActiveRunId();
   if (!runId) return Promise.resolve();
   const token = beginRunDetailFetch("detail");
+  setActiveRunDetailError(null);
+  renderRunSteps();
   return fetchJson(`/api/runs/${encodeURIComponent(runId)}`).then((data) => {
     if (!runDetailFetchCurrent("detail", token)) return;
     setActiveRunDetail(data);
@@ -1508,15 +1514,19 @@ function fetchAndRenderRunDetail() {
         ? `Run not found: ${runId}`
         : `Unable to load run ${runId}: ${e.message}. Use Refresh to retry.`,
     );
+    setActiveRunDetailError(`Unable to load steps: ${e.message}. Use Refresh to retry.`);
+    renderRunSteps();
     throw e;
   });
 }
 
-function fetchAndRenderRunEvents() {
+function fetchAndRenderRunEvents(offset = getActiveRunEventsOffset()) {
   const runId = getActiveRunId();
   if (!runId) return Promise.resolve();
   const token = beginRunDetailFetch("events");
-  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?limit=${RUN_EVENTS_LIMIT}`).then((events) => {
+  setActiveRunEventsLoading(true);
+  renderRunEvents();
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?tail=true&offset=${offset}&limit=${RUN_EVENTS_LIMIT}`).then((events) => {
     if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents(events);
     renderRunEvents();
