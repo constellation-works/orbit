@@ -25,34 +25,34 @@
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   --font-display: var(--font-sans);
   
-  --bg: #0a0a0b;
-  --bg-elev: #111114;
-  --bg-rail: #0c0c0f;
+  --bg: #0b0d10;
+  --bg-elev: #121519;
+  --bg-rail: #0e1115;
   /* ORB-10972 two-tier border scale. `--border` draws the edge of a
      panel or control; `--hair` draws every hairline *inside* one (table
      rows, group splits, log lines). Before this they were the same
      #333333, which made the grid read as loud as its contents. */
-  --border: #26262d;
-  --hair: #1b1b21;
-  --fg: #ededf0;
-  --fg-dim: #8f8f99;
-  --fg-mute: #8a8a94;
-  --fg-disabled: #6b6b75;
-  --accent: #8ab3ff;
+  --border: #22272e;
+  --hair: #1b1f25;
+  --fg: #e7eaee;
+  --fg-dim: #a3acb8;
+  --fg-mute: #8b95a3;
+  --fg-disabled: #66707d;
+  --accent: #7aa7ff;
   --accent-hover: #a9c6ff;
   --accent-hi: #c9ddff;
-  --status-proposed: #f2b35e;
-  --status-backlog: #a3a3ae;
-  --status-in-progress: #5cc8de;
-  --status-review: #d39bff;
-  --status-done: #5ad8a0;
-  --status-blocked: #ff8a80;
+  --status-proposed: #f2b24c;
+  --status-backlog: #8a94a3;
+  --status-in-progress: #5cc8f0;
+  --status-review: #b794f6;
+  --status-done: #63d297;
+  --status-blocked: #ff7a6b;
   --status-rejected: #e0726a;
-  --status-archived: #6b6b75;
-  --status-someday: #8f8f99;
-  --status-open: #f2b35e;
-  --status-triaged: #5cc8de;
-  --status-resolved: #5ad8a0;
+  --status-archived: #66707d;
+  --status-someday: #8b95a3;
+  --status-open: #f2b24c;
+  --status-triaged: #5cc8f0;
+  --status-resolved: #63d297;
   
   --priority-high: #ef4444;
   --priority-medium: #f59e0b;
@@ -62,16 +62,16 @@
   --complexity-medium: #f59e0b;
   --complexity-hard: #ef4444;
   
-  --state-success: #5ad8a0;
-  --state-active: #5ad8a0;
-  --state-running: #5cc8de;
-  --state-pending: #f2b35e;
+  --state-success: #63d297;
+  --state-active: #63d297;
+  --state-running: #5cc8f0;
+  --state-pending: #f2b24c;
   --state-held: #c4a7ff;
-  --state-failed: #ff8a80;
-  --state-error: #ff8a80;
+  --state-failed: #ff7a6b;
+  --state-error: #ff7a6b;
   --state-cancelled: #e0a39d;
   --state-interrupted: #f97316; /* orange-500 — orphaned run, resumable */
-  --state-disabled: #6b6b75;
+  --state-disabled: #66707d;
 
   /* Per-agent identity colors (matches raw/scoreboard-league.html mock). */
   --ag-codex:  #5ec8d4;
@@ -84,17 +84,39 @@
   --ag-grok-low:   rgba(76, 195, 138, 0.12);
 
   /* Washes and control surfaces shared by the redesigned chrome. */
-  --bg-sunk: #0d0d10;
-  --bg-hover: rgba(255, 255, 255, 0.04);
-  --bg-selected: #161b28;
-  --accent-wash: rgba(138, 179, 255, 0.1);
+  --bg-sunk: #0f1216;
+  --bg-hover: rgba(255, 255, 255, 0.035);
+  --bg-selected: #1a1f27;
+  --accent-wash: rgba(122, 167, 255, 0.1);
   --accent-line: #2c4a86;
-  --danger-wash: #1d1111;
-  --danger-line: #4a2522;
-  --danger-fg: #ffc7c0;
-  --radius-panel: 12px;
+  --danger-wash: #150f0f;
+  --danger-line: #3a2321;
+  --danger-fg: #ff9c90;
+  --radius-panel: 10px;
   --radius: 8px;
   --radius-sm: 6px;
+
+  /* Chrome surfaces from the 2026-10 redesign: the header and rail share
+     one surface, a raised control reads one step above a card, and a well
+     sits one step below it. */
+  --bg-chrome: #0e1115;
+  --bg-control: #151920;
+  --bg-well: #0f1216;
+  --border-strong: #2e343c;
+  --fg-strong: #f2f4f7;
+  --fg-soft: #c9d0d9;
+
+  /* Why a backlog task is or is not starting: one colour per readiness pool
+     (drain-waits.js). Every dot also carries its words in a label. */
+  --ready-eligible: #63d297;
+  --ready-locks: #d9902f;
+  --ready-capacity: #4f7fe0;
+  --ready-other: #66707d;
+
+  /* Warning wash for notes and the drain pill. */
+  --warn-wash: #1c160b;
+  --warn-line: #43331a;
+  --warn-fg: #f2c46d;
 }
 
 /* One dot colour per status and run state, read by every dot-and-label
@@ -125,6 +147,10 @@
 [data-state="cancelled"] { --dot: var(--state-cancelled); }
 [data-state="interrupted"] { --dot: var(--state-interrupted); }
 [data-state="disabled"], [data-state="skipped"] { --dot: var(--state-disabled); }
+[data-pool="eligible"] { --dot: var(--ready-eligible); }
+[data-pool="locks"] { --dot: var(--ready-locks); }
+[data-pool="capacity"] { --dot: var(--ready-capacity); }
+[data-pool="other"] { --dot: var(--ready-other); }
 
 * { box-sizing: border-box; }
 
