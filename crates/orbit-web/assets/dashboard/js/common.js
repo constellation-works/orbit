@@ -478,6 +478,24 @@ function workspacePath(path, workspace) {
   return `${path}${sep}workspace=${encodeURIComponent(workspace)}`;
 }
 
+// The host a run link names when none is given: the selected host, or the
+// serving host by name. Naming the serving host too keeps a link from opening
+// on a host this browser remembers.
+function selectedRunHost() {
+  return currentHost || (servingHost ? servingHost.name : null);
+}
+
+/// The dashboard address of run `runId`, on `host` in `workspace`. Every run
+/// link is built here: the query names the host and workspace, so a link opened
+/// in a new tab, copied or reloaded shows the same run on the same host.
+export function runHref(runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
+  const query = new URLSearchParams();
+  if (host) query.set("host", host);
+  if (workspace) query.set("workspace", workspace);
+  const search = query.toString();
+  return `${search ? `?${search}` : ""}#runs?run_id=${encodeURIComponent(runId)}`;
+}
+
 export function positiveIntParam(name, fallback) {
   const parsed = parseInt(params.get(name) || String(fallback), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;

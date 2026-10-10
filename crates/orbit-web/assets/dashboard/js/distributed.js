@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson, makeToggleRow, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -112,13 +112,6 @@ export function formatExecutionLocation(location) {
   return `on ${label}`;
 }
 
-/// The dashboard address of run `runId` on registered host `hostName`.
-export function remoteRunHref(hostName, workspace, runId) {
-  const query = new URLSearchParams({ host: hostName });
-  if (workspace) query.set("workspace", workspace);
-  return `?${query}#runs?run_id=${encodeURIComponent(runId)}`;
-}
-
 /// The execution-provenance cell shared by the run meta grid and the task
 /// detail's run line. Given the run (`{runId, workspace}`) and an execution
 /// machine the serving host's host file registers, "on <machine>" links to
@@ -134,7 +127,7 @@ export function buildExecutionProvenance(location, run = null) {
       text: formatExecutionLocation(location),
       title: `Open run ${run.runId} on ${host.name}`,
     });
-    link.href = remoteRunHref(host.name, run.workspace || getWorkspace(), run.runId);
+    link.href = runHref(run.runId, { host: host.name, workspace: run.workspace || getWorkspace() });
     link.addEventListener("click", (event) => event.stopPropagation());
     return link;
   }
@@ -260,7 +253,7 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
   if (run && run.run_id) {
     if (claim.bound_run_navigable) {
       const link = el("a", { class: "value", text: run.run_id });
-      link.href = `#runs?run_id=${encodeURIComponent(run.run_id)}`;
+      link.href = runHref(run.run_id);
       panel.appendChild(line("bound run", link));
     } else {
       // No owner-local run exists for a run that executed elsewhere. Naming the

@@ -1,7 +1,7 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1320,7 +1320,7 @@ function buildAuditDetailRow(ev, ctx) {
     addMetaLink(
       "job_run_id",
       ev.job_run_id,
-      `#runs/${encodeURIComponent(ev.job_run_id)}`,
+      runHref(ev.job_run_id),
     );
   } else {
     addMeta("job_run_id", "-");

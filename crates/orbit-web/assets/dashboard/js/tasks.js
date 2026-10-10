@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { backlogGroupHint, drainWaitFor, drainWaitSignature, onDrainReadinessChange } from './drain-waits.js';
@@ -2044,7 +2044,7 @@ function buildTaskDetail(task, context) {
       const machine = task.job_run_machine;
       if (task.job_run_navigable !== false) {
         const link = el("a", { text: display });
-        link.href = `#runs?run_id=${encodeURIComponent(display)}`;
+        link.href = runHref(display);
         value.appendChild(link);
       } else {
         value.appendChild(el("span", { text: display }));
@@ -2954,7 +2954,7 @@ function buildQuickAction(task, context) {
     // that host instead of opening this host's job store.
     if (task.job_run_navigable !== false) {
       const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
-      link.href = `#runs?run_id=${encodeURIComponent(task.job_run_id)}`;
+      link.href = runHref(task.job_run_id);
       link.addEventListener("click", (event) => event.stopPropagation());
       cell.appendChild(link);
       return cell;
@@ -3011,7 +3011,7 @@ function buildQuickActionError(task) {
     const before = text.slice(0, idx);
     const after = text.slice(idx + runId.length);
     const link = el("a", { class: "task-quick-error-link", text: runId, title: `Open run ${runId}` });
-    link.href = `#runs?run_id=${encodeURIComponent(runId)}`;
+    link.href = runHref(runId);
     link.addEventListener("click", (e) => e.stopPropagation());
     wrap = el("div", { class: "task-quick-error", title: "" }, [
       before,

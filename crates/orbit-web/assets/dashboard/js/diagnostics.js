@@ -18,7 +18,7 @@
 // Main-table and side-card requests render independently so a side-card
 // completion cannot replace the main panel's loading or failure feedback.
 
-import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, getHost, getWorkspace, formatDateTime, listItems } from './common.js';
+import { incidentClassLabel, auditActorLabel, panelCanRender, resetPanel, el, syncNodes, getWindow, getHost, getWorkspace, formatDateTime, listItems, runHref } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -131,6 +131,12 @@ function dashboardLink(label, hash, workspaceId = getWorkspace()) {
   return link;
 }
 
+function runDashboardLink(runId, workspaceId) {
+  const link = el("a", { class: "mono", text: runId, title: `Open ${runId}` });
+  link.href = runHref(runId, { workspace: workspaceId });
+  return link;
+}
+
 function errorMessageDisclosure(value, row, ctx, td) {
   const full = value || "";
   const shortened = shortenWorktreePaths(full);
@@ -190,7 +196,7 @@ function getDiagErrorsColumns(ctx) {
         const runId = row.job_run;
         if (!runId) return errorRunLabel(row);
         const workspaceId = row.workspace_id || getWorkspace();
-        const link = dashboardLink(runId, `runs/${encodeURIComponent(runId)}`, workspaceId);
+        const link = runDashboardLink(runId, workspaceId);
         link.addEventListener("click", event => {
           event.stopPropagation();
           if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
@@ -392,7 +398,7 @@ function incidentEvidenceTable(events, ctx) {
     const runCell = el("td", { class: "mono" });
     if (event.run_id) {
       const workspaceId = event.workspace_id || getWorkspace();
-      const link = dashboardLink(event.run_id, `runs/${encodeURIComponent(event.run_id)}`, workspaceId);
+      const link = runDashboardLink(event.run_id, workspaceId);
       link.addEventListener("click", click => {
         click.stopPropagation();
         if (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey || click.button !== 0) return;
