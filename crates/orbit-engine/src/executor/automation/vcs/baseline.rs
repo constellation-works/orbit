@@ -822,12 +822,12 @@ pub struct BaseFailureCheck {
 /// [ORB-15122]. A failure there is checked on the base through
 /// `compare_with_base`, whose `(base, command)` result cache is the same one
 /// delivery validation fills, so a gate-step `baseline_red` run of the same
-/// command on the same base is reused rather than repeated. The base run is handed the selection the
-/// candidate run reported, and a base run that is not comparable with it
-/// settles nothing. Beyond the exit status and timeout outcome
-/// `BaselineCheck::reproduces` compares, the failures each output names
-/// (`failure_identities`) must not grow on the candidate, and every failure
-/// the reviewer named must appear in the base's output.
+/// command on the same base is reused rather than repeated. The base run is
+/// handed the selection the candidate run reported, and a base run that is
+/// not comparable with it settles nothing. Beyond the exit status and
+/// timeout outcome `BaselineCheck::reproduces` compares, the failures each
+/// output names (`failure_identities`) must not grow on the candidate, and
+/// every failure the reviewer named must appear in the base's output.
 ///
 /// Only call this with a command the host itself trusts: it runs on the host,
 /// outside any agent sandbox.
