@@ -2,18 +2,15 @@
 // Gantt timeline, event log, per-step stdout/stderr blocks).
 // Pure vanilla JS, split into ES module with no build step.
 //
-// Extracted from app.js (ORB-00181). Owns RUN_EVENTS_LIMIT, the six run-detail state lets,
+// Extracted from app.js (ORB-00181). Owns run-detail state and limits,
 // RUN_EVENT_COLUMNS, renderRunDetail*, renderRunSteps*, renderRunKnowledge, renderRunGantt +
 // tooltip fns, logsForStep/build*, renderRunEvents, summarizeEvent.
 // Fetch orchestrators (fetchAndRenderRun*) and refresh wiring remain in app.js as the
-// cross-domain shell. Gantt retry markers read activeRunEvents (populated by separate fetch)
-// so both Gantt and Events renderers live here for local coupling.
+// cross-domain shell. Gantt retry data is independent of the Events table page.
 //
 // Receives one-time context via initRunDetail(runDetailContext()) with state accessors
 // (re-exported by app's routerContext), formatters, run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
-// No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
-// activation, and scroll-to-step.
 
 import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
@@ -23,6 +20,7 @@ import { runTaskLinks } from './runs.js';
 const $ = (id) => document.getElementById(id);
 
 const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app orchestrators
+const RUN_RETRIES_LIMIT = 100;
 const LIVE_RUN_STATES = new Set(["pending", "running", "retrying"]);
 const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
 
@@ -35,6 +33,10 @@ let activeRunEventsTotal = 0;
 let activeRunEventsOffset = 0;
 let activeRunEventsLoading = false;
 let activeRunEventsError = null;
+let activeRunRetries = [];
+let activeRunRetriesLoaded = false;
+let activeRunRetriesTruncated = false;
+let activeRunRetriesError = null;
 let activeRunLogs = [];
 let activeRunLogsError = null;
 let activeRunSubtab = "steps";
@@ -124,11 +126,12 @@ function buildReplayRunButton(run, host) {
 // revision, and generation it captured are still the ones on screen. A return
 // to the same run (A → B → A) and a workspace change that keeps the run id
 // both miss that check.
-const runDetailFetchGeneration = { detail: 0, events: 0, logs: 0 };
+const runDetailFetchGeneration = { detail: 0, events: 0, retries: 0, logs: 0 };
 
 function bumpRunDetailFetches() {
   runDetailFetchGeneration.detail += 1;
   runDetailFetchGeneration.events += 1;
+  runDetailFetchGeneration.retries += 1;
   runDetailFetchGeneration.logs += 1;
 }
 
@@ -161,12 +164,17 @@ function retireRunDetailView() {
   activeRunEventsOffset = 0;
   activeRunEventsLoading = false;
   activeRunEventsError = null;
+  activeRunRetries = [];
+  activeRunRetriesLoaded = false;
+  activeRunRetriesTruncated = false;
+  activeRunRetriesError = null;
   activeRunLogs = [];
   activeRunLogsError = null;
   expandedStepIndices = new Set();
   if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
     renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.", { preserveFeedback: false });
     renderRunSteps();
+    renderRunGantt();
   }
 }
 
@@ -198,6 +206,20 @@ export function setActiveRunEventsLoading(v) { activeRunEventsLoading = v; }
 
 export function setActiveRunEventsError(v) { activeRunEventsError = v || null; }
 
+export function setActiveRunRetries(events) {
+  activeRunRetries = events.slice(0, RUN_RETRIES_LIMIT);
+  activeRunRetriesLoaded = true;
+  activeRunRetriesTruncated = events.length > RUN_RETRIES_LIMIT;
+  activeRunRetriesError = null;
+}
+
+export function setActiveRunRetriesError(message) {
+  activeRunRetries = [];
+  activeRunRetriesLoaded = false;
+  activeRunRetriesTruncated = false;
+  activeRunRetriesError = message;
+}
+
 export function getActiveRunLogs() { return activeRunLogs; }
 export function setActiveRunLogs(v) {
   activeRunLogs = v || [];
@@ -228,7 +250,7 @@ export function initRunDetail(ctx) {
   _runDetailCtx = ctx;
 }
 
-export { RUN_EVENTS_LIMIT };
+export { RUN_EVENTS_LIMIT, RUN_RETRIES_LIMIT };
 
 // --- renderers (exported for app orchestrators and runDetailContext) ---
 
@@ -1007,7 +1029,7 @@ export function renderRunGantt() {
     // target_id. Map both forms to the lane index.
     if (s.target_id != null) stepIdToIndex.set(String(s.target_id), s.step_index);
   });
-  for (const ev of activeRunEvents || []) {
+  for (const ev of activeRunRetries) {
     if (ev.body_kind !== "step_retry") continue;
     const stepId = ev.step_id;
     const index = stepIdToIndex.get(stepId);
@@ -1033,10 +1055,18 @@ export function renderRunGantt() {
   for (const state of [...new Set(steps.map(step => step.state))]) {
     legend.appendChild(stateCell(state));
   }
-  if ((activeRunEvents || []).some(event => event.body_kind === "step_retry")) {
+  if (activeRunRetries.some(event => event.body_kind === "step_retry")) {
     legend.appendChild(el("span", { class: "gantt-retry-key", text: "● Retry" }));
   }
   panel.appendChild(legend);
+  const retryNotice = activeRunRetriesError
+    ? `Retry markers unavailable: ${activeRunRetriesError}. Use Refresh to retry.`
+    : activeRunRetriesTruncated
+      ? `Showing the first ${RUN_RETRIES_LIMIT} retries; later retry markers are omitted.`
+      : !activeRunRetriesLoaded ? "Loading retry markers…" : null;
+  if (retryNotice) panel.appendChild(el("div", {
+    class: "gantt-retry-status muted", role: "status", text: retryNotice,
+  }));
 }
 
 function showGanttTooltip(e, step) {
