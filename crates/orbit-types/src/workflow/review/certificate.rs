@@ -58,6 +58,9 @@ pub struct ReviewManifest {
     pub contract_version: u32,
     pub policy_version: u32,
     pub budget: ReviewBudget,
+    /// The wall-clock deadline of the reviewer invocation this manifest is
+    /// issued for: the same seconds the host bounds the reviewer process by,
+    /// all that the review's `budget` has left.
     pub remaining: ReviewConsumption,
     pub issued_at: DateTime<Utc>,
 }

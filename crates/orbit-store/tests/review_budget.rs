@@ -55,13 +55,7 @@ fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
             .expect("record reviewer invocation")
     };
 
-    record(
-        "run-1",
-        ReviewerInvocationEvent::Started {
-            timeout_seconds: 3600,
-        },
-        opened,
-    );
+    record("run-1", ReviewerInvocationEvent::Started, opened);
     record(
         "run-1",
         ReviewerInvocationEvent::Finished {
@@ -124,13 +118,7 @@ fn released_attempt_counts_later_reviewer_runtime_against_the_budget() {
     );
 
     let retry_at = resumed_at + Duration::minutes(1);
-    let started = record(
-        "run-1-resume",
-        ReviewerInvocationEvent::Started {
-            timeout_seconds: 3600,
-        },
-        retry_at,
-    );
+    let started = record("run-1-resume", ReviewerInvocationEvent::Started, retry_at);
     let running = started.attempts[0]
         .reviewer_running
         .as_ref()

@@ -51,7 +51,7 @@ fn a_reviewer_timeout_retains_its_output_and_stops_before_retry_or_publication()
     assert!(matches!(
         host.reviewer_events.lock().unwrap().as_slice(),
         [
-            orbit_types::workflow::ReviewerInvocationEvent::Started { .. },
+            orbit_types::workflow::ReviewerInvocationEvent::Started,
             orbit_types::workflow::ReviewerInvocationEvent::TimedOut { .. },
         ]
     ));
@@ -152,9 +152,9 @@ fn a_report_shape_defect_returns_to_the_reviewer_once_before_settlement() {
         matches!(
             host.reviewer_events.lock().unwrap().as_slice(),
             [
-                orbit_types::workflow::ReviewerInvocationEvent::Started { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Started,
                 orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
-                orbit_types::workflow::ReviewerInvocationEvent::Started { .. },
+                orbit_types::workflow::ReviewerInvocationEvent::Started,
                 orbit_types::workflow::ReviewerInvocationEvent::Finished { .. },
             ]
         ),

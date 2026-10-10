@@ -452,9 +452,7 @@ impl Gated {
     /// that ran `runtime_seconds`, as the engine does around the dispatch.
     pub(super) fn reviewer_ran(&self, run_id: &str, admission: &Value, runtime_seconds: u64) {
         for event in [
-            ReviewerInvocationEvent::Started {
-                timeout_seconds: 3600,
-            },
+            ReviewerInvocationEvent::Started,
             ReviewerInvocationEvent::Finished { runtime_seconds },
         ] {
             record_reviewer_invocation(

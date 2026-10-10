@@ -150,6 +150,60 @@ pub(super) fn run_review_pipeline(fixture: &Fixture) {
         .unwrap();
 }
 
+/// [ORB-15094] The manifest advertises the deadline the reviewer process is
+/// given, for a `review.minutes` below, at and above the activity's 3600 s wall
+/// clock. The deadline is all the seconds the review has left.
+#[test]
+fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
+    if !super::dispatch_admission::isolated(
+        "review_continuation::the_manifest_advertises_the_deadline_the_host_hands_the_reviewer",
+    ) {
+        return;
+    }
+    for (minutes, deadline_seconds) in [(30_u32, 1800_u64), (60, 3600), (120, 7200)] {
+        let mut fixture = Fixture::new_with_review_minutes(minutes);
+        fixture.admit();
+        RuntimeHost::mark_job_run_running(
+            &fixture.runtime,
+            fixture.input["job_run_id"].as_str().unwrap(),
+            Utc::now(),
+            std::process::id(),
+        )
+        .unwrap();
+        let advertised = manifest(&fixture);
+        assert_eq!(advertised.budget.minutes, minutes);
+        let bound = RuntimeHost::record_reviewer_invocation(
+            &fixture.runtime,
+            &ReviewerInvocationRequest {
+                run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
+                lineage_key: fixture.input["admission"]["lineage_key"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                attempt_id: fixture.input["admission"]["attempt_id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                event: ReviewerInvocationEvent::Started,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            bound, deadline_seconds,
+            "review.minutes = {minutes}: the reviewer's bound is not capped by the activity's wall clock"
+        );
+        assert_eq!(
+            advertised.remaining.seconds, bound,
+            "review.minutes = {minutes}: the manifest must advertise the deadline the reviewer is given"
+        );
+        assert_eq!(
+            fixture.input["admission"]["remaining"]["seconds"], bound,
+            "review.minutes = {minutes}: admission reports the same deadline"
+        );
+    }
+}
+
 #[test]
 fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     if !super::dispatch_admission::isolated(
@@ -182,18 +236,19 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     };
     let bound = RuntimeHost::record_reviewer_invocation(
         &fixture.runtime,
-        &request(ReviewerInvocationEvent::Started {
-            timeout_seconds: 1800,
-        }),
+        &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
     .unwrap();
-    assert!(
-        bound > 0 && bound < 600,
-        "a timeout must leave continuation time within the captured budget"
+    assert_eq!(
+        bound, 600,
+        "the reviewer may use all of the captured budget"
     );
+    // The reviewer is cut short before its deadline; a reviewer that ran to
+    // the deadline would have spent the review's minutes.
+    let ran = bound / 2;
     let finished = request(ReviewerInvocationEvent::TimedOut {
-        runtime_seconds: bound,
+        runtime_seconds: ran,
     });
     RuntimeHost::record_reviewer_invocation(&fixture.runtime, &finished).unwrap();
     RuntimeHost::release_review_attempt(
@@ -222,7 +277,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
         }
     );
     assert_eq!(
-        ledger.consumed_seconds, bound,
+        ledger.consumed_seconds, ran,
         "only runtime actually spent counts"
     );
     assert!(ledger.remaining_at(Utc::now()).seconds > 0);
@@ -354,9 +409,7 @@ fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
     };
     let bound = RuntimeHost::record_reviewer_invocation(
         &fixture.runtime,
-        &request(ReviewerInvocationEvent::Started {
-            timeout_seconds: 1800,
-        }),
+        &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
     .unwrap();

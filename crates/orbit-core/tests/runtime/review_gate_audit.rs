@@ -36,16 +36,21 @@ impl Fixture {
 
     /// The fixture with `review` appended to its `[review]` table.
     pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
-        Self::build(required, review, ReviewTiming::BeforePr)
+        Self::build(required, review, ReviewTiming::BeforePr, 10)
+    }
+
+    /// The fixture whose captured `review.minutes` is `minutes` [ORB-15094].
+    pub(super) fn new_with_review_minutes(minutes: u32) -> Self {
+        Self::build(&[], "", ReviewTiming::BeforePr, minutes)
     }
 
     /// The fixture for a run that captured `review.before_landing` instead
     /// [ORB-14849].
     pub(super) fn before_landing() -> Self {
-        Self::build(&[], "", ReviewTiming::BeforeLanding)
+        Self::build(&[], "", ReviewTiming::BeforeLanding, 10)
     }
 
-    fn build(required: &[&str], review: &str, timing: ReviewTiming) -> Self {
+    fn build(required: &[&str], review: &str, timing: ReviewTiming, review_minutes: u32) -> Self {
         let switch = match timing {
             ReviewTiming::BeforeLanding => "before_landing",
             _ => "before_pr",
@@ -116,7 +121,9 @@ impl Fixture {
             crew_source: policy.review_crew.source.label().into(),
             // A bounded fixture budget exercises exhaustion without depending
             // on the operational default.
-            budget: ReviewBudget { minutes: 10 },
+            budget: ReviewBudget {
+                minutes: review_minutes,
+            },
             required_validation_commands: Some(
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
@@ -282,9 +289,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
     // The reviewer runs past the candidate's ten minutes without a verdict:
     // the preflight and a re-admission are both denied.
     for event in [
-        ReviewerInvocationEvent::Started {
-            timeout_seconds: 3600,
-        },
+        ReviewerInvocationEvent::Started,
         ReviewerInvocationEvent::Finished {
             runtime_seconds: 601,
         },

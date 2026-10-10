@@ -34,6 +34,8 @@ mod provider_usage_window;
 mod recovery_evidence;
 mod review_fixes;
 #[cfg(unix)]
+mod reviewer_wall_clock;
+#[cfg(unix)]
 mod source_inspection;
 mod v2_cli_agent;
 #[cfg(unix)]
