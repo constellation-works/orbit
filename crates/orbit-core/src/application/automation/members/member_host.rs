@@ -7,11 +7,13 @@ use orbit_automation::{
     AutomationError,
     members::{MemberAdmission, MemberHost, MemberOutcome, MemberPage},
 };
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::TaskListFilter;
 use orbit_types::{
     task::TaskStatus,
     workflow::{
-        JobRunState, JobRunTrigger,
+        ActivityV2Spec, JobRun, JobRunState, JobRunTrigger, JobV2, JobV2StepBody, PipelineState,
+        TargetStep,
         automation::{members::*, *},
     },
 };
@@ -427,25 +429,17 @@ impl MemberHost for Host<'_> {
 
         // Only the exact canonical deterministic apply steps can provide this
         // record. Agent prose and unrelated output keys are never searched.
+        let steps = PilotSteps::of(self.runtime, &run)?;
         let state = self.runtime.read_run_state(id)?;
-        let apply_output = |index: u32| {
-            state
-                .as_ref()
-                .filter(|state| state.step_states.get(&index) == Some(&JobRunState::Success))
-                .and_then(|state| state.step_output(index))
-        };
-        let Some(initial) = apply_output(APPLY_STEP) else {
+        let checkpoint = |step: Option<PilotStep>| checkpoint(state.as_ref(), step);
+        let Some(initial) = checkpoint(steps.apply).filter(|output| is_apply_output(output)) else {
             if !stopped {
                 return Ok(MemberOutcome::Pending);
             }
             // A retry would replay the frozen source; once the branch moved
             // under any member's material, no member was applied and every
             // one is better claimed afresh at the head [ORB-14476].
-            let prepared = state
-                .as_ref()
-                .filter(|state| state.step_states.get(&PREPARE_STEP) == Some(&JobRunState::Success))
-                .and_then(|state| state.step_output(PREPARE_STEP))
-                .unwrap_or(&Value::Null);
+            let prepared = checkpoint(steps.prepare).unwrap_or(&Value::Null);
             let stale = stale_tasks(
                 self.runtime,
                 attempt,
@@ -500,7 +494,7 @@ impl MemberHost for Host<'_> {
             .and_then(Value::as_u64)
             .unwrap_or(0)
             != 0;
-        let repair = apply_output(REPAIR_APPLY_STEP);
+        let repair = checkpoint(steps.repair_apply).filter(|output| is_apply_output(output));
         if repairs_requested && repair.is_none() && !stopped {
             return Ok(MemberOutcome::Pending);
         }
@@ -610,11 +604,97 @@ fn incident_crew(
     Ok(Some(agreed.flatten()))
 }
 
-/// Step indices of the deterministic steps in `task_pilot_pipeline`: the
-/// preparation, the partition apply and the targeted repair apply.
-const PREPARE_STEP: u32 = 0;
-const APPLY_STEP: u32 = 2;
-const REPAIR_APPLY_STEP: u32 = 4;
+/// One deterministic step of the definition a run executed: its id and its
+/// global step index, the key of its checkpoint.
+#[derive(Clone, Copy)]
+struct PilotStep {
+    id: &'static str,
+    index: u32,
+}
+
+/// The deterministic steps of `task_pilot_pipeline` a member settles from:
+/// the preparation, the partition apply and the targeted repair apply. Each
+/// is found by step id and action in the definition the run executed, never
+/// by position, so a step inserted before them cannot hand another step's
+/// output to settlement [ORB-15197].
+struct PilotSteps {
+    prepare: Option<PilotStep>,
+    apply: Option<PilotStep>,
+    repair_apply: Option<PilotStep>,
+}
+
+impl PilotSteps {
+    fn of(runtime: &OrbitRuntime, run: &JobRun) -> Result<Self, AutomationError> {
+        // The run's pinned snapshot when it has one, otherwise the catalog
+        // asset. A job no catalog ships any more (the retired triage job)
+        // offers no step, so its runs settle as stopped without evidence.
+        let mut job = match runtime.resolve_run_definition(run) {
+            Ok((_, job)) => job,
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Job,
+                ..
+            }) => {
+                return Ok(Self {
+                    prepare: None,
+                    apply: None,
+                    repair_apply: None,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        // Resolve `activity:` refs exactly as execution does, so only a step
+        // that ran the deterministic action qualifies.
+        let catalog = runtime
+            .v2_activity_catalog()
+            .map_err(|e| AutomationError::Evidence(format!("activity catalog: {e}")))?;
+        orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+            .map_err(|e| AutomationError::Evidence(format!("run definition: {e}")))?;
+        Ok(Self {
+            prepare: deterministic_step(&job, "prepare", "prepare_task_pilot"),
+            apply: deterministic_step(&job, "apply", "apply_task_pilot_results"),
+            repair_apply: deterministic_step(&job, "apply_repairs", "apply_task_pilot_results"),
+        })
+    }
+}
+
+/// The top-level step `id` of `job`, when it runs the deterministic `action`.
+fn deterministic_step(job: &JobV2, id: &'static str, action: &str) -> Option<PilotStep> {
+    let index = job.steps.iter().position(|step| step.id == id)?;
+    let JobV2StepBody::Target(TargetStep {
+        spec: ActivityV2Spec::Deterministic(spec),
+        ..
+    }) = &job.steps[index].body
+    else {
+        return None;
+    };
+    (spec.action == action).then_some(PilotStep {
+        id,
+        index: u32::try_from(index).ok()?,
+    })
+}
+
+/// The output `step` checkpointed, once it succeeded. The pipeline entry
+/// under the step's id is written by the same checkpoint; a mismatch means
+/// the index names another step in what was recorded, so nothing is read.
+fn checkpoint(state: Option<&PipelineState>, step: Option<PilotStep>) -> Option<&Value> {
+    let (state, step) = (state?, step?);
+    if state.step_states.get(&step.index) != Some(&JobRunState::Success) {
+        return None;
+    }
+    let output = state.step_output(step.index)?;
+    state
+        .pipeline
+        .get(step.id)
+        .is_none_or(|entry| entry == output)
+        .then_some(output)
+}
+
+/// Whether `output` is an apply record: every apply output counts its
+/// repairs and carries the member evidence slot. Anything else (a skipped
+/// step's null, another step's output) settles no member [ORB-15197].
+fn is_apply_output(output: &Value) -> bool {
+    output.get("repair_count").is_some_and(Value::is_u64) || output.get("member_evidence").is_some()
+}
 
 /// The `member_evidence` an apply step recorded: one entry per claim member it
 /// applied. A run checkpointed before batching carried a single object.

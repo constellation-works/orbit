@@ -30,6 +30,7 @@ mod crew_selection;
 mod native_os;
 mod pilot_output;
 mod races;
+mod settlement;
 mod source_moves;
 
 struct Workspace {
@@ -276,14 +277,43 @@ impl Workspace {
                 })
             })
             .collect::<Vec<_>>();
-        let mut state = PipelineState::new(run_id.clone(), "task_pilot_pipeline".into(), json!({}));
-        state.record_step(
-            2,
-            JobRunState::Success,
-            Some(json!({"member_evidence": evidence})),
-            None,
-        );
-        self.runtime.write_run_state(&run_id, &state).unwrap();
+        self.record_steps(&run_id, &[("apply", &json!({"member_evidence": evidence}))]);
+    }
+
+    /// The global index the engine checkpoints step `id` of the installed
+    /// pilot job at: its position among the job's top-level steps.
+    fn pilot_step_index(&self, id: &str) -> u32 {
+        let path = self
+            .runtime
+            .global_root()
+            .join("resources/jobs/task_pilot_pipeline.yaml");
+        let job: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let position = job["spec"]["steps"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .position(|step| step["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("the installed pilot job has no step `{id}`"));
+        u32::try_from(position).unwrap()
+    }
+
+    /// Record each output as a successful checkpoint of `run_id`, the way
+    /// the engine does: at the step's index and under its id.
+    fn record_steps(&self, run_id: &str, steps: &[(&str, &Value)]) {
+        let mut state = self
+            .runtime
+            .read_run_state(run_id)
+            .unwrap()
+            .unwrap_or_else(|| {
+                PipelineState::new(run_id.into(), "task_pilot_pipeline".into(), json!({}))
+            });
+        for (id, output) in steps {
+            let index = self.pilot_step_index(id);
+            state.record_step(index, JobRunState::Success, Some((*output).clone()), None);
+            state.record_pipeline_output(id, (*output).clone());
+        }
+        self.runtime.write_run_state(run_id, &state).unwrap();
     }
 
     fn task(&self, title: &str) -> Task {

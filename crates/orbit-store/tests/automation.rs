@@ -426,6 +426,31 @@ fn concurrent_action_key_admission_initializes_one_run_and_resolves_without_writ
     assert_eq!(jobs.read_run_state(run_id).unwrap(), Some(state));
 }
 
+/// The automation v1-v3 tables and ledger rows, as a binary before the
+/// one-time member repairs left a store.
+fn automation_schema_v3(base: &Store) {
+    base.connection()
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE automation_consumers (consumer TEXT PRIMARY KEY, generation INTEGER NOT NULL, state_json TEXT NOT NULL);
+             CREATE TABLE automation_coverage (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, receipt_json TEXT NOT NULL, accepted_at TEXT NOT NULL);
+             CREATE INDEX automation_coverage_consumer ON automation_coverage(consumer, accepted_at);
+             CREATE TABLE automation_delivery_intents (record_id TEXT PRIMARY KEY, repository TEXT NOT NULL, branch TEXT NOT NULL, delivery_json TEXT NOT NULL);
+             CREATE TABLE automation_delivery_members (repository TEXT NOT NULL, branch TEXT NOT NULL, commit_id TEXT NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(repository,branch,commit_id,record_id));
+             CREATE TABLE automation_waivers (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, waiver_json TEXT NOT NULL);
+             CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));
+             CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id);
+             CREATE TABLE automation_recoveries (record_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, recorded_at TEXT NOT NULL, record_json TEXT NOT NULL);
+             CREATE INDEX automation_recoveries_consumer ON automation_recoveries(consumer, recorded_at);
+             INSERT INTO feature_schema_meta(feature, version, name, applied_at) VALUES
+               ('automation', 1, 'consumer_checkpoints_and_coverage', '2026-01-01T00:00:00Z'),
+               ('automation', 2, 'retry_lineage_index', '2026-01-01T00:00:00Z'),
+               ('automation', 3, 'consumer_recovery_records', '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+}
+
 /// A task-pilot member a branch move shelved before supersession existed: its
 /// exhausted failure record sits at the fingerprint it is still pending at,
 /// while it is pending at a newer source. The one-time repair releases it so
@@ -492,27 +517,10 @@ fn feature_repair_releases_members_shelved_at_a_source_the_branch_left() {
     // A store at automation schema v3, as the binary before the repair left
     // it: the v1-v3 tables and their ledger rows, then the shelved state.
     let base = Store::open_in_memory().unwrap();
+    automation_schema_v3(&base);
     {
         let connection = base.connection();
         let connection = connection.lock().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE automation_consumers (consumer TEXT PRIMARY KEY, generation INTEGER NOT NULL, state_json TEXT NOT NULL);
-                 CREATE TABLE automation_coverage (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, receipt_json TEXT NOT NULL, accepted_at TEXT NOT NULL);
-                 CREATE INDEX automation_coverage_consumer ON automation_coverage(consumer, accepted_at);
-                 CREATE TABLE automation_delivery_intents (record_id TEXT PRIMARY KEY, repository TEXT NOT NULL, branch TEXT NOT NULL, delivery_json TEXT NOT NULL);
-                 CREATE TABLE automation_delivery_members (repository TEXT NOT NULL, branch TEXT NOT NULL, commit_id TEXT NOT NULL, record_id TEXT NOT NULL, PRIMARY KEY(repository,branch,commit_id,record_id));
-                 CREATE TABLE automation_waivers (batch_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, batch_json TEXT NOT NULL, waiver_json TEXT NOT NULL);
-                 CREATE TABLE automation_job_keys (workspace_id TEXT NOT NULL, action_key TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(workspace_id,action_key));
-                 CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id);
-                 CREATE TABLE automation_recoveries (record_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, recorded_at TEXT NOT NULL, record_json TEXT NOT NULL);
-                 CREATE INDEX automation_recoveries_consumer ON automation_recoveries(consumer, recorded_at);
-                 INSERT INTO feature_schema_meta(feature, version, name, applied_at) VALUES
-                   ('automation', 1, 'consumer_checkpoints_and_coverage', '2026-01-01T00:00:00Z'),
-                   ('automation', 2, 'retry_lineage_index', '2026-01-01T00:00:00Z'),
-                   ('automation', 3, 'consumer_recovery_records', '2026-01-01T00:00:00Z');",
-            )
-            .unwrap();
         connection
             .execute(
                 "INSERT INTO automation_consumers VALUES (?1,?2,?3)",
@@ -548,5 +556,141 @@ fn feature_repair_releases_members_shelved_at_a_source_the_branch_left() {
             .unwrap()
             .generation,
         8
+    );
+}
+
+/// A task-pilot member the member host settled from the checkpoint at
+/// apply's former position after a step was inserted before apply: the
+/// `pilots` fan-in output held no member evidence, so it was recorded failed,
+/// even while the run's real apply was still to come. The one-time repair
+/// releases those records; a record whose run checkpointed apply there, or
+/// whose run is unknown, stays.
+#[test]
+fn feature_repair_releases_pilot_failures_settled_from_another_steps_checkpoint() {
+    if isolated("feature_repair_releases_pilot_failures_settled_from_another_steps_checkpoint") {
+        return;
+    }
+    use orbit_types::workflow::automation::members::{
+        MemberAttempt, MemberState, StateMember, StateTriggerKind,
+    };
+    use orbit_types::workflow::{JobRunState, PipelineState};
+    use serde_json::json;
+
+    let base = Store::open_in_memory().unwrap();
+    automation_schema_v3(&base);
+    let jobs = compose::workspace_job_run_store(base.clone(), "workspace");
+    let run = |steps: &[(u32, &str, serde_json::Value)]| {
+        let run = jobs
+            .insert_job_run("task_pilot_pipeline", 1, now(), None, None)
+            .unwrap();
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id, json!({}));
+        for (index, id, output) in steps {
+            state.record_step(*index, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output(id, output.clone());
+        }
+        jobs.write_run_state(&run.run_id, &state).unwrap();
+        run.run_id
+    };
+    let pilots = json!([{"partition_index": 0, "tasks": []}]);
+    let apply = json!({"member_evidence": [], "repair_count": 1});
+    let runs = [
+        // Settled from the fan-in while apply had yet to run.
+        ("running", run(&[(2, "pilots", pilots.clone())])),
+        // Settled from the fan-in; apply and its repair ran afterwards.
+        (
+            "applied",
+            run(&[(2, "pilots", pilots.clone()), (3, "apply", apply.clone())]),
+        ),
+        // Before the inserted step, apply itself sat at that position.
+        ("read", run(&[(2, "apply", apply)])),
+        ("unknown", "missing-run".to_string()),
+    ];
+
+    let member = |key: &str| StateMember {
+        key: key.into(),
+        task_ids: vec![key.into()],
+        fingerprint: format!("{key}-fingerprint"),
+        source: SourceRevision {
+            commit: "head".into(),
+            tree: "head-tree".into(),
+        },
+        evidence: json!({"task_id": key}),
+        first_seen: now(),
+        changed_at: now(),
+        crew: None,
+    };
+    let failed = |key: &str, run_id: &str| MemberAttempt {
+        consumer: "fixture/pilot".into(),
+        kind: StateTriggerKind::PreparationEligible,
+        id: format!("attempt-{key}"),
+        member: member(key),
+        members: vec![],
+        attempt: 1,
+        max_attempts: 2,
+        deadline: now(),
+        retry_after: now(),
+        action_key: format!("automation:attempt-{key}:1"),
+        action_id: Some(run_id.into()),
+        exhausted: true,
+    };
+    let mut state = baseline();
+    state.consumer = "fixture/pilot".into();
+    state.trigger = None;
+    state.generation = 3;
+    state.members = Some(MemberState {
+        pending: runs
+            .iter()
+            .map(|(key, _)| (key.to_string(), member(key)))
+            .collect(),
+        failed: runs
+            .iter()
+            .map(|(key, run_id)| (key.to_string(), failed(key, run_id)))
+            .collect(),
+        withheld: runs
+            .iter()
+            .map(|(key, _)| (key.to_string(), "no_member_evidence".into()))
+            .collect(),
+        ..Default::default()
+    });
+    base.connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO automation_consumers VALUES (?1,?2,?3)",
+            rusqlite::params![
+                state.consumer,
+                state.generation,
+                serde_json::to_string(&state).unwrap()
+            ],
+        )
+        .unwrap();
+    let store = compose::automation_store(base.clone()).unwrap();
+
+    let repaired = store.automation_state(&state.consumer).unwrap().unwrap();
+    assert_eq!(repaired.generation, 4, "the repair fences older snapshots");
+    let members = repaired.members.unwrap();
+    for key in ["running", "applied"] {
+        assert!(!members.failed.contains_key(key), "{key} is released");
+        assert!(!members.withheld.contains_key(key), "{key} is released");
+        assert!(members.pending.contains_key(key), "{key} stays observed");
+    }
+    for key in ["read", "unknown"] {
+        assert_eq!(
+            members.failed.get(key),
+            state.members.as_ref().unwrap().failed.get(key),
+            "{key} keeps its failure record"
+        );
+        assert!(members.withheld.contains_key(key));
+    }
+
+    // Applied once: reopening leaves the repaired state alone.
+    compose::automation_store(base.clone()).unwrap();
+    assert_eq!(
+        store
+            .automation_state(&state.consumer)
+            .unwrap()
+            .unwrap()
+            .generation,
+        4
     );
 }

@@ -6,6 +6,7 @@ use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
     members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState, StateTriggerKind},
 };
+use orbit_types::workflow::{JobRunState, PipelineState};
 use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
 
@@ -238,6 +239,87 @@ fn every_member_settled(
 /// costs at most one more pilot attempt. Each repaired consumer advances its
 /// generation, so a writer holding the old snapshot is refused.
 pub(super) fn release_stale_source_failures(conn: &Connection) -> Result<(), OrbitError> {
+    release_failures(conn, |members, key, failed| {
+        Ok(shelved_by_source(members, key, failed))
+    })
+}
+
+/// The global step index `apply` held in `task_pilot_pipeline` until a step
+/// was inserted before it, and where the member host kept reading it.
+const MISREAD_APPLY_INDEX: u32 = 2;
+
+/// One-time repair [ORB-15197]. The member host read `task_pilot_pipeline`
+/// steps by position. Once a step was inserted before `apply`, it took the
+/// `pilots` fan-in output at the old apply position for the apply record,
+/// found no member evidence there and recorded every member failed, often
+/// while the real apply was still running, so no assessment was certified and
+/// a run that needed a repair apply lost its claim. Each such record names a
+/// task-pilot run whose checkpoint at that position is not its `apply`
+/// checkpoint; this releases those records so the members are observed afresh
+/// and the next pilot certifies them. A record whose run cannot be read, or
+/// whose run recorded `apply` at that position, stays. Each repaired consumer
+/// advances its generation, so a writer holding the old snapshot is refused.
+pub(super) fn release_misread_pilot_failures(conn: &Connection) -> Result<(), OrbitError> {
+    let states_exist = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_run_states')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    if !states_exist {
+        return Ok(());
+    }
+    release_failures(conn, |members, key, failed| {
+        if failed.kind != StateTriggerKind::PreparationEligible
+            || members
+                .active
+                .as_ref()
+                .is_some_and(|active| active.member_for(key).is_some())
+        {
+            return Ok(false);
+        }
+        let Some(run_id) = failed.action_id.as_deref() else {
+            return Ok(false);
+        };
+        misread_apply(conn, run_id)
+    })
+}
+
+/// Whether every stored state of the task-pilot run `run_id` holds a
+/// successful checkpoint at [`MISREAD_APPLY_INDEX`] that is not its `apply`
+/// output. An unreadable state proves nothing and answers `false`.
+fn misread_apply(conn: &Connection, run_id: &str) -> Result<bool, OrbitError> {
+    let states = {
+        let mut statement = conn
+            .prepare(
+                "SELECT s.pipeline_state_json FROM job_run_states s \
+                 JOIN job_runs r ON r.workspace_id = s.workspace_id AND r.run_id = s.run_id \
+                 WHERE s.run_id = ?1 AND r.job_id = 'task_pilot_pipeline'",
+            )
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        statement
+            .query_map([run_id], |row| row.get::<_, String>(0))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+    };
+    Ok(!states.is_empty()
+        && states.iter().all(|raw| {
+            decode::<PipelineState>(raw).is_ok_and(|state| {
+                state.step_states.get(&MISREAD_APPLY_INDEX) == Some(&JobRunState::Success)
+                    && state
+                        .step_output(MISREAD_APPLY_INDEX)
+                        .is_some_and(|output| state.pipeline.get("apply") != Some(output))
+            })
+        }))
+}
+
+/// Remove each failed record `release` selects, with the withheld reason it
+/// left, from every consumer this binary can read.
+fn release_failures(
+    conn: &Connection,
+    release: impl Fn(&MemberState, &str, &MemberAttempt) -> Result<bool, OrbitError>,
+) -> Result<(), OrbitError> {
     let rows = {
         let mut statement = conn
             .prepare("SELECT consumer, generation, state_json FROM automation_consumers")
@@ -262,12 +344,12 @@ pub(super) fn release_stale_source_failures(conn: &Connection) -> Result<(), Orb
         let Some(members) = state.members.as_mut() else {
             continue;
         };
-        let released = members
-            .failed
-            .iter()
-            .filter(|(key, failed)| shelved_by_source(members, key, failed))
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
+        let mut released = Vec::new();
+        for (key, failed) in &members.failed {
+            if release(members, key, failed)? {
+                released.push(key.clone());
+            }
+        }
         if released.is_empty() {
             continue;
         }
