@@ -74,11 +74,24 @@ template:
 
     Your narrative output is advisory; the issues you file are the durable
     side-effect channel.
+
+    ## Persist the execution summary
+
+    In an ordinary managed activity, persist a meaningful `execution_summary`
+    on this task with `orbit.task.update` before finishing. Include the
+    validated revision, each command run with a passed, failed, or not-run
+    outcome, any coverage gaps, and the filed task IDs; when no issues were
+    found, state "no repository changes". A successful agent response does not
+    substitute for persisting this task field.
+
+    In claimed mode, `orbit.task.update` is unavailable. Return the same
+    execution summary in the output so the owner can import it.
   acceptance_criteria:
   - Recent changes were exercised through their real user-facing paths.
   - Real, non-duplicate issues were filed on the workspace's configured task or issue surface with evidence and reproduction steps.
   - The validated candidate revision is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).
   - Non-duplicate failing tests that block the prescribed validation command were filed as durable issues, with validation impact distinguished from production impact.
+  - The persisted execution summary, or the returned summary for owner import in claimed mode, records the validated revision, commands run with passed/failed/not-run outcomes, coverage gaps, and filed task IDs or "no repository changes" when none were found.
   task_type: chore
   tags:
   - qa-sweep
