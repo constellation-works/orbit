@@ -19,6 +19,12 @@ const CANCELLABLE_RUN_STATES = new Set(["pending", "running"]);
 const RESUMABLE_RUN_STATES = new Set(["failed", "interrupted", "timeout"]);
 const ACTIVE_RUN_STATES = new Set(["pending", "running"]);
 const RUN_FILTERS = new Set(["all", "active", "failed"]);
+// One delivered task runs these three pipelines back to back; the list folds
+// them into one group per task.
+const PIPELINE_GROUP_JOBS = new Set(["task_auto_pipeline", "task_gate_pipeline", "task_pr_pipeline"]);
+// Worst first: a group reads as the most urgent state among its runs.
+const GROUP_STATE_PRIORITY = ["failed", "timeout", "interrupted", "running", "pending"];
+const FAILED_AT_EXCERPT_CHARS = 80;
 
 const RUN_SORT_DEFAULT_DIR = {
   when: "desc",
@@ -38,6 +44,8 @@ const resumedRunIdsBySource = new Map();
 // the row re-renders mid-request.
 const resumeRequestsInFlight = new Set();
 const cancelRequestsInFlight = new Set();
+// Pipeline groups the operator has opened, by group key. Groups start folded.
+const expandedRunGroups = new Set();
 const replayRequestsInFlight = new Set();
 let runFilter = (() => {
   const value = new URL(window.location.href).searchParams.get("run_state") || "all";
@@ -1131,6 +1139,206 @@ export function runTaskLinks(run) {
   return cell;
 }
 
+// The step whose error explains a failed run: the newest step that ran and
+// recorded an error, else the newest step that ran. Mirrors the server's
+// `run_error_step`, which the list payload does not name.
+function runErrorStep(run) {
+  const steps = Array.isArray(run && run.steps) ? run.steps.filter(Boolean) : [];
+  const ran = steps.filter((step) => step.state !== "skipped");
+  return ran.slice().reverse().find((step) => step.error_code || step.error_message)
+    || ran[ran.length - 1]
+    || steps[steps.length - 1]
+    || null;
+}
+
+function truncateText(text, max) {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+// Why a failed, timed-out or interrupted run ended; null for any other state.
+function runFailure(run) {
+  if (!runIsResumable(run)) return null;
+  const step = runErrorStep(run);
+  const stepId = step && step.target_id ? String(step.target_id) : "";
+  const code = (step && step.error_code) || run.error_code || "";
+  const message = (step && step.error_message) || run.error_message || "";
+  const detail = [code, message].filter(Boolean).join(": ").replace(/\s+/g, " ").trim();
+  return {
+    stepId,
+    excerpt: truncateText(detail, FAILED_AT_EXCERPT_CHARS),
+    title: [stepId && `Step: ${stepId}`, code && `Code: ${code}`, message && `Message: ${message}`]
+      .filter(Boolean).join("\n"),
+  };
+}
+
+// The pipeline name without its shared affixes: "gate" for task_gate_pipeline.
+function pipelineShortName(jobId) {
+  return String(jobId || "").replace(/^task_/, "").replace(/_pipeline$/, "");
+}
+
+function runFailedAtCell(run, { withJob = false } = {}) {
+  const cell = el("span", { class: "run-failed-at" });
+  const failure = runFailure(run);
+  if (!failure) return cell;
+  if (!failure.stepId && !failure.excerpt) {
+    cell.classList.add("empty");
+    cell.textContent = "no error recorded";
+    return cell;
+  }
+  const where = [withJob ? pipelineShortName(run.job_id) : "", failure.stepId].filter(Boolean).join(" › ");
+  if (where) cell.appendChild(el("span", { class: "run-failed-step", text: where }));
+  if (failure.excerpt) cell.appendChild(el("span", { class: "run-failed-excerpt", text: failure.excerpt }));
+  cell.title = failure.title;
+  return cell;
+}
+
+function runFailureHash(run) {
+  const failure = runFailure(run);
+  return failure ? `${failure.stepId}|${failure.excerpt}` : "";
+}
+
+// Runs of one task's pipelines share a group; a task with a single such run in
+// the list stays a plain row. Groups sit where their first run sorts. Only the
+// loaded page is grouped: a triplet split across Load more pages folds once its
+// other runs arrive.
+function groupRunsForDisplay(sorted) {
+  const entries = [];
+  const groups = new Map();
+  for (const run of sorted) {
+    const taskIds = PIPELINE_GROUP_JOBS.has(run.job_id) ? runTaskIds(run) : [];
+    if (taskIds.length !== 1) {
+      entries.push({ run });
+      continue;
+    }
+    const key = `${run.workspace_id || getWorkspace() || ""}:${taskIds[0]}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, runs: [] };
+      groups.set(key, group);
+      entries.push(group);
+    }
+    group.runs.push(run);
+  }
+  return entries.map((entry) => (entry.runs && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
+}
+
+function runGroupState(runs) {
+  const states = new Set(runs.map((run) => run.state));
+  return GROUP_STATE_PRIORITY.find((state) => states.has(state)) || runs[0].state;
+}
+
+function runGroupRow(group, attributed) {
+  const { runs, key } = group;
+  const expanded = expandedRunGroups.has(key);
+  const first = runs[0];
+  const latest = runs.reduce((a, b) => (runTimestampValue(b) > runTimestampValue(a) ? b : a));
+  const ts = latest.finished_at || latest.started_at || latest.scheduled_at || latest.created_at;
+  const failed = runs.filter(runIsResumable);
+  const frictions = runs.map(runFriction);
+  const denials = frictions.reduce((sum, f) => sum + (f.denials || 0), 0);
+  const toolFails = frictions.reduce((sum, f) => sum + (f.toolFails || 0), 0);
+  const jobNames = runs.map((run) => run.job_id).join(", ");
+  const toggle = el("button", {
+    class: "id run-group-toggle",
+    text: `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
+    title: `${expanded ? "Hide" : "Show"} ${jobNames}`,
+  });
+  const failedAt = failed.length ? runFailedAtCell(failed[0], { withJob: true }) : el("span", { class: "run-failed-at" });
+  if (failed.length > 1) failedAt.title = failed.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
+  const row = el("div", {
+    class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}`,
+    title: `${runs.length} pipeline runs for this task: ${jobNames}`,
+  }, [
+    el("span", { class: "state" }, [stateCell(runGroupState(runs))]),
+    attributed ? el("span", { class: "run-workspace", text: first.workspace_name || first.workspace_id, title: first.workspace_id }) : null,
+    toggle,
+    runTaskLinks(first),
+    failedAt,
+    el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: `${runs.length} runs` })]),
+    el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+    runCountCell(denials, "denials"),
+    runCountCell(toolFails, "tool-fails"),
+    el("span", { class: "duration", text: "—" }),
+    el("span", { class: "run-actions" }),
+  ]);
+  row.dataset.key = `group-${key}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}`;
+  row.style.cursor = "pointer";
+  makeRowDisclosure(row, toggle, {
+    expanded,
+    onToggle: () => {
+      if (expandedRunGroups.has(key)) expandedRunGroups.delete(key);
+      else expandedRunGroups.add(key);
+      renderRuns(currentRuns());
+    },
+  });
+  return row;
+}
+
+function runRow(r, attributed, body, { child = false } = {}) {
+  const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
+  const friction = runFriction(r);
+  const { durationMs, isLive } = runDurationInfo(r);
+  const formattedDuration = fmtDurationValue(durationMs);
+  const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
+  const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
+  if (r.retry_source_run_id) {
+    const sourceId = r.retry_source_run_id;
+    const lineage = el("button", {
+      class: "run-lineage",
+      text: `from ${sourceId}`,
+      title: `Open source run ${sourceId}`,
+    });
+    lineage.addEventListener("click", (e) => {
+      e.stopPropagation();
+      doNavigateToRun(sourceId, r.workspace_id);
+    });
+    runIdCell.appendChild(lineage);
+  }
+  const resumedAsId = resumedRunIdsBySource.get(runIdentity(r));
+  if (resumedAsId) {
+    const lineage = el("button", {
+      class: "run-lineage resumed-as",
+      text: `resumed as ${resumedAsId}`,
+      title: `Open resumed run ${resumedAsId}`,
+    });
+    lineage.addEventListener("click", (e) => {
+      e.stopPropagation();
+      doNavigateToRun(resumedAsId, r.workspace_id);
+    });
+    runIdCell.appendChild(lineage);
+  }
+  // The job cell is the row's button: the row also holds the copy-id,
+  // lineage and run actions, so it cannot be a button itself. Its text is
+  // clipped in a narrow column, so its tooltip is the full job name.
+  const openButton = el("button", { class: "id", text: r.job_id, title: r.job_id });
+  const rowCells = [
+    el("span", { class: "state" }, [stateCell(r.state)]),
+    attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
+    openButton,
+    runTaskLinks(r),
+    runFailedAtCell(r),
+    runIdCell,
+    el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+    runCountCell(friction.denials, "denials"),
+    runCountCell(friction.toolFails, "tool-fails"),
+    runDurationCell(r),
+    el("span", { class: "run-actions" }, [
+      runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
+      runIsResumable(r) ? buildResumeRunButton(r, body) : null,
+    ]),
+  ];
+  const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
+  row.dataset.key = `run-${runIdentity(r)}`;
+  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}`;
+  row.style.cursor = "pointer";
+  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
+  // A run row opens the run detail view rather than disclosing inline, so its
+  // button has no expansion state.
+  makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
+  return row;
+}
+
 export function renderRuns(runs) {
   if (!panelCanRender("runs-body")) return;
   const body = $("runs-body");
@@ -1184,6 +1392,7 @@ export function renderRuns(runs) {
     attributed ? el("span", { class: "runs-workspace-header", text: "Workspace" }) : null,
     runHeaderCell("Job", "job"),
     runHeaderCell("Task", "task"),
+    el("span", { class: "run-failed-at-header", text: "Failed at", title: "The step a failed, timed-out or interrupted run stopped at, and its error" }),
     runHeaderCell("Run ID", "run_id"),
     runHeaderCell("When", "when"),
     runHeaderCell("Denials", "denials", { num: true }),
@@ -1195,66 +1404,15 @@ export function renderRuns(runs) {
   header.dataset.key = "runs-header";
   header.dataset.hash = `header-${runSort.key}-${runSort.dir}-${attributed ? "workspace" : "scoped"}`;
   frag.appendChild(header);
-  for (const r of top) {
-    const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
-    const friction = runFriction(r);
-    const { durationMs, isLive } = runDurationInfo(r);
-    const formattedDuration = fmtDurationValue(durationMs);
-    const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
-    const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
-    if (r.retry_source_run_id) {
-      const sourceId = r.retry_source_run_id;
-      const lineage = el("button", {
-        class: "run-lineage",
-        text: `from ${sourceId}`,
-        title: `Open source run ${sourceId}`,
-      });
-      lineage.addEventListener("click", (e) => {
-        e.stopPropagation();
-        doNavigateToRun(sourceId, r.workspace_id);
-      });
-      runIdCell.appendChild(lineage);
+  for (const entry of groupRunsForDisplay(top)) {
+    if (!entry.runs) {
+      frag.appendChild(runRow(entry.run, attributed, body));
+      continue;
     }
-    const resumedAsId = resumedRunIdsBySource.get(runIdentity(r));
-    if (resumedAsId) {
-      const lineage = el("button", {
-        class: "run-lineage resumed-as",
-        text: `resumed as ${resumedAsId}`,
-        title: `Open resumed run ${resumedAsId}`,
-      });
-      lineage.addEventListener("click", (e) => {
-        e.stopPropagation();
-        doNavigateToRun(resumedAsId, r.workspace_id);
-      });
-      runIdCell.appendChild(lineage);
+    frag.appendChild(runGroupRow(entry, attributed));
+    if (expandedRunGroups.has(entry.key)) {
+      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, { child: true }));
     }
-    // The job cell is the row's button: the row also holds the copy-id,
-    // lineage and run actions, so it cannot be a button itself.
-    const openButton = el("button", { class: "id", text: r.job_id, title: `Open run ${r.run_id}` });
-    const rowCells = [
-      el("span", { class: "state" }, [stateCell(r.state)]),
-      attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
-      openButton,
-      runTaskLinks(r),
-      runIdCell,
-      el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
-      runCountCell(friction.denials, "denials"),
-      runCountCell(friction.toolFails, "tool-fails"),
-      runDurationCell(r),
-      el("span", { class: "run-actions" }, [
-        runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
-        runIsResumable(r) ? buildResumeRunButton(r, body) : null,
-      ]),
-    ];
-    const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
-    row.dataset.key = `run-${runIdentity(r)}`;
-    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}`;
-    row.style.cursor = "pointer";
-    row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
-    // A run row opens the run detail view rather than disclosing inline, so its
-    // button has no expansion state.
-    makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
-    frag.appendChild(row);
   }
   syncNodes(body, Array.from(frag.children));
 }
