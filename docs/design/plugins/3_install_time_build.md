@@ -9,7 +9,7 @@ paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 ---
 
 # Threat model: install-time spec.build for source-built plugins
@@ -189,7 +189,7 @@ Orbit does not parse lockfiles, so it does not claim to verify them (§4, depend
 **Decision.**
 
 - **Build directory.** A fresh directory created with a random name under the namespace's
-  staging area, `~/.orbit/plugins/<ns>/.build-<nonce>/`, owned by the operator, mode `0700`,
+  staging area, `~/.orbit/plugins/<ns>/.build-<pid>-<nonce>/`, owned by the operator, mode `0700`,
   created one component at a time with no links followed. It holds `src/` (a writable copy of
   the fetched checkout, without `.git`), `home/`, `tmp/` and whatever the phases create. It is
   the only writable path in either phase. Orbit's install pruning (scope §3) skips `.build-*`

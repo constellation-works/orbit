@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls"
 tags: ["auditability"]
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 ---
 
 # Spec: Self-Reported Actor Identity for Unauthenticated MCP Calls
@@ -87,12 +87,12 @@ accumulate two identities.
 
 ## Normalization
 
-`normalize_self_reported_actor` is the single gate. It returns `None` — anonymous — for a
-claim that is blank, longer than 128 characters, or contains any control character.
-Control characters are rejected rather than stripped: a newline would let a claim forge
-extra fields in any line-oriented rendering of the audit log, and sanitizing it would
-record an actor the caller never named. Over-length claims are likewise rejected rather
-than truncated.
+`normalize_self_reported_actor` is the single gate. It trims leading and trailing
+whitespace, then returns `None` — anonymous — for a blank claim, one longer than 128
+UTF-8 bytes, or one that still contains a control character. Remaining control characters
+are rejected rather than stripped: an internal newline could let a claim forge extra fields
+in a line-oriented audit log, and sanitizing it would record an actor the caller never named.
+Over-length claims are likewise rejected rather than truncated.
 
 Accepted claims are lowercased with internal whitespace runs collapsed, so `Claude  Code`
 and `claude code` aggregate as one group. Case folding is safe precisely because the value

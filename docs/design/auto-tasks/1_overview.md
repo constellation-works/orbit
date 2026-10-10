@@ -2,7 +2,7 @@
 title: Auto-tasks — Overview
 owner: claude
 last_updated: 2026-10-04
-last_validated: 2026-10-04
+last_validated: 2026-10-09
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -47,13 +47,16 @@ becomes just the first definition.
   mints one make-up task, not one per slot. Cadence is per-definition data, not
   a knob in the identity `config.yaml` ([L-0014] keeps runtime config out of
   `config.yaml`).
-- **Cursor** — per-definition last-fired state, host-local at
-  `<orbit_dir>/state/auto-tasks.json`, so the definition YAML is never
-  churned by a scheduler fire.
+- **Time cursor** — per-definition last-fired state for cron and interval
+  schedules, host-local at `<orbit_dir>/state/auto-tasks.json`, so the
+  definition YAML is never churned by a scheduler fire. Delivery-trigger
+  definitions use durable Automation checkpoints, batches and receipts in the
+  host SQLite store instead.
 - **Scheduler** — the host clock tick calls the evaluator directly after routine
-  evaluation. No job run is created; fire evidence is the minted task, the cursor,
-  and the tick report row. Auto-tasks are shown on the Operations auto-task panel,
-  not on the routines surface.
+  evaluation. Scheduling an auto-task creates no job run; fire evidence is the
+  minted task and tick report, with time cursors for cron/interval definitions
+  and durable batch/receipt state for delivery-trigger definitions. Auto-tasks
+  are shown on the Operations auto-task panel, not on the routines surface.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
@@ -84,13 +87,12 @@ becomes just the first definition.
 | CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |
 | Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
 | Operator settings over bundled bodies, fork migration | `crates/orbit-automation/src/auto_tasks/settings.rs`, `crates/orbit-core/src/application/auto_tasks/settings.rs` | ORB-14909 |
-| Deterministic action (slated for retirement) | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
-| Seeded assets (scheduler routine/job/activity slated for retirement) | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
+| Retired scheduler routine migration template | `crates/orbit-core/assets/routines/retired/auto_task_scheduler.yaml` | ORB-12237 |
 | Default auto-task catalog | `crates/orbit-core/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
 
 ## Embedded default catalog
 
-These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These nine YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
