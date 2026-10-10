@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
 use super::lifecycle::fresh_offer_history;
-use super::selection::{AdmissionSnapshot, Screen};
+use super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
 
@@ -216,12 +216,19 @@ impl TaskCommitBoundary {
     /// No local run, worktree, branch or public pull endpoint is created here.
     ///
     /// Candidates are selected from the generated index before the exclusive
-    /// section, which stalls every task write on the host [ORB-14724]. The
+    /// section, which stalls the partition's task writes [ORB-14724]. The
     /// section re-reads only what one decision rests on: the candidate, its
     /// dependencies, the in-flight tasks whose footprints can conflict, claims
     /// and reservations. A candidate that changed after selection is judged on
     /// what the section reads, so a stale selection can defer it but never
     /// admit it.
+    ///
+    /// The section is scoped to this partition, leaving other partitions'
+    /// ordinary sections running [ORB-15106]. Only a candidate whose
+    /// dependency another partition holds needs the host-wide section, so
+    /// that dependency cannot move while the decision rests on it: the
+    /// partition-scoped section stops at that read, before anything is
+    /// written, and the decision is taken again host-wide.
     ///
     /// `admission_holds` maps each task held by a live owner-local delivery,
     /// a successful pilot preparation or a current pilot finding to its
@@ -262,7 +269,7 @@ impl TaskCommitBoundary {
         let snapshot = self.admission_snapshot(request, ordering)?;
         #[cfg(test)]
         super::selection::after_selection::run();
-        self.with_admission(|| {
+        let admit = |reach| {
             self.admit_locked(
                 identity,
                 request,
@@ -272,8 +279,14 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
+                reach,
             )
-        })
+        };
+        if let Some(lookup) = self.with_admission(|| admit(DependencyReach::Partition))? {
+            return Ok(lookup);
+        }
+        self.with_host_admission(|| admit(DependencyReach::Host))?
+            .ok_or_else(|| OrbitError::Store("a host-wide admission refused a dependency".into()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -287,7 +300,8 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
-    ) -> Result<AdmissionLookup, OrbitError> {
+        reach: DependencyReach,
+    ) -> Result<Option<AdmissionLookup>, OrbitError> {
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
             let previous = decode::<StoredReceipt>(&row.payload_json)?;
             let same = match previous {
@@ -297,7 +311,9 @@ impl TaskCommitBoundary {
             if !same {
                 return Err(OrbitError::InvalidInput("request_mismatch".into()));
             }
-            return self.lookup_admission(identity, &request.request_id);
+            return self
+                .lookup_admission(identity, &request.request_id)
+                .map(Some);
         }
         let in_flight = self.in_flight_locked(snapshot, repo_root)?;
         let claims = self.execution_claims()?;
@@ -345,7 +361,9 @@ impl TaskCommitBoundary {
             &in_flight.tasks,
             &mut receipt,
         )? {
-            return self.lookup_admission(identity, &request.request_id);
+            return self
+                .lookup_admission(identity, &request.request_id)
+                .map(Some);
         }
         let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
         for selected in &snapshot.backlog {
@@ -374,8 +392,17 @@ impl TaskCommitBoundary {
                 .collect::<Vec<_>>();
             let history = task_history_from_events(bundle.events.clone());
             let task = translator.task_from_bundle(bundle)?;
-            let statuses = self
-                .dependency_statuses(task.dependencies().into_iter().collect(), &BTreeMap::new())?;
+            // A dependency another partition holds is out of a
+            // partition-scoped section's reach. Nothing has been written yet,
+            // so the caller takes this decision again host-wide.
+            let Some(statuses) = self.dependency_statuses(
+                task.dependencies().into_iter().collect(),
+                &BTreeMap::new(),
+                reach,
+            )?
+            else {
+                return Ok(None);
+            };
             if !screen.queued(&task, &statuses) {
                 receipt.queue_depth = receipt.queue_depth.saturating_sub(1);
             }
@@ -482,7 +509,9 @@ impl TaskCommitBoundary {
                     "admission changed inside the serialization boundary".into(),
                 ));
             }
-            return self.lookup_admission(identity, &request.request_id);
+            return self
+                .lookup_admission(identity, &request.request_id)
+                .map(Some);
         }
         self.store.insert_task_coordination_row(
             &self.workspace_id,
@@ -495,6 +524,7 @@ impl TaskCommitBoundary {
             )?,
         )?;
         self.lookup_admission(identity, &request.request_id)
+            .map(Some)
     }
 
     /// Never compact an unsettled claim. Tombstones have no deletion API in v1.

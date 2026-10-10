@@ -41,9 +41,13 @@
 //!
 //! Every runtime composition participates in the same filesystem locks. A
 //! durable required marker prevents legacy task stores from accessing a
-//! partition after coordinated composition has activated it. A shared host
-//! lock additionally protects dependency reads across workspace partitions;
-//! admission takes it exclusively before its partition lock.
+//! partition after coordinated composition has activated it. A host lock,
+//! always taken before the partition lock, additionally protects dependency
+//! reads across workspace partitions. Ordinary sections, claim mutations,
+//! commits and an admission whose decision reads only its own partition hold
+//! it shared, so they never stall another partition's work. Only an admission
+//! that reads a dependency another partition holds takes it exclusively, and
+//! only for that decision.
 //!
 //! # Recovery before exposure
 //!

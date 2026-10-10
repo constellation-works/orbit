@@ -1,16 +1,25 @@
-//! ORB-14724: a pull admission holds the host-wide exclusive commit boundary,
-//! so every task write on the host waits while it runs. The section must cost
-//! what one decision needs, not what the partition holds, and a candidate
-//! that changes between selection and the section must never be admitted from
-//! the selection's stale view.
+//! ORB-14724: a pull admission holds its partition's commit boundary
+//! exclusively, so the partition's task writes wait while it runs. The
+//! section must cost what one decision needs, not what the partition holds,
+//! and a candidate that changes between selection and the section must never
+//! be admitted from the selection's stale view.
+//!
+//! ORB-15106: it held the host lock exclusively too, so every workspace's
+//! task reads and writes on the host waited on one drain's admissions. Only a
+//! decision that reads another partition's dependency may still stall other
+//! partitions.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_common::fs::io::FileLockOptions;
 use orbit_common::test_env::{self, FixtureProgress};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType};
 use tempfile::TempDir;
@@ -28,10 +37,13 @@ use crate::driver::sqlite::task_registry::{
 use crate::repository::task::v2::TaskV2Store;
 
 const PARTITION: &str = "orbit-test-123456";
+const OTHER_PARTITION: &str = "other-test-654321";
 
 /// One owner partition: its commit boundary and a task store inside it.
 struct Owner {
-    _root: TempDir,
+    _root: Option<TempDir>,
+    root: PathBuf,
+    partition: &'static str,
     boundary: Arc<TaskCommitBoundary>,
     tasks: Arc<TaskV2Store>,
     repo: PathBuf,
@@ -42,36 +54,67 @@ impl Owner {
     fn open() -> Self {
         // A partition seed fsyncs every task; keep it off a disk-backed `TMPDIR`.
         let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).expect("tempdir");
-        let registry =
-            TaskRegistryStore::open(&task_registry_path(root.path())).expect("open registry");
-        let repo = root.path().join("repo");
+        let mut owner = Self::open_in(root.path(), PARTITION);
+        owner._root = Some(root);
+        owner
+    }
+
+    /// Another workspace partition on the same host: the same registry,
+    /// journal and host lock.
+    fn neighbour(&self) -> Self {
+        Self::open_in(&self.root, OTHER_PARTITION)
+    }
+
+    fn open_in(root: &Path, partition: &'static str) -> Self {
+        let registry = TaskRegistryStore::open(&task_registry_path(root)).expect("open registry");
+        let repo = root.join(partition);
         let orbit_dir = repo.join(".orbit");
         std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
         registry
             .bind_workspace(BindWorkspaceParams {
-                partition_id: Some(PARTITION.to_string()),
-                slug: "Orbit Test".to_string(),
+                partition_id: Some(partition.to_string()),
+                slug: partition.to_string(),
                 repo_root: repo.clone(),
                 workspace_path: repo.clone(),
                 orbit_dir: orbit_dir.clone(),
                 repo_fingerprint: None,
             })
             .expect("bind workspace");
-        let store = Store::open(&root.path().join("state.sqlite")).expect("open store");
-        let backends = workspace_coordinated_backends(registry.clone(), PARTITION.into(), store)
+        let store = Store::open(&root.join("state.sqlite")).expect("open store");
+        let backends = workspace_coordinated_backends(registry.clone(), partition.into(), store)
             .expect("compose");
         let tasks = Arc::new(TaskV2Store::with_commit_boundary(
             registry,
-            PARTITION.into(),
+            partition.into(),
             Arc::clone(&backends.commit_boundary),
         ));
         Self {
-            _root: root,
+            _root: None,
+            root: root.to_path_buf(),
+            partition,
             boundary: backends.commit_boundary,
             tasks,
             repo,
             orbit_dir,
         }
+    }
+
+    /// A second handle on this partition's boundary that gives up on a
+    /// contended lock within milliseconds, standing in for an ordinary
+    /// section that would otherwise wait out the production deadline.
+    fn impatient_boundary(&self) -> TaskCommitBoundary {
+        TaskCommitBoundary::new(
+            Store::open(&self.root.join("state.sqlite")).expect("open store"),
+            TaskRegistryStore::open(&task_registry_path(&self.root)).expect("open registry"),
+            self.partition.into(),
+        )
+        .expect("open boundary")
+        .with_lock_options(FileLockOptions {
+            timeout: Duration::from_millis(300),
+            warn_after: Duration::from_millis(20),
+            record_shared_holders: true,
+            warn_held_after: None,
+        })
     }
 
     fn create(&self, spec: Spec<'_>) -> Task {
@@ -115,6 +158,17 @@ impl Owner {
         request_id: &str,
         hold: &ValidationHold<'_>,
     ) -> (AdmissionReceipt, SectionCost) {
+        let (receipt, sections) = self.admit_sections(request_id, hold);
+        assert_eq!(sections.len(), 1, "one exclusive section per admission");
+        (receipt, sections[0])
+    }
+
+    /// [`Self::admit`], returning every admission section it entered.
+    fn admit_sections(
+        &self,
+        request_id: &str,
+        hold: &ValidationHold<'_>,
+    ) -> (AdmissionReceipt, Vec<SectionCost>) {
         SECTIONS.with(|sections| sections.borrow_mut().clear());
         let lookup = self
             .boundary
@@ -137,8 +191,7 @@ impl Owner {
             panic!("expected a receipt: {lookup:?}");
         };
         let sections = SECTIONS.with(|sections| sections.borrow().clone());
-        assert_eq!(sections.len(), 1, "one exclusive section per admission");
-        (*receipt, sections[0])
+        (*receipt, sections)
     }
 
     fn status(&self, id: &str) -> TaskStatus {
@@ -423,4 +476,152 @@ fn a_candidate_changed_after_selection_is_never_admitted_from_the_selection() {
             }
         }
     }
+}
+
+/// What an ordinary section in each partition got while an admission
+/// section was deciding.
+struct Neighbours {
+    own: Result<(), OrbitError>,
+    other: Result<(), OrbitError>,
+}
+
+/// Admit one request from `owner` and, from inside its admission section,
+/// enter an ordinary section in `owner`'s partition and in `other`'s.
+fn admit_while_probing(
+    owner: &Owner,
+    other: &Owner,
+) -> (AdmissionReceipt, Vec<SectionCost>, Neighbours) {
+    let own = owner.impatient_boundary();
+    let neighbour = other.impatient_boundary();
+    let probed = std::cell::RefCell::new(None);
+    let hold = |_: &Task, _: &[TaskComment], _: &[TaskHistoryEntry]| {
+        // Ordinary sections run on their own threads, as another process's
+        // task reads would.
+        let neighbours = std::thread::scope(|scope| {
+            let own = scope.spawn(|| own.enter_ordinary(|| Ok(())));
+            let other = scope.spawn(|| neighbour.enter_ordinary(|| Ok(())));
+            Neighbours {
+                own: own.join().expect("own partition probe"),
+                other: other.join().expect("other partition probe"),
+            }
+        });
+        *probed.borrow_mut() = Some(neighbours);
+        Ok(None)
+    };
+    let (receipt, sections) = owner.admit_sections("pull-1", &hold);
+    let neighbours = probed
+        .into_inner()
+        .expect("the admission section ran its hold check");
+    (receipt, sections, neighbours)
+}
+
+/// The section kind an ordinary section timed out behind.
+fn blocked_by(result: &Result<(), OrbitError>) -> String {
+    let error = result
+        .as_ref()
+        .expect_err("the ordinary section was excluded");
+    let timeout = error.file_lock_timeout().expect("a typed lock timeout");
+    timeout
+        .holder
+        .as_ref()
+        .map(|holder| holder.label.clone())
+        .unwrap_or_else(|| panic!("an exclusive holder named in {timeout:?}"))
+}
+
+/// A candidate whose dependency is in its own partition is decided in a
+/// section that excludes only that partition: an ordinary section in another
+/// workspace partition runs to completion while it decides, and one in the
+/// admitting partition still waits for the decision.
+#[test]
+fn an_admission_within_its_partition_leaves_other_partitions_running() {
+    let owner = Owner::open();
+    let other = owner.neighbour();
+    let prerequisite = owner.create(Spec::new("done", TaskStatus::Done, "src/done.rs"));
+    let candidate = owner.create(Spec {
+        dependencies: vec![prerequisite.id],
+        ..Spec::new("candidate", TaskStatus::Backlog, "src/candidate.rs")
+    });
+    other.create(Spec::new(
+        "neighbour",
+        TaskStatus::Backlog,
+        "src/neighbour.rs",
+    ));
+
+    let (receipt, sections, neighbours) = admit_while_probing(&owner, &other);
+
+    assert_eq!(
+        receipt.claim.as_ref().map(|claim| claim.task_id.as_str()),
+        Some(candidate.id.as_str()),
+        "{receipt:?}"
+    );
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| section.kind)
+            .collect::<Vec<_>>(),
+        ["admission"],
+        "ORB-15106: a decision within one partition never takes the host lock exclusively"
+    );
+    assert!(
+        neighbours.other.is_ok(),
+        "ORB-15106: another partition's ordinary section ran while the admission decided: {:?}",
+        neighbours.other
+    );
+    assert!(
+        blocked_by(&neighbours.own).contains(": admission at "),
+        "the admitting partition stays excluded for the decision: {:?}",
+        neighbours.own
+    );
+}
+
+/// A candidate whose dependency another workspace partition holds is the
+/// case that still needs the host lock: the partition-scoped section stops
+/// at that dependency before writing anything, and the decision is taken
+/// again in a host-wide section that excludes every partition's ordinary
+/// sections, so the dependency cannot move while the decision rests on it.
+#[test]
+fn an_admission_reading_another_partitions_dependency_excludes_the_host() {
+    let owner = Owner::open();
+    let other = owner.neighbour();
+    let prerequisite = other.create(Spec::new("done", TaskStatus::Done, "src/done.rs"));
+    let candidate = owner.create(Spec {
+        dependencies: vec![prerequisite.id.clone()],
+        ..Spec::new("candidate", TaskStatus::Backlog, "src/candidate.rs")
+    });
+
+    let (receipt, sections, neighbours) = admit_while_probing(&owner, &other);
+
+    assert_eq!(
+        receipt.claim.as_ref().map(|claim| claim.task_id.as_str()),
+        Some(candidate.id.as_str()),
+        "the cross-partition dependency is satisfied: {receipt:?}"
+    );
+    assert_eq!(owner.status(&candidate.id), TaskStatus::InProgress);
+    assert_eq!(other.status(&prerequisite.id), TaskStatus::Done);
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| section.kind)
+            .collect::<Vec<_>>(),
+        ["admission", "host admission"],
+        "the partition-scoped section stops at the cross-partition dependency, then decides host-wide"
+    );
+    // The candidate, its dependency, and the commit.
+    let bound = 3;
+    assert!(
+        sections[1].lightweight_reads <= bound,
+        "the host-wide section read {} bundles; it may read only the candidate, its dependency \
+         and the commit's own ({bound})",
+        sections[1].lightweight_reads
+    );
+    assert!(
+        blocked_by(&neighbours.other).contains(": host admission at "),
+        "the cross-partition dependency read excludes other partitions' ordinary sections: {:?}",
+        neighbours.other
+    );
+    assert!(
+        blocked_by(&neighbours.own).contains(": host admission at "),
+        "{:?}",
+        neighbours.own
+    );
 }

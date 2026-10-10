@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-03
+last_validated: 2026-10-09
 ---
 # Task/Reservation Commit Boundary
 
@@ -20,9 +20,13 @@ recovery) over `crates/orbit-store/src/driver/sqlite/task_commit_journal/` (the 
 ## The two mechanisms
 
 **One serialization boundary per task-store partition, with a host admission lock.**
-The host lock excludes ordinary writers across partitions during admission, because a task
-may depend on a task in another workspace. Ordinary operations hold it shared; admission
-holds it exclusive. The partition advisory lock then protects recovery and bundle publication. Ordinary task reads and writes, and ordinary reservation writes, take it
+The host lock, always taken before the partition lock, excludes ordinary writers across
+partitions while an admission reads a dependency that another workspace's partition holds.
+Ordinary operations, claim mutations, commits, and an admission whose decision reads only its
+own partition hold it shared, so they never stall another partition's work. Only that
+cross-partition admission holds it exclusive. Holding it exclusively for every admission
+section stalled every workspace's task reads and writes behind one drain's claims. The
+partition advisory lock then protects recovery and bundle publication. Ordinary task reads and writes, and ordinary reservation writes, take it
 *shared* — they still run concurrently with one another and still take their own per-bundle or
 SQLite locks underneath. An admission section takes it *exclusive*, so its readiness reads and
 its commit see state no ordinary write can change in between. Every participant takes the
@@ -125,9 +129,12 @@ has been removed. A durable `.task-commit-required` marker makes legacy task com
 refuse access to a coordinated partition, including compositions opened before activation.
 There is no automatic downgrade. Maintenance/import operations must be quiesced separately.
 
-Ordinary operations remain concurrent under shared host and partition locks. Admissions
-exclude ordinary writers across the host registry while checking cross-workspace
-dependencies. Recovery nesting is tracked per partition rather than by a process-wide depth.
+Ordinary operations remain concurrent under shared host and partition locks. An admission
+section excludes its own partition's writers. It excludes writers across the host registry
+only while a decision checks a cross-workspace dependency. A partition-scoped section reaching
+such a dependency stops before it writes anything, and the decision is taken again in a
+host-wide section. Recovery nesting is tracked per partition rather than by a process-wide
+depth.
 
 Owner admission applies the shared completed-archive dependency rule to status history
 from canonical bundles inside that lock, after recovering each registered dependency owner.

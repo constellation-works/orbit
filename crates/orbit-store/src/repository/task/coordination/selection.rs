@@ -1,12 +1,13 @@
 //! Candidate selection for one pull admission [ORB-14724].
 //!
-//! The admission section holds the host-wide exclusive commit boundary, so
-//! every task write on the host waits while it runs. Candidates are therefore
-//! selected before it, from the generated task index under the shared
-//! boundary, and the section re-reads only what one decision rests on: the
-//! in-flight tasks whose footprints can conflict, and a surviving candidate
-//! with its dependencies. Every rule that admits or defers a candidate lives in
-//! [`Screen`], which judges the selection and the section's re-read alike.
+//! The admission section holds its partition exclusively, and the whole host
+//! when a candidate depends on another partition's task, so task writes wait
+//! while it runs. Candidates are therefore selected before it, from the
+//! generated task index under the shared boundary, and the section re-reads
+//! only what one decision rests on: the in-flight tasks whose footprints can
+//! conflict, and a surviving candidate with its dependencies. Every rule that
+//! admits or defers a candidate lives in [`Screen`], which judges the
+//! selection and the section's re-read alike.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -25,6 +26,17 @@ use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
 
 fn is_in_flight(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::InProgress | TaskStatus::Review)
+}
+
+/// Which workspace partitions a dependency read may reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DependencyReach {
+    /// Every partition on the host: a selection under the shared boundary, or
+    /// a host-wide admission section that excludes every partition's writers.
+    Host,
+    /// This partition alone: a partition-scoped admission section, which
+    /// shares the host lock with other partitions' ordinary writers.
+    Partition,
 }
 
 /// What one admission selects before its exclusive section [ORB-14724].
@@ -261,7 +273,10 @@ impl TaskCommitBoundary {
                 )
             });
             let dependencies = backlog.iter().flat_map(Task::dependencies).collect();
-            let statuses = self.dependency_statuses(dependencies, &known)?;
+            // `Host` reaches every partition, so it reads every dependency.
+            let statuses = self
+                .dependency_statuses(dependencies, &known, DependencyReach::Host)?
+                .unwrap_or_default();
             Ok(AdmissionSnapshot {
                 backlog,
                 in_flight,
@@ -274,12 +289,14 @@ impl TaskCommitBoundary {
     /// The status of each of `dependencies`: from `known`, or else read from
     /// the bundle of whichever workspace partition holds it. A completed
     /// archived dependency reads as `done`; an id no partition holds is
-    /// absent.
+    /// absent. `None` when another partition holds a dependency and `reach`
+    /// is this partition alone: that read needs a host-wide section.
     pub(super) fn dependency_statuses(
         &self,
         dependencies: BTreeSet<String>,
         known: &BTreeMap<String, TaskStatus>,
-    ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        reach: DependencyReach,
+    ) -> Result<Option<BTreeMap<String, TaskStatus>>, OrbitError> {
         let mut statuses = BTreeMap::new();
         let mut archived_histories = BTreeMap::new();
         for dependency in &dependencies {
@@ -292,9 +309,12 @@ impl TaskCommitBoundary {
             };
             let bundle = if binding.partition_id == self.workspace_id {
                 self.bundle_store.read_bundle_if_settled(dependency)?
+            } else if reach == DependencyReach::Partition {
+                return Ok(None);
             } else {
-                // Inside the admission section the host lock excludes every
-                // partition's ordinary writers, so this cannot move there.
+                // Inside a host-wide admission section the host lock excludes
+                // every partition's ordinary writers, so this cannot move
+                // there.
                 let owner = TaskCommitBoundary {
                     store: self.store.clone(),
                     registry: self.registry.clone(),
@@ -333,7 +353,7 @@ impl TaskCommitBoundary {
             dependencies,
             |id| Ok(archived_histories.remove(id)),
         );
-        Ok(statuses)
+        Ok(Some(statuses))
     }
 
     /// The in-flight tasks as the admission section reads them, with each
