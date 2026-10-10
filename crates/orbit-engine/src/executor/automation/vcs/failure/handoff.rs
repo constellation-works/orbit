@@ -21,7 +21,7 @@ use super::conflict::{
 };
 use super::ownership::{
     ensure_failure_handoff_ownership, prepared_attempt_owns_rebase, preserve_completion_failure,
-    refuse_foreign_rebase, release_review_attempts,
+    push_incomplete_landing_reviewer_commit, refuse_foreign_rebase, release_review_attempts,
 };
 use super::preserve::{
     hold_baseline_red_candidate, hold_provider_failure_candidate, hold_upgrade_pending_candidate,
@@ -104,6 +104,10 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         && !upgrade_pending
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
     {
+        // [ORB-15329] An incomplete before-landing review's reviewer commit
+        // is pushed to the PR before the PR is left unmerged.
+        let reviewer_push =
+            push_incomplete_landing_reviewer_commit(host, input, failed_step_id, error_message);
         return preserve_completion_failure(
             host,
             &task,
@@ -112,6 +116,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             error_code,
             error_message,
             &pr_number,
+            reviewer_push.as_ref(),
         );
     }
 

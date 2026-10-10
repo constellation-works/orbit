@@ -6,9 +6,12 @@ use orbit_types::task::{TaskComment, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
-use crate::executor::automation::input::input_string_field;
+use crate::executor::automation::input::{
+    canonicalize_existing_dir, input_string_field, required_input_string,
+};
 
-use super::super::freshness::{rebase_belongs_to_attempt, rebase_provenance_summary};
+use super::super::freshness::{commit_sha, rebase_belongs_to_attempt, rebase_provenance_summary};
+use super::super::push::push_batch_changes_inner;
 use super::super::resume::ensure_retry_descends_from;
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, REVIEW_ADMISSION_STEPS};
@@ -54,6 +57,76 @@ pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
     )
 }
 
+/// The settlement step of the before-landing review.
+const LANDING_SETTLE_STEP: &str = "landing_review_gate_settle";
+
+/// The refusal a before-landing settlement leads with when the verdict is
+/// `incomplete`.
+const INCOMPLETE_VERDICT_REFUSAL: &str = "review_gate_blocked: verdict incomplete";
+
+/// [ORB-15329] Push the reviewer commit a before-landing review recorded
+/// before it settled `incomplete`, so it is not stranded in this host's
+/// worktree.
+///
+/// Settlement commits the reviewer's repair before it judges the verdict, so
+/// an `incomplete` refusal leaves that commit on the worktree branch and
+/// `landing_push` never runs. It goes onto the published head the review
+/// reviewed under a lease on it and nowhere else. This is a preservation
+/// push: the commit is neither approved nor revalidated, the PR stays open
+/// and unmerged, and `complete_pr` does not run. `None` when the failure is
+/// not an incomplete settlement; otherwise the outcome, where a push that
+/// could not be made is recorded rather than raised so the original failure
+/// stays authoritative.
+pub(super) fn push_incomplete_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    failed_step_id: &str,
+    error_message: &str,
+) -> Option<Value> {
+    if failed_step_id != LANDING_SETTLE_STEP || !error_message.contains(INCOMPLETE_VERDICT_REFUSAL)
+    {
+        return None;
+    }
+    Some(
+        push_landing_reviewer_commit(host, input)
+            .unwrap_or_else(|error| json!({"decision": "push_failed", "error": error.to_string()})),
+    )
+}
+
+fn push_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    let worktree = pipeline_step(input, "worktree")?;
+    let workspace_path = canonicalize_existing_dir(
+        required_input_string(worktree, "workspace_path")?,
+        "pipeline.worktree.workspace_path",
+    )?;
+    let missing = |step: &str, field: &str| {
+        OrbitError::Execution(format!(
+            "pr_failure_handoff: the run recorded no `{step}.{field}`"
+        ))
+    };
+    let branch = pipeline_checkpoint_string(input, "sync_base", "head")
+        .ok_or_else(|| missing("sync_base", "head"))?;
+    let published = pipeline_checkpoint_string(input, "push", "local_sha")
+        .ok_or_else(|| missing("push", "local_sha"))?;
+    if commit_sha(&workspace_path, &branch)? == published {
+        return Ok(json!({"decision": "no_reviewer_commit", "published_head_sha": published}));
+    }
+    let mut pushed = push_batch_changes_inner(
+        host,
+        &json!({
+            "branch": branch,
+            "workspace_path": workspace_path,
+            "lease_remote_sha": published,
+        }),
+        &workspace_path,
+    )?;
+    pushed["published_head_sha"] = json!(published);
+    Ok(pushed)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -63,6 +136,7 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     error_code: &str,
     error_message: &str,
     pr_number: &str,
+    reviewer_push: Option<&Value>,
 ) -> Result<Value, OrbitError> {
     let pr_url = task
         .external_refs
@@ -77,11 +151,11 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     let note = match &landing_review {
         Some(reason) => format!(
             "Before-landing review did not approve PR #{pr_number} (`{reason}`); the PR stays \
-             open and unmerged and the task stays '{}'. Nothing was merged, and only a fix the \
-             review settled was pushed. An operator decides what lands next.\n\n- Run: \
-             `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
+             open and unmerged and the task stays '{}'. Nothing was merged. {} An operator \
+             decides what lands next.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
              `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
-            task.status
+            task.status,
+            reviewer_push_sentence(reviewer_push),
         ),
         None => format!(
             "PR completion failed after publication; preserved PR #{pr_number} and task status \
@@ -111,12 +185,40 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
             "review_completion_failure"
         },
         "reason": landing_review,
+        "reviewer_push": reviewer_push,
         "failed_step_id": failed_step_id,
         "pr_number": pr_number,
         "pr_url": pr_url,
         "candidate_preserved": true,
         "task_status": task.status.to_string(),
     }))
+}
+
+/// What the comment says became of the reviewer commit an incomplete
+/// before-landing review recorded.
+fn reviewer_push_sentence(reviewer_push: Option<&Value>) -> String {
+    let Some(push) = reviewer_push else {
+        return "Only a fix the review settled was pushed.".to_string();
+    };
+    let decision = push
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let field = |key: &str| push.get(key).and_then(Value::as_str).unwrap_or("unknown");
+    match decision {
+        "no_reviewer_commit" => "The review recorded no commit to push.".to_string(),
+        "push_failed" => format!(
+            "The reviewer's commit could not be pushed and stays in the run's worktree: {}",
+            field("error")
+        ),
+        _ => format!(
+            "The reviewer's commit `{}` was pushed to the PR branch on top of the published head \
+             `{}` so it is not stranded in the run's worktree; it is neither approved nor \
+             revalidated, and hosted CI restarts on it.",
+            field("local_sha"),
+            field("published_head_sha"),
+        ),
+    }
 }
 
 /// The typed reason a failure message leads with — the first `snake_case:`

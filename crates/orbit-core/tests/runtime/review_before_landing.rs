@@ -2,6 +2,9 @@
 //! its unpublished candidate, and any outcome but an approve keeps that PR
 //! open and unmerged with the task in review [ORB-14849].
 
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use chrono::Utc;
 use orbit_core::TaskStatus;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
@@ -140,6 +143,24 @@ fn status(fixture: &Fixture) -> TaskStatus {
 }
 
 fn failure_handoff(fixture: &Fixture, failed_step: &str, message: &str) -> Value {
+    failure_handoff_after(fixture, failed_step, message, &json!({}))
+}
+
+/// The failure handoff with `steps` as the pipeline's earlier step outputs.
+fn failure_handoff_after(
+    fixture: &Fixture,
+    failed_step: &str,
+    message: &str,
+    steps: &Value,
+) -> Value {
+    let mut pipeline = json!({
+        "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
+        "landing_review_gate_admit": fixture.input["admission"],
+    });
+    pipeline
+        .as_object_mut()
+        .unwrap()
+        .extend(steps.as_object().unwrap().clone());
     execute_deterministic_action(
         &fixture.runtime,
         "pr_failure_handoff",
@@ -150,10 +171,7 @@ fn failure_handoff(fixture: &Fixture, failed_step: &str, message: &str) -> Value
             "error_message": message,
             "run_id": fixture.input["job_run_id"],
             "job_input": {"task_ids": [fixture.task_id], "base_branch": "main", "base_sync": "local"},
-            "pipeline": {
-                "worktree": {"job_run_id": fixture.input["job_run_id"], "workspace_path": fixture.repo},
-                "landing_review_gate_admit": fixture.input["admission"],
-            },
+            "pipeline": pipeline,
         }),
         false,
         &Default::default(),
@@ -328,4 +346,226 @@ fn an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts() {
         assert!(reviewed, "{case}: a settled incomplete is the review");
         assert!(ledger.attempts[0].released_at.is_none(), "{case}");
     }
+}
+
+fn git(cwd: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command.args(args).current_dir(cwd).output().unwrap();
+    assert!(
+        output.status.success(),
+        "git {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// A before-landing run whose candidate is published to a bare `origin`, whose
+/// reviewer left an edit that settlement committed, and whose settlement was
+/// then refused with `verdict`. The reviewer commit is local only.
+struct Stranded {
+    fixture: Fixture,
+    bare: PathBuf,
+    published: String,
+    refused: String,
+}
+
+fn stranded(verdict: &str) -> Stranded {
+    let mut fixture = Fixture::before_landing();
+    let bare = fixture._root.path().join("origin.git");
+    git(
+        fixture._root.path(),
+        &["init", "--bare", "-q", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["push", "-q", "origin", "main", "candidate"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+
+    published(&fixture);
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+    std::fs::write(fixture.repo.join("candidate.txt"), "reviewed\n").unwrap();
+    fixture.put_report(&json!({
+        "schema_version": REVIEW_CONTRACT_VERSION,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": verdict, "summary": "Fixed what was found; one check is missing.",
+        "findings": [],
+        "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
+        "escalation": "A required check could not run.",
+    }));
+    let refused = fixture
+        .settle()
+        .expect_err("a review that does not approve is refused")
+        .to_string();
+    assert!(
+        refused.contains(&format!("review_gate_blocked: verdict {verdict}")),
+        "{refused}"
+    );
+    assert_ne!(
+        git(&fixture.repo, &["rev-parse", "HEAD"]),
+        published_head,
+        "settlement committed the reviewer's edit"
+    );
+    assert_eq!(
+        git(&bare, &["rev-parse", "refs/heads/candidate"]),
+        published_head,
+        "the reviewer commit is only in the run's worktree"
+    );
+    Stranded {
+        fixture,
+        bare,
+        published: published_head,
+        refused,
+    }
+}
+
+impl Stranded {
+    fn handoff(&self) -> Value {
+        failure_handoff_after(
+            &self.fixture,
+            "landing_review_gate_settle",
+            &self.refused,
+            &json!({
+                "sync_base": {"head": "candidate"},
+                "push": {"local_sha": self.published},
+            }),
+        )
+    }
+
+    fn remote(&self, reference: &str) -> String {
+        git(&self.bare, &["rev-parse", reference])
+    }
+}
+
+/// The reviewer's fix commit settled `incomplete` is not left in the run's
+/// worktree: the failure handoff pushes it onto the published head under a
+/// lease, and the PR stays unmerged with the task in review [ORB-15329].
+#[test]
+fn an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing() {
+    if !super::dispatch_admission::isolated(
+        "review_before_landing::an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing",
+    ) {
+        return;
+    }
+    let stranded = stranded("incomplete");
+    let main_before = stranded.remote("refs/heads/main");
+    let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
+
+    let handoff = stranded.handoff();
+
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(
+        handoff["reviewer_push"]["decision"], "performed_fast_forward",
+        "{handoff}"
+    );
+    assert_eq!(handoff["reviewer_push"]["local_sha"], reviewer_commit);
+    assert_eq!(
+        stranded.remote("refs/heads/candidate"),
+        reviewer_commit,
+        "the reviewer commit is on the remote PR branch"
+    );
+    assert_eq!(
+        git(
+            &stranded.bare,
+            &["rev-parse", &format!("{reviewer_commit}^")]
+        ),
+        stranded.published,
+        "it sits directly on the published head"
+    );
+    assert_eq!(stranded.remote("refs/heads/main"), main_before);
+    assert_eq!(handoff["task_status"], "review", "{handoff}");
+    assert_eq!(status(&stranded.fixture), TaskStatus::Review);
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment
+                .message
+                .starts_with("Before-landing review did not approve PR #42")
+                && comment.message.contains("was pushed to the PR branch")
+                && comment.message.contains("neither approved nor revalidated")
+        }),
+        "{comments:#?}"
+    );
+}
+
+/// The push is conditional on the head the review reviewed: a branch that moved
+/// since keeps its new head, the reviewer commit stays local, and the handoff
+/// still leaves the PR open in review.
+#[test]
+fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
+    if !super::dispatch_admission::isolated(
+        "review_before_landing::a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved",
+    ) {
+        return;
+    }
+    let stranded = stranded("incomplete");
+    let other = stranded.fixture._root.path().join("other");
+    git(
+        stranded.fixture._root.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            "candidate",
+            stranded.bare.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.name", "Orbit Test"]);
+    git(&other, &["config", "user.email", "orbit-test@example.com"]);
+    git(&other, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(other.join("other.txt"), "moved\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "moved on"]);
+    git(&other, &["push", "-q", "origin", "candidate"]);
+    let moved = stranded.remote("refs/heads/candidate");
+
+    let handoff = stranded.handoff();
+
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(
+        handoff["reviewer_push"]["decision"], "push_failed",
+        "{handoff}"
+    );
+    assert!(
+        handoff["reviewer_push"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("push_lease_lost"),
+        "{handoff}"
+    );
+    assert_eq!(stranded.remote("refs/heads/candidate"), moved);
+    assert_eq!(status(&stranded.fixture), TaskStatus::Review);
+}
+
+/// Only an `incomplete` settlement pushes: a `reject` leaves the reviewer
+/// commit local like any other non-approving outcome.
+#[test]
+fn a_rejected_before_landing_review_pushes_nothing() {
+    if !super::dispatch_admission::isolated(
+        "review_before_landing::a_rejected_before_landing_review_pushes_nothing",
+    ) {
+        return;
+    }
+    let stranded = stranded("reject");
+
+    let handoff = stranded.handoff();
+
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
+    assert_eq!(status(&stranded.fixture), TaskStatus::Review);
 }

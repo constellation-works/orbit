@@ -316,9 +316,19 @@ failed revalidation or a settle error — fails the run with the PR open and
 unmerged, and the failure handoff keeps the task in `review` with a comment
 naming the step's typed reason (`review_gate_blocked`,
 `review_timeout_incomplete`, `push_lease_lost`, ...) and decision
-`landing_review_failure`. No outcome closes the PR. Because the PR is
-already published and the task promoted, an evidence-only `incomplete` is
-not held in progress (§4): it ends like any other `incomplete`. Final
+`landing_review_failure`. No outcome closes the PR. One exception to "no
+push": a reviewer commit that settled `incomplete` is not left in the run's
+host-local worktree. Settlement has already committed the reviewer's repair, so
+the failure handoff pushes it onto the published head under the same lease as
+`landing_push` and records the result as `reviewer_push` in its output and in
+the comment. It is a preservation push: the commit is neither approved nor
+revalidated, hosted CI restarts on it, `complete_pr` does not run and nothing
+merges. A lost lease (`push_lease_lost`) is recorded without failing the
+handoff, and the commit stays local. A `reject`, a reviewer timeout or a failed
+revalidation pushes nothing; uncommitted edits of a timed-out reviewer are not
+preserved. Because the PR is already published and the task promoted, an
+evidence-only `incomplete` is not held in progress (§4): it ends like any other
+`incomplete`. Final
 recovery still gets one look, as for a failed re-review.
 
 **Claimed leaves: the review runs on the leaf.** A claim from an owner with
