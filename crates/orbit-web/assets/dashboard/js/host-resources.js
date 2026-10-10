@@ -42,17 +42,19 @@ export function cpuLoadMultiple(percent, threshold = false) {
 /// disagree about severity or the load unit.
 export function describeResource(payload, resource) {
   const { reading, known, severity, held, note } = hostReading(payload, resource);
+  const fill = known ? Math.max(0, Math.min(100, reading.percent)) : 0;
   const path = resource === 'disk' && reading?.path ? ` ${reading.path}` : '';
   const label = resource === 'cpu' ? 'load' : resource === 'memory' ? 'mem' : 'disk';
   const value = !known ? '-' : resource === 'cpu' ? cpuLoadMultiple(reading.percent) : `${reading.percent.toFixed(0)}%`;
   const detail = !known ? `${resource}${path} ${note}`
     : resource === 'cpu' ? `${CPU_MEASURE} Now ${reading.percent.toFixed(1)}% of cores (${note}).`
     : `${resource}${path} ${reading.percent.toFixed(1)}% (${note})`;
-  return { label, value, suffix: known && resource === 'cpu' ? ' cores' : '', detail, severity, held };
+  return { label, value, suffix: known && resource === 'cpu' ? ' cores' : '', detail, severity, held, fill };
 }
 
 /// Three chips for the serving host: load, mem and disk, each with its own
-/// severity, held state and title. Throttling is a state of the chip that
+/// severity, held state, title and a bar of how full it is (load past every
+/// core fills it). Throttling is a state of the chip that
 /// holds admission (class, dot, outline, accessible text), never visible text,
 /// and each chip is sized for its widest usual reading, so neither a verdict
 /// flip nor a new reading moves the top bar.
@@ -60,16 +62,23 @@ export function renderHostResources(payload, host = document.getElementById('hos
   if (!host) return;
   const { age, status, reason } = hostVerdict(payload);
   host.replaceChildren(...RESOURCES.map(resource => {
-    const { label, value, suffix, detail, severity, held } = describeResource(payload, resource);
+    const { label, value, suffix, detail, severity, held, fill } = describeResource(payload, resource);
     const title = `${detail} · sampled ${age} · Throttle verdict: ${status}${held ? ' on this resource' : ''} · ${reason}`;
     const node = el('span', { class: `host-resource ${severity}${held ? ' throttled' : ''}`, title, role: 'group', 'aria-label': title }, [
       el('span', { class: 'k', text: label }),
       el('span', { class: 'v', text: value }, suffix ? [el('span', { class: 'unit', text: suffix })] : []),
+      el('span', { class: 'host-resource-bar', 'aria-hidden': 'true' }, [meterFill(fill)]),
       ...(held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
     ]);
     node.dataset.resource = resource;
     return node;
   }));
+}
+
+function meterFill(percent) {
+  const fill = el('span', { class: 'host-resource-fill' });
+  fill.setAttribute('style', `width: ${percent}%`);
+  return fill;
 }
 
 const listeners = new Set();

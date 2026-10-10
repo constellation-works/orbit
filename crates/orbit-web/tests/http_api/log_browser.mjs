@@ -69,13 +69,13 @@ const checkOrder = async (kind, barShowsRow = true) => {
     assert.ok(result.summaryFits, `compact run must be visible without wrapping or scrolling: ${JSON.stringify(result)}`);
     assert.ok(result.sourceFits, 'last target segment must fit its column');
   }
-  assert.equal(result.source, 'supervisor');
+  assert.equal(result.source, relay.fields.provider);
   assert.equal(result.target, target);
   assert.equal(result.fullRun, run);
   assert.ok(!result.message.includes('{"type"'), `relay rows must show the event kind, not the provider JSON: ${result.message}`);
   assert.ok(!result.statusBar.includes('{"type"'), `the status bar must not show raw provider JSON: ${result.statusBar}`);
   if (barShowsRow) {
-    assert.equal(result.statusSource, 'supervisor');
+    assert.equal(result.statusSource, relay.fields.provider);
     assert.equal(result.statusTarget, target);
     assert.ok(result.sameHtml, 'dock and status bar must use the same message/context order');
   }

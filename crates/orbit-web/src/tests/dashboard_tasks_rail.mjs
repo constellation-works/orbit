@@ -301,9 +301,10 @@ paint(emptyPage, []);
 assert.equal(emptyText(), 'No tasks available.', 'a non-replica workspace keeps the plain empty state');
 assert.equal(byId['tasks-body'].querySelector('.empty-state button'), null);
 
-// ORB-15213: a backlog row says why the drain is not starting it, and the group
-// hint counts what is eligible versus waiting, from the same readiness snapshot
-// the Drain card renders. Rows without a wait stay as they were.
+// ORB-15213: a backlog row says why the drain is not starting it, as a
+// readiness dot beside its ID with the wait in its label and tooltip, and the
+// Backlog card counts each pool in a legend that filters the card, from the
+// same readiness snapshot the Drain card renders.
 const drainWaits = modules.get('drain-waits.js').namespace;
 const backlogContext = { ...taskContext, getActiveStatuses: () => new Set(['backlog']), statusOrder: ['backlog'] };
 const backlog = [31, 32, 33, 34, 35].map(index => task(index, { status: 'backlog' }));
@@ -313,15 +314,17 @@ const paintBacklog = () => {
   renderTasks(backlog, backlogContext);
 };
 const backlogBody = byId['tasks-body'];
-const rowFor = id => backlogBody.querySelectorAll('.row').find(row => row.dataset.key === `task-${id}`);
-const waitBadgeOf = id => rowFor(id).querySelector('.drain-wait-badge');
-const groupHintText = () => backlogBody.querySelector('.group-header .group-hint').textContent;
+const taskRows = () => backlogBody.querySelectorAll('.row').filter(row => String(row.dataset.key || '').startsWith('task-'));
+const rowFor = id => taskRows().find(row => row.dataset.key === `task-${id}`);
+const dotOf = id => rowFor(id).querySelector('.ready-dot');
+const legendButtons = () => backlogBody.querySelectorAll('.ready-filter');
+const legendCounts = () => Object.fromEntries(legendButtons().map(button => [button.dataset.pool, button.querySelector('.ready-filter-count').textContent]));
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
 
 paintBacklog();
-assert.ok(!groupHintText().includes('eligible'), `without a snapshot the hint claims no eligibility: ${groupHintText()}`);
-assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'no snapshot, no wait badges');
+assert.equal(backlogBody.querySelector('.group-readiness'), null, 'without a snapshot the card claims no readiness');
+assert.ok(taskRows().every(row => row.querySelector('.ready-dot').classList.contains('none')), 'no snapshot, no readiness dots');
 
 const snapshot = {
   tasks: [
@@ -334,14 +337,28 @@ const snapshot = {
 };
 drainWaits.setDrainReadiness(snapshot);
 assert.equal(repaints.length, 1, 'a new snapshot repaints the list once');
-assert.equal(waitBadgeOf('ORB-31'), null, 'an eligible task shows no wait');
-assert.equal(waitBadgeOf('ORB-32').textContent, 'waits on ORB-77 · lock', 'a lock wait names the holder');
-assert.ok(waitBadgeOf('ORB-32').title.includes('Lock: file:docs/CONFIG.md') && waitBadgeOf('ORB-32').title.includes('context_lock_conflict'), `the lock detail is in the tooltip: ${waitBadgeOf('ORB-32').title}`);
-assert.equal(waitBadgeOf('ORB-33').textContent, 'needs macos host', 'a host wait names the OS');
-assert.ok(waitBadgeOf('ORB-33').title.includes('waits for a macos host (os:macos)'), 'the host detail is in the tooltip');
-assert.equal(waitBadgeOf('ORB-34').textContent, 'throttled', 'a throttle wait says so');
-assert.equal(waitBadgeOf('ORB-35'), null, 'a task the snapshot does not mention shows no wait');
-assert.equal(groupHintText(), '5 approved · 1 eligible now, 1 waiting on locks, 1 waiting on capacity, 1 waiting, other, 1 not in the drain snapshot');
+assert.equal(dotOf('ORB-31').dataset.pool, 'eligible');
+assert.equal(dotOf('ORB-31').getAttribute('aria-label'), 'Eligible now', 'an eligible task says so');
+assert.ok(rowFor('ORB-31').querySelector('.task-quick').classList.contains('ready'), 'Ship reads ready when nothing holds the task');
+assert.equal(dotOf('ORB-32').dataset.pool, 'locks');
+assert.equal(dotOf('ORB-32').getAttribute('aria-label'), 'Waiting on locks: waits on ORB-77 · lock', 'a lock wait names the holder');
+assert.ok(dotOf('ORB-32').title.includes('Lock: file:docs/CONFIG.md') && dotOf('ORB-32').title.includes('context_lock_conflict'), `the lock detail is in the tooltip: ${dotOf('ORB-32').title}`);
+assert.ok(!rowFor('ORB-32').querySelector('.task-quick').classList.contains('ready'), 'Ship stays quiet while the task waits');
+assert.equal(dotOf('ORB-33').dataset.pool, 'other');
+assert.equal(dotOf('ORB-33').getAttribute('aria-label'), 'Waiting, other: needs macos host', 'a host wait names the OS');
+assert.ok(dotOf('ORB-33').title.includes('waits for a macos host (os:macos)'), 'the host detail is in the tooltip');
+assert.equal(dotOf('ORB-34').dataset.pool, 'capacity');
+assert.equal(dotOf('ORB-34').getAttribute('aria-label'), 'Waiting on capacity: throttled', 'a throttle wait says so');
+assert.ok(dotOf('ORB-35').classList.contains('none'), 'a task the snapshot does not mention shows no readiness');
+assert.deepEqual(legendCounts(), { eligible: '1', locks: '1', capacity: '1', other: '1' }, 'the legend counts each pool once');
+assert.equal(backlogBody.querySelector('.ready-unknown').textContent, '1 not in the drain snapshot');
+
+// A legend entry narrows the card to its pool and a second press restores it.
+legendButtons().find(button => button.dataset.pool === 'locks').dispatch('click');
+assert.deepEqual(taskRows().map(row => row.dataset.key), ['task-ORB-32'], 'the locks entry shows only lock waits');
+assert.equal(legendButtons().find(button => button.dataset.pool === 'locks').getAttribute('aria-pressed'), 'true');
+legendButtons().find(button => button.dataset.pool === 'locks').dispatch('click');
+assert.equal(taskRows().length, 5, 'pressing it again shows every backlog task');
 
 // The same snapshot again changes nothing, so the 30 s poll does not repaint.
 drainWaits.setDrainReadiness(JSON.parse(JSON.stringify(snapshot)));
@@ -350,8 +367,8 @@ assert.equal(repaints.length, 1, 'an unchanged snapshot does not repaint');
 // A snapshot belongs to one workspace: leaving it drops every wait.
 common.setWorkspace('ws_other');
 assert.equal(repaints.length, 2, 'leaving the workspace repaints');
-assert.equal(backlogBody.querySelectorAll('.drain-wait-badge').length, 0, 'another workspace wears none of the previous waits');
-assert.ok(!groupHintText().includes('eligible'), 'and the hint stops counting');
+assert.ok(taskRows().every(row => row.querySelector('.ready-dot').classList.contains('none')), 'another workspace wears none of the previous waits');
+assert.equal(backlogBody.querySelector('.group-readiness'), null, 'and the card stops counting');
 stopListening();
 common.setWorkspace('ws_orbit');
 

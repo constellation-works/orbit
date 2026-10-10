@@ -3,13 +3,14 @@
 /* ORB-10972: the dock. Two panes, one column width. `data-mode` on the
    host swaps which pane is displayed; nothing about the column's own box
    changes, so the task table beside it never reflows on a mode switch. */
+/* The dock is a column of cards under a pill tab bar; it has no frame of
+   its own. */
 #side-dock {
   display: flex;
   flex-direction: column;
+  gap: 12px;
   min-height: 0;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -17,47 +18,45 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--hair);
+  gap: 8px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
 }
 
-.dock-seg-group { display: flex; align-items: center; gap: 4px; }
+.dock-seg-group { flex: 1 1 auto; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; }
 
 .dock-seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 32px;
   border: none;
   background: transparent;
   color: var(--fg-mute);
   font: inherit;
-  font-size: 12px;
-  padding: 4px 11px;
-  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 12px;
+  border-radius: 7px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .dock-seg:hover { color: var(--fg); }
-.dock-seg.on { color: var(--fg); background: var(--bg); }
+.dock-seg.on { color: var(--fg-strong); background: var(--bg-selected); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .dock-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.dock-meta {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-mute);
-}
 
-.dock-pane { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+
+.dock-pane { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 12px; }
 #side-dock[data-mode="drain"] .dock-pane[data-pane="drain"] { display: flex; }
 #side-dock[data-mode="log"] .dock-pane[data-pane="log"] { display: flex; }
 
 .dock-pane > .panel {
-  border: none;
-  border-radius: 0;
-  background: transparent;
   flex: 1 1 auto;
   min-height: 0;
 }

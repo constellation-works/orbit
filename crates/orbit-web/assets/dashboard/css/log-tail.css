@@ -8,17 +8,25 @@
    the collapsed log panel used to do. */
 .log-statusbar {
   flex: 0 0 auto;
-  height: 30px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-elev);
+  height: 34px;
+  border-top: 1px solid #1f242b;
+  background: var(--bg-chrome);
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   padding: 0 20px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
+  color: var(--fg-dim);
   min-width: 0;
 }
+/* Open log jumps to the full tail in the Tasks dock. */
+.log-statusbar .sb-open {
+  flex: none; margin-left: auto; padding: 0; border: 0; background: transparent;
+  color: var(--accent); font-family: var(--font-sans); font-size: 12.5px; cursor: pointer;
+}
+.log-statusbar .sb-open:hover { text-decoration: underline; }
+.log-statusbar .sb-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
 /* ORB-10972: the live dot is used in the dock header and the status bar
    now, so it needs a rule of its own rather than one scoped to the log
@@ -33,8 +41,8 @@
   animation: livePulse 2.4s ease-in-out infinite;
 }
 .log-statusbar .live-dot { flex: 0 0 auto; }
-.log-statusbar .sb-label,
-.log-statusbar .sb-t { color: var(--fg-mute); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.log-statusbar .sb-label { color: var(--fg-soft); flex: 0 0 auto; }
+.log-statusbar .sb-t { color: var(--fg-dim); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 .log-statusbar .sb-ag { color: var(--fg-dim); flex: 0 0 auto; }
 .log-statusbar .sb-m {
   color: var(--fg-dim);
@@ -76,71 +84,63 @@
   flex: 1; overflow: auto; position: relative;
   min-height: 0;
   container-type: inline-size;
-  background:
-    linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px) 0 0 / 100% 22px,
-    var(--bg-elev);
+  background: var(--bg-elev);
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
-.log-stream .inner {
-  padding: 8px 0;
-  font-family: var(--font-mono);
-  width: max-content;
-  min-width: 100%;
-}
+.log-stream .inner { padding: 0 0 8px; }
+
+/* A row: the time, then a head line (badge, task, source) over the message,
+   which stays on one line until the row is expanded or Wrap is on. */
 .log-line {
   display: grid;
-  grid-template-columns: 56px 62px max-content;
-  gap: 10px;
-  padding: 0 14px 0 12px;
+  grid-template-columns: 58px minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 9px 14px 9px 12px;
   border-left: 2px solid transparent;
-  font-size: 11.5px; line-height: 22px;
+  border-top: 1px solid var(--hair);
   color: var(--fg);
   cursor: pointer;
-  border-bottom: 1px solid transparent;
   transition: background 0.15s ease;
 }
-.log-line:hover { background: rgba(255,255,255,0.03); }
-.log-line.expanded { background: rgba(255,255,255,0.02); border-bottom-color: var(--hair); }
-.log-line .t  { color: var(--fg-dim); font-feature-settings: "tnum"; white-space: nowrap; }
-.log-line .ag { color: var(--fg-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-line:hover { background: rgba(255,255,255,0.025); }
+.log-line.expanded { background: rgba(255,255,255,0.02); }
+.log-line .t {
+  color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; line-height: 20px;
+  font-feature-settings: "tnum"; white-space: nowrap;
+}
+.log-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.log-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; line-height: 20px; }
+.log-line .ag { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.log-task {
+  flex: none; color: var(--accent); font-family: var(--font-mono); font-size: 12px; text-decoration: none;
+}
+.log-task:hover { text-decoration: underline; }
+.log-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
-/* The level text is replaced by the row keyline; the element stays for
-   assistive tech and for the title tooltip. */
-.log-line .lv { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.log-line.lv-ok   { border-left-color: var(--status-done); }
-.log-line.lv-info { border-left-color: transparent; }
-.log-line.lv-warn { border-left-color: var(--status-proposed); }
+/* The badge: AGENT for an agent's stdout, else the event code. */
+.log-line .lv {
+  flex: none; padding: 0 5px; border-radius: 4px; background: var(--bg-control);
+  color: var(--fg-soft); font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+  line-height: 17px; letter-spacing: 0.04em;
+}
+.log-line .lv.agent { background: #16213a; color: #a8c2f0; }
+.log-line .lv.ok    { background: color-mix(in srgb, var(--status-done) 14%, var(--bg-elev)); color: var(--status-done); }
+.log-line .lv.warn  { background: var(--warn-wash); color: var(--warn-fg); }
+.log-line .lv.err   { background: var(--danger-wash); color: var(--danger-fg); }
+.log-line .lv.deny  { background: color-mix(in srgb, var(--status-review) 14%, var(--bg-elev)); color: var(--status-review); }
+.log-line.lv-warn { border-left-color: var(--warn-line); }
 .log-line.lv-err  { border-left-color: var(--status-blocked); }
 .log-line.lv-deny { border-left-color: var(--status-review); }
-.log-line .lv.ok   { color: var(--status-done); }
-.log-line .lv.info { color: var(--status-in-progress); }
-.log-line .lv.warn { color: var(--status-proposed); }
-.log-line .lv.err  { color: var(--status-blocked); }
-.log-line .lv.deny { color: var(--status-review); }
 
-/* collapsed: single line, truncated */
-.log-line .m  { color: var(--fg-dim); white-space: nowrap; overflow: visible; text-overflow: unset; min-width: 0; }
-
-/* expanded: full message wraps below the grid row */
-.log-line.expanded .m {
-  grid-column: 1 / -1;
-  white-space: pre-wrap;
-  word-break: break-all;
-  overflow-wrap: anywhere;
-  overflow: visible;
-  text-overflow: unset;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: calc(100cqw - 26px);
-  padding: 4px 0 8px;
-  border-top: 1px dashed rgba(255,255,255,0.06);
-  line-height: 1.6;
+.log-line .m {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg-dim); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6;
 }
-.log-stream.wrap .inner { width: auto; }
-.log-stream.wrap .log-line { grid-template-columns: 56px 62px minmax(0, 1fr); }
-.log-stream.wrap .log-line .m { white-space: pre-wrap; overflow-wrap: anywhere; }
-.log-stream.wrap .log-line.expanded .m { width: auto; max-width: 100%; }
+.log-line.expanded .m, .log-stream.wrap .log-line .m {
+  white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; word-break: break-word;
+}
+.log-line.expanded .m { padding: 4px 0 2px; }
 .log-line .m b { color: var(--fg); font-weight: 500; }
 .log-line .m code {
   font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-hi);
@@ -151,11 +151,6 @@
   from { background: rgba(110, 159, 255, 0.08); }
   to   { background: transparent; }
 }
-.log-stream::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 0;
-  height: 18px; background: linear-gradient(var(--bg-elev), transparent);
-  pointer-events: none;
-}
 /* The toolbar wraps rather than clipping: at the 280-336px dock widths the
    pills, follow, wrap and the paused "N buffered" action do not fit one row,
    and a hidden overflow left the trailing controls unreachable. The doubled
@@ -164,13 +159,25 @@
   flex: 0 0 auto;
   border-top: none !important;
   border-bottom: 1px solid var(--hair);
-  padding: 7px 12px;
-  gap: 6px 5px;
+  background: transparent;
+  padding: 12px 14px;
+  gap: 8px;
   flex-wrap: wrap;
+  justify-content: space-between;
 }
-.log-filters > * { white-space: nowrap; }
-.log-filters .filter-pill { padding: 2px 7px; }
-.log-filters .seg.right { margin-left: auto; }
+.log-filter-group, .log-view-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.log-view-group { margin-left: auto; }
+.log-filters button { white-space: nowrap; }
+.log-caption {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 14px; color: var(--fg-mute); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.log-live { display: inline-flex; align-items: center; gap: 6px; }
+.log-live .live-dot { background: var(--status-done); box-shadow: none; }
+#side-dock.disconnected .log-live { color: var(--status-blocked); }
+.dock-log-state { color: var(--warn-fg); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.dock-log-state[data-level="err"] { color: var(--danger-fg); }
+.dock-log-state[data-level="deny"] { color: var(--status-review); }
 .log-foot {
   border-top: 1px solid var(--border);
   padding: 9px 16px;
@@ -190,15 +197,17 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.log-foot .seg { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-.log-foot .seg b { color: var(--fg); font-weight: 500; }
-.log-foot .seg.on { color: var(--accent); }
-.log-foot .filter-pill {
-  padding: 2px 8px; border: 1px solid var(--border); border-radius: 3px;
-  color: var(--fg); cursor: pointer;
+.log-foot .filter-pill, .log-foot .seg, .log-foot .count {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 7px; background: transparent;
+  color: var(--fg-dim); font-family: var(--font-sans); font-size: 12.5px; cursor: pointer; user-select: none;
 }
-.log-foot .filter-pill.on { color: var(--accent); border-color: var(--accent); background: rgba(110, 159, 255, 0.08); }
-.log-foot .filter-pill:hover { border-color: var(--fg-dim); }
-.log-foot .filter-pill.on:hover { border-color: var(--accent-hover); }
-.log-foot .right { margin-left: auto; cursor: pointer; user-select: none; }
-.log-foot .right.on { color: var(--accent); }
+.log-foot .filter-pill:hover, .log-foot .seg:hover, .log-foot .count:hover { color: var(--fg); border-color: var(--border-strong); }
+.log-foot .filter-pill.on, .log-foot .seg.on {
+  color: var(--fg-strong); background: var(--bg-selected); border-color: var(--border-strong);
+}
+.log-foot .count { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-wash); }
+.filter-count { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.filter-count.nonzero[data-count="warn"] { color: var(--warn-fg); }
+.filter-count.nonzero[data-count="err"] { color: var(--danger-fg); }
+.filter-count.nonzero[data-count="deny"] { color: var(--status-review); }

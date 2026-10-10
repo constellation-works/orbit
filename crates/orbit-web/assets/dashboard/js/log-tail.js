@@ -8,7 +8,7 @@
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
 // and `setDockMode` for the router's `#auto-drain` redirect.
 
-import { el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -447,6 +447,13 @@ function getLogClass(level, code) {
   return "info";
 }
 
+// The task a line is about, when its fields name one (`task_id=<id>` in
+// an agent relay's context); the row links it into the Tasks list.
+const LOG_TASK_ID = /\btask_id=([A-Z][A-Z0-9]*-\d+)\b/;
+
+// A row is the time beside two lines: a badge (AGENT for an agent's stdout,
+// else the event code), the task it names and its source, then the message,
+// cut to one line until the row is expanded or Wrap is on.
 function renderLogEvent(ev, isFresh) {
   const row = el("div", { class: "log-line" + (isFresh ? " fresh" : "") });
   row.dataset.code = ev.code || "";
@@ -457,19 +464,24 @@ function renderLogEvent(ev, isFresh) {
   const tSpan = el("span", { class: "t", text: timeStr, title: timeTitle });
   const agSpan = el("span", { class: "ag", text: ev.source || "", title: ev.target || ev.source || "" });
   const lvClass = getLogClass(ev.level, ev.code);
-  // ORB-10972: the dock is 336px, so the level is carried by a coloured
-  // keyline on the row rather than a 42px text column — that width goes to the
-  // message instead. The class stays on the span for the filter code, which
-  // reads it back out of dataset.
+  // The filters read the level back out of dataset; the class colours the
+  // row's badge and keyline.
   row.classList.add(`lv-${lvClass}`);
-  const lvSpan = el("span", { class: `lv ${lvClass}`, title: ev.code || "", text: ev.code || "" });
+  const agent = ev.agent_stdout === true;
+  const lvSpan = el("span", { class: `lv ${agent ? "agent" : lvClass}`, title: ev.code || "", text: agent ? "AGENT" : ev.code || "" });
   const mSpan = el("span", { class: "m" });
   mSpan.innerHTML = ev.message_html || "";
+  const taskId = LOG_TASK_ID.exec(mSpan.textContent || "")?.[1];
+  let task = null;
+  if (taskId) {
+    task = bindTaskLink(el("a", { class: "log-task", text: taskId, title: `Open ${taskId} in Tasks` }), taskId);
+  }
 
   row.appendChild(tSpan);
-  row.appendChild(agSpan);
-  row.appendChild(lvSpan);
-  row.appendChild(mSpan);
+  row.appendChild(el("div", { class: "log-body" }, [
+    el("div", { class: "log-head" }, [lvSpan, task, agSpan]),
+    mSpan,
+  ]));
 
   // Click to expand/collapse the full message
   row.addEventListener("click", () => row.classList.toggle("expanded"));
@@ -720,6 +732,7 @@ function syncLogFilterPills() {
 
 function applyLogFilters() {
   let visibleCount = 0;
+  const counts = { err: 0, deny: 0, warn: 0 };
   for (const row of logRows) {
     if (row.dataset.gap) {
       row.style.display = "";
@@ -728,7 +741,8 @@ function applyLogFilters() {
     const code = row.dataset.code;
     const level = row.dataset.level;
     const lvClass = getLogClass(level, code);
-    
+    if (lvClass in counts) counts[lvClass] += 1;
+
     let show = false;
     if (activeLogFilters.has("all")) {
       show = true;
@@ -744,6 +758,22 @@ function applyLogFilters() {
   
   const cnt = $("log-count");
   if (cnt) cnt.textContent = `${visibleCount}`;
+  writeLogCounts(counts);
+}
+
+// Each level pill counts its lines among those kept, and the Log tab names
+// the worst level present so a problem shows while Drain is selected.
+function writeLogCounts(counts) {
+  for (const node of document.querySelectorAll("#side-dock .filter-count[data-count]")) {
+    const count = counts[node.dataset.count] || 0;
+    node.textContent = String(count);
+    node.classList.toggle("nonzero", count > 0);
+  }
+  const state = $("dock-log-state");
+  if (!state) return;
+  const level = counts.err > 0 ? "err" : counts.deny > 0 ? "deny" : counts.warn > 0 ? "warn" : "";
+  state.textContent = level ? `${counts[level]} ${level}` : "";
+  state.dataset.level = level;
 }
 
 function rememberStreamOffset(lastEventId) {
@@ -765,6 +795,8 @@ function setLogStreamConnected(connected) {
     bar.setAttribute("aria-label", connected ? "Latest log line" : LOG_STREAM_UNAVAILABLE);
   }
   if (dock) dock.classList.toggle("disconnected", !connected);
+  const live = $("log-live-label");
+  if (live) live.textContent = connected ? "Live" : "Reconnecting";
 }
 
 function closeLogStream() {
@@ -823,8 +855,8 @@ function connectLogStream() {
         const row = renderLogEvent(ev, true);
         inner.insertBefore(row, inner.firstChild);
         logRows.unshift(row);
-        applyLogFilters();
         enforceLogBounds();
+        applyLogFilters();
         setTimeout(() => row.classList.remove("fresh"), 600);
         const stream = $("side-dock") ? $("side-dock").querySelector(".log-stream") : document.querySelector(".log-stream");
         if (stream) stream.scrollTop = 0;

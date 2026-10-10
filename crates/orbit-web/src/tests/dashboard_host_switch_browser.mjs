@@ -458,7 +458,7 @@ try {
     const style = getComputedStyle(node);
     return { visible: node.matches(':focus-visible'), width: style.outlineWidth, style: style.outlineStyle, color: style.outlineColor };
   });
-  assert(ring.visible && ring.width === '2px' && ring.style === 'solid' && ring.color === 'rgb(138, 179, 255)', `the picker shows the 2px accent focus ring: ${JSON.stringify(ring)}`);
+  assert(ring.visible && ring.width === '2px' && ring.style === 'solid' && ring.color === 'rgb(122, 167, 255)', `the picker shows the 2px accent focus ring: ${JSON.stringify(ring)}`);
   const order = await page.evaluate(() => {
     const host = document.getElementById('host-select');
     const workspace = document.getElementById('workspace-select');

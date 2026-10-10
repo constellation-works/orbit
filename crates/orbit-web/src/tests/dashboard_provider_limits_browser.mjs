@@ -5,8 +5,8 @@
 // server's per-crew `limit` and whose `/api/workflows/auto/readiness` carries
 // `provider_limits` and a task waiting with reason `provider_limit`. It checks
 // Settings › Crews' Limit column (used percent, window, reset and the gated
-// badge, a dash for an uncovered crew) and the Drain card's provider-limit
-// note and waiting task with its detail, under the light and the dark colour
+// badge, a dash for an uncovered crew), the Drain card's provider-limit note
+// and the waiting task's readiness dot with its detail, under the light and the dark colour
 // scheme, and both views against a server that predates provider limits. No
 // Orbit store, dashboard or host is contacted.
 import { pathToFileURL } from 'node:url';
@@ -75,6 +75,8 @@ const READINESS = {
   ],
 };
 
+const TASKS = READINESS.tasks.map(({ task_id }) => ({ id: task_id, title: `Fixture ${task_id}`, status: 'backlog', priority: 'medium' }));
+
 // An older host's server sends neither `provider_limits` nor a crew `limit`.
 let legacy = false;
 const withoutLimits = () => ({
@@ -87,7 +89,7 @@ function api(req, rest, res) {
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   if (req.method !== 'GET') return json({ ok: true });
   if (rest === 'workspaces') return json(WORKSPACES);
-  if (rest === 'tasks') return json({ items: [], total: 0, limit: 50, truncated: false });
+  if (rest === 'tasks') return json({ items: TASKS, total: TASKS.length, limit: 50, offset: 0, next_cursor: null });
   if (rest === 'tasks/all') return json({ items: [], total: 0 });
   if (rest === 'tasks/locks') return json({ total_locked: 0, total_tasks: 0, by_task: [] });
   if (rest === 'crews') return json({ default_crew: 'sol', crews: [] });
@@ -209,21 +211,24 @@ try {
     assert(contrast(crews.opus.valueColor, crews.opus.background) >= 4.5, `the used percent is legible: ${crews.opus.valueColor} on ${crews.opus.background}`);
     await page.screenshot({ path: path.join(evidence, `provider-limits-crews-${scheme}.png`), fullPage: true });
 
-    // 2. The Drain card: the gated providers and the task waiting on one.
+    // 2. The Drain card names the gated providers; the task waiting on one
+    //    carries the wait on its readiness dot in the Tasks list.
     await page.goto(`${origin}/#auto-drain`);
     await page.locator('#auto-drain-body .drain-provider-limit-note').waitFor({ state: 'visible' });
+    await page.locator('#tasks-body .ready-dot[data-pool]').first().waitFor({ state: 'attached' });
     await settled(page);
     const drain = await page.evaluate(() => {
       const card = document.getElementById('auto-drain-panel');
       const note = card.querySelector('.drain-provider-limit-note');
-      const list = card.querySelector('.drain-provider-limit-waits');
+      const dot = document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot');
       const box = card.getBoundingClientRect();
       return {
         note: note.textContent,
         noteColor: getComputedStyle(note).color,
         background: getComputedStyle(card).backgroundColor,
-        label: list?.getAttribute('aria-label'),
-        rows: [...(list?.querySelectorAll('.drain-blocked-row') || [])].map((row) => row.textContent),
+        pool: dot?.dataset.pool,
+        label: dot?.getAttribute('aria-label'),
+        title: dot?.title,
         overflowing: [...card.querySelectorAll('*')]
           .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > box.right + 1)
           .map((node) => node.className || node.tagName),
@@ -232,8 +237,8 @@ try {
     log.drain = drain;
     assert(/^Provider limits: claude five_hour 93% ≥ 90% until .+: opus skipped\.$/.test(drain.note), `the note names the gated provider: ${drain.note}`);
     assert(!drain.note.includes('codex'), `a provider below its threshold holds nothing: ${drain.note}`);
-    assert(drain.label === 'Tasks waiting for a provider usage limit to reset', `the waiting list is labelled: ${drain.label}`);
-    assert(drain.rows.length === 1 && drain.rows[0].includes('ORB-101') && drain.rows[0].includes('provider limit') && drain.rows[0].includes(DETAIL), `the waiting task shows its detail: ${JSON.stringify(drain.rows)}`);
+    assert(drain.pool === 'other' && drain.label.includes('provider limit'), `the waiting task's dot names its wait: ${JSON.stringify(drain)}`);
+    assert(drain.title.includes(DETAIL), `the waiting task's dot carries the detail: ${drain.title}`);
     assert(drain.overflowing.length === 0, `the Drain card content fits: ${JSON.stringify(drain.overflowing)}`);
     assert(contrast(drain.noteColor, drain.background) >= 4.5, `the note is legible: ${drain.noteColor} on ${drain.background}`);
     await page.screenshot({ path: path.join(evidence, `provider-limits-drain-${scheme}.png`), fullPage: true });
@@ -256,14 +261,14 @@ try {
     const cells = await page.evaluate(() => [...document.querySelectorAll('.config-crew-limit')].map((cell) => cell.textContent));
     assert(cells.length === 3 && cells.every((text) => text === '—'), `without limits every crew shows the placeholder: ${JSON.stringify(cells)}`);
     await page.goto(`${origin}/#auto-drain`);
-    await page.locator('#auto-drain-body .drain-provider-limit-waits').waitFor({ state: 'visible' });
+    await page.locator('#tasks-body [data-key="task-ORB-101"] .ready-dot[data-pool]').waitFor({ state: 'attached' });
     const legacyDrain = await page.evaluate(() => ({
       note: Boolean(document.querySelector('.drain-provider-limit-note')),
-      rows: [...document.querySelectorAll('.drain-provider-limit-waits .drain-blocked-row')].map((row) => row.textContent),
+      label: document.querySelector('#tasks-body [data-key="task-ORB-101"] .ready-dot').getAttribute('aria-label'),
     }));
     evidenceLog.legacy = { cells, ...legacyDrain };
     assert(!legacyDrain.note, 'no provider-limit note without readings');
-    assert(legacyDrain.rows.length === 1 && legacyDrain.rows[0].includes('waits for a provider usage limit to reset'), `a task with no detail names its wait: ${JSON.stringify(legacyDrain.rows)}`);
+    assert(legacyDrain.label.includes('provider limit'), `a task with no detail names its wait: ${legacyDrain.label}`);
     await context.close();
   }
 
@@ -275,7 +280,7 @@ try {
       'browser-crews-limit-column-shows-use-window-reset-and-gated-badge',
       'browser-crews-limit-column-placeholder-for-uncovered-crew',
       'browser-drain-card-names-gated-providers',
-      'browser-drain-card-lists-provider-limit-waits-with-detail',
+      'browser-task-dot-names-provider-limit-wait-with-detail',
       'browser-provider-limits-legible-in-light-and-dark-schemes',
       'browser-provider-limits-absent-on-older-server',
     ],

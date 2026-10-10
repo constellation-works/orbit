@@ -1,15 +1,20 @@
 /* App chrome: the nav rail, the top bar and its host chips, the workspace
    picker and scope chips, the page grid, tab panes, and subtabs. */
 
-/* ORB-10972: the app is a two-column shell — a fixed nav rail and a
-   content column that owns its own scrolling. */
+/* ORB-10972: the app is a top bar across the window over two columns: a
+   fixed nav rail and a content column that owns its own scrolling. */
 .shell {
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "top top" "rail main";
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
 }
+.shell > .topbar { grid-area: top; }
+.shell > .rail { grid-area: rail; }
+.shell > .main-col { grid-area: main; }
 
 .skip-link {
   position: fixed;
@@ -35,17 +40,17 @@
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
-  padding: 14px 12px 10px;
+  padding: 16px 12px 12px;
 }
 
-.rail-brand { padding: 2px 6px 14px; }
+.rail-brand { flex: 0 0 auto; display: flex; align-items: center; height: 36px; padding-right: 6px; }
 .rail-brand svg { height: 22px; width: auto; display: block; }
 
 .rail .tabs {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-top: 16px;
+  gap: 18px;
+  margin-top: 18px;
 }
 
 /* The router still appends #tab-indicator / #subtab-indicator to .tabs
@@ -60,9 +65,9 @@
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--fg-mute);
-  padding: 0 8px 6px;
+  padding: 0 10px 6px;
 }
 
 .rail .tab {
@@ -70,14 +75,14 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 34px;
-  padding: 0 8px;
+  height: 38px;
+  padding: 0 10px;
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: #c4c4cc;
+  color: var(--fg-soft);
   font: inherit;
-  font-size: 14px;
+  font-size: 13.5px;
   text-align: left;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
@@ -87,8 +92,8 @@
 
 .rail .tab.active {
   background: var(--bg-selected);
-  color: var(--fg);
-  font-weight: 600;
+  color: var(--fg-strong);
+  font-weight: 500;
 }
 .rail .tab.active .rail-ico { color: var(--accent); }
 
@@ -101,7 +106,7 @@
    so something needing action never reads at the weight of a total. */
 .rail-count {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   color: var(--fg-mute);
@@ -109,10 +114,11 @@
 }
 .rail-count.alert {
   color: var(--danger-fg);
-  background: #2a1413;
+  background: #3a1d1a;
   border-radius: 999px;
-  padding: 0 7px;
+  padding: 1px 7px;
   line-height: 18px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
@@ -144,44 +150,44 @@
 .rail-subtabs .subtab:hover { color: var(--fg); background: var(--bg-hover); }
 .rail-subtabs .subtab.active { color: var(--fg); background: var(--bg-selected); font-weight: 600; }
 
-.rail-foot {
-  margin-top: auto;
-  border-top: 1px solid var(--hair);
-  padding: 10px 8px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
+/* The host and workspace pickers read as one scope card at the head of the
+   rail: host above, workspace below. */
 .rail-host, .rail-workspace { display: flex; flex-direction: column; gap: 6px; }
-.rail-host:not(:empty) { margin-bottom: 8px; }
+.rail-host:not(:empty) { margin-bottom: 6px; }
 .rail-host .workspace-select,
 .rail-workspace .workspace-select {
   max-width: 100%;
   width: 100%;
-  height: 40px;
+  height: 36px;
   margin: 0;
   padding: 0 10px;
-  border-radius: var(--radius);
-  background-color: var(--bg-elev);
-  font-size: 13.5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--bg-control);
+  font-size: 13px;
   font-weight: 600;
 }
+.rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
 
-/* The line reads "refreshed <destination> · <time>" and is wider than the
-   rail, so it wraps under the dot instead of clipping the time. */
+/* When the dashboard last refreshed, in the top bar: "refreshed <destination>
+   · <time>". The host is the scope card's, so it is not repeated here. */
 .rail-conn {
   display: flex;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 12px;
   line-height: 1.4;
-  color: var(--fg-dim);
+  color: var(--fg-mute);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.rail-conn .status-dot { flex: none; margin-top: 5px; }
-.rail-conn .conn-text { min-width: 0; overflow-wrap: anywhere; }
-.rail-conn .conn-host:not(:empty) { color: var(--fg); font-weight: 600; }
-.rail-conn .conn-host:not(:empty)::after { content: " · "; color: var(--fg-dim); font-weight: 400; }
+.rail-conn .status-dot { flex: none; }
+.rail-conn .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.topbar-conn .conn-host { display: none; }
+@media (max-width: 1279px) {
+  .topbar-conn { display: none; }
+}
 
 .main-col {
   display: flex;
@@ -204,12 +210,12 @@
   flex: 0 0 auto;
   box-sizing: border-box;
   height: var(--topbar-height);
-  border-bottom: 1px solid var(--hair);
+  border-bottom: 1px solid #1f242b;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 24px;
-  background: var(--bg);
+  gap: 18px;
+  padding: 0 20px;
+  background: var(--bg-chrome);
 }
 
 .topbar .crumb {
@@ -237,40 +243,41 @@
   color: var(--fg-dim);
 }
 .host-resource-group.remote .host-resource-name { color: var(--accent); }
-.host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: 0 0 auto; }
+.host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; flex: 0 0 auto; }
 /* One chip per resource, sized so a new reading does not resize it.
    Throttling changes the held chip's colour and outline, never its size. */
+/* A reading: its name, its value and a small bar of how full it is. */
 .host-resource {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   position: relative;
   box-sizing: border-box;
   flex: 0 0 auto;
   height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
+  padding: 0 6px;
+  border: 1px solid transparent;
   border-radius: 7px;
-  color: #c4c4cc;
-  font-size: 13px;
+  color: var(--fg-mute);
+  font-size: 12.5px;
   white-space: nowrap;
   cursor: default;
+  --meter: var(--status-done);
 }
-/* Room for `load 12.3× cores` and `mem 100%`; a longer reading widens its chip. */
-.host-resource[data-resource="cpu"] { min-width: 10.5rem; }
-.host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 8rem; }
-.host-resource::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--state-running); }
-.host-resource .v { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+/* Room for `load 12.3× cores` and `mem 100%` beside the bar; a longer reading
+   widens its chip. */
+.host-resource[data-resource="cpu"] { min-width: 11.75rem; }
+.host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 7.75rem; }
+.host-resource .v { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; }
 .host-resource .unit { font-weight: 400; }
-.host-resource.elevated { background: color-mix(in srgb, var(--state-pending) 10%, var(--bg)); border-color: var(--state-pending); color: var(--state-pending); }
-.host-resource.elevated::before { background: var(--state-pending); }
-.host-resource.critical { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
-.host-resource.critical::before { background: var(--state-failed); }
-.host-resource.unknown::before { background: var(--fg-mute); }
+.host-resource-bar { flex: none; width: 36px; height: 4px; border-radius: 2px; background: #232a33; overflow: hidden; }
+.host-resource-fill { display: block; height: 100%; background: var(--meter); }
+.host-resource.elevated { --meter: var(--warn-fg); color: var(--warn-fg); }
+.host-resource.critical { --meter: var(--state-failed); background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
+.host-resource.unknown { --meter: var(--fg-disabled); }
 .host-resource.elevated .v, .host-resource.critical .v { color: inherit; }
 .host-resource.unknown .v { color: var(--fg-dim); }
 .host-resource.throttled { outline: 1px solid currentColor; outline-offset: 1px; }
-.host-resource.throttled::before { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px currentColor; }
 /* The verdict's words stay for assistive tech and the title; they take no room. */
 .host-resource .host-resource-held {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -293,14 +300,18 @@
   }
   .topbar .host-resource-group { order: 1; flex: 1 1 100%; overflow-x: auto; }
   .topbar-spacer { order: 0; }
+  .topbar .rail-brand, .topbar .global-drain-state, .topbar .refresh-btn { order: 0; }
 }
 
 .refresh-btn {
-  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
   color: var(--fg);
   font: inherit;
   font-size: 13px;
@@ -314,7 +325,7 @@
   color: var(--accent-hover);
 }
 
-.refresh-icon { display: none; }
+.refresh-icon { display: block; width: 14px; height: 14px; }
 .refresh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .refresh-btn:disabled {
@@ -322,37 +333,36 @@
   opacity: 0.55;
 }
 
-/* On phones, the brand and icon actions share the first row; the host and
-   workspace pickers get a second row, followed by scrolling destinations and
-   views. The host chips have their own topbar row. Actions stay in the topbar
-   DOM so their listeners and desktop layout are shared. */
+/* On phones the top bar keeps the brand, Drain and Refresh on its first row
+   and the host readings on a second; the rail below holds the host and
+   workspace pickers side by side over scrolling destinations and views. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas: "top" "rail" "main";
   }
   .rail {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr) 34px 34px;
-    grid-template-rows: auto auto auto;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+    grid-template-rows: auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
-    padding: 8px;
+    padding: 6px 8px;
     align-items: center;
-    gap: 6px;
+    gap: 4px 6px;
   }
-  .rail-brand { grid-column: 1; grid-row: 1; padding: 0; height: 34px; display: flex; align-items: center; align-self: start; }
   .rail-brand svg { width: 64px; height: auto; }
-  .rail-host { grid-column: 1; grid-row: 2; min-width: 0; margin-bottom: 0; align-self: start; }
+  .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
   .rail-host .rail-scope-label { display: none; }
-  .rail-workspace { grid-column: 2; grid-row: 2; min-width: 0; align-self: start; }
+  .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
   .rail-workspace .workspace-select { height: 34px; width: 100%; max-width: 100%; }
   .rail .tabs {
     grid-column: 1 / -1;
-    grid-row: 3;
+    grid-row: 2;
     flex-direction: row;
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -396,37 +406,42 @@
     white-space: nowrap;
     flex: 0 0 auto;
   }
-  .rail-foot { display: none; }
-  .topbar { padding: 6px 8px; gap: 0; }
-  .topbar-spacer { display: none; }
+  .topbar { flex-wrap: wrap; height: auto; padding: 6px 8px; row-gap: 4px; column-gap: 6px; }
+  .topbar .rail-brand { order: 0; height: 34px; }
+  .topbar-spacer { display: block; order: 1; }
+  .topbar .global-drain-state { order: 2; }
+  .topbar .refresh-btn { order: 3; }
   .topbar .host-resource-group {
+    order: 4;
     flex: 1 1 100%;
+    overflow-x: auto;
     padding: 2px;
     scrollbar-width: none;
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
     mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
-  /* Tighter chips keep all three readings in view at 375px. */
-  .host-resource { gap: 4px; padding: 0 7px; }
-  .host-resource[data-resource="cpu"] { min-width: 9.5rem; }
-  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 7.25rem; }
+  /* The pickers right below name the host, and a scope note takes room
+     only while it says something. */
+  .topbar .host-resource-name,
+  .rail-workspace .workspace-scope-note.is-inactive { display: none; }
+  /* Tighter readings keep all three in view at 375px. */
+  .host-resource { gap: 5px; padding: 0 4px; }
+  .host-resource-bar { width: 20px; }
+  .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
+  .host-resource[data-resource="memory"], .host-resource[data-resource="disk"] { min-width: 6.5rem; }
   .topbar .global-drain-state,
   .topbar .refresh-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
     height: 34px;
   }
-  .topbar .global-drain-state { right: 48px; min-width: 86px; padding: 0 8px; }
+  .topbar .global-drain-state { min-width: 86px; padding: 0 10px; }
+  .topbar .global-drain-running { display: none; }
   .topbar .refresh-btn { width: 34px; padding: 0; }
   .topbar .global-drain-state[hidden] { display: none; }
-  .refresh-icon { display: block; width: 17px; height: 17px; }
-  /* Keep the route heading and action names available to assistive tech. */
-  .topbar .crumb,
+  /* Keep the action name available to assistive tech. */
   .refresh-label {
     position: absolute;
     width: 1px;
@@ -546,56 +561,44 @@ button.scope-chip:hover {
   border-color: var(--accent);
   background: rgba(110, 159, 255, 0.12);
 }
-.ws-badge {
+/* Title badges: a workspace name, an `os:` routing tag, a readiness gap. One
+   shape, sitting on the title's baseline. */
+.ws-badge,
+.os-badge,
+.readiness-badge {
   display: inline-block;
   margin-right: 6px;
-  padding: 0 4px;
-  font-size: 10px;
-  color: var(--fg-dim);
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
   border: 1px solid var(--border);
-  border-radius: 2px;
-  vertical-align: middle;
+  border-radius: 4px;
+  vertical-align: 1px;
 }
+.ws-badge { color: var(--fg-dim); }
 
 /* An `os:` routing tag: the host a task needs, set apart from plain labels. */
 .os-badge {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 4px;
-  font-size: 10px;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 2px;
-  vertical-align: middle;
+  color: #a8c2f0;
+  background: #16213a;
+  border-color: #2a3b5e;
 }
 .os-badge-invalid {
   color: var(--fg-dim);
+  background: transparent;
   border-style: dashed;
 }
 
 /* Task readiness, in the os-badge slot: amber while a gap blocks automation,
    muted when every gap is advisory, neutral while a task pilot prepares it. */
-.readiness-badge {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 0 4px;
-  font-size: 10px;
-  border: 1px solid;
-  border-radius: 2px;
-  vertical-align: middle;
-}
 .readiness-blocking {
-  color: var(--state-pending);
-  border-color: var(--state-pending);
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  border-color: var(--warn-line);
 }
 .readiness-advisory {
   color: var(--fg-mute);
   border-color: var(--border);
-}
-/* A backlog task the drain readiness snapshot reports as waiting. */
-.drain-wait-badge {
-  color: var(--priority-medium);
-  border-color: var(--priority-medium);
 }
 .readiness-preparing {
   color: var(--fg-dim);

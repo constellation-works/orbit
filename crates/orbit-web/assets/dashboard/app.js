@@ -14,6 +14,7 @@ import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, set
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations, peekRoutineFailures } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
+import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
@@ -343,6 +344,8 @@ function renderBodyBlock(body, fallbackClass) {
 }
 
 function renderLocksPanel(payload) {
+  // The In progress rows count each task's locked files from the same read.
+  setTaskLocks(payload);
   const body = $("locks-body");
   const count = $("locks-count");
   if (!body || !count) return;
@@ -1344,6 +1347,9 @@ function activeRefreshJobs() {
     // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
     // panel shows the placeholder rendered above).
     if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
+    // When each running task's run started, for the In progress rows' elapsed
+    // time. Only while that group can show.
+    if (!aggregate && activeStatuses.has("in-progress")) add("Running runs", fetchRunningRuns());
     // The dock's Drain card; without a concrete workspace it renders its own
     // read-only note instead of fetching.
     return jobs;
@@ -1486,6 +1492,13 @@ function fetchAndRenderRuns() {
     lastRunSourcesUnavailable = unavailable;
     renderRuns(lastRuns);
   }, "diag-count");
+}
+
+function fetchRunningRuns() {
+  const revision = getWorkspaceRevision();
+  return fetchJson("/api/job-runs?state=running&limit=100").then((payload) => {
+    if (revision === getWorkspaceRevision()) setRunningRuns(payload);
+  });
 }
 
 function fetchAndRenderTaskLocks() {
@@ -1795,6 +1808,10 @@ const tasksContext = taskContext();
 onDrainReadinessChange(() => {
   if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
 });
+// Run start times and file locks arrive apart from the task list too.
+onTaskRuntimeChange(() => {
+  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+});
 buildChips(tasksContext);
 wireSearch(tasksContext);
 wireFrictionSearch();
@@ -1841,3 +1858,8 @@ syncWindowSelectors();
 iT();
 
 initLogTail();
+// The status bar's Open log shows the full tail: Tasks, with the dock on Log.
+document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
+  setDockMode("log");
+  sAT("tasks");
+});

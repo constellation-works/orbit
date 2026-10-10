@@ -12,20 +12,45 @@
   <body>
     <a class="skip-link" id="skip-link" href="#tasks-main">Skip to content</a>
     <div class="shell">
+      <!-- The bar spans the window: the brand, the selected host's live
+           readings, Drain, when the dashboard last refreshed, and Refresh.
+           The destination heading stays for assistive tech. -->
+      <header class="topbar">
+          <div class="rail-brand">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 82 24" role="img" aria-label="Orbit">
+            <g transform="translate(-2.474 -2.474) scale(0.2895)"><path d="M 82.61 44.95 A 33 33 0 1 1 55.05 17.39" fill="none" stroke="#EDEDEF" stroke-width="10" stroke-linecap="round"/><circle cx="50" cy="50" r="8.5" fill="#EDEDEF"/><circle cx="73.33" cy="26.67" r="10.5" fill="#6E9FFF"/></g>
+            <path fill="#EDEDEF" transform="translate(0 1)" d="M35.26 17.24c-1.73 0-3.12-.52-4.18-1.56-1.05-1.05-1.58-2.45-1.58-4.2 0-1.72.53-3.1 1.6-4.14 1.07-1.05 2.45-1.58 4.16-1.58s3.09.53 4.14 1.58c1.07 1.04 1.6 2.42 1.6 4.14 0 1.75-.53 3.15-1.58 4.2-1.06 1.04-2.45 1.56-4.16 1.56Zm0-2.46c.86 0 1.55-.3 2.06-.9.52-.61.78-1.41.78-2.4 0-.98-.26-1.76-.78-2.36-.51-.6-1.2-.9-2.06-.9s-1.56.3-2.08.9c-.51.6-.76 1.38-.76 2.36 0 .99.25 1.79.76 2.4.52.6 1.22.9 2.08.9ZM43.65 17V6h2.58l.18 1.48c.32-.54.73-.95 1.24-1.24.52-.29 1.13-.44 1.84-.44.31 0 .59.03.84.08v2.74a5.5 5.5 0 0 0-.96-.08c-.82 0-1.49.23-2 .7-.5.45-.76 1.14-.76 2.06V17h-3Zm14.05.24c-.76 0-1.42-.15-1.98-.46a3.6 3.6 0 0 1-1.32-1.26L54.16 17h-2.54V1.8h3v5.46c.36-.45.8-.81 1.32-1.08a4 4 0 0 1 1.78-.38c1.46 0 2.64.53 3.52 1.58.9 1.04 1.34 2.41 1.34 4.1 0 1.72-.45 3.11-1.36 4.18-.9 1.05-2.07 1.58-3.52 1.58Zm-.68-2.48c.78 0 1.39-.3 1.84-.9.46-.6.7-1.39.7-2.38 0-.98-.24-1.76-.7-2.34-.45-.6-1.06-.9-1.84-.9-.77 0-1.38.3-1.84.9-.45.58-.68 1.36-.68 2.34 0 .99.23 1.78.68 2.38.46.6 1.07.9 1.84.9ZM65.12 17V6h3v11h-3Zm1.5-12.44c-.51 0-.94-.17-1.28-.5-.33-.34-.5-.76-.5-1.26s.17-.91.5-1.24c.34-.34.77-.52 1.28-.52s.93.18 1.26.52c.34.33.52.74.52 1.24s-.18.92-.52 1.26c-.33.33-.75.5-1.26.5ZM76.13 17.2c-1.25 0-2.22-.31-2.9-.94-.68-.64-1.02-1.58-1.02-2.82V8.48H70.3V6h1.92V3.34h3V6h3.02v2.48h-3.02v4.98c0 .45.1.76.3.94.2.17.55.26 1.04.26h1.6V17c-.28.07-.61.12-1 .16-.37.03-.72.04-1.04.04Z"></path>
+            </svg>
+          </div>
+          <h1 class="crumb visually-hidden" id="topbar-crumb">Tasks</h1>
+          <!-- Live readings for the selected host: load relative to cores, memory
+               and disk. The group names that host. Each chip is sized for its
+               widest usual reading, so a new reading or a throttle verdict does
+               not move the bar. The windowed counts sit on the rail (failed runs
+               on Runs, events on Audit). -->
+          <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
+            <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
+            <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
+              <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">-</span></span>
+              <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
+              <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
+            </div>
+          </div>
+          <span class="topbar-spacer"></span>
+          <button id="global-drain-state" class="global-drain-state" type="button" title="Open Drain card" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></button>
+          <div class="rail-conn topbar-conn">
+            <span id="conn-status" class="status-dot orange"></span>
+            <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
+          </div>
+          <button id="refresh-btn" class="refresh-btn" type="button" title="Refresh dashboard"><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 0 4M16 3v5h-5"/></svg><span class="refresh-label">Refresh</span></button>
+      </header>
       <!-- ORB-10972: the top-level nav is a left rail. It keeps the `.tab` /
            `.subtab` classes and the `#diag-subtabs` id the router selects on,
            so every prior hash route resolves unchanged — only the nav's
            position and presentation moved. Diagnostics' subtabs are visible
            children here instead of a second row hidden inside the tab. -->
       <nav class="rail" aria-label="Dashboard sections">
-        <div class="rail-brand">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 82 24" role="img" aria-label="Orbit">
-          <g transform="translate(-2.474 -2.474) scale(0.2895)"><path d="M 82.61 44.95 A 33 33 0 1 1 55.05 17.39" fill="none" stroke="#EDEDEF" stroke-width="10" stroke-linecap="round"/><circle cx="50" cy="50" r="8.5" fill="#EDEDEF"/><circle cx="73.33" cy="26.67" r="10.5" fill="#6E9FFF"/></g>
-          <path fill="#EDEDEF" transform="translate(0 1)" d="M35.26 17.24c-1.73 0-3.12-.52-4.18-1.56-1.05-1.05-1.58-2.45-1.58-4.2 0-1.72.53-3.1 1.6-4.14 1.07-1.05 2.45-1.58 4.16-1.58s3.09.53 4.14 1.58c1.07 1.04 1.6 2.42 1.6 4.14 0 1.75-.53 3.15-1.58 4.2-1.06 1.04-2.45 1.56-4.16 1.56Zm0-2.46c.86 0 1.55-.3 2.06-.9.52-.61.78-1.41.78-2.4 0-.98-.26-1.76-.78-2.36-.51-.6-1.2-.9-2.06-.9s-1.56.3-2.08.9c-.51.6-.76 1.38-.76 2.36 0 .99.25 1.79.76 2.4.52.6 1.22.9 2.08.9ZM43.65 17V6h2.58l.18 1.48c.32-.54.73-.95 1.24-1.24.52-.29 1.13-.44 1.84-.44.31 0 .59.03.84.08v2.74a5.5 5.5 0 0 0-.96-.08c-.82 0-1.49.23-2 .7-.5.45-.76 1.14-.76 2.06V17h-3Zm14.05.24c-.76 0-1.42-.15-1.98-.46a3.6 3.6 0 0 1-1.32-1.26L54.16 17h-2.54V1.8h3v5.46c.36-.45.8-.81 1.32-1.08a4 4 0 0 1 1.78-.38c1.46 0 2.64.53 3.52 1.58.9 1.04 1.34 2.41 1.34 4.1 0 1.72-.45 3.11-1.36 4.18-.9 1.05-2.07 1.58-3.52 1.58Zm-.68-2.48c.78 0 1.39-.3 1.84-.9.46-.6.7-1.39.7-2.38 0-.98-.24-1.76-.7-2.34-.45-.6-1.06-.9-1.84-.9-.77 0-1.38.3-1.84.9-.45.58-.68 1.36-.68 2.34 0 .99.23 1.78.68 2.38.46.6 1.07.9 1.84.9ZM65.12 17V6h3v11h-3Zm1.5-12.44c-.51 0-.94-.17-1.28-.5-.33-.34-.5-.76-.5-1.26s.17-.91.5-1.24c.34-.34.77-.52 1.28-.52s.93.18 1.26.52c.34.33.52.74.52 1.24s-.18.92-.52 1.26c-.33.33-.75.5-1.26.5ZM76.13 17.2c-1.25 0-2.22-.31-2.9-.94-.68-.64-1.02-1.58-1.02-2.82V8.48H70.3V6h1.92V3.34h3V6h3.02v2.48h-3.02v4.98c0 .45.1.76.3.94.2.17.55.26 1.04.26h1.6V17c-.28.07-.61.12-1 .16-.37.03-.72.04-1.04.04Z"></path>
-        </svg>
-        </div>
-
-        <!-- The host and workspace pickers sit under the brand: they scope every
+        <!-- The host and workspace pickers head the rail: they scope every
              view, so they belong above the destinations they scope, not below
              the fold. The host comes first because it scopes the workspace list. -->
         <div class="rail-host" id="rail-host"></div>
@@ -74,35 +99,9 @@
             </nav>
           </div>
         </div>
-
-        <div class="rail-foot">
-          <div class="rail-conn">
-            <span id="conn-status" class="status-dot orange"></span>
-            <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text">connecting&hellip;</span></span>
-          </div>
-        </div>
       </nav>
 
       <div class="main-col">
-        <header class="topbar">
-          <h1 class="crumb" id="topbar-crumb">Tasks</h1>
-          <!-- Live readings for the selected host: load relative to cores, memory
-               and disk. The group names that host. Each chip is sized for its
-               widest usual reading, so a new reading or a throttle verdict does
-               not move the bar. The windowed counts sit on the rail (failed runs
-               on Runs, events on Audit). -->
-          <div class="host-resource-group" id="host-resource-group" role="group" aria-label="Live resources of the serving host">
-            <span class="host-resource-name" id="host-resource-name" aria-hidden="true">serving host</span>
-            <div class="host-resource-chips" id="host-resource-chips" aria-live="polite">
-              <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">-</span></span>
-              <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">-</span></span>
-              <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">-</span></span>
-            </div>
-          </div>
-          <span class="topbar-spacer"></span>
-          <button id="global-drain-state" class="global-drain-state" type="button" title="Open Drain card" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span></button>
-          <button id="refresh-btn" class="refresh-btn" type="button" title="Refresh dashboard"><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 8a6 6 0 1 0 0 4M16 3v5h-5"/></svg><span class="refresh-label">Refresh</span></button>
-        </header>
         <!-- ORB-14680: the selected host's state. An unreachable, mismatched or
              too-old host replaces every panel with one host-level state; a
              host on another version or protocol keeps a non-blocking banner. -->
@@ -116,17 +115,21 @@
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
             <header class="tasks-head">
-              <h2 class="panel-title">Tasks</h2>
+              <div class="tasks-heading">
+                <h2 class="panel-title">Tasks</h2>
+                <span class="count" id="tasks-count">-</span>
+              </div>
               <div class="task-search-wrap">
+                <svg class="task-search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></svg>
                 <input type="search" id="task-search" placeholder="Filter by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" aria-describedby="task-lookup-status" title="Press Enter on a task ID to open it, even outside this list or workspace" />
+                <kbd class="task-search-key" aria-hidden="true">/</kbd>
                 <span id="task-lookup-status" class="task-lookup-status" role="status"></span>
               </div>
-              <span class="count" id="tasks-count">-</span>
             </header>
             <div class="controls">
               <div id="task-filter" role="group" aria-label="Filter tasks by status"></div>
             </div>
-            <div class="filter-summary" id="task-filter-summary" role="status" aria-live="polite"></div>
+            <div class="filter-summary visually-hidden" id="task-filter-summary" role="status" aria-live="polite"></div>
             <nav class="task-pagination" aria-label="Task pages">
               <button id="tasks-previous" type="button" disabled>Previous</button>
               <span id="tasks-page-status" role="status" aria-live="polite"></span>
@@ -151,24 +154,30 @@
           <div class="dock-head">
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
               <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
-              <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log</button>
+              <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
-            <span class="dock-meta"><span class="live-dot"></span><span id="log-count">0</span> lines</span>
           </div>
 
           <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
             <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
               <header>
-                <span class="drain-title"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-title">Auto-drain</span></span>
-                <span class="drain-live" id="auto-drain-live">—</span>
+                <h2 class="drain-title" id="auto-drain-title">Auto-drain</h2>
+                <span class="drain-phase" id="auto-drain-phase"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-phase-label">—</span></span>
               </header>
               <div class="body" id="auto-drain-body">
                 <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
               </div>
               <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
             </section>
+            <section class="panel drain-start-card" id="auto-drain-start" aria-labelledby="auto-drain-start-title" hidden>
+              <header>
+                <h2 class="drain-title" id="auto-drain-start-title">Start a window</h2>
+                <span class="drain-start-sub" id="auto-drain-start-sub"></span>
+              </header>
+              <div class="body" id="auto-drain-start-body"></div>
+            </section>
             <section class="panel" id="locks-panel">
-              <header><span>Locked files</span><span class="count" id="locks-count">0 files / 0 tasks</span></header>
+              <header><h2 class="drain-title">Locked files</h2><span class="count" id="locks-count">0 files / 0 tasks</span></header>
               <div class="body" id="locks-body"></div>
             </section>
           </div>
@@ -176,14 +185,22 @@
           <div class="dock-pane" id="dock-pane-log" role="tabpanel" aria-labelledby="dock-tab-log" data-pane="log">
             <section class="panel" id="log-panel">
               <div class="log-foot log-filters">
-                <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>
-                <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">err</button>
-                <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>
-                <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>
-                <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">agent</button>
-                <button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><b>&#8595;</b> follow</button>
-                <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">wrap</button>
-                <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                <div class="log-filter-group" role="group" aria-label="Filter log lines">
+                  <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">All</button>
+                  <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
+                  <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
+                  <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
+                  <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
+                </div>
+                <div class="log-view-group">
+                  <button type="button" class="seg on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
+                  <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">Wrap</button>
+                  <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                </div>
+              </div>
+              <div class="log-caption">
+                <span>Newest first · <span id="log-count">0</span> shown</span>
+                <span class="log-live"><span class="live-dot" aria-hidden="true"></span><span class="log-live-label" id="log-live-label">Live</span></span>
               </div>
               <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
                 <div class="inner" id="logInner"></div>
@@ -556,6 +573,7 @@
       <span class="sb-t" id="log-statusbar-time"></span>
       <span class="sb-ag" id="log-statusbar-source"></span>
       <span class="sb-m" id="log-statusbar-message"></span>
+      <button type="button" class="sb-open" id="log-statusbar-open">Open log</button>
     </div>
     <div id="gantt-tooltip" role="tooltip" aria-hidden="true"></div>
     <script type="module" src="/static/app.js"></script>

@@ -48,7 +48,7 @@ async function assertAccentFocusRing(control) {
     };
   });
   if (!focused.active || !focused.focusVisible || focused.outlineWidth !== '2px'
-    || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(138, 179, 255)') {
+    || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(122, 167, 255)') {
     throw new Error(`Keyboard control must show a 2px accent focus ring: ${JSON.stringify(focused)}`);
   }
 }
@@ -1225,7 +1225,7 @@ async function assertSkipLinkAndFocusRings(page) {
     };
   });
   if (!firstFocus.active || !firstFocus.visible) throw new Error(`First Tab must reveal Skip to content: ${JSON.stringify(firstFocus)}`);
-  if (firstFocus.outlineWidth !== '2px' || firstFocus.outlineStyle !== 'solid' || firstFocus.outlineColor !== 'rgb(138, 179, 255)') {
+  if (firstFocus.outlineWidth !== '2px' || firstFocus.outlineStyle !== 'solid' || firstFocus.outlineColor !== 'rgb(122, 167, 255)') {
     throw new Error(`Skip link focus ring must be 2px accent: ${JSON.stringify(firstFocus)}`);
   }
 
@@ -1270,7 +1270,7 @@ async function assertSkipLinkAndFocusRings(page) {
       sawSkipLink = true;
       break;
     }
-    if (focused.focusVisible && (focused.outlineWidth !== '2px' || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(138, 179, 255)')) {
+    if (focused.focusVisible && (focused.outlineWidth !== '2px' || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(122, 167, 255)')) {
       throw new Error(`Keyboard focus ring differs from the 2px accent ring: ${JSON.stringify(focused)}`);
     }
     await page.keyboard.press('Tab');
