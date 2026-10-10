@@ -26,6 +26,9 @@ import {
   renderRunGantt,
   renderRunEvents,
   RUN_EVENTS_LIMIT,
+  RUN_RETRIES_LIMIT,
+  setActiveRunRetries,
+  setActiveRunRetriesError,
   getActiveRunId,
   setActiveRunId,
   getActiveRunDetail,
@@ -1385,10 +1388,8 @@ function activeRefreshJobs() {
       return jobs;
     }
     add("Run detail", fetchAndRenderRunDetail());
-    // Events power both the Events sub-tab and the Gantt's retry markers, so
-    // they're fetched on every run-detail refresh regardless of which sub-tab
-    // is active.
     add("Run events", fetchAndRenderRunEvents());
+    add("Timeline retries", fetchAndRenderRunRetries());
     add("Run logs", fetchAndRenderRunLogs());
     return jobs;
   }
@@ -1530,14 +1531,29 @@ function fetchAndRenderRunEvents(offset = getActiveRunEventsOffset()) {
     if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents(events);
     renderRunEvents();
-    renderRunGantt();
   }).catch((error) => {
     if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents([]);
     if (error.status !== 404) setActiveRunEventsError(error.message);
     renderRunEvents();
-    renderRunGantt();
     if (error.status !== 404) throw error;
+  });
+}
+
+function fetchAndRenderRunRetries() {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("retries");
+  // One extra row detects truncation without scanning an unbounded history.
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?kind=step_retry&offset=0&limit=${RUN_RETRIES_LIMIT + 1}`).then((events) => {
+    if (!runDetailFetchCurrent("retries", token)) return;
+    setActiveRunRetries(events);
+    renderRunGantt();
+  }).catch((error) => {
+    if (!runDetailFetchCurrent("retries", token)) return;
+    setActiveRunRetriesError(error.message);
+    renderRunGantt();
+    throw error;
   });
 }
 

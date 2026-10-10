@@ -166,7 +166,7 @@ function fixture(url) {
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   if (/^\/api\/runs\/cross-workspace-run(?:\/|$)/.test(url.pathname)) {
-    runDetailRequests.push({ path: url.pathname, workspace: url.searchParams.get('workspace') });
+    runDetailRequests.push({ path: url.pathname, kind: url.searchParams.get('kind'), workspace: url.searchParams.get('workspace') });
   }
   if (shipFixture && url.pathname === '/api/workflows/ship') {
     check(options.method === 'POST', 'Ship uses the dispatch endpoint');
@@ -284,7 +284,10 @@ liveDrain = false;
 navigateToRun('cross-workspace-run', 'two');
 await settle();
 check(text('run-detail-title') === 'Run cross-workspace-run', 'selected workspace loads the existing cross-workspace run');
-check(runDetailRequests.length === 3, 'selected workspace loads run details, events and logs');
+for (const [suffix, kind] of [['', null], ['/events', null], ['/events', 'step_retry'], ['/logs', null]]) {
+  check(runDetailRequests.some(request => request.path === `/api/runs/cross-workspace-run${suffix}` && request.kind === kind),
+    `selected workspace loads run ${suffix || 'detail'}${kind ? ` filtered by ${kind}` : ''}`);
+}
 check(runDetailRequests.every(request => request.workspace === 'two'), 'selected-workspace run requests carry workspace scope');
 const scopedRunRequests = runDetailRequests.length;
 setWorkspace(null);
