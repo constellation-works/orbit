@@ -26,10 +26,11 @@ use super::persist::{
 };
 use super::source::SourceSnapshot;
 use super::{
-    CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED, VALIDATION_TOOL_WARNINGS,
-    action_failed, member_ready, requested_workspace_root, required_os, required_string,
-    required_string_array, string_array, string_array_value, unauthorized_missing_targets,
-    validate_after_selectors, validate_recommendations,
+    CONTEXT_CREATION_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED, PILOT_NORMALIZATIONS,
+    VALIDATION_TOOL_WARNINGS, action_failed, member_ready, normalize_evidence_gaps,
+    requested_workspace_root, required_os, required_string, required_string_array, string_array,
+    string_array_value, unauthorized_missing_targets, validate_after_selectors,
+    validate_recommendations,
 };
 
 pub(in super::super) fn apply(
@@ -313,27 +314,25 @@ pub(in super::super) fn apply(
             ));
             continue;
         };
-        let result_index = result_object
-            .get("partition_index")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| format!("partition result {position} is missing partition_index"));
-        let result_index = match result_index {
-            Ok(index) => index,
-            Err(error) => {
-                partition_decisions.push(failed_partition(expected_index, &expected_ids, error));
-                continue;
-            }
-        };
-        if result_index != expected_index {
-            partition_decisions.push(failed_partition(
-                expected_index,
-                &expected_ids,
-                format!(
-                    "partition result {position} reports index {result_index}, expected {expected_index}"
+        // The host owns the partition index: results are matched by position,
+        // so a missing or wrong echo is a formatting slip, not a failure. The
+        // task_ids check below still rejects a result for another partition.
+        let reported_index = result_object.get("partition_index").and_then(Value::as_u64);
+        let result_normalizations = match reported_index {
+            Some(index) if index == expected_index => Vec::new(),
+            Some(index) => vec![json!({
+                "field": "partition_index",
+                "note": format!(
+                    "result {position} reported index {index}; the host's index {expected_index} applies"
                 ),
-            ));
-            continue;
-        }
+            })],
+            None => vec![json!({
+                "field": "partition_index",
+                "note": format!(
+                    "result {position} omitted partition_index; the host's index {expected_index} applies"
+                ),
+            })],
+        };
         let result_ids = match result_object
             .get("task_ids")
             .ok_or_else(|| action_failed(action, "`task_ids` must be an array"))
@@ -540,6 +539,11 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
+            let mut normalized = (*assessment).clone();
+            let pilot_normalizations = normalize_evidence_gaps(&mut normalized)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let assessment = &normalized;
             let complexity = match validate_recommendations(action, task_id, assessment) {
                 Ok(complexity) => complexity,
                 Err(error) => {
@@ -606,6 +610,12 @@ pub(in super::super) fn apply(
                     CONTEXT_ATTACHMENT_WARNINGS.to_string(),
                     json!(over_attachment_findings(complexity, &after)),
                 );
+                if !pilot_normalizations.is_empty() {
+                    fields.insert(
+                        PILOT_NORMALIZATIONS.to_string(),
+                        json!(pilot_normalizations),
+                    );
+                }
                 if !retained.is_empty() {
                     fields.insert(CONTEXT_CREATION_RETAINED.to_string(), json!(retained));
                 }
@@ -811,7 +821,7 @@ pub(in super::super) fn apply(
             .filter(|task| task["outcome"] == "stale")
             .cloned()
             .collect::<Vec<_>>();
-        partition_decisions.push(json!({
+        let mut decision = json!({
             "partition_index": expected_index,
             "task_ids": expected_ids,
             "outcome": outcome,
@@ -820,7 +830,11 @@ pub(in super::super) fn apply(
             "unresolved_count": unresolved,
             "error": error,
             "stale_tasks": stale_tasks,
-        }));
+        });
+        if !result_normalizations.is_empty() {
+            decision[PILOT_NORMALIZATIONS] = json!(result_normalizations);
+        }
+        partition_decisions.push(decision);
     }
 
     if seen_task_ids.len() != prepared_before.len() {

@@ -31,7 +31,8 @@ mod validation_tools;
 pub(super) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    required_os, unauthorized_missing_targets, validate_after_selectors, validate_recommendations,
+    normalize_evidence_gaps, required_os, unauthorized_missing_targets, validate_after_selectors,
+    validate_recommendations,
 };
 pub(super) use drain_promotion::{
     approval_disqualification, approved_by_drain, held_classification,
@@ -61,6 +62,10 @@ pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
 /// each naming the operator reauthorization path.
 pub(super) const CONTEXT_CREATION_RETAINED: &str = "context_creation_retained";
 pub(super) const CONTEXT_REAUTHORIZATION_REQUIRED: &str = "context_reauthorization_required";
+
+/// Assessment field apply attaches when it rewrote a model formatting slip
+/// (today a scalar or missing `evidence_gaps`) instead of rejecting it.
+pub(super) const PILOT_NORMALIZATIONS: &str = "pilot_normalizations";
 
 #[cfg(test)]
 mod tests;
