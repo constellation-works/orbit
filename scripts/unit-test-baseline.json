@@ -105,6 +105,8 @@
         "doctor/tests/permissions.rs::repair_refuses_final_and_parent_symlink_swaps_after_scanning",
         "doctor/tests/task.rs::retired_graph_cleanup_unlinks_boundaries_without_following_them",
         "doctor/tests/task.rs::stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers",
+        "doctor/tests/worker_token.rs::absent_empty_refused_and_mismatched_clock_files_stay_distinct",
+        "doctor/tests/worker_token.rs::clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits",
         "doctor/tests/worker_token.rs::skips_off_macos_and_when_no_routed_crew_uses_claude",
         "doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is",
         "doctor/tests/workspace.rs::cleanup_preserves_a_lock_held_by_a_live_process",

@@ -60,5 +60,7 @@ pass-listed credential the timer-started runs need.
 
 `orbit doctor` has a `claude-worker-token` row. On macOS, when a routed crew
 uses Claude, it warns if the workspace's effective `pass` omits the token or
-the installed clock has no token in `clock.env`. `env-pass` separately reports
+the installed clock has no token in `clock.env` that the same `pass` admits (a
+`clock.env` holding only a name the workspace's `pass` omits is a mismatch, and
+the row names it). `env-pass` separately reports
 pass-listed names the current shell does not hold.
