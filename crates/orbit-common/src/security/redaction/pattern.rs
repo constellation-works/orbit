@@ -210,10 +210,6 @@ impl PatternRedactor {
         me
     }
 
-    pub fn empty() -> Self {
-        Self { patterns: vec![] }
-    }
-
     /// Apply all patterns in order to `input`.
     pub fn apply_str(&self, input: &str) -> String {
         let mut out: Cow<'_, str> = Cow::Borrowed(input);

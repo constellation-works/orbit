@@ -138,14 +138,6 @@ impl ParamSpec {
     pub fn cli_value_name(&self) -> String {
         self.name.to_ascii_uppercase()
     }
-
-    /// The flag spelling, or `None` for positional/CLI-hidden parameters.
-    pub fn cli_long(&self) -> Option<&'static str> {
-        match self.cli.map(|binding| binding.kind) {
-            Some(CliArgKind::Flag { long, .. }) => Some(long),
-            _ => None,
-        }
-    }
 }
 
 /// How the CLI renders an operation's response when `--json` is not passed.

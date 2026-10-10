@@ -25,29 +25,6 @@ pub fn process_start_and_parent(pid: u32) -> Option<(ProcessStartKey, u32)> {
     inspect_process(pid).map(|(starttime, ppid)| (ProcessStartKey { pid, starttime }, ppid))
 }
 
-/// Walk from this process toward pid 1, including self. Stops on a kernel
-/// read failure, a self-parent, or a bounded depth so a pid cycle cannot
-/// loop the caller.
-///
-/// This reads `/proc/<pid>` (Linux) or libproc (macOS). A Landlock-confined
-/// plugin child cannot do that for another process; [`current_process_group`]
-/// and [`current_parent_pid`] are the syscalls that still work there.
-pub fn ancestor_start_keys() -> Vec<ProcessStartKey> {
-    let mut pid = std::process::id();
-    let mut out = Vec::new();
-    for _ in 0..64 {
-        let Some((starttime, ppid)) = inspect_process(pid) else {
-            break;
-        };
-        out.push(ProcessStartKey { pid, starttime });
-        if ppid == 0 || ppid == pid {
-            break;
-        }
-        pid = ppid;
-    }
-    out
-}
-
 /// This process's process-group id (`getpgrp`). Orbit spawns plugin backends
 /// with `process_group(0)`, so the child's PGID equals its PID and every
 /// descendant — including `orbit tool run` started from a `$()` subshell —
