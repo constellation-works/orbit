@@ -8,10 +8,16 @@ use orbit_core::runtime::host_resource::{
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-struct Fixture(Mutex<HostResourceSample>);
+/// A probe whose sample is `age` old when it is read.
+///
+/// Stamping the sample at the read, not when the fixture sets it, keeps its age
+/// independent of how long runtime setup took: a sample stamped ten seconds old
+/// before a 16-second setup was already stale at the first read (ORB-15238).
+struct Fixture(Mutex<(Duration, HostResourceSample)>);
 impl HostResourceProbe for Fixture {
     fn sample(&self, paths: &[PathBuf]) -> HostResourceSample {
-        let mut sample = self.0.lock().unwrap().clone();
+        let (age, mut sample) = self.0.lock().unwrap().clone();
+        sample.sampled_at = Utc::now() - age;
         sample.disks = paths
             .iter()
             .map(|path| DiskSample {
@@ -30,12 +36,15 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
     ) {
         return;
     }
-    let probe = Arc::new(Fixture(Mutex::new(HostResourceSample {
-        sampled_at: Utc::now() - Duration::seconds(10),
-        cpu_percent: Some(99.0),
-        memory_percent: Some(25.0),
-        disks: vec![],
-    })));
+    let probe = Arc::new(Fixture(Mutex::new((
+        Duration::seconds(10),
+        HostResourceSample {
+            sampled_at: Utc::now(),
+            cpu_percent: Some(99.0),
+            memory_percent: Some(25.0),
+            disks: vec![],
+        },
+    ))));
     let runtime = OrbitRuntime::in_memory()
         .unwrap()
         .with_host_resource_probe(probe.clone());
@@ -44,9 +53,9 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
     assert_eq!(first.disk.as_ref().unwrap().reading.percent, Some(10.0));
     assert_eq!(first.cpu.severity, ResourceSeverity::Critical);
     let clone = runtime.clone();
-    probe.0.lock().unwrap().sampled_at = Utc::now() - Duration::seconds(5);
+    probe.0.lock().unwrap().0 = Duration::seconds(5);
     assert!(!clone.host_resource_status().throttle);
-    probe.0.lock().unwrap().sampled_at = Utc::now();
+    probe.0.lock().unwrap().0 = Duration::zero();
     let held = runtime.host_resource_status();
     assert!(held.throttle);
     assert!(
@@ -56,12 +65,12 @@ fn runtime_injection_shares_hysteresis_and_reports_unknown_and_stale() {
     );
     {
         let mut data = probe.0.lock().unwrap();
-        data.cpu_percent = None;
+        data.1.cpu_percent = None;
     }
     let unknown = clone.host_resource_status();
     assert!(!unknown.throttle);
     assert_eq!(unknown.cpu.severity, ResourceSeverity::Unknown);
-    probe.0.lock().unwrap().sampled_at = Utc::now() - Duration::seconds(20);
+    probe.0.lock().unwrap().0 = Duration::seconds(20);
     let stale = runtime.host_resource_status();
     assert!(stale.stale);
     assert!(stale.disk.is_none());

@@ -25,8 +25,6 @@ use orbit_common::fs::generation::executable_generation;
 use orbit_common::test_env;
 use tempfile::tempdir;
 
-const HANDOVER_DEADLINE: Duration = Duration::from_secs(60);
-
 #[test]
 fn a_replaced_dashboard_execs_the_installed_executable_and_keeps_serving() {
     exercise_handover(|mut server, pid, _| {
@@ -81,10 +79,9 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
     let port = free_port();
     let mut server = spawn_dashboard(&installed, &home, port);
     let pid = server.id();
-    wait_until(
-        || TcpStream::connect(("127.0.0.1", port)).is_ok(),
-        "listening",
-    );
+    test_env::wait_until("listening", || {
+        TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
     assert!(http_get(port, "/healthz").contains("ok"));
 
     let candidate = temp.path().join("candidate");
@@ -94,32 +91,20 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
     std::fs::copy(&candidate, &staged).expect("stage replacement");
     std::fs::rename(&staged, &installed).expect("replace installation");
 
-    wait_until(
-        || {
-            generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()
-                == Some(&new_digest)
-        },
-        "handover",
-    );
+    test_env::wait_until("handover", || {
+        generation_fixture::running_digest(&home.join(".orbit"), pid).as_deref()
+            == Some(&new_digest)
+    });
     assert!(
         matches!(server.try_wait(), Ok(None)),
         "the dashboard must exec in place, not exit"
     );
-    wait_until(
-        || TcpStream::connect(("127.0.0.1", port)).is_ok(),
-        "listening after the handover",
-    );
+    test_env::wait_until("listening after the handover", || {
+        TcpStream::connect(("127.0.0.1", port)).is_ok()
+    });
     assert!(http_get(port, "/healthz").contains("ok"));
 
     after_handover(server, pid, port);
-}
-
-fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
-    let deadline = Instant::now() + HANDOVER_DEADLINE;
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
 }
 
 fn free_port() -> u16 {

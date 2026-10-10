@@ -7,7 +7,7 @@ use orbit_types::task::{Task, TaskType};
 use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, Server, isolated, json_ok};
+use super::support::{Fixture, Server, isolated, json_ok, sent};
 
 const FILTER: &str = "status=backlog,proposed&tags=page,release&type=bug&q=needle&limit=3";
 const WORKSPACE: &str = "ws_http_fixture";
@@ -90,7 +90,7 @@ fn page(server: &Server, endpoint: &str, filter: &str, cursor: Option<&str>) -> 
     if let Some(cursor) = cursor {
         request = request.query(&[("cursor", cursor)]);
     }
-    json_ok(request.send().unwrap())
+    json_ok(sent("GET", endpoint, request))
 }
 
 fn ids(page: &Value) -> Vec<String> {
