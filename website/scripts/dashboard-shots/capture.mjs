@@ -106,6 +106,25 @@ if (selection === "--fixture-core") {
       case "/api/job-runs":
         payload = { items: [], total: 0, limit: 100, truncated: false };
         break;
+      default:
+        if (pathname.endsWith("/host/resources")) {
+          payload = {
+            sample_age_seconds: 8,
+            throttle: false,
+            thresholds: { enabled: true },
+            cpu: { percent: 32, severity: "ok" },
+            memory: { percent: 48, severity: "ok" },
+            disk: { percent: 27, severity: "ok" },
+            pressures: [],
+            reason: "No sustained resource pressure",
+          };
+        } else if (pathname.endsWith("/workflows/auto/readiness")) {
+          payload = {
+            capacity: { drain_phase: "idle", active_leaf_runs: 0, max_active_leaf_runs: 5, free_slots: 5, pull_drain_run_id: null },
+            tasks: [],
+          };
+        }
+        break;
     }
     await route.fulfill({ json: payload });
   });
