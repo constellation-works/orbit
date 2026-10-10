@@ -9,7 +9,7 @@ paths:
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
 related_artifacts: [ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-10-04
+last_validated: 2026-10-10
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -173,7 +173,7 @@ show`, the Drain card, and the follower's idle receipt (`os_unavailable`). So
 an `os:macos` repair filed on a Linux owner waits for a macOS follower instead
 of blocking the owner's worker. Retag with `orbit.task.update` to reroute a
 backlog task; running or claimed work is not moved. Owner and followers must
-deploy the same protocol revision (currently 8, as defined by
+deploy the same protocol revision (currently 10, as defined by
 `DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA`; OS matching arrived in revision 4). Empty
 `workflow.required_validation_commands` means no required check, as on an
 owner's own delivery: a claimed leaf runs nothing and records that, and the
@@ -369,7 +369,7 @@ enlarged live claim; the original receipt stays immutable. Only Git or `.orbit`
 metadata, environment files, symlinks and malformed paths are refused, with
 exact paths. Protected metadata names and environment patterns (including `.envrc`)
 ignore ASCII case on every host: `.Orbit/`, `.GIT/`, `.ENV` and `.Env.local`
-are refused even on Linux. Both peers require the same protocol revision (currently 8;
+are refused even on Linux. Both peers require the same protocol revision (currently 10;
 widening arrived in 3).
 
 
