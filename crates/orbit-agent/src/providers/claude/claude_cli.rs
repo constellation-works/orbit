@@ -31,9 +31,18 @@ fn claude_cli_model_arg(model: &str) -> String {
 /// `ScheduleWakeup` never fires. Without it a worker that armed a loop while it
 /// waited on gates got a second `result` turn of prose after the envelope turn
 /// (`jrun-20261008-1237-c25`, `jrun-20261008-1421-c5`).
+///
+/// [ORB-15130] With both switches set, the Bash tool's 10-minute cap on a
+/// foreground command is the only way to wait, so a reviewer facing a longer
+/// gate detached it with `nohup … &`, said it would poll later, and ended the
+/// session with its placeholder report (`jrun-20261009-2339-c1`,
+/// `jrun-20261009-2338-c3`). The default and cap are raised so a gate can run
+/// in the foreground; the activity's own wall clock still bounds the session.
 pub(crate) const CLAUDE_CLI_FIXED_ENV: &[(&str, &str)] = &[
     ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"),
     ("CLAUDE_CODE_DISABLE_CRON", "1"),
+    ("BASH_DEFAULT_TIMEOUT_MS", "600000"),
+    ("BASH_MAX_TIMEOUT_MS", "3600000"),
 ];
 
 pub(crate) struct ClaudeCliTransport {
