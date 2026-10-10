@@ -30,8 +30,6 @@ env:
   NEXTEST_LINUX_SHA256: a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52
   CARGO_DENY_VERSION: 0.19.9
   CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
-  LLVM_COV_VERSION: 0.8.7
-  LLVM_COV_LINUX_SHA256: 9a75fe29538d3800b3da57f6f6efb64cba5c720a257bf0cb8b51f39d495a9168
   # [ORB-13017] The uv-locked Python plugin fixture runs its backend through
   # uv. Keep in sync with UV_VERSION in ci-macos.yml.
   UV_VERSION: 0.11.28

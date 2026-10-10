@@ -111,10 +111,10 @@ pub(super) fn split_deferred_failures(
 }
 
 /// A newer green branch-event run (push, schedule or dispatch) of the same
-/// workflow on the same branch is stronger evidence than an older red finding. The collector normally moves that red run to
-/// `stale_or_superseded`; retaining this check at filing keeps a replayed or
-/// hand-constructed snapshot from filing a repair after the branch is already
-/// green.
+/// workflow on the same branch is stronger evidence than an older red finding.
+/// The collector normally moves that red run to `stale_or_superseded`; retaining
+/// this check at filing keeps a replayed or hand-constructed snapshot from
+/// filing a repair after the branch is already green.
 pub(super) fn exclude_already_repaired(
     failures: Vec<Value>,
     evidence: &Value,
