@@ -34,6 +34,24 @@ table.audit-table td.c-target {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+@media (min-width: 1184px) {
+  #audit-body table.audit-table { table-layout: fixed; }
+  #audit-body table.audit-table > thead th,
+  #audit-body table.audit-table > tbody tr.audit-row > td {
+    padding-inline: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #audit-body table.audit-table > thead th:nth-child(1) { width: 17%; }
+  #audit-body table.audit-table > thead th:nth-child(2) { width: 12%; }
+  #audit-body table.audit-table > thead th:nth-child(3) { width: 12%; }
+  #audit-body table.audit-table > thead th:nth-child(4) { width: 24%; }
+  #audit-body table.audit-table > thead th:nth-child(5) { width: 17%; }
+  #audit-body table.audit-table > thead th:nth-child(6) { width: 11%; }
+  #audit-body table.audit-table > thead th:nth-child(7) { width: 7%; }
+}
+
 tr.audit-detail-row td {
   padding: 12px 16px;
   background: #050505;
@@ -183,6 +201,41 @@ table.policy-table.policy-cause-table th,
 table.policy-table.policy-cause-table td {
   white-space: nowrap;
 }
+
+@media (min-width: 1184px) {
+  #audit-policy-body .policy-cell,
+  #audit-policy-body .policy-section { min-width: 0; }
+  #audit-policy-body table.policy-table {
+    width: 100%;
+    table-layout: fixed;
+  }
+  #audit-policy-body table.policy-table th,
+  #audit-policy-body table.policy-table td {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-inline: 10px;
+  }
+  #audit-policy-body table.policy-table:not(.policy-cause-table):not(.policy-recent-table) th:first-child { width: 78%; }
+  #audit-policy-body table.policy-table:not(.policy-cause-table):not(.policy-recent-table) th:last-child { width: 22%; }
+  #audit-policy-body table.policy-cause-table th:nth-child(1) { width: 25%; }
+  #audit-policy-body table.policy-cause-table th:nth-child(2) { width: 35%; }
+  #audit-policy-body table.policy-cause-table th:nth-child(3) { width: 15%; }
+  #audit-policy-body table.policy-cause-table th:nth-child(4) { width: 25%; }
+  #audit-policy-body table.policy-recent-table th:nth-child(1) { width: 14%; }
+  #audit-policy-body table.policy-recent-table th:nth-child(2) { width: 20%; }
+  #audit-policy-body table.policy-recent-table th:nth-child(3) { width: 20%; }
+  #audit-policy-body table.policy-recent-table th:nth-child(4) { width: 20%; }
+  #audit-policy-body table.policy-recent-table th:nth-child(5) { width: 26%; }
+  #audit-policy-body .policy-link {
+    box-sizing: border-box;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+}
 .policy-link {
   appearance: none;
   border: 1px solid var(--border);
@@ -240,6 +293,34 @@ table.policy-table.policy-cause-table td {
 .summary-table th.num, .summary-table td.num { text-align: right; }
 .summary-table th:first-child { width: 36%; }
 .summary-table td.num { white-space: nowrap; overflow-wrap: normal; }
+
+@media (min-width: 1184px) {
+  /* This is the completion-by-complexity card, rendered first in this panel.
+     Keep its five status columns inside the card instead of inheriting the
+     wider implement-one table's content sizing. */
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table {
+    table-layout: fixed;
+  }
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table th,
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table td {
+    padding-inline: 4px;
+    font-size: 10px;
+  }
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table th {
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: keep-all;
+  }
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table th:first-child { width: 32%; }
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table th:nth-child(2) { width: 8%; }
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table th:nth-child(n + 3) { width: 20%; }
+  #diag-implement-one-body > .audit-summary-card:first-child .summary-table td:not(.num) {
+    min-width: 0;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+}
+
 /* Secondary counts remain in the row's title and reappear in wider cards. */
 @container (max-width: 420px) {
   .summary-table .summary-secondary { display: none; }
