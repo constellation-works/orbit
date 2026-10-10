@@ -15,6 +15,7 @@ const AUTO_DRAIN_APPROVE_RULE = "Approval needs context files and an assessed co
 const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
 let lastOperations = null;
+let routineFailureRequest = 0;
 let lastAutoTasks = null;
 let lastAutoDrain = null;
 let announcedDrainState = null;
@@ -40,6 +41,7 @@ export function initOperations(nextContext) {
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
+    updateRoutineFailureBadge([]);
     expandedDrainLists.clear();
     announcedDrainState = null;
     updateDrainIndicators("idle", "idle");
@@ -425,8 +427,8 @@ function whenCell(label, at, { fallback = "—", muted = false } = {}) {
 
 function outcomeDot(state) {
   const tone = state === "succeeded" || state === "success" || state === "ok" ? "ok"
-    : state === "failed" || state === "error" ? "failed"
-    : state === "running" || state === "pending" ? "running"
+    : state === "failed" || state === "error" || state === "timed_out" ? "failed"
+    : state === "running" || state === "pending" || state === "intent" || state === "dispatched" ? "running"
     : "idle";
   return el("span", { class: `operation-dot ${tone}`, title: state || "never" });
 }
@@ -659,6 +661,75 @@ function routineTimeline(routines, now = Date.now()) {
   return strip;
 }
 
+function routineFailureText(routine) {
+  const streak = routine.failure_streak;
+  if (!streak?.count) return "";
+  return `Failing ${streak.truncated ? "at least " : ""}${streak.count} fire${streak.count === 1 ? "" : "s"} in a row since ${time(streak.since)}${streak.truncated ? " or earlier" : ""}`;
+}
+
+function failingRoutines(routines) {
+  return routines.filter(routine => routine.failure_streak?.count >= 3);
+}
+
+function scopedRoutines(payload) {
+  const workspace = selectedWorkspaceName();
+  return workspace ? (payload.routines || []).filter(routine => routine.source === workspace) : [];
+}
+
+function updateRoutineFailureBadge(routines) {
+  routineFailureRequest += 1;
+  const node = $("rail-count-routine-failures");
+  if (!node) return;
+  const failures = failingRoutines(routines);
+  node.hidden = failures.length === 0;
+  node.textContent = failures.length ? `${failures.length} routine${failures.length === 1 ? "" : "s"}` : "";
+  node.title = failures.length
+    ? `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. See Automation › Routines.`
+    : "";
+}
+
+// Keep Health's warning visible from every tab, including before Routines is
+// opened. A reply from an earlier host/workspace visit must not restore it.
+export async function peekRoutineFailures() {
+  if (isAggregateView() || !selectedWorkspaceName()) {
+    updateRoutineFailureBadge([]);
+    return;
+  }
+  const visit = captureWorkspaceVisit();
+  const request = ++routineFailureRequest;
+  try {
+    const payload = await fetchJson("/api/routines");
+    if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge(scopedRoutines(payload));
+  } catch (_) {
+    if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge([]);
+  }
+}
+
+function routineFireStrip(routine, workspaceId) {
+  const fires = routine.recent_fires || (routine.last_fire ? [routine.last_fire] : []);
+  if (!fires.length) return null;
+  const strip = el("div", { class: "routine-fire-strip", role: "group", "aria-label": "Recent fires, oldest to newest" });
+  for (const fire of [...fires].reverse()) {
+    const label = `${fire.state || "unknown"} · ${time(fire.slot || fire.started_at)} · attempt ${fire.attempt || 1}${fire.run_id ? ` · Open run ${fire.run_id}` : " · No run was dispatched"}`;
+    const node = fire.run_id ? runLink(fire.run_id, workspaceId, "") : el("span");
+    node.className = "routine-fire";
+    node.title = label;
+    node.setAttribute("aria-label", label);
+    node.appendChild(outcomeDot(fire.state));
+    strip.appendChild(node);
+  }
+  return strip;
+}
+
+function routineFailureSummary(routines) {
+  const failures = failingRoutines(routines);
+  if (!failures.length) return null;
+  return el("aside", { class: "routine-failures", role: "status" }, [
+    el("strong", { text: `${failures.length} routine${failures.length === 1 ? "" : "s"} failing repeatedly` }),
+    ...failures.map(routine => el("div", { text: `${routine.name} · ${routineFailureText(routine)}` })),
+  ]);
+}
+
 function routineRow(payload, routine, workspaceId) {
   const fire = routine.last_fire;
   const state = routineState(routine);
@@ -687,6 +758,10 @@ function routineRow(payload, routine, workspaceId) {
       ].filter(Boolean)),
     ]
     : [el("span", { class: "operation-cell-main muted", text: "Never" })];
+  lastRun.push(routineFireStrip(routine, workspaceId));
+  if (routine.failure_streak?.count) {
+    lastRun.push(el("span", { class: "operation-cell-sub routine-failure-streak", text: routineFailureText(routine) }));
+  }
   card.append(
     el("div", { class: "operation-row-head" }, [
       operationCell("", [routineButton(payload, routine)], "operation-cell-control"),
@@ -723,9 +798,8 @@ function renderOperations(payload) {
   if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
   const workspace = selectedWorkspaceName();
   const workspaceId = selectedWorkspace()?.id || null;
-  const routines = workspace
-    ? (payload.routines || []).filter((routine) => routine.source === workspace)
-    : [];
+  const routines = scopedRoutines(payload);
+  updateRoutineFailureBadge(routines);
   const inactive = workspace
     ? (payload.retired || []).filter((routine) => routine.plugin_inactive && routine.source === workspace)
     : [];
@@ -741,6 +815,8 @@ function renderOperations(payload) {
   if (routines.length === 0 && inactive.length === 0 && ownerOnly.length === 0) {
     body.appendChild(el("div", { class: "empty-state", text: workspace ? "No routines are defined by this workspace." : "Select a workspace to list its routines." }));
   } else if (routines.length) {
+    const warning = routineFailureSummary(routines);
+    if (warning) body.appendChild(warning);
     body.appendChild(routineTimeline(routines));
     const active = routines.filter((routine) => routine.enabled);
     const paused = routines.filter((routine) => !routine.enabled);
@@ -1308,6 +1384,7 @@ function renderJobs(payload) {
   if (payload.routines) {
     lastOperations = payload.routines;
     noteCronZone(lastOperations);
+    updateRoutineFailureBadge(scopedRoutines(lastOperations));
   }
   const body = $("jobs-body");
   if (!body) return;

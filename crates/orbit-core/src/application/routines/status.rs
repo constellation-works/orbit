@@ -3,6 +3,7 @@
 //! pause), the computed next-due slot, and the last recorded fire — so "why
 //! didn't this fire?" is one command.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
@@ -20,6 +21,22 @@ use super::loader::{
     RoutineWorkspaceProvider, collect_host_routines,
 };
 use crate::OrbitRuntime;
+
+// Bound status reads independently of the compact ten-fire dashboard strip.
+const FIRE_HISTORY_LIMIT: usize = 100;
+const RECENT_FIRE_LIMIT: usize = 10;
+
+/// Consecutive failures at the head of a routine's fire history.
+#[derive(Debug, Clone)]
+pub struct RoutineFailureStreak {
+    /// Number of distinct fires whose latest attempt failed.
+    pub count: usize,
+    /// Slot of the oldest failure in the streak (RFC 3339).
+    pub since: Option<String>,
+    /// History ended before a non-failure was seen: count is a lower bound
+    /// and the streak may have started before `since`.
+    pub truncated: bool,
+}
 
 /// Operator-facing schedule readiness. Theoretical next-slot math may still be
 /// present; this state says whether that time is armed.
@@ -74,6 +91,10 @@ pub struct RoutineStatus {
     /// it: the cron fire store, or for a state- or delivery-triggered routine
     /// the newest run that routine's automation admitted when that is newer.
     pub last_fire: Option<RoutineFireRecord>,
+    /// Recent distinct fires, newest first, including automation runs.
+    pub recent_fires: Vec<RoutineFireRecord>,
+    /// Latest consecutive failures; success, skips and in-flight fires reset it.
+    pub failure_streak: RoutineFailureStreak,
     pub automation: Option<serde_json::Value>,
 }
 
@@ -177,7 +198,8 @@ pub fn routine_statuses_with_providers(
     let mut statuses = Vec::with_capacity(collection.routines.len());
     for routine in collection.routines {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
-        let cron_fire = store.routine_latest_fire(&routine.definition.name)?;
+        let cron_fires =
+            store.routine_recent_fires(&routine.definition.name, FIRE_HISTORY_LIMIT)?;
         let cursor = store.routine_cursor(&routine.definition.name)?;
         let paused_at = pauses
             .get(&routine.definition.name)
@@ -185,7 +207,12 @@ pub fn routine_statuses_with_providers(
         let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
             discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine(runtime,&routine.definition,now_utc) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
         });
-        let last_fire = newest_fire(cron_fire, automation_fire(&discovered, &routine)?);
+        let automation_fires = automation_fires(&discovered, &routine)?;
+        let last_fire = newest_fire(
+            cron_fires.first().cloned(),
+            automation_fires.first().cloned(),
+        );
+        let (recent_fires, failure_streak) = fire_history(cron_fires, automation_fires);
         statuses.push(RoutineStatus {
             routine,
             paused_at,
@@ -193,6 +220,8 @@ pub fn routine_statuses_with_providers(
             last_evaluated_slot: cursor.and_then(|cursor| cursor.last_slot),
             next_due,
             last_fire,
+            recent_fires,
+            failure_streak,
             automation,
         });
     }
@@ -207,39 +236,94 @@ pub fn routine_statuses_with_providers(
     })
 }
 
-/// The latest run a state- or delivery-triggered routine's automation admitted.
+/// Recent runs a state- or delivery-triggered routine's automation admitted.
 ///
 /// Those fires never touch the cron fire store: the run itself carries the
 /// routine as its trigger, so the run record is the fire record. A cron-only
 /// routine has no such runs and is not queried.
-fn automation_fire(
+fn automation_fires(
     discovered: &DiscoveredWorkspaces,
     routine: &LoadedRoutine,
-) -> Result<Option<RoutineFireRecord>, OrbitError> {
+) -> Result<Vec<RoutineFireRecord>, OrbitError> {
     let trigger = &routine.definition.trigger;
     if trigger.deliveries_landed.is_none() && trigger.state.is_none() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let Some((_, runtime)) = discovered
         .entries
         .iter()
         .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
     else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    let run = runtime
+    let runs = runtime
         .stores()
         .jobs()
         .list_job_runs_filtered(&JobRunQuery {
             job_id: Some(routine.definition.target.job_name().to_string()),
             trigger_routine: Some(routine.definition.name.clone()),
-            limit: Some(1),
+            limit: Some(FIRE_HISTORY_LIMIT),
             include_steps: false,
             ..JobRunQuery::default()
-        })?
+        })?;
+    Ok(runs
         .into_iter()
-        .next();
-    Ok(run.map(|run| fire_from_run(&routine.definition.name, &routine.source_workspace, run)))
+        .map(|run| fire_from_run(&routine.definition.name, &routine.source_workspace, run))
+        .collect())
+}
+
+fn fire_at(fire: &RoutineFireRecord) -> Option<DateTime<chrono::FixedOffset>> {
+    DateTime::parse_from_rfc3339(&fire.slot).ok()
+}
+
+/// Merge histories without counting cron retries or a run present in both
+/// stores twice. Never cross a saturated source's horizon: an unseen success
+/// there could break the streak before an older fire from the other source.
+fn fire_history(
+    cron: Vec<RoutineFireRecord>,
+    automation: Vec<RoutineFireRecord>,
+) -> (Vec<RoutineFireRecord>, RoutineFailureStreak) {
+    let horizon = [&cron, &automation]
+        .into_iter()
+        .filter(|fires| fires.len() == FIRE_HISTORY_LIMIT)
+        .filter_map(|fires| fires.iter().filter_map(fire_at).min())
+        .max();
+    let cron_runs: HashSet<_> = cron.iter().filter_map(|fire| fire.run_id.clone()).collect();
+    let mut slots = HashSet::new();
+    let mut runs = HashSet::new();
+    let mut fires: Vec<_> = cron
+        .into_iter()
+        // The store orders attempts descending within each slot.
+        .filter(|fire| slots.insert(fire_at(fire)))
+        .chain(automation.into_iter().filter(|fire| {
+            fire.run_id
+                .as_ref()
+                .is_none_or(|id| !cron_runs.contains(id))
+        }))
+        .filter(|fire| {
+            fire.run_id
+                .as_ref()
+                .is_none_or(|id| runs.insert(id.clone()))
+        })
+        .filter(|fire| horizon.is_none_or(|at| fire_at(fire).is_some_and(|slot| slot >= at)))
+        .collect();
+    fires.sort_by_key(|fire| std::cmp::Reverse(fire_at(fire)));
+    let count = fires
+        .iter()
+        .take_while(|fire| {
+            matches!(
+                fire.state,
+                RoutineFireState::Failed | RoutineFireState::TimedOut | RoutineFireState::Error
+            )
+        })
+        .count();
+    let streak = RoutineFailureStreak {
+        count,
+        since: count.checked_sub(1).map(|index| fires[index].slot.clone()),
+        truncated: count > 0 && count == fires.len() && horizon.is_some(),
+    };
+    fires.truncate(RECENT_FIRE_LIMIT);
+    (fires, streak)
 }
 
 fn fire_from_run(name: &str, source_workspace: &str, run: JobRun) -> RoutineFireRecord {

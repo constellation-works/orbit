@@ -3,7 +3,7 @@ use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::AutoTaskAddParams;
-use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState};
+use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState, RoutineStoreBackend};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::members::{
     MemberAssessment, MemberAttempt, MemberState, StateMember, StateTriggerKind,
@@ -341,6 +341,299 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 DateTime::parse_from_rfc3339(fire["started_at"].as_str().unwrap()).unwrap(),
                 run.created_at,
                 "the fire is timed by its run: {fire}"
+            );
+        },
+    );
+}
+
+// Public HTTP projection: a fire is a scheduled slot, not each retry attempt.
+// Timestamps are seeded explicitly so chronology never depends on host timing.
+fn record_fire(
+    store: &dyn RoutineStoreBackend,
+    fixture: &Fixture,
+    name: &str,
+    at: DateTime<Utc>,
+    attempt: u32,
+    state: RoutineFireState,
+) {
+    let slot = at.to_rfc3339();
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: name.into(),
+            slot: slot.clone(),
+            attempt,
+            source_workspace: "fixture".into(),
+        })
+        .unwrap();
+    if state != RoutineFireState::Error {
+        store
+            .routine_mark_fire_dispatched(
+                name,
+                &slot,
+                attempt,
+                &format!("jrun-{name}-{}-{attempt}", at.timestamp()),
+            )
+            .unwrap();
+    }
+    store
+        .routine_mark_fire_outcome(name, &slot, attempt, state, None)
+        .unwrap();
+    let global = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+    global.with_transaction(|tx| {
+        tx.connection().execute(
+            "UPDATE routine_fires SET created_at = ?1, updated_at = ?2 WHERE routine_name = ?3 AND slot = ?1 AND attempt = ?4",
+            (&slot, (at + Duration::minutes(1)).to_rfc3339(), name, attempt),
+        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn routine_fire_history_counts_slots_and_stops_at_non_failures() {
+    isolated(
+        "automation::routine_fire_history_counts_slots_and_stops_at_non_failures",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("watch_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            for name in ["watch", "empty"] {
+                fs::write(routines.join(format!("{name}.yaml")), format!(
+                    "schemaVersion: 1\nname: {name}\nenabled: true\ntarget: job:watch_pipeline\ntrigger: {{cron: '*/20 * * * *'}}\n"
+                )).unwrap();
+            }
+            let store =
+                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let start = DateTime::parse_from_rfc3339("2026-10-10T06:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            for i in 0..13 {
+                let outcome = match i {
+                    0 => RoutineFireState::Succeeded,
+                    11 => RoutineFireState::TimedOut,
+                    12 => RoutineFireState::Error,
+                    _ => RoutineFireState::Failed,
+                };
+                record_fire(
+                    store.as_ref(),
+                    &fixture,
+                    "watch",
+                    start + Duration::minutes(i * 20),
+                    1,
+                    outcome,
+                );
+            }
+            let server = fixture.server(false);
+            let status = || {
+                let payload = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+                payload["routines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == "watch")
+                    .unwrap()
+                    .clone()
+            };
+            let row = status();
+            assert_eq!(row["recent_fires"].as_array().unwrap().len(), 10);
+            assert_eq!(row["recent_fires"][0]["state"], "error");
+            assert_eq!(row["recent_fires"][0]["run_id"], Value::Null);
+            assert_eq!(row["recent_fires"][1]["state"], "timed_out");
+            assert_eq!(row["recent_fires"][1]["ok"], false);
+            assert_eq!(row["recent_fires"][1]["duration_ms"], 60_000);
+            assert_eq!(row["recent_fires"][0], row["last_fire"]);
+            assert_eq!(
+                row["failure_streak"],
+                json!({
+                    "count": 12, "since": (start + Duration::minutes(20)).to_rfc3339(), "truncated": false
+                })
+            );
+            let empty = json_ok(server.get("/api/routines?workspace=ws_http_fixture"))["routines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == "empty")
+                .unwrap()
+                .clone();
+            assert_eq!(empty["recent_fires"], json!([]));
+            assert_eq!(empty["failure_streak"]["count"], 0);
+            assert!(empty["failure_streak"]["since"].is_null());
+
+            // An older slot's successful retry breaks the streak without adding a dot.
+            record_fire(
+                store.as_ref(),
+                &fixture,
+                "watch",
+                start + Duration::minutes(200),
+                2,
+                RoutineFireState::Succeeded,
+            );
+            let row = status();
+            assert_eq!(row["failure_streak"]["count"], 2);
+            assert_eq!(row["recent_fires"][2]["attempt"], 2);
+            assert_eq!(row["recent_fires"][2]["state"], "succeeded");
+            assert_eq!(
+                row["recent_fires"][3]["slot"],
+                (start + Duration::minutes(180)).to_rfc3339()
+            );
+
+            for (i, outcome) in [
+                RoutineFireState::Dispatched,
+                RoutineFireState::Skipped,
+                RoutineFireState::Succeeded,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                record_fire(
+                    store.as_ref(),
+                    &fixture,
+                    "watch",
+                    start + Duration::minutes(260 + i as i64 * 20),
+                    1,
+                    outcome,
+                );
+                assert_eq!(
+                    status()["failure_streak"],
+                    json!({"count": 0, "since": null, "truncated": false})
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn routine_streak_merges_automation_history_and_marks_bounded_history() {
+    isolated(
+        "automation::routine_streak_merges_automation_history_and_marks_bounded_history",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("review_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(routines.join("review.yaml"),
+                "schemaVersion: 1\nname: review\nenabled: false\ntarget: job:review_pipeline\ntrigger:\n  deliveries_landed: {branch: agent-main, threshold: 1, max_wait_minutes: 10, coverage: landed_code_review_v1, max_items: 20, retries: 0}\n"
+            ).unwrap();
+            let store =
+                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let start = DateTime::parse_from_rfc3339("2026-10-10T06:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            record_fire(
+                store.as_ref(),
+                &fixture,
+                "review",
+                start,
+                1,
+                RoutineFireState::Failed,
+            );
+            record_fire(
+                store.as_ref(),
+                &fixture,
+                "review",
+                start,
+                2,
+                RoutineFireState::Failed,
+            );
+            // The workspace run query can also return retained cron attempts.
+            // Neither the superseded attempt nor its current run is another fire.
+            for attempt in 1..=2 {
+                let mut run = fixture.seed_run(
+                    &format!("jrun-review-{}-{attempt}", start.timestamp()),
+                    "review_pipeline",
+                    JobRunState::Failed,
+                );
+                run.created_at = start;
+                let mut pipeline =
+                    PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+                pipeline.trigger = Some(JobRunTrigger::routine("review", start.to_rfc3339()));
+                fixture
+                    .runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .upsert_job_run_for_workspace(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &run,
+                        Some(&pipeline),
+                    )
+                    .unwrap();
+            }
+            for i in 1..4 {
+                let mut run = fixture.seed_run(
+                    &format!("jrun-delivery-{i}"),
+                    "review_pipeline",
+                    JobRunState::Failed,
+                );
+                run.created_at = start + Duration::minutes(i * 20);
+                run.started_at = Some(run.created_at);
+                run.finished_at = Some(run.created_at + Duration::minutes(1));
+                let mut pipeline =
+                    PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+                pipeline.trigger =
+                    Some(JobRunTrigger::state_routine("review", "delivery-consumer"));
+                fixture
+                    .runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .upsert_job_run_for_workspace(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &run,
+                        Some(&pipeline),
+                    )
+                    .unwrap();
+            }
+            // Same job, different routine: must never break this routine's streak.
+            let other = fixture.seed_run(
+                "jrun-other-success",
+                "review_pipeline",
+                JobRunState::Success,
+            );
+            let mut pipeline =
+                PipelineState::new(other.run_id.clone(), other.job_id.clone(), json!({}));
+            pipeline.trigger = Some(JobRunTrigger::state_routine("other", "other-consumer"));
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .upsert_job_run_for_workspace(
+                    &fixture.runtime.workspace_id().unwrap(),
+                    &other,
+                    Some(&pipeline),
+                )
+                .unwrap();
+            let server = fixture.server(false);
+            let status = || {
+                json_ok(server.get("/api/routines?workspace=ws_http_fixture"))["routines"][0]
+                    .clone()
+            };
+            let row = status();
+            assert_eq!(
+                row["failure_streak"],
+                json!({"count": 4, "since": start.to_rfc3339(), "truncated": false})
+            );
+            assert_eq!(row["recent_fires"].as_array().unwrap().len(), 4);
+            assert_eq!(row["recent_fires"][0]["run_id"], "jrun-delivery-3");
+            assert_eq!(row["recent_fires"][0], row["last_fire"]);
+
+            // Bound the read without presenting the retained count as exact, or
+            // extending it past unseen cron history with older automation runs.
+            for i in 4..105 {
+                record_fire(
+                    store.as_ref(),
+                    &fixture,
+                    "review",
+                    start + Duration::minutes(i * 20),
+                    1,
+                    RoutineFireState::Failed,
+                );
+            }
+            let row = status();
+            assert_eq!(row["recent_fires"].as_array().unwrap().len(), 10);
+            assert_eq!(
+                row["failure_streak"],
+                json!({
+                    "count": 100, "since": (start + Duration::minutes(100)).to_rfc3339(), "truncated": true
+                })
             );
         },
     );
