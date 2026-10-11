@@ -4,7 +4,7 @@ summary: Run Cargo builds within Orbit's host-wide cross-worktree admission and 
 tags: [operations, performance, rust]
 paths: ["Makefile", "scripts/build-budget.py"]
 related_artifacts: [ORB-11754, ORB-11760]
-last_validated: 2026-10-09
+last_validated: 2026-10-11
 ---
 
 # Bound Concurrent Orbit Repository Builds
@@ -131,13 +131,18 @@ step, when no step output was checkpointed. Live metrics refresh on the provider
 10-second supervision observation interval.
 
 `orbit run readiness` and `orbit doctor` warn when a running local or pull drain's
-effective concurrency exceeds the host build slots, including a resized ceiling.
-The warning names both counts, `ORBIT_BUILD_SLOTS` and the resolved `slots` file.
+effective concurrency exceeds the host build slots, including a resized ceiling. The
+warning fires only in a checkout that ships `scripts/build-budget.py`, because only such
+a checkout's Make targets wait for a slot. In any other checkout, builds run without
+admission, so no mismatch is reported whatever `ORBIT_BUILD_SLOTS` or the `slots` file
+says. The warning names both counts, `ORBIT_BUILD_SLOTS` and the resolved `slots` file.
 These diagnostics do not change capacity or admission; a drain may deliberately
-run more agents than build slots. Disabled admission produces no mismatch warning.
+run more agents than build slots. Disabled admission (`ORBIT_BUILD_BUDGET=0`) produces
+no mismatch warning.
 An invalid build-budget setting or unreadable slots file does not prevent `orbit run readiness`
 from reporting the snapshot; it surfaces the failure as an advisory `build_budget_error` field
-on the capacity object (with `build_budget_warnings: []`) and in command text.
+on the capacity object (with `build_budget_warnings: []`) and in command text. That error
+is reported in every checkout, including one that does not ship the wrapper.
 Fresh managed `proc.spawn` calls include accumulated queue credit in the activity's
 remaining budget, while their configured per-call timeout still applies. Prefer
 the provider's native long-running shell transport for build validation.
