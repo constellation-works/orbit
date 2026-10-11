@@ -18,7 +18,9 @@ use super::super::base_claim::failure_identities;
 #[cfg(unix)]
 use super::super::base_claim::{BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure};
 #[cfg(unix)]
-use super::super::baseline::cached_base_check;
+use super::super::baseline::{cached_base_check, known_red};
+#[cfg(unix)]
+use super::super::required_command::{VALIDATION_TIMEOUT_MS, run_required_command};
 #[cfg(unix)]
 use crate::RuntimeHost;
 
@@ -27,6 +29,151 @@ struct Host;
 
 #[cfg(unix)]
 impl RuntimeHost for Host {}
+
+// Fault injection [ORB-15590]: a small capture ceiling forces a genuine
+// supervisor stop without generating large output or load. Its process-wide
+// environment needs a child; the settlement boundary covers a real signal.
+#[test]
+#[cfg(unix)]
+fn supervisor_stops_never_classify_partial_failures_as_known_red() {
+    const MARKER: &str = "ORBIT_TEST_BASE_CLAIM_STOP_CHILD";
+    let test = concat!(
+        module_path!(),
+        "::supervisor_stops_never_classify_partial_failures_as_known_red"
+    )
+    .split_once("::")
+    .unwrap()
+    .1;
+    if std::env::var(MARKER).as_deref() != Ok(test) {
+        let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            child.env_remove(key);
+        });
+        child
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env(MARKER, test)
+            .env("HOME", root.path())
+            .env("USERPROFILE", root.path())
+            .current_dir(root.path());
+        let output = orbit_common::test_env::run_child_test(&mut child, test, root.path());
+        orbit_common::test_env::assert_child_test_passed(
+            test,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        return;
+    }
+
+    for (case, stop, cause) in [
+        (
+            "signal",
+            "kill -TERM $$",
+            Some("process terminated with signal:"),
+        ),
+        (
+            "capture",
+            "printf '%2048s' ''",
+            Some("process output capture limit exceeded on stdout"),
+        ),
+        ("completed", ":", None),
+    ] {
+        let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+        let repo = root.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        git_ok(&repo, &["init", "-q", "-b", "main"]);
+        fs::write(
+            repo.join("check.sh"),
+            format!(
+                "#!/bin/sh\n\
+                 selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+                 [ -n \"$selection\" ] || selection='{{\"packages\":[\"suite\"]}}'\n\
+                 printf '{{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}}' \"$selection\" \
+                 > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+                 echo 'test suite::broken ... FAILED'\n\
+                 if [ -f candidate.txt ]; then {stop}; fi\n\
+                 exit 1\n"
+            ),
+        )
+        .unwrap();
+        git_ok(&repo, &["add", "check.sh"]);
+        git_ok(&repo, &["commit", "-q", "-m", "base"]);
+        let base = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        fs::write(repo.join("candidate.txt"), "after\n").unwrap();
+        git_ok(&repo, &["add", "candidate.txt"]);
+        git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
+
+        let _env = orbit_common::test_env::scoped([(
+            "ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES",
+            Some("1024"),
+        )]);
+        let command = "exec sh check.sh";
+        let failures = ["test suite::broken".to_string()].into_iter().collect();
+        let run = run_required_command(&Host, &repo, command, None, VALIDATION_TIMEOUT_MS).unwrap();
+        assert!(!run.timed_out && !run.passed, "{case}: a failed, uncut run");
+        assert_eq!(run.failures, failures, "{case}: printed failures survive");
+        assert_eq!(
+            known_red(&run, &failures),
+            cause.is_none(),
+            "[ORB-15590] the shared predicate refuses supervisor-stopped partial failures: {case}"
+        );
+
+        let check = verify_base_failure(
+            &Host,
+            &repo,
+            base.trim(),
+            command,
+            &["suite::broken".to_string()],
+            "jrun-fixture",
+            ReplayBudget::new(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(check.cut, None, "{case}: not a reserve cut");
+        match cause {
+            Some(cause) => {
+                assert!(
+                    run.infrastructure_failure
+                        .as_deref()
+                        .unwrap()
+                        .starts_with(cause),
+                    "{case}: the supervisor supplied the stop cause"
+                );
+                assert!(
+                    matches!(&check.verdict, BaseFailureVerdict::Inconclusive(reason) if reason.contains(cause)),
+                    "[ORB-15590] {case}: partial failures stay inconclusive: {:?}",
+                    check.verdict
+                );
+                assert_eq!(
+                    check.base_replay, None,
+                    "{case}: no replay of partial failures"
+                );
+                assert_eq!(
+                    check.base_log,
+                    serde_json::Value::Null,
+                    "{case}: no base run"
+                );
+            }
+            None => {
+                assert_eq!(
+                    check.verdict,
+                    BaseFailureVerdict::KnownRed {
+                        failures: failures.into_iter().collect()
+                    }
+                );
+                assert_eq!(check.base_replay, Some(BaseReplay::FailingTests));
+            }
+        }
+    }
+}
 
 #[cfg(unix)]
 fn git_ok(repo: &Path, args: &[&str]) {

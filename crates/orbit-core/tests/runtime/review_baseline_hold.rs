@@ -765,6 +765,82 @@ const REPLAYING_GATE: &str = "#!/bin/sh\n\
     exit 1\n";
 const CHECK_RUNS_LOG: &str = "check-runs.log";
 
+/// [ORB-15590] A genuine signal stops the host's candidate after it reports
+/// its selection and a shared failed test. The complete base could reproduce
+/// that test, but its replay cannot establish what the stopped run never did.
+#[test]
+fn a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay",
+    ) {
+        return;
+    }
+    // Exec keeps the signalled shell as the supervised child, so the signal
+    // is recorded by the executor rather than converted to shell exit 143.
+    let command = "exec sh check.sh";
+    let check = REPLAYING_GATE.replace(
+        "exit 1\n",
+        "if grep -q after candidate.txt; then kill -TERM $$; fi\nexit 1\n",
+    );
+    let mut fixture = with_checks(
+        Fixture::new_with_config(&[], "baseline_commands = [\"exec sh check.sh\"]\n"),
+        &check,
+        "after\n",
+    );
+    let failure = settle_claim(&mut fixture, command, &["check.sh"]);
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&fixture);
+    assert_eq!(
+        settled.verdict,
+        ReviewVerdict::Incomplete,
+        "[ORB-15590] incomplete candidate coverage cannot approve a review"
+    );
+    assert!(settled.baseline_red.is_empty());
+    assert!(settled.known_red.is_empty());
+    assert_eq!(settled.validation[0].outcome, ValidationOutcome::Failed);
+    assert!(settled.host_overrides.is_empty());
+    let escalation = settled.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("process terminated with signal:"),
+        "the supervisor stop remains visible: {escalation}"
+    );
+    let runs = std::fs::read_to_string(fixture.repo.join(".git").join(CHECK_RUNS_LOG)).unwrap();
+    assert_eq!(
+        runs.lines().collect::<Vec<_>>(),
+        ["full"],
+        "partial candidate failures never cause a base replay"
+    );
+    let evidence: Value = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_BASELINE_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    let check = &evidence["checks"][0];
+    assert_eq!(check["decision"], "refused", "{check}");
+    assert_eq!(check["base_replay"], Value::Null, "{check}");
+    assert_eq!(check["base"], Value::Null, "{check}");
+    assert_eq!(check["candidate"]["timed_out"], false, "{check}");
+    assert_eq!(check["cut"], Value::Null, "{check}");
+    assert_eq!(
+        check["candidate"]["summary"]["selection"],
+        json!({"packages": ["suite"]}),
+        "{check}"
+    );
+    assert!(
+        fixture
+            .runtime
+            .get_task_history(&fixture.task_id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
+        "[ORB-15590] a stopped candidate never records known-red acceptance"
+    );
+}
+
 /// [ORB-15328] A failing gate whose failures the base shares settles with
 /// them attributed to the base by replaying only the failing tests there: the
 /// full selection runs once, on the candidate, and settlement records the

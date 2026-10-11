@@ -634,7 +634,10 @@ verdict stays what the reviewer reported and is never coverage. A
 confirmed check whose candidate failures are known red is not held
 [ORB-15546]. By the rule required validation applies [ORB-15375], the
 candidate run names at least one failure, every one a failed test the base
-fails too, without timing out or deferring a sandbox-confined path. Under
+fails too, without timing out, being stopped by the supervisor, or deferring
+a sandbox-confined path. A candidate stopped by a signal or output-capture
+limit remains inconclusive before any base replay: partial output cannot
+establish all of its failures. Under
 the same conditions as a hold, the review settles `accept`
 (`accept_with_fixes` over a repair). The record keeps its `failed` outcome;
 the certificate's `known_red` records the command, record id, base, final

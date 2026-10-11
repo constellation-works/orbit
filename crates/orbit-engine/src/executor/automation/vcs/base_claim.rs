@@ -50,7 +50,8 @@ pub enum BaseFailureVerdict {
     /// The base fails as the candidate does, and the candidate's failures
     /// are known red [ORB-15546]: at least one, every one a test the base
     /// fails too, with no timeout and no deferred sandbox path on the
-    /// candidate. The candidate introduced none of them. Carries them.
+    /// candidate, and no supervisor stop. The candidate introduced none of
+    /// them. Carries them.
     KnownRed { failures: Vec<String> },
     /// The base fails too, but the candidate names failures it does not:
     /// those still belong to the candidate.
@@ -181,6 +182,8 @@ impl BaseFailureCheck {
 /// candidate first: a pass there is `CandidatePasses` unless its output shows
 /// deferred, skipped, or unavailable-sandbox evidence, or its summary shows
 /// it executed no counted test; those leave the claim inconclusive [ORB-15122].
+/// A failed candidate run stopped by a signal or output-capture limit is
+/// inconclusive without replay: its printed failures may be incomplete.
 ///
 /// A failure there is checked on the base [ORB-15328]. A full-selection
 /// result the `(base, command, selection)` cache already holds, as delivery
@@ -291,6 +294,16 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             },
         };
         return Ok(checked(verdict, Value::Null, None));
+    }
+    if let Some(cause) = &run.infrastructure_failure {
+        return Ok(checked(
+            BaseFailureVerdict::Inconclusive(format!(
+                "the host's run of `{}` on the candidate was stopped: {cause}",
+                run.command
+            )),
+            Value::Null,
+            None,
+        ));
     }
     if run.missing_tool.is_some() || run.network_evidence.is_some() {
         return Ok(checked(
