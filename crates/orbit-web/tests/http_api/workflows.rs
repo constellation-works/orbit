@@ -3,8 +3,10 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRun, JobRunState, TaskStatus};
-use orbit_types::workflow::{ChildDispatch, PipelineState};
+use orbit_core::{JobRun, JobRunState, Task, TaskComplexity, TaskPriority, TaskStatus};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, ChildDispatch, PipelineState,
+};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, Server, error_code, isolated, json_ok};
@@ -891,6 +893,187 @@ fn auto_readiness_reports_authorization_and_replica_for_the_start_form() {
             assert_eq!(operator["controls_authorized"], true, "{operator}");
             assert_eq!(operator["replica"], false, "{operator}");
             assert_eq!(operator["approvals"]["enabled"], false, "{operator}");
+        },
+    );
+}
+
+/// A task ready for admission but for what the test arranges: criteria, a
+/// plan, an assessed complexity and one existing file it locks.
+fn readiness_task(
+    fixture: &Fixture,
+    title: &str,
+    status: TaskStatus,
+    priority: TaskPriority,
+    file: &str,
+) -> Task {
+    std::fs::write(fixture.runtime.paths().repo_root.join(file), "fixture\n").unwrap();
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: format!("Readiness fixture: {title}"),
+            acceptance_criteria: vec!["The fixture is observable.".into()],
+            plan: "Fixture plan.".into(),
+            context_files: vec![format!("file:{file}")],
+            priority,
+            complexity: TaskComplexity::Medium,
+            status: Some(status),
+            ..Default::default()
+        })
+        .unwrap()
+}
+
+/// Return `task` to the backlog under a red-base hold, the status change and
+/// history note a delivery that met a red base leaves.
+fn hold_for_red_base(fixture: &Fixture, task: &str, hold: &BaselineRedHold) {
+    let runtime = &fixture.runtime;
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(&runtime.global_root()),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        runtime.workspace_id().unwrap(),
+        runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        task,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: "system".into(),
+            status: Some(TaskStatus::Backlog),
+            status_event: Some(BASELINE_RED_HOLD_EVENT.into()),
+            status_note: Some(hold.text("required validation is red on the base")),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+/// `?task=` explains exactly the named tasks, so a task detail gets its own
+/// answer: waiting on a lock, waiting on capacity, held for a red base,
+/// eligible, and a proposed task the bounded backlog listing never reaches.
+#[test]
+fn auto_readiness_explains_the_tasks_it_names() {
+    isolated(
+        "workflows::auto_readiness_explains_the_tasks_it_names",
+        || {
+            let fixture = Fixture::new();
+            let holder = readiness_task(
+                &fixture,
+                "lock holder",
+                TaskStatus::InProgress,
+                TaskPriority::Medium,
+                "held.rs",
+            );
+            let locked = readiness_task(
+                &fixture,
+                "waits on the lock",
+                TaskStatus::Backlog,
+                TaskPriority::Medium,
+                "held.rs",
+            );
+            let eligible = readiness_task(
+                &fixture,
+                "takes the one slot",
+                TaskStatus::Backlog,
+                TaskPriority::High,
+                "eligible.rs",
+            );
+            let saturated = readiness_task(
+                &fixture,
+                "finds no slot",
+                TaskStatus::Backlog,
+                TaskPriority::Low,
+                "saturated.rs",
+            );
+            // A delivery that met a red base returns its task to the backlog.
+            let red = readiness_task(
+                &fixture,
+                "held for a red base",
+                TaskStatus::InProgress,
+                TaskPriority::Medium,
+                "red.rs",
+            );
+            let hold = BaselineRedHold {
+                base_ref: "origin/agent-main".into(),
+                base_sha: "1a2b3c4d5e6f".into(),
+                command: "make ci-test-affected".into(),
+                run_id: "jrun-red".into(),
+                selection: None,
+            };
+            hold_for_red_base(&fixture, &red.id, &hold);
+            let proposed = readiness_task(
+                &fixture,
+                "awaits approval",
+                TaskStatus::Proposed,
+                TaskPriority::Medium,
+                "proposed.rs",
+            );
+            let server = fixture.server(false);
+
+            let named = [&locked, &eligible, &saturated, &red, &proposed]
+                .map(|task| task.id.as_str())
+                .join(",");
+            let payload = json_ok(server.get(&format!(
+                "/api/workflows/auto/readiness?workspace={WS}&concurrency=1&task={named}"
+            )));
+            let entries = payload["tasks"].as_array().unwrap();
+            assert_eq!(entries.len(), 5, "exactly the named tasks: {payload:#}");
+            let entry = |task: &Task| {
+                entries
+                    .iter()
+                    .find(|entry| entry["task_id"] == task.id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{} missing: {payload:#}", task.id))
+            };
+            let waiting = entry(&locked);
+            assert_eq!(waiting["reason"], "context_lock_conflict", "{waiting}");
+            assert_eq!(
+                waiting["conflicts"][0]["locking_task_id"],
+                holder.id.as_str(),
+                "{waiting}"
+            );
+            assert_eq!(
+                waiting["conflicts"][0]["requested_file"], "file:held.rs",
+                "{waiting}"
+            );
+            let ready = entry(&eligible);
+            assert_eq!(ready["eligible"], true, "{ready}");
+            let full = entry(&saturated);
+            assert_eq!(full["eligible"], false, "{full}");
+            assert_eq!(full["reason"], "capacity_saturated", "{full}");
+            let held = entry(&red);
+            assert_eq!(held["reason"], "baseline_red_hold", "{held}");
+            let detail = held["detail"].as_str().unwrap();
+            assert!(
+                detail.contains(&hold.command) && detail.contains(&hold.base_sha),
+                "the hold names its command and red base: {held}"
+            );
+            let approval = entry(&proposed);
+            assert_eq!(approval["reason"], "not_backlog", "{approval}");
+            assert_eq!(approval["status"], "proposed", "{approval}");
+
+            let listing = json_ok(server.get(&format!(
+                "/api/workflows/auto/readiness?workspace={WS}&concurrency=1"
+            )));
+            assert!(
+                listing["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|entry| entry["task_id"] != proposed.id.as_str()),
+                "the bounded listing never reaches a proposed task: {listing:#}"
+            );
+
+            for bad in ["HF-404404", "not%20an%20id"] {
+                let response = server.get(&format!(
+                    "/api/workflows/auto/readiness?workspace={WS}&task={bad}"
+                ));
+                assert_eq!(response.status().as_u16(), 400, "{bad}");
+            }
         },
     );
 }

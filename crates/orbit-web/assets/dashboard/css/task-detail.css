@@ -145,6 +145,42 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
+/* The drain part leads the card: the pool dot and words, the row dot's badge
+   text, then one labelled line per holder, lock or dependency. */
+.readiness-drain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.readiness-drain-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--fg);
+}
+.readiness-drain-line {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 8px;
+}
+.readiness-drain-line .label {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.readiness-drain a.relation-target {
+  text-decoration: none;
+}
+.readiness-drain-value,
+.readiness-dependency {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+}
 
 .property-list {
   display: flex;

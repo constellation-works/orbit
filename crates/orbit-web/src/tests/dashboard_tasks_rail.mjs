@@ -93,6 +93,11 @@ function matches(node, simple) {
   const tag = simple.match(/^[a-z]+/i)?.[0];
   if (tag && node.tagName !== tag.toUpperCase()) return false;
   for (const [, name] of simple.matchAll(/\.([^\s.#[]+)/g)) if (!classesOf(node).includes(name)) return false;
+  // `[data-draft]`-style presence tests, so an open detail is not mistaken for a draft.
+  for (const [, name] of simple.matchAll(/\[([\w-]+)\]/g)) {
+    const key = name.startsWith('data-') ? name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()) : null;
+    if (!(key ? node.dataset[key] : node.getAttribute(name) != null)) return false;
+  }
   const id = simple.match(/#([\w-]+)/)?.[1];
   return !id || node.id === id;
 }
@@ -399,6 +404,145 @@ assert.ok(taskRows().every(row => row.querySelector('.ready-dot').classList.cont
 assert.equal(backlogBody.querySelector('.group-readiness'), null, 'and the card stops counting');
 stopListening();
 common.setWorkspace('ws_orbit');
+
+// ORB-15371: the Readiness card of a proposed or backlog task leads with its
+// drain pool and the row dot's badge text, then what holds it, the server's
+// detail and the raw reason, above the preparation gaps. The detail reads its
+// own task's entry, so it answers with no Drain card snapshot at all, and
+// "Ready" is claimed only for an eligible task with nothing missing.
+const readyGaps = { ready: true, preparing: false, gaps: [] };
+const advisoryGap = { ready: true, preparing: false, gaps: [{ code: 'missing_plan', severity: 'advisory', message: 'No plan yet', fix: 'Write a plan' }] };
+const redBase = 'required validation `make ci-test-affected` fails on `origin/agent-main` at 1a2b3c4d; the hold stands until the owner\'s clock checks a new base tip and the command passes there';
+const readinessEntries = {
+  'ORB-41': { task_id: 'ORB-41', status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:docs/CONFIG.md', locking_task_id: 'ORB-77' }] },
+  'ORB-42': { task_id: 'ORB-42', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-1'] },
+  'ORB-43': { task_id: 'ORB-43', status: 'backlog', eligible: false, reason: 'baseline_red_hold', detail: redBase },
+  'ORB-44': { task_id: 'ORB-44', status: 'backlog', eligible: true, reason: 'ready' },
+  'ORB-45': { task_id: 'ORB-45', status: 'backlog', eligible: false, reason: 'unmet_dependency', dependencies: [{ task_id: 'ORB-50', status: 'in-progress' }, { task_id: 'ORB-51', status: 'proposed' }] },
+  'ORB-46': { task_id: 'ORB-46', status: 'backlog', eligible: true, reason: 'ready' },
+  'ORB-47': { task_id: 'ORB-47', status: 'backlog', eligible: false, reason: 'brand_new_wait', detail: 'something the dashboard has never heard of' },
+  'ORB-48': { task_id: 'ORB-48', status: 'proposed', eligible: false, reason: 'not_backlog' },
+};
+const readinessReads = [];
+const heldReads = new Map();
+const holdRead = () => {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+};
+const settleReads = () => new Promise(setImmediate);
+const readinessResponse = (body, ok = true) => ({ ok, status: ok ? 200 : 500, text: async () => JSON.stringify(body), json: async () => body, headers: { get: () => null } });
+context.fetch = path => {
+  const url = new URL(path, 'http://dashboard.test');
+  assert.equal(url.pathname, '/api/workflows/auto/readiness', `the detail reads only drain readiness: ${path}`);
+  const id = url.searchParams.get('task');
+  readinessReads.push({ id, workspace: url.searchParams.get('workspace') });
+  if (heldReads.has(id)) return heldReads.get(id).promise;
+  if (id === 'ORB-49') return Promise.resolve(readinessResponse({ error: 'readiness unavailable' }, false));
+  return Promise.resolve(readinessResponse({ tasks: [readinessEntries[id]] }));
+};
+const cardTasks = [
+  task(41, { status: 'backlog', readiness: readyGaps }),
+  task(42, { status: 'backlog', readiness: readyGaps }),
+  task(43, { status: 'backlog', readiness: readyGaps }),
+  task(44, { status: 'backlog', readiness: readyGaps }),
+  task(45, { status: 'backlog', readiness: readyGaps }),
+  task(46, { status: 'backlog', readiness: advisoryGap }),
+  task(47, { status: 'backlog', readiness: readyGaps }),
+  task(48, { status: 'proposed', readiness: readyGaps }),
+  task(49, { status: 'backlog', readiness: readyGaps }),
+];
+const cardContext = { ...taskContext, getActiveStatuses: () => new Set(['proposed', 'backlog']), statusOrder: ['proposed', 'backlog'] };
+const paintCards = () => {
+  served = { total: cardTasks.length, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = cardTasks;
+  renderTasks(cardTasks, cardContext);
+};
+const readinessCard = id => byId['tasks-body'].querySelector(`#detail-${id} .readiness-list`);
+const cardHead = id => readinessCard(id).querySelector('.readiness-drain-head').children.map(node => node.textContent);
+heldReads.set('ORB-41', holdRead());
+paintCards();
+for (const item of cardTasks) {
+  const title = rowFor(item.id).querySelector('button.title');
+  title.parentNode.dispatch('click', { target: title });
+}
+assert.ok(readinessCard('ORB-41').textContent.includes('Checking whether the drain can take this task'), 'a read in flight says so');
+assert.ok(!readinessCard('ORB-41').textContent.includes('Ready'), 'a read in flight claims no readiness');
+heldReads.get('ORB-41').resolve(readinessResponse({ tasks: [readinessEntries['ORB-41']] }));
+heldReads.delete('ORB-41');
+await settleReads();
+assert.deepEqual(
+  readinessReads.map(read => read.id).sort(),
+  cardTasks.map(item => item.id).sort(),
+  'each open proposed or backlog task asks for its own readiness',
+);
+assert.ok(readinessReads.every(read => read.workspace === 'ws_orbit'), 'in the selected workspace');
+
+// Waiting on a lock: the holder links to its task, with the contested selector.
+assert.deepEqual(cardHead('ORB-41'), ['', 'Waiting on locks', 'waits on ORB-77 · lock']);
+const holderLink = readinessCard('ORB-41').querySelector('a.relation-target');
+assert.equal(holderLink.textContent, 'ORB-77');
+assert.ok(holderLink.href.includes('open=ORB-77'), `the holder is a link to its task: ${holderLink.href}`);
+assert.ok(readinessCard('ORB-41').textContent.includes('file:docs/CONFIG.md'), 'the contested selector is named');
+assert.ok(readinessCard('ORB-41').textContent.includes('Reason: context_lock_conflict'), 'the raw reason is kept');
+assert.ok(!readinessCard('ORB-41').textContent.includes('Ready: nothing is missing.'), 'a waiting task is never Ready');
+assert.ok(readinessCard('ORB-41').textContent.includes('No preparation gaps.'));
+
+// Waiting on capacity.
+assert.deepEqual(cardHead('ORB-42'), ['', 'Waiting on capacity', 'no free slot']);
+assert.ok(readinessCard('ORB-42').textContent.includes('Reason: capacity_saturated'));
+
+// A red base: "base red", with the command and base sha from the hold.
+assert.deepEqual(cardHead('ORB-43'), ['', 'Waiting, other', 'base red']);
+assert.ok(readinessCard('ORB-43').textContent.includes('make ci-test-affected') && readinessCard('ORB-43').textContent.includes('1a2b3c4d'), 'the hold names its command and red base');
+assert.ok(readinessCard('ORB-43').textContent.includes('Reason: baseline_red_hold'));
+
+// Eligible with nothing missing is the only Ready.
+assert.deepEqual(cardHead('ORB-44'), ['', 'Eligible now', 'nothing holds it']);
+assert.ok(readinessCard('ORB-44').textContent.includes('Ready: nothing is missing.'), 'an eligible task with no gaps is Ready');
+
+// Unmet dependencies: each linked, with its status.
+assert.deepEqual(cardHead('ORB-45'), ['', 'Waiting, other', 'waits on deps']);
+const dependencies = readinessCard('ORB-45').querySelectorAll('.readiness-dependency').map(node => node.textContent);
+assert.deepEqual(dependencies, ['ORB-50in-progress', 'ORB-51proposed'], 'each dependency is listed with its status');
+assert.deepEqual(readinessCard('ORB-45').querySelectorAll('.readiness-dependency a.relation-target').map(link => link.textContent), ['ORB-50', 'ORB-51']);
+
+// Eligible, but a preparation gap stays listed in the same card and Ready is not claimed.
+assert.deepEqual(cardHead('ORB-46'), ['', 'Eligible now', 'nothing holds it']);
+assert.ok(readinessCard('ORB-46').querySelector('.readiness-gap').textContent.includes('No plan yet'), 'the gap stays in the card');
+assert.ok(!readinessCard('ORB-46').textContent.includes('Ready: nothing is missing.'));
+
+// An unknown reason keeps its raw code and detail.
+assert.deepEqual(cardHead('ORB-47'), ['', 'Waiting, other', 'brand new wait']);
+assert.ok(readinessCard('ORB-47').textContent.includes('something the dashboard has never heard of'));
+assert.ok(readinessCard('ORB-47').textContent.includes('Reason: brand_new_wait'));
+
+// A proposed task waits for approval.
+assert.deepEqual(cardHead('ORB-48'), ['', 'Waiting, other', 'awaits approval']);
+
+// No answer and no snapshot: the card says readiness is unknown, never Ready.
+assert.ok(readinessCard('ORB-49').textContent.includes('Drain readiness unknown: readiness unavailable.'), readinessCard('ORB-49').textContent);
+assert.ok(!readinessCard('ORB-49').textContent.includes('Ready'), 'unknown readiness is not Ready');
+
+// The row dot and the card word one entry alike. The Drain card's snapshot
+// also stands in for a task whose own read failed.
+drainWaits.setDrainReadiness({ tasks: [
+  ...Object.values(readinessEntries).filter(entry => entry.status === 'backlog'),
+  { task_id: 'ORB-49', status: 'backlog', eligible: false, reason: 'capacity_saturated' },
+] });
+paintCards();
+for (const id of ['ORB-41', 'ORB-42', 'ORB-43', 'ORB-44', 'ORB-45']) {
+  const [, pool, text] = cardHead(id);
+  const dotLabel = dotOf(id).getAttribute('aria-label');
+  assert.ok(dotLabel === pool || dotLabel === `${pool}: ${text}`, `${id}: dot "${dotLabel}" matches card "${pool}: ${text}"`);
+}
+assert.deepEqual(cardHead('ORB-49'), ['', 'Waiting on capacity', 'no free slot'], 'the snapshot entry stands in');
+for (const item of cardTasks) {
+  const title = rowFor(item.id).querySelector('button.title');
+  title.parentNode.dispatch('click', { target: title });
+}
+drainWaits.setDrainReadiness({ tasks: [] });
+context.fetch = () => new Promise(() => {});
 
 // Review approval runs the shipped row handler and request client. Hold the
 // response to observe pending state without timers or an optimistic status edit.
