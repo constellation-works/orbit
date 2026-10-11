@@ -237,6 +237,77 @@ fn create_only_seed_creates_absent_defaults_and_never_rewrites_existing_definiti
 }
 
 #[test]
+fn implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees() {
+    if !isolated(
+        "workspace_seed::implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees",
+    ) {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let mut expected_files = Vec::new();
+
+    for (layout, skills_dir) in [
+        ("resources/skills", workspace.join("resources/skills")),
+        ("skills", workspace.join("skills")),
+    ] {
+        for skill_id in ["orbit-pr", "orbit-approve-task"] {
+            let tree = skills_dir.join(skill_id);
+            std::fs::create_dir_all(&tree).expect("legacy skill tree");
+
+            let skill = tree.join("SKILL.md");
+            let skill_bytes = format!("# Operator-edited {skill_id}\n").into_bytes();
+            std::fs::write(&skill, &skill_bytes).expect("operator skill edits");
+            expected_files.push((layout, skill, skill_bytes));
+
+            let note = tree.join("notes.txt");
+            let note_bytes = format!("unknown operator file in {layout}/{skill_id}\n").into_bytes();
+            std::fs::write(&note, &note_bytes).expect("unknown operator file");
+            expected_files.push((layout, note, note_bytes));
+        }
+    }
+
+    let roots = orbit_core::runtime::OrbitRuntimeRoots {
+        global_root: global.clone(),
+        shared_root: workspace.clone(),
+        local_root: workspace.clone(),
+    };
+    OrbitRuntime::initialize_from_resolved_roots(roots, None).expect("implicit runtime open");
+
+    for (layout, path, expected) in &expected_files {
+        assert_eq!(
+            std::fs::read(path).expect("legacy skill file survives runtime open"),
+            *expected,
+            "runtime open changed {layout}/{}",
+            path.strip_prefix(workspace.join(layout))
+                .expect("file belongs to legacy layout")
+                .display()
+        );
+    }
+
+    init_workspace_at_root(
+        &workspace,
+        InitOptions {
+            global_root_override: Some(global),
+            ..Default::default()
+        },
+    )
+    .expect("explicit workspace initialization");
+
+    for (layout, path, expected) in expected_files {
+        assert_eq!(
+            std::fs::read(&path).expect("legacy skill file survives workspace init"),
+            expected,
+            "workspace init changed {layout}/{}",
+            path.strip_prefix(workspace.join(layout))
+                .expect("file belongs to legacy layout")
+                .display()
+        );
+    }
+}
+
+#[test]
 fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
     if !isolated(
         "workspace_seed::settings_only_migration_waits_for_crud_and_preserves_concurrent_settings",

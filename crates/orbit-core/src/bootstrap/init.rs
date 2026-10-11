@@ -30,8 +30,6 @@ use orbit_common::fs::io::{
 use crate::runtime::resolve_global_root;
 use orbit_config::{ConfigRoots, ConfigSeed, ResolvedConfig, seed_default_config};
 
-const LEGACY_WORKSPACE_SEEDED_SKILL_IDS: [&str; 2] = ["orbit-approve-task", "orbit-pr"];
-
 #[derive(Debug, Clone)]
 pub struct InitResult {
     pub refreshed_skill_files: usize,
@@ -502,10 +500,6 @@ fn remove_workspace_seeded_default_skills(
                 remove_path_if_exists(&skill_dir)?;
             }
         }
-        for skill_id in LEGACY_WORKSPACE_SEEDED_SKILL_IDS {
-            remove_path_if_exists(&skills_dir.join(skill_id))?;
-        }
-
         // Skills are never seeded into a workspace-only skills directory, so a
         // managed manifest here describes skill trees that were just removed.
         // Drop it once nothing else remains, otherwise it would keep an
