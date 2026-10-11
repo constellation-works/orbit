@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -304,9 +305,10 @@ fn write_flood_script(
 }
 
 /// Kills recorded children if the supervisor does not, including when an
-/// assertion panics or a drain fails to return. A pid is signalled only while
-/// its command line contains every required marker, including its unique
-/// recorded path. Cleanup signals individual pids, never a discovered group.
+/// assertion panics or a drain fails to return. A pid is signalled only when
+/// its argv can be read and contains every required marker, including its
+/// unique recorded path. Unreadable argv authorizes nothing. Cleanup signals
+/// individual pids, never a discovered group.
 #[cfg(unix)]
 struct FloodCleanup {
     cancel: Arc<AtomicBool>,
@@ -382,7 +384,7 @@ fn reap_recorded(leader_path: &Path, leader_marker: &[u8], kids_dir: &Path) {
 
 #[cfg(unix)]
 fn kill_if_cmdline(pid: u32, markers: &[&[u8]]) {
-    if !cmdline_has(pid, markers) {
+    if !signal_authorized(&inspect_argv(pid), markers) {
         return;
     }
     let Some(pid) = i32::try_from(pid).ok().filter(|pid| *pid > 1) else {
@@ -397,12 +399,220 @@ fn kill_if_cmdline(pid: u32, markers: &[&[u8]]) {
     }
 }
 
-#[cfg(unix)]
-fn cmdline_has(pid: u32, markers: &[&[u8]]) -> bool {
-    let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline")) else {
-        return false;
+/// What a platform argv read can honestly say about one pid.
+#[derive(Debug, PartialEq, Eq)]
+enum ArgvInspection {
+    /// Argv bytes, NUL-separated, with no environment trailer.
+    Present(Vec<u8>),
+    /// The pid is gone or is an unreaped zombie (`process_is_alive` is false).
+    NoProcess,
+    /// The process may still be running, but its argv could not be read.
+    Unavailable,
+}
+
+/// How the leak assertion treats one inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReapVerdict {
+    /// Gone, zombie, or a live pid whose argv no longer contains the marker.
+    Reaped,
+    /// Alive and still the recorded command.
+    StillRecorded,
+    /// Inspection failed. This is not evidence that the process exited.
+    Uncertain,
+}
+
+fn reap_verdict(inspection: &ArgvInspection, marker: &[u8]) -> ReapVerdict {
+    match inspection {
+        ArgvInspection::NoProcess => ReapVerdict::Reaped,
+        ArgvInspection::Unavailable => ReapVerdict::Uncertain,
+        ArgvInspection::Present(cmdline) => {
+            let still_recorded =
+                !marker.is_empty() && cmdline.windows(marker.len()).any(|window| window == marker);
+            if still_recorded {
+                ReapVerdict::StillRecorded
+            } else {
+                ReapVerdict::Reaped
+            }
+        }
+    }
+}
+
+fn signal_authorized(inspection: &ArgvInspection, markers: &[&[u8]]) -> bool {
+    match inspection {
+        ArgvInspection::Present(cmdline) => cmdline_matches(cmdline, markers),
+        // A missing or unreadable argv never identifies the recorded child.
+        ArgvInspection::NoProcess | ArgvInspection::Unavailable => false,
+    }
+}
+
+fn inspection_from_read(result: io::Result<Vec<u8>>) -> ArgvInspection {
+    match result {
+        Ok(cmdline) => ArgvInspection::Present(cmdline),
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(libc::ESRCH) =>
+        {
+            ArgvInspection::NoProcess
+        }
+        Err(_) => ArgvInspection::Unavailable,
+    }
+}
+
+/// `KERN_PROCARGS2` layout: native-endian `argc`, a NUL-terminated executable
+/// path, NUL padding, then `argc` NUL-terminated arguments. Bytes after those
+/// arguments are the environment and are not part of the command identity.
+fn argv_from_procargs2(buf: &[u8]) -> io::Result<Vec<u8>> {
+    if buf.len() < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "short procargs2 record",
+        ));
+    }
+    let mut argc_bytes = [0u8; 4];
+    argc_bytes.copy_from_slice(&buf[..4]);
+    let argc = i32::from_ne_bytes(argc_bytes);
+    let Ok(argc) = usize::try_from(argc) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "procargs2 argc out of range",
+        ));
     };
-    cmdline_matches(&cmdline, markers)
+    if argc > 4096 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "procargs2 argc out of range",
+        ));
+    }
+    let mut index = 4usize;
+    while index < buf.len() && buf[index] != 0 {
+        index += 1;
+    }
+    if index >= buf.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unterminated procargs2 executable path",
+        ));
+    }
+    while index < buf.len() && buf[index] == 0 {
+        index += 1;
+    }
+    let mut argv = Vec::new();
+    for argument in 0..argc {
+        if index >= buf.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "truncated procargs2 argv",
+            ));
+        }
+        let start = index;
+        while index < buf.len() && buf[index] != 0 {
+            index += 1;
+        }
+        if index >= buf.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unterminated procargs2 argument",
+            ));
+        }
+        if argument > 0 {
+            argv.push(0);
+        }
+        argv.extend_from_slice(&buf[start..index]);
+        index += 1;
+    }
+    Ok(argv)
+}
+
+#[cfg(unix)]
+fn inspect_argv(pid: u32) -> ArgvInspection {
+    // Zombies remain visible to `kill(pid, 0)` but can no longer run. Treat
+    // them as exited, the same way `process_is_alive` does.
+    if !crate::process::identity::process_is_alive(pid) {
+        return ArgvInspection::NoProcess;
+    }
+    inspection_from_read(read_argv_bytes(pid))
+}
+
+#[cfg(target_os = "linux")]
+fn read_argv_bytes(pid: u32) -> io::Result<Vec<u8>> {
+    fs::read(format!("/proc/{pid}/cmdline"))
+}
+
+#[cfg(target_os = "macos")]
+fn read_argv_bytes(pid: u32) -> io::Result<Vec<u8>> {
+    // `ps` is setuid and this lane refuses to exec it. `sysctl` KERN_PROCARGS2
+    // reads the same arguments without starting a process.
+    const MAX_PROCARGS: usize = 1024 * 1024;
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "pid out of range"))?;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut len: usize = 0;
+    let rc = unsafe {
+        // Safety: `mib` is the three-integer KERN_PROCARGS2 name. A null old
+        // pointer writes only the required byte count into `len`.
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3 as libc::c_uint,
+            std::ptr::null_mut(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if len == 0 || len > MAX_PROCARGS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected procargs2 size",
+        ));
+    }
+    let mut cap = len;
+    for _ in 0..4 {
+        let mut buf = vec![0u8; cap];
+        let mut out_len = cap;
+        let rc = unsafe {
+            // Safety: `buf` is writable for `out_len` bytes. The kernel writes
+            // at most that many and reports the count it stored.
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3 as libc::c_uint,
+                buf.as_mut_ptr().cast(),
+                &mut out_len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc == 0 {
+            if out_len == 0 || out_len > buf.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unexpected procargs2 length",
+                ));
+            }
+            buf.truncate(out_len);
+            return argv_from_procargs2(&buf);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOMEM) && cap < MAX_PROCARGS {
+            cap = cap.saturating_mul(2).min(MAX_PROCARGS);
+            continue;
+        }
+        return Err(error);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "procargs2 size kept growing",
+    ))
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn read_argv_bytes(_pid: u32) -> io::Result<Vec<u8>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "argv inspection is not implemented on this unix",
+    ))
 }
 
 fn cmdline_matches(cmdline: &[u8], markers: &[&[u8]]) -> bool {
@@ -433,6 +643,84 @@ fn flood_cleanup_requires_every_nonempty_marker() {
             "cleanup must require every nonempty marker: {markers:?}"
         );
     }
+}
+
+// Unreadable argv must not count as a reaped child or authorize a signal.
+// A truncated KERN_PROCARGS2 record is unreadable, not a different command.
+#[test]
+fn unreadable_argv_is_not_a_reaped_child_and_authorizes_no_signal() {
+    let marker = b"/unique/writer/0".as_slice();
+    let markers = [b"cat".as_slice(), marker];
+    let recorded = ArgvInspection::Present(b"cat\0/unique/writer/0".to_vec());
+    let cases = [
+        (
+            ArgvInspection::Unavailable,
+            ReapVerdict::Uncertain,
+            false,
+            "unreadable argv",
+        ),
+        (
+            ArgvInspection::NoProcess,
+            ReapVerdict::Reaped,
+            false,
+            "missing process",
+        ),
+        (
+            ArgvInspection::Present(b"cat\0/different/writer/0".to_vec()),
+            ReapVerdict::Reaped,
+            false,
+            "pid whose argv lost the recorded marker",
+        ),
+        (
+            recorded,
+            ReapVerdict::StillRecorded,
+            true,
+            "recorded command",
+        ),
+    ];
+    for (inspection, verdict, authorize, label) in cases {
+        assert_eq!(
+            reap_verdict(&inspection, marker),
+            verdict,
+            "{label}: inspection must not be treated as a successful exit"
+        );
+        assert_eq!(
+            signal_authorized(&inspection, &markers),
+            authorize,
+            "{label}: cleanup must signal only a fully identified recorded command"
+        );
+    }
+
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(&5i32.to_ne_bytes());
+    buffer.extend_from_slice(b"/bin/bash\0\0\0\0\0\0\0");
+    buffer.extend_from_slice(b"sh\0-c\0read value\0cat\0/tmp/orbit-marker-probe-unique-path\0");
+    buffer.extend_from_slice(b"NOT_A_MARKER=1\0");
+    let argv = argv_from_procargs2(&buffer).expect("complete procargs2 record");
+    assert_eq!(
+        argv, b"sh\0-c\0read value\0cat\0/tmp/orbit-marker-probe-unique-path",
+        "argv identity must keep every argument and drop the environment"
+    );
+    assert!(
+        !argv
+            .windows(b"NOT_A_MARKER".len())
+            .any(|window| window == b"NOT_A_MARKER"),
+        "environment bytes must not satisfy a marker match"
+    );
+    let argv_end = buffer.len() - b"NOT_A_MARKER=1\0".len();
+    // Drop the last argument's terminator so the record is no longer complete.
+    let truncated = &buffer[..argv_end - 1];
+    let unreadable = inspection_from_read(argv_from_procargs2(truncated));
+    assert_eq!(
+        unreadable,
+        ArgvInspection::Unavailable,
+        "a truncated argument record is uncertainty, not a different process"
+    );
+    assert_eq!(
+        reap_verdict(&unreadable, b"/tmp/orbit-marker-probe-unique-path"),
+        ReapVerdict::Uncertain
+    );
+    assert!(!signal_authorized(&unreadable, &markers));
 }
 
 // Native kernel coverage of the cleanup helper itself: a recorded pid may
@@ -521,6 +809,173 @@ fn flood_cleanup_preserves_unmarked_pids_and_other_group_members() {
     );
 }
 
+/// A blocked owned child stays visible without `/proc`. The leak assertion
+/// must fail while it is live, and only the watchdog's recorded pid is killed.
+#[cfg(unix)]
+#[test]
+fn blocked_child_leak_check_fails_while_the_writer_lives_and_cleanup_kills_only_that_pid() {
+    use std::any::Any;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::process::{Child, Stdio};
+
+    struct ReapingChild(Child);
+    impl Drop for ReapingChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    fn panic_text(payload: &(dyn Any + Send)) -> String {
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("non-string panic")
+            .to_string()
+    }
+    let survives = |child: &mut Child, reason: &str| {
+        let deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            assert!(
+                child.try_wait().expect("child status").is_none(),
+                "{reason}"
+            );
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let kids = dir.path().join("kids");
+    let other_kids = dir.path().join("other-kids");
+    fs::create_dir(&kids).expect("kids dir");
+    fs::create_dir(&other_kids).expect("other kids dir");
+    let marker = kids.join("0");
+    let leader_path = dir.path().join("absent-leader.pid");
+    // `read` is a shell builtin, so this process blocks with both markers in
+    // its own argv and with no descendants.
+    let mut writer = ReapingChild(
+        Command::new("sh")
+            .args(["-c", "read value", "cat"])
+            .arg(&marker)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("spawn blocked writer"),
+    );
+    let group = i32::try_from(writer.0.id()).expect("process group id");
+    let mut peer = ReapingChild(
+        Command::new("sleep")
+            .arg("120")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(group)
+            .spawn()
+            .expect("spawn peer in writer group"),
+    );
+    let pid = writer.0.id();
+    fs::write(&marker, pid.to_string()).expect("recorded pid");
+    fs::write(other_kids.join("0"), pid.to_string()).expect("unmatched pid");
+    let marker_bytes = marker.as_os_str().as_encoded_bytes().to_vec();
+
+    match inspect_argv(pid) {
+        ArgvInspection::Present(cmdline) => {
+            assert!(
+                cmdline
+                    .windows(marker_bytes.len())
+                    .any(|window| window == marker_bytes),
+                "live writer argv must contain the recorded marker, got {}",
+                String::from_utf8_lossy(&cmdline)
+            );
+            assert!(
+                cmdline.windows(b"cat".len()).any(|window| window == b"cat"),
+                "live writer argv must contain cat, got {}",
+                String::from_utf8_lossy(&cmdline)
+            );
+        }
+        other => panic!("live writer argv must be readable, got {other:?}"),
+    }
+    assert!(
+        writer.0.try_wait().expect("writer status").is_none(),
+        "writer must still be blocked before the leak check"
+    );
+
+    let leaked = catch_unwind(AssertUnwindSafe(|| {
+        assert_reaped_within(pid, &marker_bytes, Duration::from_millis(40));
+    }));
+    let payload = leaked.expect_err("leak assertion must fail while the owned writer is live");
+    let text = panic_text(&*payload);
+    assert!(
+        text.contains("still running"),
+        "a live owned child must fail as still running, not as an unreadable probe: {text}"
+    );
+    assert!(
+        writer.0.try_wait().expect("writer status").is_none(),
+        "the leak assertion must not kill the writer"
+    );
+    assert!(
+        peer.0.try_wait().expect("peer status").is_none(),
+        "the leak assertion must not kill the peer"
+    );
+
+    reap_recorded(&leader_path, b"absent-leader", &other_kids);
+    survives(
+        &mut writer.0,
+        "a pid recorded under a path that is not in its argv must not be signalled",
+    );
+    survives(
+        &mut peer.0,
+        "unmatched cleanup must not signal other members of the writer's group",
+    );
+
+    // The watchdog and `Drop` both call `reap_recorded`. Arm it only after the
+    // negative checks so this death is the watchdog's signal.
+    let armed = Instant::now();
+    let cleanup = FloodCleanup::arm(
+        leader_path,
+        kids,
+        b"absent-leader".to_vec(),
+        Duration::from_millis(500),
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = writer.0.try_wait().expect("writer status") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "watchdog did not kill the recorded blocked writer"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        armed.elapsed() >= Duration::from_millis(400),
+        "watchdog signalled before its deadline: {:?}",
+        armed.elapsed()
+    );
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGKILL),
+        "watchdog must SIGKILL only the recorded writer"
+    );
+    assert_reaped(pid, &marker_bytes);
+    survives(
+        &mut peer.0,
+        "watchdog must not signal other members of a recorded pid's group",
+    );
+    drop(cleanup);
+    survives(
+        &mut peer.0,
+        "panic cleanup must not signal other members of a recorded pid's group",
+    );
+}
+
 #[cfg(unix)]
 fn kid_pids(dir: &Path) -> Vec<(u32, PathBuf)> {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -542,23 +997,37 @@ fn read_pid_optional(path: &Path) -> Option<u32> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-/// The recorded process is gone, or its pid was reused by something else.
+/// The recorded process is gone, is a zombie, or its pid was reused by a
+/// command that does not contain `marker`.
+///
+/// Unreadable argv is uncertainty. The assertion panics instead of treating
+/// a still-live child on a host without `/proc` as reaped.
 #[cfg(unix)]
 fn assert_reaped(pid: u32, marker: &[u8]) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    assert_reaped_within(pid, marker, Duration::from_secs(2));
+}
+
+#[cfg(unix)]
+fn assert_reaped_within(pid: u32, marker: &[u8], budget: Duration) {
+    let deadline = Instant::now() + budget;
     loop {
-        match fs::read(format!("/proc/{pid}/cmdline")) {
-            Err(_) => return,
-            Ok(cmdline) if !cmdline.windows(marker.len()).any(|window| window == marker) => {
-                return;
-            }
-            Ok(cmdline) if Instant::now() >= deadline => {
+        let inspection = inspect_argv(pid);
+        match reap_verdict(&inspection, marker) {
+            ReapVerdict::Reaped => return,
+            ReapVerdict::Uncertain => panic!(
+                "pid {pid} argv inspection unavailable; refusing to treat an unreadable child as reaped"
+            ),
+            ReapVerdict::StillRecorded if Instant::now() >= deadline => {
+                let cmdline = match inspection {
+                    ArgvInspection::Present(cmdline) => cmdline,
+                    ArgvInspection::NoProcess | ArgvInspection::Unavailable => Vec::new(),
+                };
                 panic!(
                     "pid {pid} still running: {}",
                     String::from_utf8_lossy(&cmdline)
                 );
             }
-            Ok(_) => thread::sleep(Duration::from_millis(20)),
+            ReapVerdict::StillRecorded => thread::sleep(Duration::from_millis(20)),
         }
     }
 }
