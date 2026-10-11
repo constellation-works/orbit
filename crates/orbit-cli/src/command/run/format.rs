@@ -177,6 +177,25 @@ pub(crate) fn format_worker_limit_line(state: Option<&PipelineState>) -> Option<
     Some(line)
 }
 
+/// [ORB-15383] The deadline an operator extended this drain's window to.
+///
+/// Printed only once an extension moved the deadline: an unextended drain
+/// still runs to the deadline its own window step stamped.
+pub(crate) fn format_window_extension_line(state: Option<&PipelineState>) -> Option<String> {
+    let extension = state?.drain_window_extension.as_ref()?;
+    let mut line = format!(
+        "Window: extended to {} (was {}, revision {}, by {})",
+        extension.deadline.format("%Y-%m-%dT%H:%M:%SZ"),
+        extension.previous_deadline.format("%Y-%m-%dT%H:%M:%SZ"),
+        extension.revision,
+        extension.actor,
+    );
+    if let Some(reason) = &extension.reason {
+        line.push_str(&format!(" reason={reason}"));
+    }
+    Some(line)
+}
+
 /// [ORB-11283] Whether this drain was told to stop new admissions.
 ///
 /// Printed whenever the control is present, including on a finished run: that

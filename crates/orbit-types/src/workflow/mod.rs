@@ -114,7 +114,7 @@ pub use run::{
     CommitObservationStatus, CrewExclusion, CrewExclusionSource, DEFERRED_SANDBOX_ARTIFACT,
     DeferredSandboxArtifact, DeferredSandboxValidation, DeliveryEvidenceGap,
     DeliveryEvidenceProvenance, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
-    DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWorkerLimit,
+    DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWindowExtension, DrainWorkerLimit,
     FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER,
     FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
     FinalRecoveryObservedTask, FinalRecoveryRepairCommit, ForgeUnavailableHold, HeldCandidate,

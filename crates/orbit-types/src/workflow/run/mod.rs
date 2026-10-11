@@ -47,7 +47,7 @@ pub use root_cause::{
 pub use state::{
     ActivityCrewDraw, ActivityCrewPoolMember, ClaimFailureClass, CrewExclusion,
     CrewExclusionSource, DrainAdmissionPass, DrainAdmissionsStop, DrainApprovalReport,
-    DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWorkerLimit,
+    DrainCancelRequest, DrainCapacity, DrainWaitingTask, DrainWindowExtension, DrainWorkerLimit,
     FailureActivityCheckpoint, FinalRecoveryCheckpoint, FinalRecoveryKey,
     FinalRecoveryObservedTask, FinalRecoveryRepairCommit, OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
     OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_CAPACITY_MARKER,

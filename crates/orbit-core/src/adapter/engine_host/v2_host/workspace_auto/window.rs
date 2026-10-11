@@ -6,7 +6,7 @@ use crate::OrbitRuntime;
 use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
 
 use super::action_failed;
-use super::drains::live_admissions_stop;
+use super::drains::live_drain_state;
 
 /// Open or re-read a drain window [ORB-10819].
 ///
@@ -16,6 +16,11 @@ use super::drains::live_admissions_stop;
 /// expired. The stamp therefore lives in the stamping step's own pipeline
 /// output, which the run state already persists — no new durable artifact, and
 /// re-reading the window is a pure function of a value the run carries.
+///
+/// An answer reads the drain's own run state too: an operator stop closes the
+/// window early, and an operator extension (`orbit run extend`, ORB-15383)
+/// replaces the echoed deadline when it is later. The answer reports the
+/// deadline in force, so the run's own step outputs show the extension.
 ///
 /// A zero or absent window is expired on the first answer. `break_when` is
 /// evaluated after a loop body runs, so that yields exactly one iteration:
@@ -31,8 +36,11 @@ pub(in super::super) fn drain_window(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let now = Utc::now();
+    let state = live_drain_state(runtime, input);
     let deadline = match optional_deadline(action, input)? {
-        Some(deadline) => deadline,
+        Some(echoed) => state
+            .as_ref()
+            .map_or(echoed, |state| state.effective_drain_deadline(echoed)),
         None => {
             let for_seconds = window_seconds(action, input)?;
             now.checked_add_signed(seconds_to_delta(action, for_seconds)?)
@@ -47,7 +55,7 @@ pub(in super::super) fn drain_window(
 
     let remaining_seconds = (deadline - now).num_milliseconds() as f64 / 1000.0;
     let window_expired = remaining_seconds <= 0.0;
-    let closed = live_admissions_stop(runtime, input).is_some();
+    let closed = state.is_some_and(|state| state.admissions_stopped());
     let expired = window_expired || closed;
     Ok(json!({
         "deadline": deadline.to_rfc3339_opts(SecondsFormat::Secs, true),

@@ -1547,6 +1547,103 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     assert_eq!(fixture.run_state(id), "running");
 }
 
+/// `orbit run extend` lengthens a live drain in place and retunes it, and a
+/// repeat drain start still queues behind it as a successor rather than
+/// extending it [ORB-15383]. Only drain control records are written; the
+/// fixture's live test PID keeps orphan reconciliation away from the run.
+#[test]
+fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
+    let fixture = Fixture::init();
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-extend";
+    let input = serde_json::json!({"for_seconds": 3600, "max_active_leaf_runs": 2});
+    let now = chrono::Utc::now();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running',?3,?4,?4,?4,?5)",
+        params![id,fixture.workspace_id(),input.to_string(),now.to_rfc3339(),std::process::id()],
+    ).unwrap();
+    let stamped =
+        (now + chrono::Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut state = orbit_types::workflow::PipelineState::new(
+        id.into(),
+        "workspace_auto_pipeline".into(),
+        input.clone(),
+    );
+    state.record_pipeline_output("open_window", serde_json::json!({"deadline": stamped}));
+    runtime.write_run_state(id, &state).unwrap();
+
+    let changed = fixture.json(&[
+        "run",
+        "extend",
+        id,
+        "--for",
+        "3h",
+        "--concurrency",
+        "4",
+        "--reason",
+        "CLI fixture",
+        "--json",
+    ]);
+    assert_eq!(changed["outcome"], "extended", "{changed}");
+    assert_eq!(changed["previous_deadline"], stamped.as_str());
+    assert_eq!(changed["revision"], 1);
+    assert_eq!(changed["concurrency"]["previous_concurrency"], 2);
+    assert_eq!(changed["concurrency"]["concurrency"], 4);
+    let extended = runtime.read_run_state(id).unwrap().unwrap();
+    let extension = extended.drain_window_extension.as_ref().unwrap();
+    assert_eq!(
+        changed["deadline"],
+        extension
+            .deadline
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    );
+    assert!(extension.deadline >= now + chrono::Duration::hours(3));
+    assert_eq!(extension.actor, "cli");
+    assert_eq!(extension.reason.as_deref(), Some("CLI fixture"));
+    assert_eq!(
+        extended
+            .drain_worker_limit
+            .as_ref()
+            .unwrap()
+            .max_active_leaf_runs,
+        4
+    );
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    assert_eq!(
+        shown["run"]["drain_window_extension"]["revision"], 1,
+        "{shown}"
+    );
+
+    let unchanged = fixture.json(&["run", "extend", id, "--for", "5m", "--json"]);
+    assert_eq!(unchanged["outcome"], "unchanged");
+    assert_eq!(unchanged["deadline"], changed["deadline"]);
+    assert!(unchanged["concurrency"].is_null());
+
+    let error = fixture.failure(&["run", "extend", id, "--for", "soon", "--json"]);
+    assert!(
+        error["error"].as_str().unwrap().contains("duration"),
+        "{error}"
+    );
+
+    // A second start does not reach the live drain: it waits for its slot.
+    let successor = runtime
+        .submit_pipeline_run(
+            "workspace_auto_pipeline",
+            serde_json::json!({"for_seconds": 7200}),
+            None,
+            Some("fixture"),
+        )
+        .unwrap();
+    assert!(successor.queued, "{successor:?}");
+    assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), extended);
+    assert_eq!(fixture.run_state(id), "running");
+}
+
 /// A drain's worker limit is the only ceiling on the delivery jobs it
 /// dispatches. With nineteen delivery wrappers already running — past the ten
 /// the job once allowed — a twentieth is admitted to run at once instead of

@@ -451,14 +451,18 @@ impl OrbitRuntime {
         };
         initial_state.trigger = Some(trigger);
         // [ORB-11283] A queued drain can carry an operator stop (or worker
-        // ceiling) written before the worker seeded this document. Replacing
-        // the whole state would silently resume admissions.
+        // ceiling, or window extension) written before the worker seeded this
+        // document. Replacing the whole state would silently resume
+        // admissions.
         if let Some(existing) = self.read_run_state(&run.run_id)? {
             if initial_state.drain_worker_limit.is_none() {
                 initial_state.drain_worker_limit = existing.drain_worker_limit;
             }
             if initial_state.drain_admissions_stop.is_none() {
                 initial_state.drain_admissions_stop = existing.drain_admissions_stop;
+            }
+            if initial_state.drain_window_extension.is_none() {
+                initial_state.drain_window_extension = existing.drain_window_extension;
             }
             if initial_state.drain_cancel.is_none() {
                 initial_state.drain_cancel = existing.drain_cancel;

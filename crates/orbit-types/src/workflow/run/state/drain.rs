@@ -185,6 +185,29 @@ pub struct DrainWorkerLimit {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A live operator extension of a bounded drain's window [ORB-15383].
+///
+/// A drain stamps its deadline once, in its `open_window` step output, and
+/// every later window answer echoes that stamp. This is the mutable
+/// counterpart, like [`DrainWorkerLimit`] is for the ceiling: the window
+/// answer, readiness and upgrade-resume all read the later of the stamp and
+/// this deadline, so the run keeps its id, its children and its authority
+/// while its window grows. It never shortens a window and never reopens a
+/// drain whose admissions were stopped.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainWindowExtension {
+    /// The deadline in force since this extension.
+    pub deadline: DateTime<Utc>,
+    /// The deadline it replaced, kept as change evidence.
+    pub previous_deadline: DateTime<Utc>,
+    /// Accepted-extension counter, starting at 1.
+    pub revision: u32,
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub extended_at: DateTime<Utc>,
+}
+
 /// A backlog task a drain's admission pass left unstarted, and why.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DrainWaitingTask {

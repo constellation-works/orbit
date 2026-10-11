@@ -10,7 +10,8 @@ use crate::output::color::Domain;
 use super::format::{
     LockHolders, format_admissions_stop_line, format_child_dispatch_lines,
     format_crew_selection_line, format_duration, format_run_role, format_timestamp,
-    format_waiting_line_with_holders, format_worker_limit_line, summarize_error_message,
+    format_waiting_line_with_holders, format_window_extension_line, format_worker_limit_line,
+    summarize_error_message,
 };
 
 /// Whether a run read may reconcile stale runs before reporting them.
@@ -277,6 +278,9 @@ pub(crate) fn run_header_text_with_lock_holders(
         lines.push(line);
     }
     if let Some(line) = format_worker_limit_line(state) {
+        lines.push(line);
+    }
+    if let Some(line) = format_window_extension_line(state) {
         lines.push(line);
     }
     if let Some(line) = format_admissions_stop_line(state) {

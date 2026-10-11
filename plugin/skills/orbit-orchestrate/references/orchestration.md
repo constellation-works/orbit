@@ -27,6 +27,7 @@ orbit run auto --for 2h --allow-crew opus,sonnet  # ... using only these crews
 orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 2h # on a replica
 orbit run auto --stop                      # stop new admissions; children keep running
 orbit run concurrency <run-id> --set 7     # retune a live drain, without replacing it
+orbit run extend <run-id> --for 4h         # lengthen a live drain's window in place
 orbit run readiness                        # explain current auto-drain eligibility, read-only
 orbit run readiness <task-id> --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
@@ -70,6 +71,25 @@ authorization. The retune keeps all of them:
   one you read, so two operators cannot silently overwrite each other. The
   current value and who last moved it are on `orbit run show <run-id>`
   (`drain_worker_limit`) and `orbit run readiness`.
+
+The window is adjustable the same way. `orbit run extend <run-id> --for <d>
+[--concurrency N]` moves a live drain's deadline to the later of its current
+one and now plus `<d>` (at most 24 hours ahead), on the same run, and retunes
+its ceiling when `--concurrency` is given. **Extend a drain whose window is
+about to lapse instead of starting another**: a second `orbit run auto`
+queues behind the live drain and admits nothing until that drain ends, which
+for a pull drain is only after every leaf it claimed has settled.
+
+- A shorter window is a no-op (`outcome: unchanged`); a window never shrinks.
+- A pull drain can be extended in its settling tail, after its window closed,
+  and resumes requesting. An owner drain whose window has closed is refused:
+  it has stopped admitting.
+- It is refused for a drain stopped with `--stop` or being cancelled (an
+  extension never reopens one) and for a drain started without `--for`, which
+  makes a single admission pass.
+- Each request is audited on the run with the old and new deadline, and
+  `orbit run show` prints `Window: extended to …` (`drain_window_extension`
+  in JSON). `orbit run readiness` reports the extended `ends_at`.
 
 `orbit run auto --stop` ends new admissions for this workspace's active
 coordinator. It does not need a run id, does not cancel children, and is

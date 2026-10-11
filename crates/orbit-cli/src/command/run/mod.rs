@@ -5,6 +5,7 @@ mod command;
 mod concurrency;
 mod drain_summary;
 mod events;
+mod extend;
 mod format;
 mod history;
 pub mod job;

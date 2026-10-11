@@ -26,6 +26,7 @@ mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;
 mod drain_cancel;
+mod drain_extend;
 mod final_recovery;
 mod forge_hold_resume;
 mod git_protection;

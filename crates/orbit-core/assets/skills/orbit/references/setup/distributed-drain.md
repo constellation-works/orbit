@@ -238,6 +238,10 @@ returns.
   review admits a replacement beside it, up to N such leaves, so a drain may
   carry N implementing plus N reviewing leaves; `orbit run show <run-id>`
   splits its `Claimed leaves:` by stage.
+- `orbit run extend <run-id> --for <d> [--concurrency N]` lengthens a live
+  pull drain's window on the same run, even in its settling tail after the
+  window closed; a second `orbit run auto --pull` would only queue behind it.
+  A stopped, cancelling or single-pass (`--for` omitted) drain refuses it.
 - Each iteration reclaims the `target/` build output of every settled leaf
   whose worker has exited (`reclaimed_build_bytes`) and keeps the checkout.
   `orbit gc worktrees --confirm` on the follower removes settled leaves'

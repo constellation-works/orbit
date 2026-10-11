@@ -21,6 +21,7 @@ Audits:
 Maintenance:
   cancel       Cancel a pending or running job run
   concurrency  Change how many tasks a running drain keeps in flight
+  extend       Lengthen a running drain's window, and optionally retune it
   readiness    Explain why backlog tasks are waiting in auto-drain
 
 Options:
@@ -68,3 +69,4 @@ Run history:
 Maintenance:
   orbit run cancel <run_id>
   orbit run concurrency <run_id> --set 7
+  orbit run extend <run_id> --for 2h [--concurrency <N>]

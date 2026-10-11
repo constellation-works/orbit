@@ -79,6 +79,10 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         .and_then(|state| state.drain_admissions_stop.as_ref())
         .and_then(|stop| serde_json::to_value(stop).ok())
         .unwrap_or(Value::Null);
+    let drain_window_extension = state
+        .and_then(|state| state.drain_window_extension.as_ref())
+        .and_then(|extension| serde_json::to_value(extension).ok())
+        .unwrap_or(Value::Null);
     let drain_cancel = state
         .and_then(|state| state.drain_cancel.as_ref())
         .and_then(|cancel| serde_json::to_value(cancel).ok())
@@ -155,6 +159,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "created_at": run.created_at.to_rfc3339(),
     });
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
+    value["drain_window_extension"] = drain_window_extension;
     // [ORB-14777] Pass-listed variables the submitting process did not hold.
     // Added outside the literal: it is at `json!`'s recursion limit.
     value["env_pass_unset"] = json!(
