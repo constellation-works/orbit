@@ -124,13 +124,15 @@ pub(crate) enum TunnelOrigin {
 /// until it reports that it bound its local listener (OpenSSH binds `-L`
 /// only after auth; see [`ForwardMarker`]) or the probe exits. Only then does
 /// [`TunnelSpec::attach_timeout`] bound the `/healthz` wait. `ready` is never
-/// called before the child owning the forward has reported its bind.
+/// called before the child owning the forward has reported its bind, and each
+/// call receives the deadline it must return by ([`ProbeLimit`]). A socket
+/// timeout inside `ready` does not extend that deadline.
 ///
 /// The returned [`SshTunnel`] tears the forward down on drop, so every exit
 /// path — error, panic, normal return — releases it.
 pub(crate) fn establish(
     spec: &TunnelSpec,
-    mut ready: impl FnMut() -> bool,
+    mut ready: impl FnMut(ProbeLimit<'_>) -> bool,
 ) -> Result<(SshTunnel, TunnelOrigin), OrbitError> {
     let unattended = spec.unattended.as_ref();
     let mut probe = spawn_tunnel(spec, None)?;
@@ -223,9 +225,13 @@ fn spawn_ssh_for(spec: &TunnelSpec, ssh_args: &[String]) -> Result<Child, OrbitE
     if spec.unattended.is_some() {
         command.stdout(Stdio::null());
     }
-    command
-        .spawn()
-        .map_err(|error| OrbitError::Io(format!("failed to launch {}: {error}", spec.ssh_program)))
+    // A freshly written test stub can still be open for write across a sibling
+    // fork; Linux then returns ETXTBSY for a short window (ORB-11340).
+    #[cfg(target_os = "linux")]
+    let child = orbit_common::test_process::retry_executable_busy(|| command.spawn());
+    #[cfg(not(target_os = "linux"))]
+    let child = command.spawn();
+    child.map_err(|error| OrbitError::Io(format!("failed to launch {}: {error}", spec.ssh_program)))
 }
 
 /// Arguments for a bare probe forward: the port forward and nothing else
@@ -458,6 +464,20 @@ fn wait_until_forward_bound(tunnel: &mut SshTunnel, spec: &TunnelSpec) -> Result
     }
 }
 
+/// Limits one readiness observation.
+///
+/// [`poll_until_ready`] can only check the clock and `cancel` between calls.
+/// The probe has to stop on its own when [`Self::deadline`] passes or
+/// [`Self::cancel`] is set, including while bytes are still arriving: a
+/// socket read timeout resets on every fragment and does not enforce this
+/// deadline.
+pub(crate) struct ProbeLimit<'a> {
+    /// Absolute instant by which the probe must have returned.
+    pub(crate) deadline: Instant,
+    /// Set when establish should stop. Observed between reads.
+    pub(crate) cancel: Option<&'a AtomicBool>,
+}
+
 /// Poll `ready` through `tunnel`'s forward until it answers or `timeout`
 /// elapses.
 ///
@@ -466,10 +486,11 @@ fn wait_until_forward_bound(tunnel: &mut SshTunnel, spec: &TunnelSpec) -> Result
 /// either happened — a dead `ssh` is a configuration failure, not a
 /// "nothing running there yet" — or `cancel` was set. `ready` is consulted
 /// only once the child has reported its bind, so whatever answers is behind
-/// this child's forward.
+/// this child's forward. The poll sleeps at most the time still left on
+/// `timeout`, and it passes that same deadline into `ready`.
 pub(crate) fn poll_until_ready(
     tunnel: &mut SshTunnel,
-    mut ready: impl FnMut() -> bool,
+    mut ready: impl FnMut(ProbeLimit<'_>) -> bool,
     timeout: Duration,
     remote_description: &str,
     cancel: Option<&AtomicBool>,
@@ -482,13 +503,26 @@ pub(crate) fn poll_until_ready(
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
             return Err(cancelled(remote_description));
         }
-        if tunnel.forward_bound() && ready() {
-            return Ok(true);
-        }
         if Instant::now() >= deadline {
             return Ok(false);
         }
-        std::thread::sleep(POLL_INTERVAL);
+        if tunnel.forward_bound() {
+            let answered = ready(ProbeLimit { deadline, cancel });
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                return Err(cancelled(remote_description));
+            }
+            if answered {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        std::thread::sleep(POLL_INTERVAL.min(remaining));
     }
 }
 

@@ -27,8 +27,7 @@
 //! called from the blocking pool, never from an async worker.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::time::{Duration, Instant};
@@ -44,8 +43,10 @@ use crate::ssh_tunnel::{self, SshTunnel, TunnelOrigin, TunnelSpec, Unattended};
 /// `ssh -o ConnectTimeout`: how long the TCP connect to a host may take.
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Largest identity response read through a new tunnel.
-const IDENTITY_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+/// Largest identity body read through a new tunnel. The status line and
+/// headers use the shared probe caps. A body that reaches this size before
+/// EOF is refused.
+const IDENTITY_MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// How long [`HostTunnels::shutdown_all`] waits for an establish in progress
 /// to notice the cancel flag and drop its child.
@@ -346,9 +347,14 @@ impl HostTunnels {
         };
         // Every error return below drops `tunnel`, which stops the child.
         let (mut tunnel, origin) =
-            ssh_tunnel::establish(&spec, || crate::connect::healthz_ok(local_port))
+            ssh_tunnel::establish(&spec, |limit| crate::connect::healthz_ok(local_port, limit))
                 .map_err(|error| ForwardError::from_establish(target, &error))?;
-        let identity = read_identity(target, local_port, self.config.identity_timeout);
+        let identity = read_identity(
+            target,
+            local_port,
+            self.config.identity_timeout,
+            Some(self.closing.as_ref()),
+        );
         // The child holds its `-L` listener until it exits, so a child still
         // running after the read means its forward answered it. One that
         // exited may have left the port to another listener: report the exit.
@@ -475,14 +481,20 @@ fn read_identity(
     target: &HostTarget,
     local_port: u16,
     timeout: Duration,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RemoteIdentity, ForwardError> {
-    let (status, body) =
-        http_get(local_port, "/api/hosts?probe=false", timeout).map_err(|error| {
-            ForwardError::unreachable(format!(
+    let (status, body) = match http_get(local_port, "/api/hosts?probe=false", timeout, cancel) {
+        Ok(response) => response,
+        Err(error) if error.kind() == ErrorKind::Interrupted => {
+            return Err(ForwardError::shutting_down());
+        }
+        Err(error) => {
+            return Err(ForwardError::unreachable(format!(
                 "host '{}' did not answer its identity read: {error}",
                 target.name
-            ))
-        })?;
+            )));
+        }
+    };
     if status == 404 {
         return Err(ForwardError::registry(
             HostRegistryCode::HostTooOld,
@@ -524,35 +536,26 @@ fn read_identity(
     }
 }
 
-/// A bounded HTTP/1.0 GET over the forward: the status and up to
-/// [`IDENTITY_MAX_RESPONSE_BYTES`] of body.
-fn http_get(local_port: u16, path: &str, timeout: Duration) -> std::io::Result<(u16, String)> {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    let request = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes())?;
-    let mut reader = BufReader::new(stream).take(IDENTITY_MAX_RESPONSE_BYTES);
-    let mut status_line = String::new();
-    reader.read_line(&mut status_line)?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())
-        .filter(|_| status_line.starts_with("HTTP/1."))
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("not an HTTP response: {:?}", status_line.trim_end()),
-            )
-        })?;
-    let mut response = String::new();
-    reader.read_to_string(&mut response)?;
-    let body = response
-        .split_once("\r\n\r\n")
-        .map_or(String::new(), |(_, body)| body.to_string());
-    Ok((status, body))
+/// A bounded HTTP/1.0 GET over the forward.
+///
+/// `timeout` is the total deadline, not a per-read socket timeout. The status
+/// line, headers and body each have their own byte cap; an oversized or
+/// unfinished reply is an error. `cancel` stops the read between bytes.
+fn http_get(
+    local_port: u16,
+    path: &str,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> std::io::Result<(u16, String)> {
+    let response = crate::connect::probe_http_get(
+        local_port,
+        path,
+        Instant::now() + timeout,
+        cancel,
+        IDENTITY_MAX_BODY_BYTES,
+        crate::connect::ProbeIdle::UntilDeadline,
+    )?;
+    Ok((response.status, response.body))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

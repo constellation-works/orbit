@@ -21,28 +21,41 @@
 //! Unlike [`crate::serve`], this command reads no local `.orbit/` state: the
 //! workspace lives on the remote, so it needs no [`orbit_core::OrbitRuntime`].
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use clap::Args;
 use orbit_common::process::shell::quote_posix_arg;
 use orbit_core::OrbitError;
 
-use crate::ssh_tunnel::{self, SshTunnel, TunnelOrigin, TunnelSpec};
+use crate::ssh_tunnel::{self, ProbeLimit, SshTunnel, TunnelOrigin, TunnelSpec};
 use crate::{DEFAULT_DASHBOARD_PORT, open_browser};
 
 /// How long to wait for the remote dashboard to answer `/healthz` before
 /// giving up. Generous because it covers SSH connect + remote process spawn.
 const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Per-probe TCP connect/read/write timeout for the `/healthz` check.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+/// How long one idle socket read or write may block. A peer that keeps sending
+/// bytes resets this, so it is not the probe's deadline; [`ProbeLimit`] and
+/// [`PROBE_EXCHANGE_TIMEOUT`] are.
+pub(crate) const PROBE_IO_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Largest probe response read. The read timeout applies per read, so without
-/// a cap a remote that keeps streaming would hold the probe indefinitely.
-const PROBE_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+/// Status line cap. A line with no newline by this size is refused rather than
+/// appended to without a bound.
+pub(crate) const PROBE_MAX_STATUS_LINE_BYTES: usize = 8 * 1024;
+
+/// Header block after the status line, same refusal rule.
+pub(crate) const PROBE_MAX_HEADER_BYTES: usize = 8 * 1024;
+
+/// Largest probe body. Hitting the cap before EOF refuses the response.
+const PROBE_MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// Total time for one post-attach body probe (`GET /api/routines`). A trickle
+/// faster than [`PROBE_IO_TIMEOUT`] cannot extend it.
+const PROBE_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long to wait, once the local forward is accepting connections, for an
 /// already-running remote dashboard to answer `/healthz` before concluding
@@ -108,8 +121,9 @@ pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), Or
 
     // From here on, every exit path (error, panic, normal) tears the tunnel
     // down via `SshTunnel`'s `Drop`.
-    let (mut tunnel, origin) =
-        ssh_tunnel::establish(&tunnel_spec(&args, local_port), || healthz_ok(local_port))?;
+    let (mut tunnel, origin) = ssh_tunnel::establish(&tunnel_spec(&args, local_port), |limit| {
+        healthz_ok(local_port, limit)
+    })?;
 
     let url = format!("http://localhost:{local_port}");
 
@@ -238,50 +252,355 @@ fn routines_controls_authorized(local_port: u16) -> Option<bool> {
     parse_controls_authorized(&http_get_ok_body(local_port, "/api/routines")?)
 }
 
+/// Whether an idle read ends the attempt or keeps waiting until the deadline.
+///
+/// Readiness polling uses [`ProbeIdle::Yield`]: a silent peer must return so
+/// the next poll can run. A one-shot body read uses
+/// [`ProbeIdle::UntilDeadline`]: gaps shorter than the total budget still
+/// succeed, and a trickle cannot extend that budget.
+#[derive(Clone, Copy)]
+pub(crate) enum ProbeIdle {
+    /// Return when one read waits out [`PROBE_IO_TIMEOUT`] with no bytes.
+    Yield,
+    /// Keep reading through idle gaps until the caller's deadline.
+    UntilDeadline,
+}
+
+/// Status and body of one bounded HTTP/1.0 GET.
+pub(crate) struct ProbedHttp {
+    pub(crate) status: u16,
+    pub(crate) body: String,
+}
+
 /// `GET path` over the forwarded local port. Returns the response body only
-/// on a `200` status line.
+/// on a `200` status line. The exchange stops at [`PROBE_EXCHANGE_TIMEOUT`]
+/// even when the peer keeps sending.
 fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
-    let mut stream = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).ok()?;
-    let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+    let deadline = Instant::now() + PROBE_EXCHANGE_TIMEOUT;
+    let response = probe_http_get(
+        local_port,
+        path,
+        deadline,
+        None,
+        PROBE_MAX_BODY_BYTES,
+        ProbeIdle::UntilDeadline,
+    )
+    .ok()?;
+    (response.status == 200).then_some(response.body)
+}
+
+/// `GET path`, bounded by `deadline` and `max_body_bytes`.
+///
+/// The status line and the header block each stop at their own caps. An
+/// oversized line, a body that reaches `max_body_bytes` before EOF, or a
+/// response that is still incomplete at `deadline` is an error. `cancel` ends
+/// the read between bytes.
+pub(crate) fn probe_http_get(
+    local_port: u16,
+    path: &str,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+    max_body_bytes: usize,
+    idle: ProbeIdle,
+) -> io::Result<ProbedHttp> {
+    let mut stream = connect_probed(local_port, deadline, cancel)?;
     let request = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).ok()?;
-    let mut response = String::new();
-    BufReader::new(stream)
-        .take(PROBE_MAX_RESPONSE_BYTES)
-        .read_to_string(&mut response)
-        .ok()?;
-    let (headers, body) = response.split_once("\r\n\r\n")?;
-    let status_line = headers.lines().next().unwrap_or_default();
-    if status_line.starts_with("HTTP/1.") && status_line.contains(" 200 ") {
-        Some(body.to_string())
-    } else {
-        None
-    }
+    write_all_bounded(&mut stream, request.as_bytes(), deadline, cancel)?;
+    let status_line = read_status_line(&mut stream, deadline, cancel, idle)?;
+    let status = http_status_code(&status_line)?;
+    read_header_block(&mut stream, deadline, cancel, idle)?;
+    let body = read_capped_body(&mut stream, max_body_bytes, deadline, cancel, idle)?;
+    let body = String::from_utf8(body)
+        .map_err(|_| io::Error::new(ErrorKind::InvalidData, "tunnel probe body is not utf-8"))?;
+    Ok(ProbedHttp { status, body })
 }
 
 /// Best-effort `GET /healthz` over the forwarded local port. Returns `true`
 /// only on a `200` status line. Any connect/IO error (including `ssh` refusing
 /// the forwarded connection because the remote server is not up yet) is `false`.
-pub(crate) fn healthz_ok(local_port: u16) -> bool {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) else {
+///
+/// Only the status line is read. `limit` is the attach or spawn budget still
+/// remaining: a peer that trickles bytes without a newline cannot outlive it,
+/// and a line longer than [`PROBE_MAX_STATUS_LINE_BYTES`] is not healthy.
+pub(crate) fn healthz_ok(local_port: u16, limit: ProbeLimit<'_>) -> bool {
+    let deadline = limit.deadline;
+    let cancel = limit.cancel;
+    if probe_stopped(deadline, cancel) {
+        return false;
+    }
+    let Ok(mut stream) = connect_probed(local_port, deadline, cancel) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
-    if stream
-        .write_all(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .is_err()
+    if write_all_bounded(
+        &mut stream,
+        b"GET /healthz HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        deadline,
+        cancel,
+    )
+    .is_err()
     {
         return false;
     }
-    let mut status_line = String::new();
-    if BufReader::new(stream).read_line(&mut status_line).is_err() {
+    // Yield on an idle read so a port with nothing behind it is retried inside
+    // the same budget. A trickle still hits `deadline` between bytes.
+    let Ok(status_line) = read_status_line(&mut stream, deadline, cancel, ProbeIdle::Yield) else {
         return false;
-    }
+    };
     status_line.starts_with("HTTP/1.") && status_line.contains(" 200 ")
+}
+
+fn connect_probed(
+    port: u16,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+) -> io::Result<TcpStream> {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    loop {
+        if cancel_requested(cancel) {
+            return Err(cancelled_io());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(deadline_io());
+        }
+        match TcpStream::connect_timeout(&addr, remaining.min(PROBE_IO_TIMEOUT)) {
+            Ok(stream) => {
+                let _ = stream.set_nodelay(true);
+                return Ok(stream);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn write_all_bounded(
+    stream: &mut TcpStream,
+    bytes: &[u8],
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+) -> io::Result<()> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if cancel_requested(cancel) {
+            return Err(cancelled_io());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(deadline_io());
+        }
+        stream.set_write_timeout(Some(remaining.min(PROBE_IO_TIMEOUT)))?;
+        match stream.write(&bytes[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    ErrorKind::WriteZero,
+                    "tunnel probe write stalled",
+                ));
+            }
+            Ok(written) => offset += written,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) if is_idle(&error) => return Err(deadline_io()),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn read_status_line(
+    stream: &mut TcpStream,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+    idle: ProbeIdle,
+) -> io::Result<String> {
+    let bytes = read_capped_line(stream, PROBE_MAX_STATUS_LINE_BYTES, deadline, cancel, idle)?;
+    let line = std::str::from_utf8(&bytes).map_err(|_| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "tunnel probe status line is not utf-8",
+        )
+    })?;
+    Ok(line.to_string())
+}
+
+fn read_header_block(
+    stream: &mut TcpStream,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+    idle: ProbeIdle,
+) -> io::Result<()> {
+    let mut total = 0usize;
+    loop {
+        if total >= PROBE_MAX_HEADER_BYTES {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("tunnel probe headers exceed {PROBE_MAX_HEADER_BYTES} bytes"),
+            ));
+        }
+        let line = read_capped_line(
+            stream,
+            PROBE_MAX_HEADER_BYTES - total,
+            deadline,
+            cancel,
+            idle,
+        )?;
+        total += line.len();
+        if line.as_slice() == b"\n" || line.as_slice() == b"\r\n" {
+            return Ok(());
+        }
+    }
+}
+
+/// Read one line, including its trailing `\n`, refusing to grow past `max_bytes`.
+fn read_capped_line(
+    stream: &mut TcpStream,
+    max_bytes: usize,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+    idle: ProbeIdle,
+) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(max_bytes.min(128));
+    let mut byte = [0u8; 1];
+    loop {
+        if cancel_requested(cancel) {
+            return Err(cancelled_io());
+        }
+        if Instant::now() >= deadline {
+            return Err(deadline_io());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        stream.set_read_timeout(Some(remaining.min(PROBE_IO_TIMEOUT)))?;
+        match stream.read(&mut byte) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "tunnel probe response ended before a complete line",
+                ));
+            }
+            Ok(_) => {
+                if buf.len() >= max_bytes {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("tunnel probe line exceeds {max_bytes} bytes"),
+                    ));
+                }
+                buf.push(byte[0]);
+                if byte[0] == b'\n' {
+                    return Ok(buf);
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) if is_idle(&error) => match idle {
+                ProbeIdle::Yield => {
+                    return Err(io::Error::new(
+                        ErrorKind::TimedOut,
+                        "tunnel probe read idle",
+                    ));
+                }
+                ProbeIdle::UntilDeadline => continue,
+            },
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn read_capped_body(
+    stream: &mut TcpStream,
+    max_bytes: usize,
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+    idle: ProbeIdle,
+) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        if cancel_requested(cancel) {
+            return Err(cancelled_io());
+        }
+        if Instant::now() >= deadline {
+            return Err(deadline_io());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        stream.set_read_timeout(Some(remaining.min(PROBE_IO_TIMEOUT)))?;
+        if buf.len() >= max_bytes {
+            let mut extra = [0u8; 1];
+            match stream.read(&mut extra) {
+                Ok(0) => return Ok(buf),
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("tunnel probe body exceeds {max_bytes} bytes"),
+                    ));
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if is_idle(&error) => match idle {
+                    ProbeIdle::Yield => {
+                        return Err(io::Error::new(
+                            ErrorKind::TimedOut,
+                            "tunnel probe read idle",
+                        ));
+                    }
+                    ProbeIdle::UntilDeadline => continue,
+                },
+                Err(error) => return Err(error),
+            }
+        }
+        let room = max_bytes - buf.len();
+        let want = room.min(chunk.len());
+        match stream.read(&mut chunk[..want]) {
+            Ok(0) => return Ok(buf),
+            Ok(read) => buf.extend_from_slice(&chunk[..read]),
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) if is_idle(&error) => match idle {
+                ProbeIdle::Yield => {
+                    return Err(io::Error::new(
+                        ErrorKind::TimedOut,
+                        "tunnel probe read idle",
+                    ));
+                }
+                ProbeIdle::UntilDeadline => continue,
+            },
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn http_status_code(status_line: &str) -> io::Result<u16> {
+    if !status_line.starts_with("HTTP/1.") {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            format!("not an HTTP response: {:?}", status_line.trim_end()),
+        ));
+    }
+    status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!("not an HTTP response: {:?}", status_line.trim_end()),
+            )
+        })
+}
+
+fn probe_stopped(deadline: Instant, cancel: Option<&AtomicBool>) -> bool {
+    cancel_requested(cancel) || Instant::now() >= deadline
+}
+
+fn cancel_requested(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+}
+
+fn is_idle(error: &io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
+}
+
+fn deadline_io() -> io::Error {
+    io::Error::new(ErrorKind::TimedOut, "tunnel probe deadline exceeded")
+}
+
+fn cancelled_io() -> io::Error {
+    io::Error::new(ErrorKind::Interrupted, "tunnel probe cancelled")
 }
 
 /// Block until Ctrl-C / SIGTERM, or until the `ssh` child exits on its own

@@ -2,7 +2,7 @@
 title: "Remote Access — Design"
 owner: codex
 last_updated: 2026-10-08
-last_validated: 2026-10-10
+last_validated: 2026-10-11
 status: Accepted
 feature: remote-access
 doc_role: design
@@ -72,10 +72,10 @@ The Web-owned tunnel then follows an attach-first lifecycle:
 
 1. Start ssh -N with ExitOnForwardFailure=yes and -L 127.0.0.1:<local>:localhost:<remote>, plus a LocalCommand that writes a private marker file once ssh has bound the forward ([bind report](./specs/ssh-tunnel.md#bind-report)).
 2. Wait until that marker exists, or until ssh exits. OpenSSH binds -L only after authentication, so passphrase, password, and 2FA time is outside the attach budget. An exit before the marker is a connection failure. A listener on the port alone proves nothing: another process may have taken the port before ssh, and ssh then exits. Ctrl-C cancels a stuck prompt; there is no separate authentication deadline.
-3. Poll GET /healthz through the forward for up to five seconds, measured from that bind report.
+3. Poll GET /healthz through the forward for up to five seconds, measured from that bind report. The five seconds bound the polls together. A socket timeout limits one idle read, and a peer that trickles status bytes cannot extend the wait. A status line longer than 8 KiB is not healthy.
 4. If health answers 200, keep that commandless forward and mark the session attached.
 5. If nothing answers, tear down the probe and start ssh -tt with the same forward plus orbit web serve --no-open --port <remote-port>.
-6. Poll health for up to 30 seconds, once that child has reported its own bind, then open the local browser unless --no-open was requested.
+6. Poll health for up to 30 seconds, once that child has reported its own bind, under the same total deadline and status-line bound, then open the local browser unless --no-open was requested.
 7. Block until Ctrl-C, SIGTERM, or SSH exit; dropping the tunnel terminates and reaps the local SSH child.
 
 In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the remote serve process started by this session. In attach mode there is no remote command, so teardown closes only the forward and leaves the pre-existing dashboard running.

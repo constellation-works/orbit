@@ -996,6 +996,7 @@
         "tests/dashboard_assets.rs::settings_system_view_executes_render_provenance_override_edit_and_refused_write",
         "tests/dashboard_assets.rs::tasks_rail_count_reports_matching_total_across_pages_and_aggregate_view",
         "tests/host_tunnels.rs::a_dead_child_is_replaced_by_the_next_request",
+        "tests/host_tunnels.rs::a_paced_identity_body_cannot_outlive_its_deadline",
         "tests/host_tunnels.rs::a_spawned_remote_gets_operator_exactly_when_the_session_has_it",
         "tests/host_tunnels.rs::an_idle_tunnel_is_torn_down_but_not_under_an_open_lease",
         "tests/host_tunnels.rs::concurrent_first_requests_share_one_attached_ssh",
@@ -1005,7 +1006,10 @@
         "tests/serve.rs::early_signal_before_first_poll_is_not_a_lost_wakeup",
         "tests/serve.rs::grace_period_does_not_start_before_shutdown_is_signaled",
         "tests/serve.rs::teardown_returns_after_grace_period_with_blocking_work_in_flight",
-        "tests/ssh_tunnel.rs::delayed_forward_bind_attaches_without_a_second_ssh"
+        "tests/ssh_tunnel.rs::cancel_during_a_paced_status_reaps_the_ssh_child",
+        "tests/ssh_tunnel.rs::delayed_forward_bind_attaches_without_a_second_ssh",
+        "tests/ssh_tunnel.rs::oversized_status_line_is_refused_without_draining_the_flood",
+        "tests/ssh_tunnel.rs::paced_status_fragments_cannot_outlive_the_readiness_budget"
       ]
     }
   },
