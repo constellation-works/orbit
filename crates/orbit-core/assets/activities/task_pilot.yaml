@@ -291,6 +291,16 @@ spec:
        `utility_warnings` finding citing the criterion and the conflict;
        admission keeps holding hosts that cannot meet the requirement until
        an operator retags or re-scopes it.
+       If a criterion forbids sandbox deferral or says a skip is not evidence
+       for a test that only runs under nested Seatbelt or Bubblewrap, check
+       whether the test is in a required validation gate. The sanctioned
+       deferred-sandbox replay runs that gate on the claim host outside the
+       worker sandbox, and a passing replay is the evidence; the worker's
+       nested-sandbox skip alone is not. Report the contradiction in
+       `utility_warnings` with a repair that requires the gate to pass on the
+       claim-host replay. The replay cannot satisfy a criterion for a
+       standalone test outside a required gate, so flag that scope mismatch
+       rather than treating deferral as evidence for it.
        Also check whether a criterion's evidence can come only from one
        particular machine: its live task store, its running services, or its
        data, such as timings measured on a named host against its workspace.
