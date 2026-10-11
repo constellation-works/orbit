@@ -317,6 +317,11 @@ fn agent_timeout_admission_and_engine_use_the_same_ceiling() {
 
 #[test]
 fn agent_submissions_report_saturation_and_their_queue_position() {
+    if !isolated_run_observation(
+        "run_observation::agent_invoke::agent_submissions_report_saturation_and_their_queue_position",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     let limit = operator_json(
         &fixture,
