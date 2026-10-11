@@ -85,7 +85,9 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// version 1 result's output names paths under the old checkout root.
 /// Version 3 records the command's summary [ORB-15131]; an older passing
 /// result cannot show that it executed any test.
-const CACHE_SCHEMA_VERSION: u32 = 3;
+/// Version 4 ignores deadline-shortened timeouts [ORB-15350]; a shortened
+/// timeout is treated as inconclusive and never cached.
+const CACHE_SCHEMA_VERSION: u32 = 4;
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
 const LEGACY_WORKTREES_DIR: &str = "worktrees";
@@ -412,6 +414,12 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
             if let Some(evidence) = &run.network_evidence {
                 return inconclusive(format!(
                     "the base run of '{}' could not reach the network: {evidence}",
+                    run.command
+                ));
+            }
+            if run.timed_out && run.timeout_ms < VALIDATION_TIMEOUT_MS {
+                return inconclusive(format!(
+                    "the base run of '{}' timed out before the review deadline",
                     run.command
                 ));
             }

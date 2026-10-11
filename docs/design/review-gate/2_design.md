@@ -594,7 +594,10 @@ failures it printed are still replayed on the base, and when the base shares
 all of them the review settles `incomplete` (`baseline_cut`) naming the cut
 and those failures. A cut run that printed no replayable failure attributes
 none and settles the same way; one the base does not share is the candidate's
-as below. When every failed required check
+as below. A base replay stopped at its deadline is inconclusive and is not
+cached [ORB-15350], so a shortened review budget cannot poison later replays
+or full-allowance delivery validation; a retry with a longer budget can still
+complete and attribute shared failures to the base. When every failed required check
 is confirmed, no finding is open, no external evidence is pending, and the
 records are consistent once those checks count as passed, the certificate
 records the holds in `baseline_red`. The step then fails typed
@@ -1212,5 +1215,6 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 - [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.
+- [ORB-15350] — a base replay stopped at its deadline is inconclusive and is not cached, preventing a shortened review deadline from poisoning the baseline result cache.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

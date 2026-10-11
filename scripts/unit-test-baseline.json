@@ -629,6 +629,8 @@
         "executor/automation/vcs/operations/tests/push_retry.rs::pushes_confirm_lost_replies_without_reusing_a_consumed_lease",
         "executor/automation/vcs/operations/tests/push_retry.rs::pushes_do_not_retry_permanent_refusals_even_with_transport_diagnostics",
         "executor/automation/vcs/operations/tests/push_retry.rs::pushes_recover_from_transient_remote_failures",
+        "executor/automation/vcs/tests/base_claim.rs::a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached",
+        "executor/automation/vcs/tests/base_claim.rs::a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached",
         "executor/automation/vcs/tests/base_claim.rs::a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the_base",
         "executor/automation/vcs/tests/base_claim.rs::failure_identities_name_each_failed_test_and_located_error_across_runners",
         "executor/automation/vcs/tests/delivery_marker.rs::delivery_markers_preserve_valid_inner_candidates_and_marker_grammar",

@@ -96,6 +96,8 @@ pub(super) struct RequiredCommandRun {
     pub(super) network_evidence: Option<String>,
     /// What the command reported it ran, when it reports that.
     pub(super) summary: Option<ValidationSummary>,
+    /// The timeout allowance in milliseconds the command ran under [ORB-15350].
+    pub(super) timeout_ms: u64,
 }
 
 /// What a command reported about its own run in [`VALIDATION_SUMMARY_ENV`]:
@@ -361,6 +363,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         network_retries: 0,
         network_evidence: None,
         summary,
+        timeout_ms,
     })
 }
 
