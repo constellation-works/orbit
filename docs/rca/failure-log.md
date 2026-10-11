@@ -10,6 +10,7 @@ related_artifacts:
   - ORB-15156
   - ORB-15400
   - ORB-15406
+  - ORB-15409
 ---
 
 # Run failure log
@@ -33,6 +34,35 @@ Newest entries go first. When you rescue a blocked task, add its cause here
 before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
+
+## 2026-10-11: A Mac claimed implementer cannot pass a gate that reaches Seatbelt tests
+
+- **Where:** Mac follower, `implement_one` in `task_claimed_pr_pipeline`. The
+  implementer runs `make ci-test-affected` inside its own sandbox-exec
+  profile.
+- **Symptom:** the implementer finishes the change, then declares
+  `validation_environment` or `validation_incomplete` ("macOS refuses nested
+  sandbox profiles"). Step recovery returns `not_recovered`, final recovery
+  escalates, and the claim fails with the diff uncommitted in the Mac worktree.
+- **Cause:** nested sandbox-exec cannot apply a profile, so every
+  Seatbelt-gated test prints `SKIP: sandbox-exec cannot apply a profile: …`
+  (39 lines for an orbit-core change). `judge_host_test_output` refuses any
+  `SKIP:` line. The implementer prompt says a Seatbelt denial is not
+  deferrable, and macOS has no counterpart of the Bubblewrap deferral
+  (ORB-15287). Whether a claim fails depends on how strictly the model reads
+  that rule, not on the change. In the same context three `orbit-cli::process`
+  tests also fail on the base, and they pass on dk-server-2.
+- **Fix:** ORB-15409 (proposed; needs an owner choice between deferral parity
+  and routing). Until then:
+  - Rescue by hand. Copy the worktree diff (`git diff HEAD`) to a box
+    worktree on current `agent-main`, run ci-fast, ci-test-affected and
+    ci-lint there, and open a PR.
+  - Keep orbit-core, orbit-cli and orbit-engine work off the Mac by tagging
+    it `os:linux`.
+- **Tasks:** ORB-15399 (luna, PR #4260), ORB-15395 (sol, PR #4262), and in
+  part ORB-15365 (PR #4253).
+- **Final recovery:** `escalate` (`jrun-20261011-0356-c1`,
+  `jrun-20261011-0406-c1`).
 
 ## 2026-10-11: A finished candidate is refused because its deferral record has no `probe.command`
 
