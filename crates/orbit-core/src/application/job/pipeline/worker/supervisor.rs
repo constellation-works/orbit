@@ -5,6 +5,9 @@
 //! when it claims the persisted run, reap it, and translate an exit that left
 //! the run non-terminal into a diagnostic step, a terminal state, and an audit
 //! row. That is one job, and [`PipelineWorkerSupervisor`] owns it.
+//! Store-read faults keep the observer alive: it continues reaping the child
+//! and retries until fresh run state permits ownership-safe exit settlement.
+//! It never stops a worker merely because its persisted state is unreadable.
 //!
 //! The supervisor is built from the handles that work needs — the run and
 //! audit stores, workspace paths, the session event log, the worker command
@@ -280,20 +283,12 @@ impl PipelineWorkerSupervisor {
         let workspace = self.workspace();
         let child_pid = child.id();
         let mut claimed = false;
+        let mut exit_status = None;
         // [ORB-12903] The worker's own scope, located while the child is
         // alive: once every process in it is gone the cgroup goes with it.
         let mut scope = None;
         loop {
-            let run = self
-                .runs
-                .get_job_run(run_id)?
-                .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-            // Read after the run: a claim observed here was made by the exec'd
-            // worker, which `systemd-run --scope` only starts once it is
-            // inside its scope.
-            if scope.is_none() {
-                scope = WorkerScopeCgroup::of_process(child_pid);
-            }
+            let run = self.read_run_while_reaping(run_id, &mut child, &mut exit_status, &mut scope);
             if run.pid == Some(child_pid) && !claimed {
                 log_best_effort(
                     "audit worker claim",
@@ -320,28 +315,32 @@ impl PipelineWorkerSupervisor {
             // A persisted owner or non-pending state settles the only startup
             // question this observer owns. Waiting for the child avoids a
             // full run/step SQLite read every 25ms throughout normal work.
-            let status = if run.pid.is_some() || run.state != JobRunState::Pending {
-                Some(child.wait().map_err(|error| {
-                    OrbitError::Execution(format!(
-                        "wait for pipeline worker process for run '{run_id}': {error}"
-                    ))
-                })?)
+            let status = if exit_status.is_some() {
+                exit_status
             } else {
-                child.try_wait().map_err(|error| {
-                    OrbitError::Execution(format!(
-                        "observe pipeline worker process for run '{run_id}': {error}"
-                    ))
-                })?
+                let observation = if run.pid.is_some() || run.state != JobRunState::Pending {
+                    child.wait().map(Some)
+                } else {
+                    child.try_wait()
+                };
+                match observation {
+                    Ok(status) => status,
+                    Err(error) => {
+                        tracing::warn!(run_id, worker_pid = child_pid, %error, "retrying pipeline worker observation");
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                }
             };
 
             if let Some(status) = status {
+                exit_status = Some(status);
                 // The worker may have changed the run after the last startup
                 // observation. Exit handling must use fresh state so duplicate
                 // ownership, cancellation, and terminal outcomes stay
                 // authoritative.
-                let run = self.runs.get_job_run(run_id)?.ok_or_else(|| {
-                    OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
-                })?;
+                let run =
+                    self.read_run_while_reaping(run_id, &mut child, &mut exit_status, &mut scope);
                 let output = read_pipeline_worker_log_tail(&mut worker_log_reader);
                 let output_detail = output
                     .as_deref()
@@ -446,6 +445,49 @@ impl PipelineWorkerSupervisor {
                 return Ok(());
             }
 
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// An unreadable or missing run cannot release child ownership. Retry
+    /// without signalling the worker (it may have claimed and started providers
+    /// meanwhile), and reap even during a persistent store outage. Retain the
+    /// exit status until the store recovers so settlement uses fresh ownership.
+    fn read_run_while_reaping(
+        &self,
+        run_id: &str,
+        child: &mut Child,
+        exit_status: &mut Option<std::process::ExitStatus>,
+        scope: &mut Option<WorkerScopeCgroup>,
+    ) -> JobRun {
+        let mut fault_logged = false;
+        loop {
+            let result = self.runs.get_job_run(run_id);
+            // Read after the run: an observed claim was made by the exec'd
+            // worker inside its scope. Capture before reaping, including on
+            // read faults, so a reused PID cannot supply another worker's scope.
+            if scope.is_none() && exit_status.is_none() {
+                *scope = WorkerScopeCgroup::of_process(child.id());
+            }
+            let error = match result {
+                Ok(Some(run)) => return run,
+                Ok(None) => OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()),
+                Err(error) => error,
+            };
+            if exit_status.is_none() {
+                match child.try_wait() {
+                    Ok(status) => *exit_status = status,
+                    Err(error) => {
+                        tracing::warn!(run_id, worker_pid = child.id(), %error, "retrying pipeline worker observation");
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                }
+            }
+            if !fault_logged {
+                tracing::warn!(run_id, worker_pid = child.id(), %error, "retrying pipeline worker run read while retaining its reaper");
+                fault_logged = true;
+            }
             thread::sleep(Duration::from_millis(25));
         }
     }
