@@ -146,6 +146,7 @@ impl OrbitRuntime {
                 target_type: COMMAND_TARGET_TYPE,
                 target_id: None,
                 task_id: None,
+                workspace_id: None,
                 status,
                 payload: json!({
                     "argv": argv_redacted,

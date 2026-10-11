@@ -38,6 +38,8 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+# Exercise production lock-denial writes through the runner action in HTTP fixtures.
+orbit-engine = { path = "../orbit-engine" }
 orbit-store = { path = "../orbit-store" }
 reqwest.workspace = true
 # Substitute pipeline worker for tests that submit runs [ORB-12902].

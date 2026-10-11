@@ -11,7 +11,9 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use orbit_common::fs::selector::Selector;
-use orbit_core::{AuditEvent, AuditEventStatus, OrbitError, OrbitRuntime, TaskStatus};
+use orbit_core::{
+    AuditEvent, AuditEventFilter, AuditEventStatus, OrbitError, OrbitRuntime, TaskStatus,
+};
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, TaskHistoryEntry, TaskRelationType,
 };
@@ -253,14 +255,17 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
         })
         .collect();
 
+    // Filter in the store before applying the limit, so other workspaces
+    // cannot crowd out local evidence. Legacy unscoped denials cannot be
+    // safely attributed from task IDs or shared relative paths; exclude them.
     let lock_denials = runtime
-        .list_audit_events(
-            None,
-            Some(TASK_LOCK_RESERVE_TOOL.to_string()),
-            Some(AuditEventStatus::Denied),
-            None,
-            LOCK_DENIAL_SCAN_LIMIT,
-        )?
+        .list_audit_events_filtered(&AuditEventFilter {
+            workspace_id: Some(runtime.workspace_id()?),
+            tool_name: Some(TASK_LOCK_RESERVE_TOOL.to_string()),
+            status: Some(AuditEventStatus::Denied),
+            limit: LOCK_DENIAL_SCAN_LIMIT,
+            ..Default::default()
+        })?
         .iter()
         .filter_map(lock_denial)
         .collect();

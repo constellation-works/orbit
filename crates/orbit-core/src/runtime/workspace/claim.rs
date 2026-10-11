@@ -352,6 +352,7 @@ fn record_claim_audit(
             target_type: CLAIM_TARGET_TYPE,
             target_id: claim_id,
             task_id: None,
+            workspace_id: None,
             status,
             payload,
         },

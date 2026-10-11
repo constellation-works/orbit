@@ -63,6 +63,7 @@ pub(super) fn record_task_lock_audit_event(
     status: AuditEventStatus,
     payload: Value,
 ) -> Result<(), OrbitError> {
+    let workspace_id = runtime.workspace_id()?;
     record_coordination_audit_event(
         runtime,
         CoordinationAuditEvent {
@@ -71,6 +72,7 @@ pub(super) fn record_task_lock_audit_event(
             target_type: "task_reservation",
             target_id,
             task_id,
+            workspace_id: Some(&workspace_id),
             status,
             payload,
         },

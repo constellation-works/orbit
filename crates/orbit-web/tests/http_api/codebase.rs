@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{AuditEventInsertParams, AuditEventStatus, OrbitError, TaskStatus};
+use orbit_engine::RuntimeHost;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskRelation,
@@ -178,6 +179,17 @@ fn reserve_request(
 }
 
 fn lock_denial(fixture: &Fixture, index: usize, task: Option<&str>, run: Option<&str>, file: &str) {
+    lock_denial_in_workspace(fixture, index, task, run, file, Some("ws_http_fixture"));
+}
+
+fn lock_denial_in_workspace(
+    fixture: &Fixture,
+    index: usize,
+    task: Option<&str>,
+    run: Option<&str>,
+    file: &str,
+    workspace: Option<&str>,
+) {
     let arguments = json!({
         "actor": "codex",
         "task_ids": task.into_iter().collect::<Vec<_>>(),
@@ -206,7 +218,7 @@ fn lock_denial(fixture: &Fixture, index: usize, task: Option<&str>, run: Option<
             host: None,
             pid: 1,
             session_id: None,
-            workspace_id: Some("ws_http_fixture".into()),
+            workspace_id: workspace.map(str::to_string),
             caller_machine_id: None,
             caller_machine_name: None,
             process_machine_id: None,
@@ -222,6 +234,129 @@ fn lock_denial(fixture: &Fixture, index: usize, task: Option<&str>, run: Option<
             step_index: None,
         })
         .unwrap();
+}
+
+#[test]
+fn codebase_excludes_foreign_and_unscoped_denials_without_local_activity() {
+    isolated(
+        "codebase::codebase_excludes_foreign_and_unscoped_denials_without_local_activity",
+        || {
+            let fixture = Fixture::new();
+            for (index, workspace, file) in [
+                (0, Some("ws_foreign"), "src/foreign-only.rs"),
+                (1, None, "src/legacy-only.rs"),
+            ] {
+                lock_denial_in_workspace(&fixture, index, None, None, file, workspace);
+            }
+            let server = fixture.server(false);
+            let body = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=1"
+            )));
+            assert_eq!(body["tasks_scanned"], 0);
+            assert_eq!(body["lock_contention"]["rows"], json!([]));
+            assert_eq!(body["lock_contention"]["below_support"], 0);
+        },
+    );
+}
+
+#[test]
+fn codebase_scopes_production_lock_denials_and_support_but_audit_remains_global() {
+    isolated(
+        "codebase::codebase_scopes_production_lock_denials_and_support_but_audit_remains_global",
+        || {
+            let fixture = Fixture::new();
+            fs::create_dir_all(fixture.runtime.paths().repo_root.join("src")).unwrap();
+            fs::write(fixture.runtime.paths().repo_root.join("src/shared.rs"), "").unwrap();
+            let holder = add(&fixture, "holder", &["src/shared.rs"], vec![]);
+            let waiter = add(&fixture, "waiter", &["src/shared.rs"], vec![]);
+            let request = |task: &str| {
+                fixture
+                    .runtime
+                    .run_deterministic(
+                        "reserve_locks",
+                        &json!({}),
+                        &json!({"task_ids": [task], "ttl_seconds": 120}),
+                        Default::default(),
+                    )
+                    .unwrap()
+            };
+            assert_eq!(request(&holder)["reserved"], true);
+            for _ in 0..2 {
+                assert_eq!(request(&waiter)["reserved"], false);
+            }
+            let local = fixture
+                .runtime
+                .list_audit_events(
+                    None,
+                    Some("orbit.task.locks.reserve".into()),
+                    Some(AuditEventStatus::Denied),
+                    None,
+                    100,
+                )
+                .unwrap();
+            assert_eq!(local.len(), 2);
+            assert!(
+                local
+                    .iter()
+                    .all(|event| { event.workspace_id.as_deref() == Some("ws_http_fixture") })
+            );
+
+            for (index, workspace, file) in [
+                (100, Some("ws_foreign"), "src/shared.rs"),
+                (101, Some("ws_foreign"), "src/foreign-only.rs"),
+                (102, None, "src/shared.rs"),
+                (103, None, "src/legacy-only.rs"),
+            ] {
+                // A local task ID or relative path cannot attribute an old
+                // unscoped row, or override an explicit foreign workspace.
+                let task = if index == 100 { "HF-999" } else { &waiter };
+                lock_denial_in_workspace(&fixture, index, Some(task), None, file, workspace);
+            }
+
+            let server = fixture.server(false);
+            let body = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=1"
+            )));
+            let section = &body["lock_contention"];
+            assert_eq!(section["rows"].as_array().unwrap().len(), 1, "{body}");
+            let lock = row(section, "src/shared.rs").unwrap();
+            assert_eq!(lock["numerator"], 1, "local denial retries count once");
+            assert_eq!(lock["denominator"], 2);
+            assert_eq!(lock["rate"], 0.5);
+            assert_eq!(lock["reservations"], 1);
+            assert_eq!(lock["denials"], 2, "only local attempts count");
+            let strict = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=3"
+            )));
+            assert_eq!(strict["lock_contention"]["rows"], json!([]));
+            assert_eq!(strict["lock_contention"]["below_support"], 1);
+
+            let global = fixture
+                .runtime
+                .list_audit_events(
+                    None,
+                    Some("orbit.task.locks.reserve".into()),
+                    Some(AuditEventStatus::Denied),
+                    None,
+                    100,
+                )
+                .unwrap();
+            assert_eq!(global.len(), 6, "the shared audit reader stays global");
+            let audit = json_ok(server.get(&format!(
+                "/api/audit?{WS}&since=24h&tool=orbit.task.locks.reserve&status=denied&limit=100"
+            )));
+            assert_eq!(audit.as_array().unwrap().len(), 6);
+            for index in 100..104 {
+                assert!(
+                    audit
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|event| { event["execution_id"] == format!("lock-denial-{index}") })
+                );
+            }
+        },
+    );
 }
 
 fn row<'a>(section: &'a Value, path: &str) -> Option<&'a Value> {
