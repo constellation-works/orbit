@@ -1,7 +1,8 @@
-//! `orbit run auto --approve-proposed` [ORB-14117]: one drain pass selects
-//! qualifying proposed tasks, applies their pilot results under the drain's
-//! verified authority, records the approvals, and admits the approved work.
-//! The deterministic steps run in an isolated child against real stores; the
+//! `orbit run auto --approve-proposed` [ORB-14117]: a drain pass selects
+//! qualifying proposed tasks for a detached pilot, the pilot applies its
+//! results under the drain's verified authority, and the pass that sees the
+//! pilot finish records the approvals and admits the approved work. The
+//! deterministic steps run in an isolated child against real stores; the
 //! agent pilot's output is supplied as fixture data.
 
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ use tempfile::TempDir;
 
 #[cfg(unix)]
 mod required_tools;
+mod step_graph;
 
 struct Workspace {
     _root: TempDir,
@@ -300,11 +302,20 @@ impl Workspace {
     /// Finish the pilot child `pilot` without applying any result, as a
     /// failed or stale pilot does.
     fn pilot_failed(&self, pilot: &str) {
+        self.finish(pilot, JobRunState::Failed);
+    }
+
+    /// End the run `run_id` in `state`, claiming it first if no worker has.
+    fn finish(&self, run_id: &str, state: JobRunState) {
         let jobs = orbit_store::compose::workspace_job_run_store(
             self.runtime.sqlite_store().unwrap(),
             self.runtime.workspace_id().unwrap(),
         );
-        jobs.finalize_job_run(pilot, JobRunState::Failed, Utc::now(), None)
+        if jobs.get_job_run(run_id).unwrap().unwrap().state == JobRunState::Pending {
+            jobs.mark_job_run_running(run_id, Utc::now(), std::process::id())
+                .unwrap();
+        }
+        jobs.finalize_job_run(run_id, state, Utc::now(), None)
             .unwrap();
     }
 
@@ -338,15 +349,16 @@ impl Workspace {
         run.run_id
     }
 
-    /// The pilot child the drain's `approve_proposed` step dispatches.
+    /// The detached pilot child the drain's `approve_proposed` step
+    /// dispatches, still running.
     fn pilot_child(&self, drain: &str, task_ids: &Value) -> String {
         let pilot = self.running("task_pilot_pipeline", json!({ "task_ids": task_ids }));
         let mut state = self.runtime.read_run_state(drain).unwrap().unwrap();
         state.record_child_dispatch(ChildDispatch::submitted(
             pilot.clone(),
             "task_pilot_pipeline".into(),
-            "invoke_and_wait".into(),
-            true,
+            "invoke_detached".into(),
+            false,
             false,
             Utc::now(),
         ));
@@ -363,13 +375,29 @@ impl Workspace {
     }
 
     /// Prepare and apply `assessments` the way the pilot child's steps do,
-    /// with the authority record the drain hands it.
+    /// with the authority record the drain hands it, then end the pilot run
+    /// the way its last step does.
     fn pilot(&self, drain: &str, pilot: &str, assessments: Vec<Value>) -> Result<Value, String> {
-        self.apply(
+        let applied = self.apply(
             pilot,
             assessments,
             json!({"drain_promotion": {"run_id": drain}}),
-        )
+        );
+        self.finish(
+            pilot,
+            if applied.is_ok() {
+                JobRunState::Success
+            } else {
+                JobRunState::Failed
+            },
+        );
+        applied
+    }
+
+    /// The drain's record step, as the pass that sees a pilot finish runs it.
+    fn record(&self, drain: &str) -> Value {
+        self.action("record_proposed_approvals", json!({ "run_id": drain }))
+            .unwrap()
     }
 
     /// Prepare and apply `assessments` with promotion authorized under
@@ -452,14 +480,34 @@ fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pa
     let selection = workspace.select(&drain);
     assert_eq!(selection["task_ids"], json!([tagged.id, scoped.id]));
     assert_eq!(selection["drain_promotion"], json!({"run_id": drain}));
+    assert_eq!(selection["pilot_active"], true, "this pass starts a pilot");
+    assert_eq!(selection["pilot_live"], false);
+    assert_eq!(selection["pilot_finished"], false);
 
+    // Passes while the detached pilot runs neither pilot its tasks again nor
+    // start a second pilot.
     let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let late = workspace.task("late", &[], &["file:README.md"], TaskComplexity::Low);
+    let during = workspace.select(&drain);
+    assert_eq!(during["task_ids"], json!([]), "{during}");
+    assert_eq!(during["pilot_live"], true);
+    assert_eq!(during["live_pilot_run_ids"], json!([pilot]));
+    assert_eq!(during["pilot_active"], true);
+    assert_eq!(during["deferred_candidates"], 1, "{during}");
+    for task in [&tagged, &scoped] {
+        assert_eq!(held_reason(&during, task), Some("pilot_running"));
+    }
+
     let mut no_diff = assessment(&tagged);
     no_diff["context_files_after"] = json!([]);
     no_diff["disposition"] = json!("verified_no_diff");
     no_diff["evidence"] = json!("The result is a filed report outside the repository.");
     let applied = workspace
-        .pilot(&drain, &pilot, vec![no_diff, assessment(&scoped)])
+        .apply(
+            &pilot,
+            vec![no_diff, assessment(&scoped)],
+            json!({"drain_promotion": {"run_id": drain}}),
+        )
         .unwrap();
     assert_eq!(applied["status"], "succeeded", "{applied}");
     let decisions = applied["drain_approval"].as_array().unwrap();
@@ -488,14 +536,26 @@ fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pa
             "the approval names the drain: {approval:?}"
         );
     }
+    let still_running = workspace.select(&drain);
+    assert_eq!(still_running["pilot_finished"], false, "{still_running}");
+    assert_eq!(still_running["task_ids"], json!([]));
 
-    let recorded = workspace
-        .action(
-            "record_proposed_approvals",
-            json!({"run_id": drain, "task_ids": selection["task_ids"]}),
-        )
-        .unwrap();
+    // The pass that sees the pilot finish records the approvals from the
+    // pilot's own run input, then admits them.
+    workspace.finish(&pilot, JobRunState::Success);
+    let observing = workspace.select(&drain);
+    assert_eq!(observing["pilot_finished"], true, "{observing}");
+    assert_eq!(observing["pilot_live"], false);
+    assert_eq!(
+        observing["task_ids"],
+        json!([late.id]),
+        "the next pilot starts"
+    );
+    let recorded = workspace.record(&drain);
     assert_eq!(recorded["approved"], json!([tagged.id, scoped.id]));
+    assert_eq!(recorded["approved_count"], 2);
+    assert_eq!(recorded["pilots"][0]["run_id"], json!(pilot));
+    assert_eq!(recorded["pilots"][0]["status"], "success");
     let report = workspace
         .runtime
         .read_run_state(&drain)
@@ -516,8 +576,20 @@ fn tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pa
             .as_array()
             .unwrap()
             .contains(&json!(scoped.id)),
-        "the approved task is admitted in the same pass: {admitted}"
+        "the approved task is admitted in the pass that recorded it: {admitted}"
     );
+
+    // A recorded pilot is never counted again.
+    assert_eq!(workspace.select(&drain)["pilot_finished"], false);
+    assert_eq!(workspace.record(&drain)["approved"], json!([]));
+    let report = workspace
+        .runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .drain_approvals
+        .unwrap();
+    assert_eq!(report.approved_total, 2);
 }
 
 #[test]

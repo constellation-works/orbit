@@ -269,13 +269,17 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ClassifyWorkspaceAutoTasks => {
             workspace_auto::classify_workspace_auto_tasks(runtime, action, input)
         }
-        // `--approve-proposed`: the qualifying proposed tasks this pass pilots
-        // under the drain's authority, and afterwards what that pilot approved.
+        // `--approve-proposed`: the qualifying proposed tasks a pass pilots
+        // under the drain's authority, what each finished pilot approved, and
+        // the bounded wait on a live pilot.
         CoreDeterministicAction::SelectProposedApprovals => {
             workspace_auto::select_proposed_approvals(runtime, action, input)
         }
         CoreDeterministicAction::RecordProposedApprovals => {
             workspace_auto::record_proposed_approvals(runtime, action, input)
+        }
+        CoreDeterministicAction::AwaitApprovalPilot => {
+            workspace_auto::await_approval_pilot(runtime, action, input)
         }
         // Stamp a drain deadline, or answer whether a stamped one has passed
         // [ORB-10819]. Gates the start of the next iteration only; nothing

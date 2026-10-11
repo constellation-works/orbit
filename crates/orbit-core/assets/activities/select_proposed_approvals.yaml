@@ -12,6 +12,13 @@ spec:
     its newest history entry is a drain-approval hold the pilot recorded, or
     while a task-pilot run this drain already finished covered it and the
     task has not changed since; editing the task makes it eligible again.
+    A task a live task-pilot run of this drain carries is held as
+    `pilot_running`, and nothing is selected while such a run is live, so
+    the drain pilots one batch at a time. `pilot_live` and
+    `live_pilot_run_ids` report that run, `pilot_active` is true while one is
+    live or when this pass selected candidates for a new one, and
+    `pilot_finished` is true when a finished pilot awaits
+    `record_proposed_approvals`. All three are defined on every output.
     The creation-grant entry a write re-seals after its own entry is not a
     change and never hides a hold.
     At most ten candidates are returned per pass, oldest first, all sharing
@@ -38,7 +45,17 @@ spec:
         type: boolean
   output_schema_json:
     type: object
-    required: [approve_proposed, task_ids, candidate_count, drain_promotion]
+    required:
+      [
+        approve_proposed,
+        task_ids,
+        candidate_count,
+        drain_promotion,
+        pilot_active,
+        pilot_live,
+        live_pilot_run_ids,
+        pilot_finished,
+      ]
     properties:
       approve_proposed:
         type: boolean
@@ -68,5 +85,15 @@ spec:
         type: array
         items:
           type: string
+      pilot_active:
+        type: boolean
+      pilot_live:
+        type: boolean
+      live_pilot_run_ids:
+        type: array
+        items:
+          type: string
+      pilot_finished:
+        type: boolean
   action: select_proposed_approvals
   config: {}
