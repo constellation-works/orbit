@@ -420,7 +420,9 @@ configuration, including build, scratch, and toolchain residue, and an earlier
 run under another scratch. They also cover toolchain cache reuse, reinstall
 and fallback, a third run queueing for two slots, the thread count, reuse of
 a passing run and what invalidates it, and what passing and failing runs
-keep:
+keep. Off Linux, the cases supply each Linux command the script uses that
+the host lacks (util-linux `flock`, GNU `mv -T`, GNU `nproc`) as a shim and
+say so on stderr; a Linux host always runs its own:
 
 ```bash
 python3 scripts/test-codeql-rust-local.py

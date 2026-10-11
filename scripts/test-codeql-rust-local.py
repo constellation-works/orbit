@@ -2,14 +2,17 @@
 """Exercise local CodeQL's subprocess boundary without CodeQL or downloads."""
 
 import fcntl
+import functools
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import re
 import select
 import signal
+import sys
 import tempfile
 import time
 import unittest
@@ -17,6 +20,98 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path(os.environ.get("ORBIT_SCRATCH_DIR", REPO_ROOT / ".orbit/tmp"))
+
+# The script runs only on Linux, where it relies on util-linux flock(1), GNU
+# mv -T and GNU nproc. The cases stub uname to Linux, so another host must also
+# supply those commands. There, and only for a command the host lacks, the
+# cases use these shims: flock takes a real flock(2) lock on the inherited
+# descriptor, as util-linux does, mv -T is one rename(2), and nproc counts the
+# processors this process may use. Linux always runs its own tools. A shim
+# refuses any other usage, so a script change cannot pass untested.
+FLOCK_SHIM = r'''#!/usr/bin/env python3
+"""util-linux flock(1) as the script uses it: flock [-s | -x] [-n] FD."""
+import fcntl, sys
+
+operation, flags, args = fcntl.LOCK_EX, 0, sys.argv[1:]
+while len(args) > 1 and args[0] in ("-s", "-x", "-n"):
+    option = args.pop(0)
+    if option == "-n":
+        flags = fcntl.LOCK_NB
+    else:
+        operation = fcntl.LOCK_SH if option == "-s" else fcntl.LOCK_EX
+if len(args) != 1 or not args[0].isdigit():
+    print(f"flock shim: unsupported arguments {sys.argv[1:]}", file=sys.stderr)
+    sys.exit(64)
+try:
+    fcntl.flock(int(args[0]), operation | flags)
+except BlockingIOError:
+    sys.exit(1)
+except OSError as error:
+    print(f"flock: {args[0]}: {error.strerror}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+MV_SHIM = r'''#!/usr/bin/env python3
+"""GNU mv -T as the script uses it: mv -T -- SOURCE DEST is one rename(2)."""
+import os, sys
+
+args = sys.argv[1:]
+if args[:1] != ["-T"]:
+    os.execv(REAL_MV, [REAL_MV, *args])
+if len(args) != 4 or args[1] != "--":
+    print(f"mv shim: unsupported arguments {args}", file=sys.stderr)
+    sys.exit(64)
+try:
+    os.rename(args[2], args[3])
+except OSError as error:
+    print(f"mv: cannot move '{args[2]}' to '{args[3]}': {error.strerror}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+NPROC_SHIM = r'''#!/usr/bin/env python3
+"""GNU nproc as the script uses it, with no option or OpenMP limit."""
+import os, sys
+
+if sys.argv[1:]:
+    print(f"nproc shim: unsupported arguments {sys.argv[1:]}", file=sys.stderr)
+    sys.exit(64)
+print(len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count())
+'''
+
+
+def usable_processors():
+    """The processors this process may use, as nproc counts them."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count()
+
+
+def mv_has_no_target_option():
+    with tempfile.TemporaryDirectory(prefix="codeql-local-mv-probe.") as directory:
+        source = Path(directory) / "source"
+        source.write_text("")
+        probe = subprocess.run(["mv", "-T", "--", source, Path(directory) / "target"],
+                               capture_output=True)
+        return probe.returncode != 0
+
+
+@functools.cache
+def linux_tool_shims():
+    """The shim each Linux command the script uses needs on this host."""
+    if platform.system() == "Linux":
+        return {}
+    shims = {}
+    if shutil.which("flock") is None:
+        shims["flock"] = FLOCK_SHIM
+    if mv_has_no_target_option():
+        real_mv = shutil.which("mv")
+        if real_mv is None:
+            raise RuntimeError("no mv on PATH")
+        shims["mv"] = MV_SHIM.replace("REAL_MV", repr(real_mv))
+    if shutil.which("nproc") is None:
+        shims["nproc"] = NPROC_SHIM
+    return shims
 
 # The codeql stub enumerates .rs files under --source-root minus the effective
 # config's paths-ignore globs, as CodeQL's build-mode none source walk does.
@@ -174,6 +269,15 @@ class LocalCodeqlTests(unittest.TestCase):
         uname = self.bin / "uname"
         uname.write_text('#!/bin/sh\n[ "$1" = -s ] || exit 99\necho "${STUB_UNAME:-Linux}"\n')
         uname.chmod(0o755)
+        # The commands the script runs, after the stubs above.
+        self.tool_path = os.environ["PATH"]
+        if linux_tool_shims():
+            userland = self.root / "linux userland"
+            userland.mkdir()
+            for name, source in linux_tool_shims().items():
+                (userland / name).write_text(source)
+                (userland / name).chmod(0o755)
+            self.tool_path = f"{userland}:{self.tool_path}"
         self.calls_file = self.root / "calls.jsonl"
         self.global_dirs = [self.root / "user-rustup", self.root / "user-cargo"]
         for directory in self.global_dirs:
@@ -182,7 +286,7 @@ class LocalCodeqlTests(unittest.TestCase):
         self.scratch = self.root / "run scratch"
         # The host toolchain cache and slot locks; never the real ~/.orbit/cache.
         self.cache = self.root / "host cache"
-        self.env = dict(git_env, PATH=f"{self.bin}:{os.environ['PATH']}",
+        self.env = dict(git_env, PATH=f"{self.bin}:{self.tool_path}",
                         STUB_CALLS=str(self.calls_file),
                         ORBIT_SCRATCH_DIR=str(self.scratch),
                         ORBIT_CODEQL_CACHE_DIR=str(self.cache),
@@ -591,7 +695,7 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
         legacy = self.cache / "slots"
         legacy.write_text("1\n")
         # Inject a rename denial without relying on UID-dependent permissions.
-        real_mv = shutil.which("mv")
+        real_mv = shutil.which("mv", path=self.tool_path)
         self.assertIsNotNone(real_mv)
         mv = self.bin / "mv"
         mv.write_text(f'''#!/usr/bin/env python3
@@ -667,7 +771,7 @@ os.execv({real_mv!r}, sys.argv)
         # nproc counts the processors this process may use, less any OpenMP limit.
         for name in ("OMP_NUM_THREADS", "OMP_THREAD_LIMIT"):
             self.env.pop(name, None)
-        share = max(1, len(os.sched_getaffinity(0)) // 2)
+        share = max(1, usable_processors() // 2)
         for label, env, expected in (("share", dict(ORBIT_CODEQL_SLOTS="2"), share),
                                      ("override", dict(ORBIT_CODEQL_THREADS="3"), 3)):
             with self.subTest(label):
@@ -756,4 +860,8 @@ os.execv({real_mv!r}, sys.argv)
 
 
 if __name__ == "__main__":
+    if linux_tool_shims():
+        print(f"test-codeql-rust-local: this {platform.system()} host lacks the Linux "
+              f"{', '.join(sorted(linux_tool_shims()))} the script uses, so the cases run it "
+              "with the test's shims for them", file=sys.stderr)
     unittest.main()

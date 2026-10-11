@@ -154,11 +154,14 @@ inputs_environment() {
     | { grep -zv '^CARGO_TARGET_DIR=' || [[ $? -eq 1 ]]; } | LC_ALL=C sort -z | sha256sum
 }
 
+# Symlinks are listed with their targets via readlink: find -printf is GNU-only.
 inputs_digest() {
   {
     printf '%s\n' "$inputs_header" \
       && find . \( "${input_prune[@]}" \) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum -- \
-      && find . \( "${input_prune[@]}" \) -prune -o -type l -printf '%p -> %l\n' | LC_ALL=C sort \
+      && find . \( "${input_prune[@]}" \) -prune -o -type l -exec sh -c \
+        'for link do target="$(readlink -- "$link")" || exit; printf "%s -> %s\n" "$link" "$target"; done' \
+        sh {} + | LC_ALL=C sort \
       && if [[ -e "$query" ]]; then
         find -L "$query" -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum --
       fi
@@ -235,7 +238,8 @@ rustup_install() {
 }
 
 remove_tree() {
-  chmod -R u+w -- "$@" && rm -rf -- "$@"
+  # The mode is chmod's first operand, so -- precedes it (POSIX order).
+  chmod -R -- u+w "$@" && rm -rf -- "$@"
 }
 
 # Installs the pinned toolchain into a fresh staging home and swaps it in whole,
