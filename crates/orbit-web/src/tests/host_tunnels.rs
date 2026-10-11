@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::PermissionsExt;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -334,4 +334,79 @@ fn a_spawned_remote_gets_operator_exactly_when_the_session_has_it() {
             assert!(!alive(pid));
         }
     }
+}
+
+/// Identity body bytes arrive faster than the probe's per-read socket timeout,
+/// and never finish. The identity budget must still end establish.
+#[test]
+fn a_paced_identity_body_cannot_outlive_its_deadline() {
+    let fragment = Duration::from_millis(100);
+    assert!(
+        fragment < crate::connect::PROBE_IO_TIMEOUT,
+        "body fragments must arrive before one socket read times out"
+    );
+    let identity_budget = Duration::from_millis(500);
+    let remote = pacing_identity(fragment);
+    let stub = Stub::new(json!({"remote": {"attach": remote, "spawn": null}}));
+    let tunnels = HostTunnels::new(TunnelConfig {
+        identity_timeout: identity_budget,
+        ..config(&stub, remote)
+    });
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let outcome = tunnels.acquire(&target("remote"), false).map(|_| ());
+        let _ = tx.send(outcome);
+    });
+    let started = Instant::now();
+    let outcome = rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap_or_else(|_| {
+            panic!("a paced identity body held establish past the identity deadline")
+        });
+    let elapsed = started.elapsed();
+    let error = outcome.expect_err("an unfinished identity body must not open a tunnel");
+    assert!(
+        elapsed < identity_budget + Duration::from_secs(4),
+        "identity establish ran for {elapsed:?}: {error:?}"
+    );
+    assert_eq!(error.code, "unreachable_destination", "{error:?}");
+    let children = pids(&stub);
+    assert_eq!(children.len(), 1, "attach succeeded and spawn did not run");
+    assert!(!alive(children[0]), "the owned ssh child was not reaped");
+}
+
+/// `/healthz` answers at once. The identity body then trickles with no end.
+fn pacing_identity(interval: Duration) -> u16 {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind pacing dashboard");
+    let port = listener.local_addr().expect("pacing dashboard port").port();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let _ = stream.set_nodelay(true);
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+            let mut buf = [0u8; 2048];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            if request.starts_with("GET /healthz ") {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                continue;
+            }
+            if !request.starts_with("GET /api/hosts?probe=false ") {
+                continue;
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n",
+            );
+            for _ in 0..500 {
+                if stream.write_all(b"{").is_err() {
+                    break;
+                }
+                thread::sleep(interval);
+            }
+        }
+    });
+    port
 }
