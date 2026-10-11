@@ -2,6 +2,218 @@
 
 use super::*;
 
+/// A dead owner cannot authorize releasing a live provider's ownership.
+/// Corrupting one audit row deterministically fails the actual store read while
+/// leaving cancellation audit writes available; no timing race is needed.
+#[cfg(unix)]
+#[test]
+fn cancellation_retains_claim_and_reservation_until_provider_teardown_is_confirmed() {
+    if !isolated(
+        module_path!(),
+        "cancellation_retains_claim_and_reservation_until_provider_teardown_is_confirmed",
+    ) {
+        return;
+    }
+    use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
+    use orbit_store::contracts::V2AuditEventInsertParams;
+
+    let cases = vec![
+        (None, false),
+        (Some("legacy-unversioned"), false),
+        (None, true),
+    ];
+    #[cfg(target_os = "linux")]
+    let cases = {
+        let mut cases = cases;
+        cases.push((Some("ps-lstart-utc-v2:pidns=foreign:provider-start"), false));
+        cases
+    };
+
+    for (identity, audit_fault) in cases {
+        let pair = Pair::new(1);
+        let drain = pair.run_drain();
+        let mut owner = std::process::Command::new("true").spawn().unwrap();
+        let owner_pid = owner.id();
+        assert!(owner.wait().unwrap().success());
+        assert_eq!(
+            probe_process_liveness(owner_pid, None),
+            ProcessLiveness::Exited
+        );
+        let leaf = pair.launched_leaf(&drain, 1, owner_pid);
+        let task = pair.claimed_task(&leaf);
+        let mut provider = ProviderFixture::spawn();
+        let unrelated = ProviderFixture::spawn();
+        let pid = provider.0.id();
+        let event_id = "cancel-provider";
+        let payload = json!({
+            "event_id": event_id,
+            "ts": Utc::now().to_rfc3339(),
+            "run_id": leaf,
+            "parent_event_id": "provider-invocation",
+            "step_id": "agent_implement",
+            "provider": "codex",
+            "body_kind": "cli_invocation_process",
+            "pid": pid,
+            "pid_start_time": identity,
+        });
+        pair.follower
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: pair.follower.workspace_id().unwrap(),
+                event_id: event_id.into(),
+                source: "v2_envelope".into(),
+                schema_version: 1,
+                event_type: "activity.progress".into(),
+                ts: Utc::now(),
+                run_id: leaf.clone(),
+                agent_identity: "fixture".into(),
+                parent_event_id: Some("provider-invocation".into()),
+                workspace_path: None,
+                payload_json: payload.to_string(),
+            })
+            .unwrap();
+        let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
+            pair.follower.global_root(),
+            pair.follower_repo.join(".orbit"),
+        ))
+        .unwrap();
+        let connection = rusqlite::Connection::open(database).unwrap();
+        if audit_fault {
+            assert_eq!(connection.execute(
+                "UPDATE v2_audit_events SET schema_version = 'unreadable' WHERE event_id = ?1 AND run_id = ?2",
+                rusqlite::params![event_id, leaf],
+            ).unwrap(), 1);
+            assert!(matches!(
+                pair.follower.collect_run_provider_processes(&leaf),
+                Err(OrbitError::Store(_))
+            ));
+        } else {
+            let processes = pair.follower.collect_run_provider_processes(&leaf).unwrap();
+            assert_eq!(processes.len(), 1);
+            assert!(!processes[0].finished);
+            assert_ne!(processes[0].liveness, ProcessLiveness::Exited);
+        }
+        let claim_before = pair.owner_claim_for_leaf(&leaf);
+        let locks_before = pair
+            .wire
+            .owner
+            .run_tool("orbit.task.locks", json!({}))
+            .unwrap();
+        assert!(
+            locks_before["by_reservation"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reservation| reservation["reservation_id"]
+                    == claim_before["claim"]["reservation_id"]),
+            "fixture owns an active reservation: {locks_before}"
+        );
+
+        let error = pair
+            .follower
+            .cancel_job_run_with_reason(&leaf, "operator", "fixture", Some("stop provider"))
+            .expect_err("unconfirmed provider teardown must fail cancellation");
+        let OrbitError::RunProviderTeardownUnconfirmed {
+            pid: failed_pid,
+            reason,
+        } = error
+        else {
+            panic!("unexpected cancellation failure: {error}");
+        };
+        assert_eq!(failed_pid, (!audit_fault).then_some(pid));
+        assert!(!reason.is_empty());
+        assert_eq!(pair.run_state(&leaf), JobRunState::Running);
+        assert_eq!(pair.owner_status(&task), "in-progress");
+        let claim_after = pair.owner_claim_for_leaf(&leaf);
+        for field in ["claim", "bound_run", "settlement", "last_event"] {
+            assert_eq!(
+                claim_after[field], claim_before[field],
+                "claim must remain owned: {field}"
+            );
+        }
+        assert_eq!(
+            pair.wire
+                .owner
+                .run_tool("orbit.task.locks", json!({}))
+                .unwrap(),
+            locks_before,
+            "reservation must remain active"
+        );
+        assert_eq!(pair.admission(&leaf).settlement, None);
+        assert!(pair.wire.calls("orbit.drain.claim.settle").is_empty());
+        assert_eq!(probe_process_liveness(pid, None), ProcessLiveness::Alive);
+        assert_eq!(
+            probe_process_liveness(unrelated.0.id(), None),
+            ProcessLiveness::Alive
+        );
+
+        // Reap the provider and restore trustworthy audit evidence. Cancellation
+        // may now finish, but the unrelated process must still be untouched.
+        provider.0.kill().unwrap();
+        provider.0.wait().unwrap();
+        let mut restored = payload;
+        restored["pid_start_time"] = Value::Null;
+        assert_eq!(connection.execute(
+            "UPDATE v2_audit_events SET schema_version = 1, payload_json = ?1 WHERE event_id = ?2 AND run_id = ?3",
+            rusqlite::params![restored.to_string(), event_id, leaf],
+        ).unwrap(), 1);
+        let cancelled = pair.follower.cancel_job_run(&leaf).unwrap();
+        assert_eq!(cancelled.outcome, "cancelled");
+        assert_eq!(cancelled.signal_outcome.as_deref(), Some("already_exited"));
+        assert_eq!(pair.run_state(&leaf), JobRunState::Cancelled);
+        assert_eq!(pair.admission(&leaf).phase, LocalPullPhase::Settled);
+        assert!(!pair.wire.calls("orbit.drain.claim.settle").is_empty());
+        let locks_after = pair
+            .wire
+            .owner
+            .run_tool("orbit.task.locks", json!({}))
+            .unwrap();
+        assert!(
+            locks_after["by_reservation"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|reservation| reservation["reservation_id"]
+                    != claim_before["claim"]["reservation_id"]),
+            "confirmed teardown releases the reservation: {locks_after}"
+        );
+        assert_eq!(
+            probe_process_liveness(unrelated.0.id(), None),
+            ProcessLiveness::Alive
+        );
+    }
+}
+
+/// Fixture children are always killed and reaped, including assertion unwinds.
+#[cfg(unix)]
+struct ProviderFixture(std::process::Child);
+
+#[cfg(unix)]
+impl ProviderFixture {
+    fn spawn() -> Self {
+        use std::os::unix::process::CommandExt;
+        Self(
+            std::process::Command::new("sleep")
+                .arg("600")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        )
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProviderFixture {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
+
 /// A foreground run owner inherits its caller's group. Cancelling that run
 /// must leave other members alive, including when the canceller shares it.
 #[cfg(unix)]

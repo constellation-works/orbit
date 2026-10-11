@@ -248,8 +248,11 @@ run's audit trail still shows open (`provider processes stopped: N` counts the r
 run's own agents; each cascaded child run stops its own). Agents run in their
 own process groups, so the owner signal alone never reaches them. A process is signalled
 only while its recorded start token still matches, so a recycled pid is left alone; one
-whose identity cannot be verified is skipped and logged. If an agent survives SIGKILL the
-cancellation fails and the run stays non-terminal.
+whose identity cannot be verified is never signalled. Unreadable provider audit
+evidence, unknown provider liveness, an unverified identity, or an agent surviving
+SIGKILL makes cancellation fail and keeps the run non-terminal with its reservation
+and claim retained, even if the owner already stopped. Restore readable evidence or
+confirm the provider has exited, then retry cancellation.
 
 `--reason` is optional. The CLI and dashboard record a `run.cancelled` event with the
 actor and any reason; inspect it with `orbit run events <run_id> --type run.cancelled`.
