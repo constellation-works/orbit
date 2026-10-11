@@ -23,7 +23,7 @@ use crate::runtime_memo::CODEBASE_ANALYTICS_TTL;
 use crate::state::{DashboardState, Ws};
 
 pub(crate) use facts::CodebaseFacts;
-use sections::{Params, Rollup};
+use sections::{Params, ROW_LIMIT, Rollup};
 
 const DEFAULT_WINDOW: &str = "90d";
 const DEFAULT_MIN_SUPPORT: usize = 15;
@@ -100,6 +100,7 @@ pub(super) async fn codebase_analytics(
                 "computed_at": facts.computed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
                 "cache_ttl_seconds": CODEBASE_ANALYTICS_TTL.as_secs(),
                 "tasks_scanned": facts.tasks.len(),
+                "row_limit": ROW_LIMIT,
             })
             .as_object()
             .cloned()

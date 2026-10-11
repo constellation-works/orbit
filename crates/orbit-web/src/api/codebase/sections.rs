@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::facts::{Anchor, BlockCause, CodebaseFacts, INFRA_CAUSES, TaskFacts};
 
 /// Rows returned per ranking.
-const ROW_LIMIT: usize = 25;
+pub(super) const ROW_LIMIT: usize = 25;
 /// Regressed tasks listed in one regression row's drill-down.
 const DRILLDOWN_LIMIT: usize = 20;
 /// Reservations naming more files than this are left out of change coupling,
@@ -263,7 +263,8 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
 /// Distinct requesters that waited on a path because of a lock conflict ÷
 /// distinct requesters that asked for it (reserved it or were refused it). A retry
 /// loop repeats the same contender and counts once. Reservation and denial
-/// counts are reported beside, not folded into, the contention figure.
+/// counts are reported beside, not folded into, the contention figure, per
+/// path and as window totals.
 fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
     #[derive(Default)]
     struct Row {
@@ -273,10 +274,13 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
         denials: usize,
     }
     let mut rows: BTreeMap<String, Row> = BTreeMap::new();
+    let mut reservations = 0;
+    let mut denials = 0;
     for reservation in &facts.reservations {
         if !params.within(reservation.at) {
             continue;
         }
+        reservations += 1;
         for key in params.rollup.keys(&reservation.files) {
             let row = rows.entry(key).or_default();
             row.reservations += 1;
@@ -288,6 +292,7 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
         if !params.within(denial.at) {
             continue;
         }
+        denials += 1;
         for key in params.rollup.keys(&denial.files) {
             let row = rows.entry(key).or_default();
             row.denials += 1;
@@ -317,6 +322,8 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
     json!({
         "rows": rows,
         "below_support": below_support,
+        "reservations": reservations,
+        "denials": denials,
         "wait_time_recorded": false,
     })
 }

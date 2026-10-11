@@ -529,6 +529,16 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
             assert_eq!(lock["denials"], 20);
             assert_eq!(lock["reservations"], 1, "reservations are a separate field");
             assert_eq!(rate_of(&low["lock_contention"], "src/lock.rs"), (1, 2));
+            assert_eq!(
+                (
+                    low["lock_contention"]["reservations"].clone(),
+                    low["lock_contention"]["denials"].clone()
+                ),
+                (json!(6), json!(20)),
+                "the window totals count every reservation, large ones included, and every denial: {}",
+                low["lock_contention"]
+            );
+            assert_eq!(low["row_limit"], 25, "the view names the ranking cut-off");
 
             let miss = row(&low["footprint_misses"], "src/widened.rs").unwrap();
             assert_eq!(rate_of(&low["footprint_misses"], "src/widened.rs"), (1, 2));
@@ -975,6 +985,8 @@ fn codebase_view_of_an_empty_workspace_is_empty_sections() {
             ] {
                 assert_eq!(empty[section]["rows"], json!([]), "{section}: {empty}");
             }
+            assert_eq!(empty["lock_contention"]["reservations"], 0);
+            assert_eq!(empty["lock_contention"]["denials"], 0);
             // The denial evidence API keeps answering.
             json_ok(server.get(&format!("/api/diagnostics/denials?{WS}")));
         },
