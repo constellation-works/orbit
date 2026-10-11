@@ -1,9 +1,9 @@
 ---
 type: runbook
-summary: Run local Rust CodeQL for every change touching Rust sources with isolated toolchain preparation, and reject incomplete semantic extraction.
+summary: Run local Rust CodeQL for every change touching Rust sources with a verified host toolchain cache and bounded concurrency, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-10-06
+last_validated: 2026-10-11
 ---
 
 # Run local Rust CodeQL for every change touching Rust sources
@@ -56,20 +56,62 @@ to the executor's available memory.
 
 Each invocation creates a fresh `codeql-rust-local.*` directory under
 `$ORBIT_SCRATCH_DIR` (or `<checkout>/.orbit/tmp` when unset). It isolates
-`RUSTUP_HOME`, `CARGO_HOME`, Cargo build output, temporary files, and CodeQL
-caches there. Toolchain installation uses
-`--profile minimal --component rust-src --no-self-update` and never writes
-to the user's `~/.rustup`. The minimal profile is required: a default-profile
-install writes rust-docs, and `macro.env.html` matches denyModify `**/*.env.*`
-even under the scratch directory. The run directory is printed before preparation,
-and retained on success or failure. It contains:
+`CARGO_HOME`, Cargo build output, temporary files, and CodeQL caches there.
+The run directory is printed before preparation. It contains:
 
-- `toolchain.log`: preparation of the pinned toolchain and rust-src.
+- `toolchain.log`: preparation of the pinned toolchain and rust-src, or the
+  line recording that the verified host cache was used and no rustup install
+  ran.
 - `codeql-config.yml`: the effective configuration used for extraction.
 - `extraction.log`, `extraction-problems.log`, `codeql-logs/`, and
   `database/log/`: extraction evidence, including extractor-only warnings.
   `database/src.zip` holds every extracted source file.
 - `analysis.log` and `results.sarif`: query execution and results.
+
+A run that fails keeps everything, including the database dataset
+(`database/db-rust/`), `cargo/`, `target/`, `tmp/` and CodeQL caches, for
+diagnosis. A passing run removes those after the SARIF is written and keeps
+only the evidence listed above, about 40 MB instead of 1.5 GB for this
+repository.
+
+### Host toolchain cache
+
+The pinned toolchain is installed once per host, not once per run, into
+`$ORBIT_CODEQL_CACHE_DIR/rust-<version>/rustup` (default
+`~/.orbit/cache/codeql-rust-local`, the host cache that Linux implementer
+sandboxes may write; see [compiler cache](compiler-cache.md)). The script
+points `RUSTUP_HOME` at it; `CARGO_HOME`, `TMPDIR` and Cargo output stay per
+run. Installation uses `--profile minimal --component rust-src
+--no-self-update` and never writes to the user's `~/.rustup`. The minimal
+profile is required: a default-profile install writes rust-docs, and
+`macro.env.html` matches denyModify `**/*.env.*`.
+
+Every run verifies the cached toolchain before using it: exactly one
+toolchain, its `rustc --version` naming the pinned version, rust-src present,
+and the SHA-256 digests of every file matching the `manifest.sha256` written
+at install. A missing or failing install is reinstalled under an exclusive
+lock into a staging directory, sealed read-only, and swapped in whole, so no
+run sees a partial toolchain. Each run holds a shared lock on it until it
+exits, so a reinstall never replaces a toolchain in use. The manifest detects
+corruption, not tampering: it sits in the same writable cache, so the cache
+carries the same trust as the compiler cache beside it.
+
+When the cache cannot be created or written and holds no valid toolchain (a
+reviewer profile without the cache grant, or [owner fulfilment](#owner-fulfilment)
+on a cold host), the run says so and installs into its own `rustup/`, as
+every run did before the cache. A valid cached toolchain is used read-only
+in those sandboxes.
+
+### Concurrent runs
+
+Extraction and analysis saturate the disk long before the CPUs, so they run
+under a host-wide counted lock: one of `ORBIT_CODEQL_SLOTS` slots, else the
+number in `$ORBIT_CODEQL_CACHE_DIR/slots`, else 2. The locks are
+`slots/slot-NNN.lock` in the cache. Every run reports
+`acquired CodeQL slot N of M after queueing X.Ys`; a run that has to wait
+first prints `waiting for a CodeQL slot` and repeats a progress line every
+45 seconds. Toolchain verification and installation are outside the slot. If
+the slot locks cannot be opened, the run warns and proceeds without one.
 
 ## Source selection
 
@@ -118,8 +160,8 @@ production paths; never attach archives or full listings.
 Exit zero means preparation, extraction-log checks, and query execution
 completed. **It does not mean the rule is clean.** Inspect `results.sarif` for
 the findings relevant to the selected query and change; for an identified
-repair, inspect that rule and each affected location. Retain the full logs,
-database and `src.zip` locally under `.orbit/tmp/`. Attach a compact JSON record
+repair, inspect that rule and each affected location. Retain the full logs
+and `src.zip` locally under `.orbit/tmp/`. Attach a compact JSON record
 with the query selector, CodeQL version, validated source tree, extraction
 checks, SARIF findings, and SHA-256 digests of the retained logs and source
 archive. Attach only bounded log/listing excerpts (gzip when useful), each
@@ -150,9 +192,10 @@ extractor skips its semantic analysis and the run refuses; declare it with
 ## Reusing a verified implementer database
 
 Before a reviewer starts a fresh extraction, inspect the implementer's local
-CodeQL evidence. The reviewer may reuse the retained database and its results
+CodeQL evidence. The reviewer may reuse the retained evidence and its results
 when the extraction checks passed and the source verification matches the
-candidate being reviewed. Verify the query selector and CodeQL version, review
+candidate being reviewed. A passing run removes the database dataset, so
+running a different query needs a fresh run. Verify the query selector and CodeQL version, review
 the extraction logs for skipped analysis or warnings, and compare the
 `codeql resolve files` listing and the paths and contents in `database/src.zip`
 with the candidate's production Rust sources and effective configuration.
@@ -240,6 +283,9 @@ these steps:
    when the repository is under `/tmp`. Host Cargo download caches are
    read-only because the script uses a run-local `CARGO_HOME`, and `codeql`
    and `rustup` come from the same login-shell `PATH` as required validation.
+   The [host toolchain cache](#host-toolchain-cache) is read-only too: a
+   valid cached toolchain and existing slot locks are used as is, and a cold
+   cache falls back to a per-run install inside the checkout.
    The checkout is removed afterwards, run directory included.
 
 The result is `passed` only when the script exits zero, reports completed
@@ -284,7 +330,9 @@ of the job.
 The behavior tests use stubbed CodeQL, rustup and host platform without downloads. The
 stubbed CodeQL enumerates a fixture checkout's sources with the effective
 configuration, including build, scratch, and toolchain residue, and an earlier
-run under another scratch:
+run under another scratch. They also cover toolchain cache reuse, reinstall
+and fallback, a third run queueing for two slots, and what passing and
+failing runs keep:
 
 ```bash
 python3 scripts/test-codeql-rust-local.py

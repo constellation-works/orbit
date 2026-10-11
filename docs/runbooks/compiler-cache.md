@@ -42,6 +42,7 @@ a host that can create Linux mount namespaces.
 | --- | --- | --- |
 | Host cache seam | Orbit global registry (`~/.orbit`), language-neutral | `$HOME/.orbit/cache/` |
 | Rust compiler cache | Operator opt-in via sccache | `$HOME/.orbit/cache/compiler/` |
+| Rust CodeQL extractor toolchain and slots | `scripts/codeql-rust-local.sh` ([runbook](codeql-local.md#host-toolchain-cache)) | `$HOME/.orbit/cache/codeql-rust-local/` |
 | rustc wrapper | Repository | `scripts/rustc-compiler-cache.sh` |
 | Cargo hook | Repository | `.cargo/config.toml` (`build.rustc-wrapper`); native Windows [overrides it off](#windows) |
 | Per-worktree build output | Each managed worktree | `$CARGO_TARGET_DIR` or `<worktree>/target/` |

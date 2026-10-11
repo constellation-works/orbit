@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import re
 import tempfile
+import time
 import unittest
 
 
@@ -16,7 +18,7 @@ SCRATCH = Path(os.environ.get("ORBIT_SCRATCH_DIR", REPO_ROOT / ".orbit/tmp"))
 # The codeql stub enumerates .rs files under --source-root minus the effective
 # config's paths-ignore globs, as CodeQL's build-mode none source walk does.
 STUB = r'''#!/usr/bin/env python3
-import json, os, re, sys
+import json, os, re, sys, time
 from pathlib import Path
 
 
@@ -51,31 +53,62 @@ if args[:2] == ["database", "create"]:
         if not any(glob.match(rel) for glob in globs))
 with open(os.environ["STUB_CALLS"], "a") as log:
     log.write(json.dumps(call) + "\n")
+
+
+def event(kind):
+    if os.environ.get("STUB_EVENTS"):
+        with open(os.environ["STUB_EVENTS"], "a") as log:
+            log.write(json.dumps(dict(kind=kind, call=args[:2], at=time.monotonic())) + "\n")
+
+
 if name == "rustup":
     if os.environ.get("STUB_INSTALL_FAIL"):
         print("error: could not create temp file: Read-only file system (os error 30)", file=sys.stderr)
         sys.exit(30)
     home = Path(os.environ["RUSTUP_HOME"])
     (home / "installed").write_text(args[2])
-    vendored = home / "toolchains" / args[2] / "lib/rustlib/src/rust/library/vendor/wasip3"
+    toolchain = home / "toolchains" / f"{args[2]}-x86_64-unknown-linux-gnu"
+    library = toolchain / "lib/rustlib/src/rust/library"
+    (library / "core/src").mkdir(parents=True)
+    (library / "core/src/lib.rs").write_text("pub fn core() {}\n")
+    vendored = library / "vendor/wasip3"
     (vendored / "src").mkdir(parents=True)
     (vendored / "Cargo.toml").write_text("[package]\n")
     (vendored / "src/lib.rs").write_text("pub fn vendored() {}\n")
+    (toolchain / "bin").mkdir()
+    (toolchain / "bin/rustc").write_text(f"#!/bin/sh\necho 'rustc {args[2]} (stub 2026-07-07)'\n")
+    (toolchain / "bin/rustc").chmod(0o755)
 elif args[:2] == ["database", "create"]:
+    event("start")
+    if os.environ.get("STUB_GATE"):
+        deadline = time.monotonic() + 150
+        while not Path(os.environ["STUB_GATE"]).exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
     database = Path(args[2])
     (database / "log").mkdir(parents=True)
+    (database / "db-rust/default").mkdir(parents=True)
+    (database / "db-rust/default/pool").write_text("dataset")
+    (database / "src.zip").write_text("archive")
+    registry = Path(os.environ["CARGO_HOME"]) / "registry/index"
+    registry.mkdir(parents=True)
+    (registry / "config.json").write_text("{}")
+    (Path(os.environ["CARGO_TARGET_DIR"]) / "debug").mkdir(parents=True)
+    (Path(os.environ["CARGO_TARGET_DIR"]) / "debug/out").write_text("build")
     log = os.environ.get("STUB_EXTRACTION_LOG", "INFO semantic crate graph extracted")
     if os.environ.get("STUB_LOG_FILE_ONLY"):
         (database / "log/extractor.log").write_text(log)
     else:
         print(log)
+    event("end")
     sys.exit(int(os.environ.get("STUB_CREATE_EXIT", "0")))
 elif args[:2] == ["database", "analyze"]:
+    event("start")
     if os.environ.get("STUB_ANALYZE_FAIL"):
         print("query evaluation: heap exhausted", file=sys.stderr)
         sys.exit(7)
     output = next(arg.split("=", 1)[1] for arg in args if arg.startswith("--output="))
     Path(output).write_text(json.dumps({"version": "2.1.0", "runs": [{"results": []}]}))
+    event("end")
 else:
     sys.exit(99)
 '''
@@ -90,6 +123,11 @@ RESIDUE = ["target/debug/build/serde-1/out/generated.rs",
 # Tracked production source plus a new file a candidate has not yet committed;
 # the shared configuration still excludes tests.
 SELECTED = ["crates/core/src/added.rs", "crates/core/src/lib.rs"]
+# What a passing run keeps as evidence; a failed run also keeps the dataset
+# and build scratch.
+EVIDENCE = ["analysis.log", "codeql-config.yml", "codeql-logs", "database",
+            "extraction-problems.log", "extraction.log", "results.sarif", "toolchain.log"]
+BULK = ["cache", "cargo", "database/db-rust", "target", "tmp"]
 
 
 class LocalCodeqlTests(unittest.TestCase):
@@ -129,9 +167,12 @@ class LocalCodeqlTests(unittest.TestCase):
             directory.mkdir()
             (directory / "sentinel").write_text("preserve")
         self.scratch = self.root / "run scratch"
+        # The host toolchain cache and slot locks; never the real ~/.orbit/cache.
+        self.cache = self.root / "host cache"
         self.env = dict(git_env, PATH=f"{self.bin}:{os.environ['PATH']}",
                         STUB_CALLS=str(self.calls_file),
                         ORBIT_SCRATCH_DIR=str(self.scratch),
+                        ORBIT_CODEQL_CACHE_DIR=str(self.cache),
                         RUSTUP_HOME=str(self.global_dirs[0]),
                         CARGO_HOME=str(self.global_dirs[1]))
 
@@ -152,6 +193,15 @@ class LocalCodeqlTests(unittest.TestCase):
         else:
             self.env["ORBIT_SCRATCH_DIR"] = str(scratch)
 
+    def use_cache(self, cache):
+        self.cache = cache
+        self.env["ORBIT_CODEQL_CACHE_DIR"] = str(cache)
+
+    def run_dir(self, result):
+        marker = "codeql-rust-local: run directory: "
+        return Path(next(line[len(marker):] for line in result.stderr.splitlines()
+                         if line.startswith(marker)))
+
     def calls(self):
         if not self.calls_file.exists():
             return []
@@ -170,10 +220,15 @@ class LocalCodeqlTests(unittest.TestCase):
             self.assertEqual((directory / "sentinel").read_text(), "preserve")
         for call in self.calls():
             env = call["env"]
-            run_dir = Path(env["RUSTUP_HOME"]).parent
+            run_dir = Path(env["CARGO_HOME"]).parent
             self.assertTrue(run_dir.is_relative_to(self.scratch))
-            for key in ("RUSTUP_HOME", "CARGO_HOME", "CARGO_TARGET_DIR", "TMPDIR", "XDG_CACHE_HOME"):
+            for key in ("CARGO_HOME", "CARGO_TARGET_DIR", "TMPDIR", "XDG_CACHE_HOME"):
                 self.assertTrue(Path(env[key]).is_relative_to(run_dir), (key, env[key]))
+            # The toolchain is the host cache's, or this run's own when the
+            # cache is unusable; never the user's rustup.
+            rustup_home = Path(env["RUSTUP_HOME"])
+            self.assertTrue(rustup_home.is_relative_to(self.cache)
+                            or rustup_home == run_dir / "rustup", rustup_home)
             self.assertEqual(env["RUSTC_WRAPPER"], "")
             self.assertEqual(env["RUSTC_WORKSPACE_WRAPPER"], "")
             if call["name"] == "codeql":
@@ -195,6 +250,8 @@ class LocalCodeqlTests(unittest.TestCase):
         self.assertEqual(install["args"], ["toolchain", "install", "1.98.1", "--profile",
                                            "minimal", "--component", "rust-src", "--no-self-update"])
         self.assertEqual(install["env"]["RUSTUP_TOOLCHAIN"], "1.98.1")
+        self.assertTrue(Path(install["env"]["RUSTUP_HOME"]).is_relative_to(self.cache / "rust-1.98.1"))
+        self.assertEqual(create["env"]["RUSTUP_HOME"], str(self.cache / "rust-1.98.1/rustup"))
         self.assertEqual(create["args"][:2], ["database", "create"])
         self.assertIn(f"--source-root={self.repo}", create["args"])
         self.assertIn("--build-mode=none", create["args"])
@@ -316,6 +373,7 @@ class LocalCodeqlTests(unittest.TestCase):
         for log, file_only in cases:
             with self.subTest(log=log, file_only=file_only):
                 self.calls_file.write_text("")
+                self.use_cache(self.root / f"host cache {len(log)}")
                 result = self.run_script("fixture.qls", STUB_EXTRACTION_LOG=log,
                                          STUB_LOG_FILE_ONLY="1" if file_only else "")
                 self.assertEqual(result.returncode, 1, result.stderr)
@@ -341,8 +399,10 @@ class LocalCodeqlTests(unittest.TestCase):
         self.assertIn("1.98.1", result.stderr)
         self.assertIn("Read-only file system (os error 30)", result.stderr)
         added = {path.relative_to(self.root) for path in self.root.rglob("*")} - before
-        self.assertTrue(all(path == Path("calls.jsonl") or path.parts[0] == "run scratch"
+        self.assertTrue(all(path == Path("calls.jsonl") or path.parts[0] in ("run scratch", "host cache")
                             for path in added), added)
+        # A failed install leaves nothing a later run could mistake for a toolchain.
+        self.assertEqual(sorted(p.name for p in (self.cache / "rust-1.98.1").iterdir()), ["lock"])
 
     def test_nonzero_extraction_without_warning_never_queries(self):
         result = self.run_script("fixture.ql", STUB_CREATE_EXIT="12")
@@ -353,6 +413,124 @@ class LocalCodeqlTests(unittest.TestCase):
         result = self.run_script("fixture.ql", STUB_ANALYZE_FAIL="1")
         self.assert_no_result(result, ["rustup", "codeql", "codeql"])
         self.assertIn("heap exhausted", result.stderr)
+
+    def test_second_run_reuses_the_cached_toolchain_without_rustup(self):
+        first = self.run_script("fixture.ql")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.calls_file.write_text("")
+        second = self.run_script("fixture.ql")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
+        self.assertIn("no rustup install ran", (self.run_dir(second) / "toolchain.log").read_text())
+        home = self.cache / "rust-1.97.0/rustup"
+        self.assertTrue(all(call["env"]["RUSTUP_HOME"] == str(home) for call in self.calls()))
+        self.assertEqual((home / "manifest.sha256").stat().st_mode & 0o222, 0)
+        self.assert_selects_only_production_source()
+        self.assert_isolated()
+
+    def test_corrupt_or_wrong_version_cache_is_reinstalled_whole(self):
+        self.assertEqual(self.run_script("fixture.ql").returncode, 0)
+        home = self.cache / "rust-1.97.0/rustup"
+        library = home / "toolchains/1.97.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library"
+        # A copy whose manifest is intact but whose rustc is another version.
+        shutil.copytree(self.cache / "rust-1.97.0", self.cache / "rust-1.98.1", symlinks=True)
+        library.chmod(0o755)
+        (library / "core/src").chmod(0o755)
+        (library / "core/src/lib.rs").unlink()
+        for toolchain, damaged in (("1.97.0", "missing rust-src file"), ("1.98.1", "wrong version")):
+            with self.subTest(damaged):
+                self.calls_file.write_text("")
+                result = self.run_script("--toolchain", toolchain, "fixture.ql")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([call["name"] for call in self.calls()], ["rustup", "codeql", "codeql"])
+                version_dir = self.cache / f"rust-{toolchain}"
+                self.assertEqual(sorted(p.name for p in version_dir.iterdir()), ["lock", "rustup"])
+                rustc = version_dir / f"rustup/toolchains/{toolchain}-x86_64-unknown-linux-gnu/bin/rustc"
+                self.assertIn(toolchain, subprocess.run([rustc], capture_output=True, text=True).stdout)
+                self.assert_isolated()
+
+    def test_unusable_cache_falls_back_to_a_run_local_install_without_a_slot(self):
+        blocker = self.root / "not a directory"
+        blocker.write_text("")
+        self.use_cache(blocker / "cache")
+        result = self.run_script("fixture.ql")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        install = self.calls()[0]
+        run_dir = self.run_dir(result)
+        self.assertEqual(install["env"]["RUSTUP_HOME"], str(run_dir / "rustup"))
+        self.assertIn("for this run only", result.stderr)
+        self.assertIn("running without a host slot", result.stderr)
+        self.assertFalse((run_dir / "rustup").exists())
+        self.assert_isolated()
+
+    def test_warm_read_only_cache_is_used_without_writing(self):
+        self.assertEqual(self.run_script("fixture.ql").returncode, 0)
+        for directory in (self.cache, self.cache / "rust-1.97.0", self.cache / "slots"):
+            directory.chmod(0o555)
+        self.addCleanup(lambda: [d.chmod(0o755) for d in (self.cache, self.cache / "rust-1.97.0",
+                                                          self.cache / "slots")])
+        before = sorted(self.cache.rglob("*"))
+        self.calls_file.write_text("")
+        result = self.run_script("fixture.ql")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
+        self.assertIn("acquired CodeQL slot", result.stderr)
+        self.assertEqual(sorted(self.cache.rglob("*")), before)
+
+    def test_third_concurrent_run_queues_for_one_of_two_slots(self):
+        # Warm the cache so only the slots, not the install lock, order the runs.
+        self.assertEqual(self.run_script("fixture.ql").returncode, 0)
+        gate, events = self.root / "gate", self.root / "events.jsonl"
+        env = dict(self.env, ORBIT_CODEQL_SLOTS="2", STUB_GATE=str(gate), STUB_EVENTS=str(events),
+                   _ORBIT_CODEQL_WAIT_REPORT_SECONDS="1")
+        runs = []
+        for index in range(3):
+            stderr = (self.root / f"run-{index}.stderr").open("w")
+            self.addCleanup(stderr.close)
+            runs.append((subprocess.Popen(["bash", str(self.script), "fixture.ql"], cwd=self.root,
+                                          env=env, stdout=subprocess.DEVNULL, stderr=stderr),
+                         self.root / f"run-{index}.stderr"))
+
+        def starts():
+            lines = events.read_text().splitlines() if events.exists() else []
+            return [json.loads(line) for line in lines if json.loads(line)["kind"] == "start"]
+
+        def waiting():
+            return [path for _, path in runs if "still waiting for a CodeQL slot" in path.read_text()]
+
+        deadline = time.monotonic() + 120
+        while (len(starts()) < 2 or not waiting()) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertEqual(len(starts()), 2, [path.read_text() for _, path in runs])
+        self.assertEqual(len(waiting()), 1)
+        gate.touch()
+        for process, path in runs:
+            self.assertEqual(process.wait(timeout=180), 0, path.read_text())
+        queued = waiting()[0].read_text()
+        self.assertRegex(queued, r"waiting for a CodeQL slot \(slots=2, ")
+        seconds = float(re.search(r"acquired CodeQL slot [12] of 2 after queueing ([0-9.]+)s", queued)[1])
+        self.assertGreaterEqual(seconds, 1.0)
+        # Each run's create and analyze hold its slot, so at most two overlap.
+        marks = sorted((json.loads(line)["at"], json.loads(line)["kind"] == "start")
+                       for line in events.read_text().splitlines())
+        active = peak = 0
+        for _, start in marks:
+            active += 1 if start else -1
+            peak = max(peak, active)
+        self.assertEqual(peak, 2)
+
+    def test_passing_run_keeps_evidence_and_failing_run_keeps_everything(self):
+        passed = self.run_dir(self.run_script("fixture.ql"))
+        self.assertEqual(sorted(p.name for p in passed.iterdir()), EVIDENCE)
+        self.assertEqual(sorted(p.name for p in (passed / "database").iterdir()), ["log", "src.zip"])
+        for case, env in (("extraction", dict(STUB_CREATE_EXIT="12")), ("analysis", dict(STUB_ANALYZE_FAIL="1"))):
+            with self.subTest(case):
+                result = self.run_script("fixture.ql", **env)
+                self.assertNotEqual(result.returncode, 0)
+                failed = self.run_dir(result)
+                for bulk in BULK:
+                    self.assertTrue((failed / bulk).is_dir(), bulk)
+                self.assertTrue((failed / "database/db-rust/default/pool").is_file())
 
 
 if __name__ == "__main__":
