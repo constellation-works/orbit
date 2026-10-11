@@ -7,8 +7,7 @@ use orbit_common::{OrbitError, StorageLayer};
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskComplexity, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus,
-    normalize_task_tags,
+    Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus, normalize_task_tags,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
@@ -16,7 +15,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::automation::members::SUPERSEDED_BY_SOURCE;
 
-use super::admission::{Admission, PreparedTaskSnapshot, ValidatedTask};
+use super::admission::{Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask};
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 
@@ -60,7 +59,7 @@ pub(super) fn operation_was_applied(
 pub(super) fn apply_task(
     runtime: &OrbitRuntime,
     snapshot: &PreparedTaskSnapshot,
-    task: &ValidatedTask,
+    task: &mut ValidatedTask,
     prepared: &Value,
     policy: &PreparationPolicy,
 ) -> Result<ApplyTaskOutcome, OrbitError> {
@@ -122,6 +121,8 @@ pub(super) fn apply_task(
                 return Ok(());
             }
             if operation_was_applied(runtime, &task.task_id, &task.operation_id)? {
+                task.applied_material =
+                    applied_material(runtime, &task.task_id, &task.operation_id)?;
                 outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
                     runtime,
                     &task.task_id,
@@ -262,6 +263,34 @@ pub(super) fn apply_task(
             let crew_redraw_history =
                 runtime.rerate_task_crew(&mut assessed, Some(task.complexity))?;
             assessed.complexity = Some(task.complexity);
+            assessed.status = target_status;
+            // Seal the exact authorized output while the same task and graph
+            // locks still cover it. Approval must never certify a later read.
+            let fingerprints = snapshot
+                .material
+                .as_ref()
+                .map(|(_, revision)| {
+                    crate::application::automation::preparation::fingerprints(
+                        runtime, &assessed, revision, policy,
+                    )
+                    .map_err(orbit_automation::automation_error_to_orbit)
+                })
+                .transpose()?;
+            let written = AppliedTaskMaterial {
+                tags: assessed.tags.clone(),
+                crew: assessed.crew.clone(),
+                crew_source: assessed.crew_source.clone(),
+                relations: assessed.relations.clone(),
+                material: fingerprints.as_ref().zip(snapshot.material.as_ref()).map(
+                    |(fingerprints, (_, revision))| {
+                        (fingerprints.material.clone(), revision.clone())
+                    },
+                ),
+                status_neutral_fingerprint: fingerprints
+                    .as_ref()
+                    .map(|fingerprints| fingerprints.status_neutral.clone()),
+                material_components: fingerprints.map(|fingerprints| fingerprints.components),
+            };
             let operator_hold = (!requirements.is_empty()).then(|| {
                 crate::application::task::OperatorValidationHold::new(&assessed, requirements)
             });
@@ -324,6 +353,7 @@ pub(super) fn apply_task(
                     "context_files_before": snapshot.context_files,
                     "complexity_before": snapshot.complexity,
                     "complexity_after": task.complexity,
+                    "applied_material": written,
                 }))
                 .map_err(|error| {
                     OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
@@ -332,6 +362,7 @@ pub(super) fn apply_task(
             let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
             match mutation {
                 AtomicTaskMutationOutcome::Applied => {
+                    task.applied_material = Some(written);
                     runtime.record_event(OrbitEvent::TaskUpdated {
                         id: task.task_id.clone(),
                     })?;
@@ -343,6 +374,8 @@ pub(super) fn apply_task(
                     )?));
                 }
                 AtomicTaskMutationOutcome::AlreadyApplied => {
+                    task.applied_material =
+                        applied_material(runtime, &task.task_id, &task.operation_id)?;
                     outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
                         runtime,
                         &task.task_id,
@@ -547,6 +580,38 @@ fn resulting_fingerprint(
         .map_err(orbit_automation::automation_error_to_orbit)
 }
 
+/// Read only the output sealed by this operation. A legacy audit without it
+/// cannot authorize approval over a crew redraw or tag change on replay.
+fn applied_material(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    operation_id: &str,
+) -> Result<Option<AppliedTaskMaterial>, OrbitError> {
+    let receipt = format!("operation_id={operation_id}");
+    for comment in runtime.get_task_comments(task_id)? {
+        if comment.by != "task-pilot" {
+            continue;
+        }
+        let Some((first, audit)) = comment.message.split_once('\n') else {
+            continue;
+        };
+        if first != receipt {
+            continue;
+        }
+        let audit: Value = serde_json::from_str(audit)
+            .map_err(|error| OrbitError::Execution(format!("read task-pilot audit: {error}")))?;
+        return audit
+            .get("applied_material")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                OrbitError::Execution(format!("read task-pilot applied material: {error}"))
+            });
+    }
+    Ok(None)
+}
+
 pub(super) fn task_operation_id(prepared: &Value, task_id: &str, assessment: &Value) -> String {
     let mut identity = json!({
         "task_id": task_id,
@@ -663,50 +728,69 @@ fn task_snapshot_drift(
     }
 }
 
-/// Why `current` no longer carries the material a pilot assessed from
-/// `snapshot` and then wrote as `after` and `complexity`, if it does not.
-/// Status is the caller's to judge: the pilot's own fields are restored to
-/// their prepared values and the rest is held to the same freshness contract
-/// as the pilot write, including its tolerance for dependency status moves.
+/// Compare the task with the exact output certified by the pilot's locked
+/// write, including its OS routing and crew redraw. Status is the caller's to
+/// judge; dependency status moves retain the pilot's freshness tolerance.
 pub(super) fn assessed_material_drift(
     runtime: &OrbitRuntime,
     current: &Task,
     snapshot: &PreparedTaskSnapshot,
-    after: &[String],
-    complexity: TaskComplexity,
+    validated: &ValidatedTask,
     policy: &PreparationPolicy,
 ) -> Option<(&'static str, String)> {
-    if current.context_files != after {
+    let Some(written) = &validated.applied_material else {
+        return Some((
+            "pilot_write_unverified",
+            "the pilot audit does not certify its written material; prepare a new assessment"
+                .to_string(),
+        ));
+    };
+    if current.context_files != validated.after {
         return Some((
             "context_files_changed",
             "task context_files changed after the pilot wrote them".to_string(),
         ));
     }
-    if current.complexity != Some(complexity) {
+    if current.complexity != Some(validated.complexity) {
         return Some((
             "complexity_changed",
             "task complexity changed after the pilot wrote it".to_string(),
         ));
     }
-    let mut assessed = current.clone();
-    assessed.context_files = snapshot.context_files.clone();
-    assessed.complexity = snapshot.complexity;
-    assessed.status = snapshot.status;
-    let (reason, detail) = task_snapshot_drift(runtime, &assessed, snapshot, policy)?;
+    if current.crew != written.crew || current.crew_source != written.crew_source {
+        return Some((
+            "crew_changed",
+            "task crew or assignment provenance changed after the pilot wrote it".to_string(),
+        ));
+    }
+    if current.relations != written.relations {
+        return Some((
+            "relations_changed",
+            "task relations changed after the pilot wrote them".to_string(),
+        ));
+    }
+    let mut snapshot = snapshot.clone();
+    snapshot.context_files = validated.after.clone();
+    snapshot.complexity = Some(validated.complexity);
+    snapshot.tags = written.tags.clone();
+    snapshot.material = written.material.clone();
+    snapshot.status_neutral_fingerprint = written.status_neutral_fingerprint.clone();
+    snapshot.material_components = written.material_components.clone();
+    let (reason, detail) = task_snapshot_drift(runtime, current, &snapshot, policy)?;
     if reason != "material_changed" {
         return Some((reason, detail.to_string()));
     }
-    let Some(fingerprint) = status_only_fingerprint(runtime, &assessed, snapshot, policy) else {
+    let Some(fingerprint) = status_only_fingerprint(runtime, current, &snapshot, policy) else {
         return Some((
             reason,
-            material_change_detail(runtime, &assessed, snapshot, policy),
+            material_change_detail(runtime, current, &snapshot, policy),
         ));
     };
-    let mut rebased = snapshot.clone();
+    let mut rebased = snapshot;
     rebased.material = rebased
         .material
         .map(|(_, revision)| (fingerprint, revision));
-    task_snapshot_drift(runtime, &assessed, &rebased, policy)
+    task_snapshot_drift(runtime, current, &rebased, policy)
         .map(|(reason, detail)| (reason, detail.to_string()))
 }
 

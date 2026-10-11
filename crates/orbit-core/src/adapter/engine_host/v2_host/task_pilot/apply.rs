@@ -796,9 +796,10 @@ pub(in super::super) fn apply(
                 operation_id,
                 required_os: native_os,
                 required_machine: native_machine,
+                applied_material: None,
             };
 
-            let outcome = apply_task(runtime, snapshot, &validated, prepared_value, &policy);
+            let outcome = apply_task(runtime, snapshot, &mut validated, prepared_value, &policy);
             let outcome = match (outcome, &authority) {
                 (
                     Ok(

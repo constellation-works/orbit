@@ -278,14 +278,9 @@ pub(super) fn approve(
                 classification: NO_AUTO_APPROVE_TAG,
                 evidence: Value::Null,
             }
-        } else if let Some((reason, detail)) = assessed_material_drift(
-            runtime,
-            &task,
-            snapshot,
-            &validated.after,
-            validated.complexity,
-            policy,
-        ) {
+        } else if let Some((reason, detail)) =
+            assessed_material_drift(runtime, &task, snapshot, validated, policy)
+        {
             Approval::Held {
                 classification: "changed_since_pilot",
                 evidence: json!({ "reason": reason, "detail": detail }),
