@@ -67,7 +67,7 @@ pub(crate) use pilot_admission::{
     OperatorValidationHold, OperatorValidationRequirement, PilotAdmissionHold,
     operator_validation_requirements,
 };
-pub(crate) use pilot_blockers::pilot_blocker_task_ids;
+pub(crate) use pilot_blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use pilot_no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
 pub use provider_limit_view::{
     CrewProviderLimit, ProviderLimitReading, ProviderLimitsView, ProviderUsageStatus,

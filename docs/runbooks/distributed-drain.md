@@ -212,8 +212,12 @@ Applied task-pilot `blocked_by` findings that name an unfinished task in the
 same workspace add a dependency in the assessment's atomic write. Proposed,
 backlog, in-progress, blocked and review targets qualify; done, archived,
 rejected, missing and other-workspace targets do not. Existing dependencies
-are preserved, repeated findings add no duplicate edge, and self-dependencies
-or cycles refuse the assessment. Human approval cannot release an unfinished
+are preserved and repeated findings add no duplicate edge. Apply drops a
+task's own ID from prerequisite findings before graph validation, recording a
+warning in the run's assessment and the task's atomic application history;
+other prerequisites and metadata still apply. A self-only finding is removed,
+while a mixed finding retains the other IDs and evidence. Dependency cycles
+between different tasks still refuse the assessment. Human approval cannot release an unfinished
 dependency: readiness reports `unmet_dependency` until the prerequisite is done.
 
 Prerequisite prose remains a promotion warning, including findings that add no
