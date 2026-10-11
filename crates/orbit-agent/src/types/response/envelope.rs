@@ -70,9 +70,10 @@ impl<'a> ParsedStdout<'a> {
         // the termination signal, not for the tidiness of the stream around it.
         // Response parsing and status peeking use this same bounded search:
         // only a complete JSON object supplies fields, never surrounding prose.
+        // Documents and encoded/prose answers all select newest first.
         match self.json_documents() {
             Ok(documents) => {
-                discover_in_values(documents.iter().rev(), &mut Budget::production(), inspect)
+                discover_in_values(documents.iter().rev(), &mut Budget::production(), &inspect)
             }
             Err(_) => discover_in_string(self.raw, &mut Budget::production(), inspect),
         }
@@ -358,7 +359,7 @@ fn exit_zero_terminal_failure(
     match discover_in_values(
         documents.iter(),
         &mut Budget::production(),
-        deserialize_envelope,
+        &deserialize_envelope,
     ) {
         Ok(None) => {}
         Ok(Some(_)) | Err(_) => return None,
@@ -503,14 +504,14 @@ fn is_discovery_limit_error(err: &OrbitError) -> bool {
 fn discover_in_values<'a, T, I, F>(
     values: I,
     budget: &mut Budget,
-    inspect: F,
+    inspect: &F,
 ) -> Result<Option<T>, OrbitError>
 where
     I: IntoIterator<Item = &'a Value>,
     F: Fn(&Value) -> Option<T>,
 {
     for value in values {
-        if let Some(found) = walk(value, budget, &inspect)? {
+        if let Some(found) = walk(value, budget, inspect)? {
             return Ok(Some(found));
         }
     }
@@ -587,6 +588,12 @@ where
         return walk(&nested, budget, inspect);
     }
 
+    // Scan forward to respect JSON container boundaries, then use the same
+    // newest-first traversal as stdout documents. Searching backwards for `{`
+    // would mistake a nested result or wrapper field for a later document.
+    // The shared parse budget bounds this collection; exhaustion must fail
+    // before any earlier envelope can become authoritative.
+    let mut documents = Vec::new();
     let mut search_from = 0;
     while let Some(rel) = raw[search_from..].find('{') {
         let start = search_from + rel;
@@ -595,9 +602,7 @@ where
         match stream.next() {
             Some(Ok(nested)) => {
                 let consumed = stream.byte_offset().max(1);
-                if let Some(found) = walk(&nested, budget, inspect)? {
-                    return Ok(Some(found));
-                }
+                documents.push(nested);
                 search_from = start + consumed;
             }
             Some(Err(_)) | None => {
@@ -605,7 +610,7 @@ where
             }
         }
     }
-    Ok(None)
+    discover_in_values(documents.iter().rev(), budget, inspect)
 }
 
 fn selected_response(value: &Value) -> Option<SelectedResponse> {
