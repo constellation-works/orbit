@@ -73,7 +73,7 @@ const BASELINE_COMMANDS: &str = "baseline_commands = [\"sh check.sh\"]\n";
 /// A before-PR gated task whose base carries `check` as `check.sh`, with the
 /// candidate (`after`, then `candidate` when that differs, in
 /// `candidate.txt`) rebased onto it. Settlement may rerun [`CHECK`].
-fn fixture(check: &str, candidate: &str) -> Fixture {
+pub(super) fn fixture(check: &str, candidate: &str) -> Fixture {
     with_checks(
         Fixture::new_with_config(&[], BASELINE_COMMANDS),
         check,
