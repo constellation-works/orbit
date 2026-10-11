@@ -96,8 +96,9 @@ pub(super) struct RequiredCommandRun {
     /// Why a successful host run cannot count as passing evidence.
     pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
     /// The first `DEFERRED:` or Seatbelt `SKIP: sandbox-exec cannot apply a
-    /// profile:` line a successful run printed: a test returned without
-    /// running its sandbox-confined path.
+    /// profile:` line the run printed: a test returned without running its
+    /// sandbox-confined path. A failed run keeps it too, so its failures are
+    /// never read as known red over a path that never ran [ORB-15546].
     pub(super) deferred_notice: Option<String>,
     /// The environment the command ran in.
     pub(super) environment: ValidationEnvironment,
@@ -360,20 +361,16 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
             .err()
         })
         .flatten();
-    let deferred_notice = passed
-        .then(|| {
-            outcome
-                .stdout
-                .lines()
-                .chain(outcome.stderr.lines())
-                .find(|line| {
-                    let line = line.trim_start();
-                    line.starts_with(HOST_TEST_DEFERRED_PREFIX)
-                        || line.starts_with(SEATBELT_DEFERRAL_PREFIX)
-                })
-                .map(|line| line.trim().to_string())
+    let deferred_notice = outcome
+        .stdout
+        .lines()
+        .chain(outcome.stderr.lines())
+        .find(|line| {
+            let line = line.trim_start();
+            line.starts_with(HOST_TEST_DEFERRED_PREFIX)
+                || line.starts_with(SEATBELT_DEFERRAL_PREFIX)
         })
-        .flatten();
+        .map(|line| line.trim().to_string());
     // Read the supervisor notes before the recorded output is bounded.
     let infrastructure_failure = (!passed)
         .then(|| {

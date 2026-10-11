@@ -79,7 +79,8 @@ pub fn combined_task_meaning_digest(
 /// Whether a certificate is acceptable coverage on its own terms: current
 /// contract, a pass verdict, validation records that establish the final
 /// candidate under [`validation_evidence`], and a candidate distinct from
-/// its base.
+/// its base. A known-red entry [ORB-15546] counts only when it was verified
+/// on the certificate's own base and final candidate.
 ///
 /// The validation rules are re-derived here rather than trusting the
 /// `validation_complete` flag alone, against the scope and retained
@@ -101,8 +102,14 @@ pub fn certificate_acceptable(certificate: &ReviewCertificate) -> Result<(), Rev
         retired: &certificate.retired_validation,
         required_validation_commands: certificate.required_validation_commands.as_deref(),
         baseline_commands: &certificate.baseline_commands,
+        known_red: &certificate.known_red,
     };
+    let known_red_bound = certificate.known_red.iter().all(|known| {
+        known.validation.base_sha == certificate.base.commit
+            && known.validation.tested_head == certificate.final_candidate.commit
+    });
     if !certificate.validation_complete
+        || !known_red_bound
         || validation_evidence(&certificate.validation, &context).is_err()
     {
         return Err(ReviewInvalidation::ValidationIncomplete);

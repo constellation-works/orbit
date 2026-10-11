@@ -126,8 +126,10 @@ The crew comes from `workflow.final_recovery_crews`. To opt out, set it to
 
 This needs no enablement either. A task whose required command fails on its
 base exactly as on the candidate waits in the backlog under a red-base hold,
-unless every test the candidate fails also fails on the base: that candidate
-proceeds, and the run, the task and the PR record the known-red tests.
+unless it fails only tests that also fail on the base: that candidate
+proceeds, and the run, the task and the PR record the known-red tests. A
+before-PR or before-landing review settles the same way for a reviewer's
+red-base claim the host confirms.
 Every clock sweep on the owner judges those holds from cached base results
 only. When a held base ref has moved to a tip nobody has checked, the sweep
 dispatches one `baseline_hold_refresh_pipeline` run, at most one per workspace

@@ -438,12 +438,15 @@ fn settle(
     // candidate before the verdict is reconciled: a refused claim settles
     // the review incomplete. [ORB-15122] A check the host passes on the
     // candidate counts as passed; one it fails while the base passes rejects.
+    // [ORB-15546] One that fails only tests the base fails too is known red
+    // and continues, its record still failed.
     // [ORB-15328] Each claim's host runs get one review budget of wall clock,
     // with the base replay's share reserved.
     let baseline_red = judgement.verify_baseline_claims(
         runtime,
         context,
         &reviewed.base,
+        &final_candidate,
         &context.base_ref(),
         &validation_scope,
         repair.as_ref(),
@@ -527,6 +530,7 @@ fn settle(
         evidence_carried: judgement.evidence_carried.clone(),
         baseline_red,
         host_overrides: judgement.host_overrides.clone(),
+        known_red: judgement.known_red.clone(),
         host_evidence: judgement.host_evidence.clone(),
         owed_evidence: owed,
         resumed_hold_attempt: held.map(|(hold, _)| hold.attempt_id),
@@ -565,6 +569,9 @@ fn settle(
     }
     store.review_certificate_record(&context.workspace_id, &certificate)?;
     publish_certificate(runtime, context, &certificate)?;
+    if certificate.verdict.passed() {
+        baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;
+    }
     settled_outcome(runtime, context, certificate)
 }
 
@@ -888,6 +895,7 @@ fn passed_output(certificate: &ReviewCertificate) -> Value {
         "findings": certificate.findings.len(),
         "consumed": certificate.consumed,
         "certificate_artifact": REVIEW_GATE_ARTIFACT,
+        "known_red": certificate.known_red,
         "handoff_evidence": null,
     })
 }

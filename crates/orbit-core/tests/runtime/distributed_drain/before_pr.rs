@@ -303,6 +303,7 @@ impl ReviewedHandoff {
             evidence_carried: None,
             baseline_red: Vec::new(),
             host_overrides: Vec::new(),
+            known_red: Vec::new(),
             host_evidence: Vec::new(),
             issued_at: Utc::now(),
             owed_evidence: Vec::new(),

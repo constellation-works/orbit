@@ -413,7 +413,8 @@ Sometimes a run stops at `validate` with `[baseline_red]` and ends `held`, not
 `failed`; its diagnostic step carries code `baseline_red`, and the gate and auto
 parents waiting on it pass it as held. That means a required
 command also fails on the base, exactly as it fails on the candidate, and the
-candidate fails a test the base does not, or names no failing test to compare.
+candidate fails a test the base does not, names no failing test to compare,
+or names a failure that is not a test (a build or lint error).
 A candidate whose failing tests all fail on the base too is not held: it
 proceeds, with a `known_red_validation` history event naming those tests. Do not
 resume or replay that run, and do not unblock the task. No `[BLOCKED]` PR was

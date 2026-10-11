@@ -37,6 +37,12 @@
 //! reads, or retires it with a reason. Records written without ids keep the
 //! command-identity rules.
 //!
+//! A failed required check the host verified known red [ORB-15546] — on the
+//! final candidate it failed only tests the pinned base fails too — keeps
+//! its failed outcome. It counts as established only through the
+//! [`HostKnownRed`] entry settlement recorded for it, which the context
+//! carries; the reviewer's record alone never asserts it.
+//!
 //! A run that passed only by deferring a sandbox-confined path executed
 //! nothing there [ORB-14334]. Inside an agent lane a test of Orbit's own
 //! sandbox prints `DEFERRED: …` and returns, because the lane's sandbox
@@ -48,8 +54,8 @@
 
 use orbit_common::fs::selector::overlaps;
 use orbit_types::workflow::{
-    RecordGap, RetainedObligation, RetiredValidation, ReviewValidation, ValidationOutcome,
-    ValidationRole, record_gap,
+    HostKnownRed, RecordGap, RetainedObligation, RetiredValidation, ReviewValidation,
+    ValidationOutcome, ValidationRole, record_gap,
 };
 
 /// [ORB-15083] What a command the reviewer skipped is to the owner, which
@@ -347,6 +353,10 @@ pub struct ValidationContext<'a> {
     /// the required commands, these are the checks a failed diagnostic may
     /// not name [ORB-14684]. Empty for a snapshot written before the field.
     pub baseline_commands: &'a [String],
+    /// [ORB-15546] Failed required checks the host verified known red on
+    /// the final candidate. A failed required record one of them names is
+    /// established without its outcome changing.
+    pub known_red: &'a [HostKnownRed],
 }
 
 impl Default for ValidationContext<'_> {
@@ -357,6 +367,7 @@ impl Default for ValidationContext<'_> {
             retired: &[],
             required_validation_commands: Some(&[]),
             baseline_commands: &[],
+            known_red: &[],
         }
     }
 }
@@ -365,6 +376,7 @@ impl Default for ValidationContext<'_> {
 /// candidate.
 ///
 /// Every required check must have passed, without deferring a confined path,
+/// or failed only as the host verified known red ([`ValidationContext::known_red`]),
 /// and at least one must exist; a
 /// declared negative control must have failed, name its kind and sources in
 /// the candidate's scope, and, when it runs on the candidate, not share its
@@ -400,6 +412,10 @@ pub fn validation_evidence(
         }
         match record.role {
             ValidationRole::Required => {
+                if host_known_red(record, context) {
+                    required_passed = true;
+                    continue;
+                }
                 if record.outcome != ValidationOutcome::Passed {
                     return Err(ValidationDefect::RequiredNotPassed {
                         command: record.command.clone(),
@@ -467,6 +483,7 @@ pub fn validation_evidence(
                 && match record.role {
                     ValidationRole::Required => {
                         record.executed_outcome() == ValidationOutcome::Passed
+                            || host_known_red(record, context)
                     }
                     ValidationRole::Superseded => passes_as_required(record, records),
                     ValidationRole::ExpectedFailure
@@ -486,6 +503,22 @@ pub fn validation_evidence(
     } else {
         Err(ValidationDefect::NoRequiredCheck)
     }
+}
+
+/// [ORB-15546] Whether the host verified `record`'s failure known red: it is
+/// a failed required record carrying a baseline claim, and a
+/// [`HostKnownRed`] entry naming at least one test carries its id and its
+/// host command. Whoever records the entry binds it to the base and final
+/// candidate ([`super::certificate_acceptable`]).
+fn host_known_red(record: &ReviewValidation, context: &ValidationContext<'_>) -> bool {
+    record.role == ValidationRole::Required
+        && record.outcome == ValidationOutcome::Failed
+        && record.baseline.is_some()
+        && context.known_red.iter().any(|known| {
+            known.record_id.as_deref() == record.record_id()
+                && !known.validation.failures.identities.is_empty()
+                && same_host_command(record, &known.validation.command)
+        })
 }
 
 /// [ORB-14616] Every file a record says it temporarily mutated, as the

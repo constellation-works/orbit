@@ -27,6 +27,16 @@
 //!   verdict stays what the reviewer reported, the certificate records the
 //!   holds, and the step fails typed `[baseline_red]` so the failure handoff
 //!   keeps the candidate and moves the task to the backlog.
+//! - A confirmed claim whose candidate failures are known red [ORB-15546] —
+//!   at least one, every one a test the base fails too, with no timeout and
+//!   no deferred sandbox path, the rule delivery validation applies to the
+//!   owner's required commands [ORB-15375] — is not held: the candidate
+//!   introduced none of them. Under the same conditions as a hold, the review
+//!   settles `accept` (or `accept_with_fixes` over a repair). The record
+//!   keeps its failed outcome; the certificate's `known_red` names the
+//!   command, base, final candidate, run and tests, the record's note and
+//!   each task's history (`known_red_validation`, which the pull request
+//!   reads) say so too. A hold elsewhere in the review still holds it.
 //! - A candidate that fails beyond the base keeps that failure: the verdict
 //!   stands and the review blocks as before.
 //! - A check the host passes on the final candidate [ORB-15122] was the
@@ -55,25 +65,31 @@
 //! failing tests when it can, or reuses a full result already recorded for
 //! that base; `review-baseline.json` records the path as `base_replay`.
 
+use chrono::Utc;
 use orbit_automation::review::{in_scope, same_host_command, validation_evidence};
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{BaseFailureVerdict, ReplayBudget, verify_base_failure};
+use orbit_types::record::OrbitEvent;
+use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    BaselineRedHold, CommitIdentity, HostCandidateOverride, REVIEW_BASELINE_ARTIFACT,
-    ReviewBaselineClaim, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+    BaselineRedHold, CommitIdentity, HostCandidateOverride, HostKnownRed,
+    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, REVIEW_BASELINE_ARTIFACT, ReviewBaselineClaim,
+    ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecordUpdateParams;
 
 use super::context::GateContext;
 use super::judgement::{Judgement, extend_note, write_artifact};
 
 impl Judgement {
     /// Check every baseline claim in the report and return the holds the
-    /// review settles under, or none when it settles as before. `repair` is
-    /// the reviewer's repair commit, which an accept override must name.
+    /// review settles under, or none when it settles as before. `candidate`
+    /// is the final candidate the host runs check. `repair` is the
+    /// reviewer's repair commit, which an accept override must name.
     /// `budget` bounds each claim's host runs.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn verify_baseline_claims(
@@ -81,6 +97,7 @@ impl Judgement {
         runtime: &OrbitRuntime,
         context: &GateContext,
         base: &SourceRevision,
+        candidate: &SourceRevision,
         base_ref: &str,
         scope: &[String],
         repair: Option<&CommitIdentity>,
@@ -111,6 +128,7 @@ impl Judgement {
         let mut holds = Vec::new();
         let mut confirmed = Vec::new();
         let mut overrides = Vec::new();
+        let mut known_red = Vec::new();
         let mut checks = Vec::new();
         let mut held = true;
         for record in &claimed {
@@ -151,6 +169,23 @@ impl Judgement {
                     });
                     confirmed.push(record.clone());
                     ("confirmed", json!({ "failures": failures }))
+                }
+                BaseFailureVerdict::KnownRed { failures } => {
+                    known_red.push((
+                        record.clone(),
+                        HostKnownRed {
+                            record_id: record.record_id().map(str::to_string),
+                            validation: KnownRedValidation {
+                                command: command.clone(),
+                                base_sha: base.commit.clone(),
+                                tested_head: candidate.commit.clone(),
+                                run_id: context.run_id.clone(),
+                                failures: check.base_failures(),
+                            },
+                            evidence_artifact: REVIEW_BASELINE_ARTIFACT.to_string(),
+                        },
+                    ));
+                    ("known_red", json!({ "failures": failures }))
                 }
                 BaseFailureVerdict::CandidateAdds { failures } => {
                     self.escalate(&format!(
@@ -258,6 +293,7 @@ impl Judgement {
         let counted = confirmed
             .iter()
             .chain(overrides.iter().map(|(record, _)| record))
+            .chain(known_red.iter().map(|(record, _)| record))
             .cloned()
             .collect::<Vec<_>>();
         if !held || !self.holdable(scope, &counted) {
@@ -266,6 +302,10 @@ impl Judgement {
         for (overridden, record) in overrides {
             self.override_record(&overridden, &record);
             self.host_overrides.push(record);
+        }
+        for (failed, known) in known_red {
+            self.note_known_red(&failed, &known);
+            self.known_red.push(known);
         }
         if holds.is_empty() {
             self.accept(repair);
@@ -284,10 +324,11 @@ impl Judgement {
         Ok(holds)
     }
 
-    /// Whether the confirmed red-base checks, and the checks the host passed
-    /// on the candidate, are all that keep the review from passing: nothing
-    /// the host refused, no open finding, no pending external evidence, and
-    /// every record consistent once they count as passed.
+    /// Whether the confirmed red-base checks, the checks the host passed on
+    /// the candidate and the known-red ones are all that keep the review
+    /// from passing: nothing the host refused, no open finding, no pending
+    /// external evidence, and every record consistent once they count as
+    /// passed. Only this judgement counts them so; no record is rewritten.
     fn holdable(&mut self, scope: &[String], confirmed: &[ReviewValidation]) -> bool {
         if self.host_refused
             || self.verdict.passed()
@@ -353,6 +394,28 @@ impl Judgement {
             .filter(|record| *record == overridden)
         {
             record.outcome = ValidationOutcome::Passed;
+            extend_note(&mut record.note, note.clone());
+        }
+    }
+
+    /// Note on `failed` what the host verified, leaving its failed outcome:
+    /// the run, the base and the tests the candidate fails only as it does.
+    fn note_known_red(&mut self, failed: &ReviewValidation, by: &HostKnownRed) {
+        let note = format!(
+            "Known red: the host's run of `{}` on the final candidate {} in run {} failed only \
+             tests base {} fails too ({}); the outcome stays failed; log {}",
+            by.validation.command,
+            by.validation.tested_head,
+            by.validation.run_id,
+            by.validation.base_sha,
+            by.validation.failure_lines().join(", "),
+            by.evidence_artifact,
+        );
+        for record in self
+            .validation
+            .iter_mut()
+            .filter(|record| *record == failed)
+        {
             extend_note(&mut record.note, note.clone());
         }
     }
@@ -450,6 +513,57 @@ pub(super) fn baseline_red_refusal(holds: &[BaselineRedHold], attempt_id: &str) 
             .map(|described| format!(" ({described})"))
             .unwrap_or_default()
     )))
+}
+
+/// Record each known-red check a passed review counted [ORB-15546] on every
+/// reviewed task's history, as delivery validation records its own
+/// [ORB-15375]: the note `pr_open` reads for the pull request.
+pub(super) fn record_known_red(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    known_red: &[HostKnownRed],
+) -> Result<(), OrbitError> {
+    for known in known_red {
+        let record = &known.validation;
+        let note = record.text(&format!(
+            "Review settlement reran required check '{}' on candidate {}: it fails only with \
+             tests that also fail on base {}, so the candidate introduced none of them and \
+             delivery proceeds; {}.",
+            record.command,
+            record.tested_head,
+            record.base_sha,
+            record
+                .failures
+                .describe()
+                .unwrap_or_else(|| "no failure named".to_string())
+        ));
+        for task_id in task_ids {
+            runtime.with_mutation(|| {
+                let updated = runtime.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: "system".into(),
+                        append_history: vec![TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: "system".to_string(),
+                            event: KNOWN_RED_VALIDATION_EVENT.to_string(),
+                            note: Some(note.clone()),
+                            from_status: None,
+                            to_status: None,
+                        }],
+                        ..Default::default()
+                    },
+                )?;
+                Ok((
+                    updated,
+                    OrbitEvent::TaskUpdated {
+                        id: task_id.clone(),
+                    },
+                ))
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// The JSON a settled red-base outcome records in the gate's audit row.
