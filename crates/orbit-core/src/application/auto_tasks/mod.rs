@@ -76,6 +76,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/full-code-review.yaml"),
     ),
     (
+        "qa-full-sweep",
+        include_str!("../../../assets/auto_tasks/qa-full-sweep.yaml"),
+    ),
+    (
         "qa-sweep",
         include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
     ),

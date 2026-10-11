@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-04
+last_updated: 2026-10-10
 last_validated: 2026-10-09
 status: Accepted
 feature: auto-tasks
@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327]
 ---
 
 # Auto-tasks — Overview
@@ -92,7 +92,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These nine YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -124,6 +124,44 @@ definition of the same name.
   it. Incomplete coverage reports `review_incomplete` with uncovered partitions
   in the artifact and task comment. Findings are `bug`s tagged `code-review` +
   `full-code-review`, with source-file and matching test context selectors.
+- `qa-full-sweep` — disabled-by-default, minted on demand (its monthly cron
+  stays off until enabled). It is the hands-on counterpart of
+  `full-code-review`: where `qa-sweep` validates only the changes since its
+  cursor and `full-code-review` reads the tree without running it, this sweep
+  runs the whole product at one pinned commit. Its body is product-agnostic.
+  The minted coordinator pins the integration-branch tip by full SHA and
+  inventories the user-facing surface from the repository's README, setup and
+  run instructions, command help trees, API routes, UI pages and documented
+  workflows — or from the repository's own full-QA runbook or harness when it
+  ships one. It attaches `qa-full-sweep-inventory.json` (`schema_version`,
+  `pinned_sha`, areas with their scenarios, exclusions with reasons) and files
+  one surface-QA chore per area of at most 20 required scenarios, tagged
+  `qa-full-sweep` + `no-diff-expected`, at `hard` complexity or below with no
+  pinned crew; it files nothing while an earlier sweep's tasks are open. Area
+  testers build the pinned commit and exercise the area through its real
+  boundaries in isolated, disposable roots, reusing `qa-sweep`'s sandbox
+  guidance. Each scenario is recorded as `PASS`, `FAIL`, `BLOCKED` or
+  `NOT_RUN` with its command and evidence in `qa-progress.json`, which a
+  resumed or re-crewed run continues from; a check that needs a missing
+  capability (authentication, a provider, another OS, a browser, public
+  post-release state) is never `PASS`. Non-duplicate failures are `bug`s
+  tagged `qa-full-sweep` with a reproducer, the pinned SHA and source/test
+  context selectors. Areas never repair, dispatch, release, tag, publish or
+  deploy.
+  **The release decision lives on a roll-up chore.** The coordinator files it
+  after the areas, tagged `qa-full-sweep` + `qa-full-sweep-rollup` +
+  `no-diff-expected` + `auto-task:qa-full-sweep`, and sets its `dependencies`
+  to every area task, so it is dispatched only once every area is `done`. It
+  reads each area's `qa-progress.json` and attaches
+  `qa-full-sweep-decision.json`: `PASS` only when every required scenario in
+  every area passed; any required `FAIL`, `BLOCKED` or `NOT_RUN`, or an area
+  whose progress is missing or incomplete, makes it `INCOMPLETE`. Because the
+  roll-up carries the definition's provenance tag, `skip_if_open` sees the
+  sweep as open until the decision is made, so a scheduled tick never files a
+  second set while areas are open. The roll-up also writes the swept commit as
+  `sweep-cursor.json`, which the definition's `skip_if_unchanged` cursor
+  (keyed on `qa-full-sweep-rollup`) reads to skip a tick when nothing has
+  landed since.
 - `doc-duties` — disabled-by-default daily validation of the
   least-recently-attempted tracked documentation. Each run attaches a
   `doc-duties-ledger.json` artifact with an outcome (`clean`, `fixed`,
@@ -172,7 +210,8 @@ definition of the same name.
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
   enables a copy no operator has configured, which `list` and `show` report
   as `effective_enabled`. The former `delivery-qa` default is retired and is not seeded;
-  hands-on QA stays with `qa-sweep` and `qa-full-sweep`.
+  hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
+  (the whole product at one commit).
 
 ## Workspace-authored definitions in this repo
 
@@ -183,6 +222,11 @@ encode this repository's branches and gates. Re-init preserves them:
 - `model-price-audit`, `release-prep`, `skill-validation`, and
   this repository's enabled copies of catalog names such as `code-review` and
   `security-review`.
+- `qa-full-sweep`, this repository's Orbit-specific pre-release sign-off
+  ([runbook](../../runbooks/qa-full-sweep.md)). It predates the generic
+  default of the same name and stays this workspace's active definition:
+  workspace sync and `orbit update` preserve the file byte for byte and never
+  retire it, and sync reports that it occupies the bundled default's name.
 
 ## Task References
 
@@ -211,6 +255,9 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-13636 — Added the disabled `full-code-review` coordinator default and
   keyed the `code-review` cursor selector on its provenance tag after
   hand-filed full-review chores shadowed the last real sweep.
+- ORB-15327 — Added the disabled, product-agnostic `qa-full-sweep`
+  coordinator default with per-area surface-QA chores and a roll-up release
+  decision.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

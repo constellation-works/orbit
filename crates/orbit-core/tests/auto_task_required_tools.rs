@@ -34,6 +34,10 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/full-code-review.yaml"),
     ),
     (
+        "qa-full-sweep",
+        include_str!("../assets/auto_tasks/qa-full-sweep.yaml"),
+    ),
+    (
         "qa-sweep",
         include_str!("../assets/auto_tasks/qa-sweep.yaml"),
     ),
@@ -51,6 +55,7 @@ const TASK_FILING_TEMPLATES: &[&str] = &[
     "code-review",
     "delivery-code-review",
     "full-code-review",
+    "qa-full-sweep",
     "run-failure-patterns",
     "security-review",
 ];
@@ -90,18 +95,195 @@ fn bundled_task_filing_templates_declare_task_add() {
 }
 
 fn task_add_payloads(description: &str) -> Vec<Value> {
+    tool_payloads(description, "orbit.task.add")
+}
+
+/// Every `--input` payload the template passes to `tool`, parsed as JSON.
+fn tool_payloads(description: &str, tool: &str) -> Vec<Value> {
+    let marker = format!("{tool} --input '");
     let mut remaining = description;
     let mut payloads = Vec::new();
-    while let Some((_, input)) = remaining.split_once("orbit.task.add --input '") {
+    while let Some((_, input)) = remaining.split_once(marker.as_str()) {
         let (json, tail) = input
             .split_once('\'')
-            .unwrap_or_else(|| panic!("task-add input in template is not closed"));
+            .unwrap_or_else(|| panic!("{tool} input in template is not closed"));
         let payload = serde_json::from_str(json)
-            .unwrap_or_else(|error| panic!("task-add input in template is invalid JSON: {error}"));
+            .unwrap_or_else(|error| panic!("{tool} input in template is invalid JSON: {error}"));
         payloads.push(payload);
         remaining = tail;
     }
     payloads
+}
+
+fn tags_of(payload: &Value) -> Vec<&str> {
+    payload["tags"]
+        .as_array()
+        .unwrap_or_else(|| panic!("filed task carries tags: {payload}"))
+        .iter()
+        .map(|tag| {
+            tag.as_str()
+                .unwrap_or_else(|| panic!("tag is a string: {tag}"))
+        })
+        .collect()
+}
+
+fn declares_tools(payload: &Value, tools: &[&str]) -> bool {
+    payload["required_tools"]
+        .as_array()
+        .is_some_and(|required| {
+            tools
+                .iter()
+                .all(|tool| required.iter().any(|candidate| candidate == tool))
+        })
+}
+
+fn spawned_from_coordinator(payload: &Value) -> bool {
+    payload["relations"].as_array().is_some_and(|relations| {
+        relations
+            .iter()
+            .any(|relation| relation["type"] == "spawned_from")
+    })
+}
+
+/// The minted coordinator fans out: it attaches its inventory, files area
+/// chores the pools route, and files a roll-up whose provenance tag makes the
+/// scheduler's open-instance dedupe hold the next sweep until the decision is
+/// made, so no second set of areas is filed while one is open.
+#[test]
+fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_mint() {
+    let source = BUNDLED_AUTO_TASKS
+        .iter()
+        .find_map(|(name, source)| (*name == "qa-full-sweep").then_some(*source))
+        .unwrap_or_else(|| panic!("qa-full-sweep is a bundled auto-task"));
+    let definition = parse_template("qa-full-sweep", source);
+    for tool in [
+        "orbit.task.add",
+        "orbit.task.list",
+        "orbit.task.update",
+        "orbit.task.artifact.put",
+    ] {
+        assert!(
+            has_required_tool(&definition, tool),
+            "the coordinator calls {tool} but does not declare it"
+        );
+    }
+    let description = &definition.template.description;
+    assert!(
+        tool_payloads(description, "orbit.task.artifact.put")
+            .iter()
+            .any(|payload| payload["path"] == "qa-full-sweep-inventory.json"),
+        "the coordinator attaches its inventory artifact"
+    );
+
+    let filed = task_add_payloads(description);
+    let areas = filed
+        .iter()
+        .filter(|payload| {
+            payload["type"] == "chore" && !tags_of(payload).contains(&"qa-full-sweep-rollup")
+        })
+        .collect::<Vec<_>>();
+    let [area] = areas.as_slice() else {
+        panic!("the coordinator files one kind of area chore: {areas:?}");
+    };
+    assert_eq!(tags_of(area), ["qa-full-sweep", "no-diff-expected"]);
+    assert!(
+        area.get("crew").is_none(),
+        "area chores name no crew, so the pools route them: {area}"
+    );
+    for complexity in area["complexity"]
+        .as_str()
+        .unwrap_or_else(|| panic!("area chore declares a complexity: {area}"))
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .split('|')
+    {
+        assert!(
+            ["low", "medium", "hard"].contains(&complexity),
+            "area chores are `hard` at most: {area}"
+        );
+    }
+    assert!(spawned_from_coordinator(area), "{area}");
+    assert!(
+        declares_tools(
+            area,
+            &[
+                "orbit.search",
+                "orbit.task.add",
+                "orbit.task.show",
+                "orbit.task.artifact.get",
+                "orbit.task.artifact.put",
+            ]
+        ),
+        "area chores declare the tools their progress and findings use: {area}"
+    );
+    assert!(
+        filed
+            .iter()
+            .any(|payload| payload["type"] == "bug" && tags_of(payload).contains(&"qa-full-sweep")),
+        "area testers file findings tagged qa-full-sweep"
+    );
+
+    let rollup = filed
+        .iter()
+        .find(|payload| tags_of(payload).contains(&"qa-full-sweep-rollup"))
+        .unwrap_or_else(|| panic!("the coordinator files a roll-up"));
+    assert!(spawned_from_coordinator(rollup), "{rollup}");
+    assert!(rollup.get("crew").is_none(), "{rollup}");
+    assert!(
+        declares_tools(
+            rollup,
+            &[
+                "orbit.task.show",
+                "orbit.task.artifact.get",
+                "orbit.task.artifact.put"
+            ]
+        ),
+        "the roll-up declares the tools it reads areas and records its decision with: {rollup}"
+    );
+    let cursor = definition
+        .skip_if_unchanged
+        .as_ref()
+        .unwrap_or_else(|| panic!("qa-full-sweep skips a tick when nothing landed"));
+    for tag in &cursor.cursor.tags {
+        assert!(
+            tags_of(rollup).contains(&tag.as_str()),
+            "the roll-up records the cursor, so it must carry cursor tag {tag}"
+        );
+    }
+    // The cursor task is the newest done chore carrying every cursor tag. A
+    // later sweep's coordinator or area chore must not qualify, or it would
+    // shadow the last decided sweep's cursor.
+    let mut coordinator_tags = definition.template.tags.clone();
+    coordinator_tags.push(orbit_types::workflow::auto_task_tag(&definition.name));
+    for (task, tags) in [
+        ("coordinator", coordinator_tags),
+        (
+            "area chore",
+            tags_of(area).into_iter().map(str::to_string).collect(),
+        ),
+    ] {
+        assert!(
+            !cursor.cursor.tags.iter().all(|tag| tags.contains(tag)),
+            "the {task} carries every cursor tag and could shadow the roll-up's cursor: {tags:?}"
+        );
+    }
+
+    let runtime = OrbitRuntime::in_memory()
+        .unwrap_or_else(|error| panic!("build in-memory runtime: {error}"));
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Full QA decision".into(),
+            tags: tags_of(rollup).into_iter().map(str::to_string).collect(),
+            ..Default::default()
+        })
+        .unwrap_or_else(|error| panic!("file the roll-up: {error}"));
+    assert_eq!(
+        runtime
+            .open_auto_task_instance(&definition)
+            .unwrap_or_else(|error| panic!("read open instances: {error}")),
+        Some(task.id.to_string()),
+        "an open roll-up is an open sweep, so skip_if_open mints no second set"
+    );
 }
 
 #[test]
@@ -297,6 +479,7 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
         "code-review",
         "delivery-code-review",
         "full-code-review",
+        "qa-full-sweep",
         "qa-sweep",
         "security-review",
     ] {

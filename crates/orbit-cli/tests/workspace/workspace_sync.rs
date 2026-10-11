@@ -511,6 +511,206 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
     );
 }
 
+/// A workspace definition that predates a bundled default of the same name
+/// (Orbit's own `qa-full-sweep`, written before the generic default shipped)
+/// is that workspace's override: sync and `orbit update` keep its bytes, never
+/// record provenance that would let a later sync refresh it, never retire it,
+/// and it stays the definition the workspace loads.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_predating_workspace_definition_overrides_a_new_default_across_sync_and_update() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&repo);
+    let mirror = temp.path().join("release-mirror");
+    std::fs::create_dir_all(&mirror).expect("create release mirror");
+    std::fs::write(mirror.join("latest-version.txt"), env!("CARGO_PKG_VERSION"))
+        .expect("publish the running version");
+    let command = |executable: Option<&Path>| {
+        let mut command = match executable {
+            Some(executable) => assert_cmd::Command::new(executable),
+            None => cargo_bin_cmd!("orbit"),
+        };
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("ORBIT_UPDATE_RELEASE_DIR", &mirror)
+            .env_remove("ORBIT_HOME")
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_INSTALL_REPO")
+            .env_remove("ORBIT_REGISTRY_ROOT")
+            .env_remove("ORBIT_WORKSPACE");
+        command.timeout(test_env::FIXTURE_STEP_DEADLINE);
+        command
+    };
+    run(
+        command(None).args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "override-machine",
+            "--task-prefix",
+            "OV",
+        ]),
+        "orbit init",
+    )
+    .success();
+    run(
+        command(None).args(["workspace", "init", "--name", "override"]),
+        "orbit workspace init",
+    )
+    .success();
+
+    let auto_tasks = std::fs::canonicalize(&repo)
+        .expect("canonical workspace root")
+        .join(".orbit/auto_tasks");
+    let definition = auto_tasks.join("qa-full-sweep.yaml");
+    let manifest_path = auto_tasks.join(".orbit-managed-assets.json");
+    // The previous release's manifest never recorded the name.
+    let mut manifest: Value =
+        serde_json::from_slice(&read(&manifest_path)).expect("parse manifest");
+    manifest["assets"]
+        .as_object_mut()
+        .expect("assets object")
+        .remove("qa-full-sweep")
+        .expect("init seeds the bundled qa-full-sweep");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("serialize manifest")
+        ),
+    )
+    .expect("write the previous release's manifest");
+    let workspace_body = "schemaVersion: 1
+name: qa-full-sweep
+description: Intentional full pre-release end-to-end sign-off for this workspace
+enabled: false
+schedule:
+  cron: 0 3 * * 0
+template:
+  title: Perform complete pre-release QA sign-off
+  description: |
+    Run this repository's own full sweep harness and attach its report.
+  acceptance_criteria:
+  - Every inventory scenario has a recorded outcome in the attached report.
+  task_type: chore
+  tags:
+  - qa-full-sweep
+  - no-diff-expected
+  priority: high
+  complexity: hard
+  crew: opus
+  status: backlog
+dedupe: skip_if_open
+created_by: codex
+created_at: 2026-09-10T07:20:00Z
+updated_by: human:operator
+updated_at: 2026-09-19T06:45:34.930746394+00:00
+";
+    std::fs::write(&definition, workspace_body).expect("write the workspace definition");
+
+    let assert_override_is_active = |when: &str| {
+        assert_eq!(
+            std::fs::read_to_string(&definition).expect("read the workspace definition"),
+            workspace_body,
+            "{when} must keep the workspace definition byte for byte"
+        );
+        let manifest: Value =
+            serde_json::from_slice(&read(&manifest_path)).expect("parse manifest");
+        assert!(
+            manifest["assets"].get("qa-full-sweep").is_none(),
+            "{when} must not record provenance a later sync could refresh: {manifest}"
+        );
+        assert!(
+            !repo
+                .join(".orbit/.retired-managed/auto_tasks/qa-full-sweep.yaml")
+                .exists(),
+            "{when} must not retire the workspace definition"
+        );
+        let shown: Value = serde_json::from_slice(
+            &run(
+                command(None).args(["auto-task", "show", "qa-full-sweep", "--json"]),
+                "orbit auto-task show qa-full-sweep",
+            )
+            .success()
+            .get_output()
+            .stdout,
+        )
+        .expect("parse auto-task show");
+        assert_eq!(
+            shown["template"]["title"], "Perform complete pre-release QA sign-off",
+            "after {when} the workspace definition is the active one: {shown}"
+        );
+        assert_eq!(shown["template"]["crew"], "opus", "{shown}");
+        assert_eq!(shown["layering"]["body"], "forked", "{shown}");
+    };
+
+    let synced: Value = serde_json::from_slice(
+        &run(
+            command(None).args(["workspace", "sync", "--json"]),
+            "orbit workspace sync",
+        )
+        .success()
+        .get_output()
+        .stdout,
+    )
+    .expect("parse sync JSON");
+    assert!(
+        synced["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| {
+                action["outcome"] == "preserved"
+                    && action["path"] == definition.to_string_lossy().as_ref()
+            }),
+        "sync reports the workspace definition preserved: {synced}"
+    );
+    assert_override_is_active("workspace sync");
+
+    let installed = temp.path().join("managed-bin/orbit");
+    std::fs::create_dir_all(installed.parent().expect("install directory"))
+        .expect("create managed install directory");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install the tested binary");
+    let mut update = command(Some(&installed));
+    update
+        .env(
+            "ORBIT_INSTALL_DIR",
+            installed.parent().expect("install directory"),
+        )
+        .args(["update", "--json"]);
+    let started = std::time::Instant::now();
+    #[cfg(target_os = "linux")]
+    let output = orbit_common::test_process::retry_executable_busy(|| update.output());
+    #[cfg(not(target_os = "linux"))]
+    let output = update.output();
+    let output = output.expect("run orbit update");
+    test_env::assert_step_finished("orbit update", started.elapsed(), &output.status);
+    assert!(
+        output.status.success(),
+        "update failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("parse update report");
+    assert!(
+        report["steps"]
+            .as_array()
+            .expect("update steps")
+            .iter()
+            .any(|step| { step["command"] == "workspace sync" && step["status"] == "succeeded" }),
+        "update converges the workspace: {report}"
+    );
+    assert_override_is_active("orbit update");
+}
+
 #[test]
 fn workspace_sync_outside_registered_workspace_fails_before_writing() {
     let parent = tempdir().expect("parent tempdir");

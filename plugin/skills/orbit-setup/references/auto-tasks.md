@@ -108,8 +108,8 @@ Include the definition's `auto-task:<name>` provenance tag in `cursor.tags`:
 only tasks minted from the definition carry it, so a hand-filed chore that
 happens to share the other tags can never become the cursor task.
 
-The shipped `code-review` and `qa-sweep` defaults carry the block against the
-workspace's base branch. Delivery-triggered definitions do not need it — they
+The shipped `code-review`, `qa-sweep` and `qa-full-sweep` defaults carry the
+block against the workspace's base branch. Delivery-triggered definitions do not need it — they
 never fire on a quiet tree.
 
 ## Managing definitions
@@ -216,9 +216,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The nine seeded definitions
+## The ten seeded definitions
 
-`orbit workspace init` seeds all nine, disabled, except any you deleted (see
+`orbit workspace init` seeds all ten, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -254,13 +254,36 @@ plugin being removed.
   lines and files confirmed findings as bugs tagged `code-review` and
   `full-code-review`;
   a clean area is a successful no-op.
+- **`qa-full-sweep`** (`medium`) — on demand (`orbit auto-task mint
+  qa-full-sweep`); its monthly cron stays off until you enable it. Where
+  `qa-sweep` validates only the changes since its cursor and
+  `full-code-review` reads the whole tree without running it, this sweep runs
+  the whole product. The minted task is a coordinator: it pins the integration
+  branch's tip, inventories the user-facing surface from the repository's own
+  docs and entry points (or from its own full-QA runbook or harness when it
+  ships one), attaches `qa-full-sweep-inventory.json` with the areas and
+  every exclusion, and files one surface-QA chore per area of at most 20
+  required scenarios, tagged `qa-full-sweep` and `no-diff-expected`, at `hard`
+  complexity or below with no pinned crew. Each area tester builds that commit
+  and exercises the area through its real boundaries in disposable roots,
+  recording every scenario as `PASS`, `FAIL`, `BLOCKED` or `NOT_RUN` in a
+  resumable `qa-progress.json`; a check that needs a missing capability is
+  never `PASS`. Non-duplicate failures become bugs tagged `qa-full-sweep`. The
+  coordinator also files a roll-up chore that depends on every area and
+  records the release decision in `qa-full-sweep-decision.json`: `PASS` only
+  when every required scenario in every area passed, otherwise `INCOMPLETE`.
+  The roll-up carries `auto-task:qa-full-sweep`, so no new sweep is minted by
+  the schedule until it is done, and it records the swept commit as the
+  `skip_if_unchanged` cursor. A workspace that already has its own
+  `qa-full-sweep.yaml` keeps it as its active definition: sync preserves the
+  file byte for byte and warns that it occupies the bundled default's name.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
   records typed coverage evidence: for each delivery, the changed paths it
   examined (or skipped, with a reason) matching the frozen diff, a verdict and
   a rationale. A review whose agent persists no execution summary leaves its
   batch owed. Hands-on QA of recent changes is
-  `qa-sweep`; a full pre-release sign-off is `qa-full-sweep` when that
-  workspace definition is present.
+  `qa-sweep`; hands-on QA of the whole product at one commit is
+  `qa-full-sweep`.
 - **`doc-duties`** (`low`) — daily. Validates a small batch of the
   least-recently-attempted workspace documentation against current behavior,
   and corrects factual drift and broken links. Each run attaches a

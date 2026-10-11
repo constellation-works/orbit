@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-09
+last_updated: 2026-10-10
 last_validated: 2026-10-09
 status: Accepted
 feature: auto-tasks
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327]
 ---
 
 # Auto-tasks — Design
@@ -250,8 +250,11 @@ ref, or a probe error. The tick report's reason then says which. A
 precondition that cannot be answered must never be the reason a sweep stops
 running.
 
-`code-review` and `qa-sweep` carry the block; the delivery-triggered
-definitions do not need it (they never fire on a quiet tree).
+`code-review`, `qa-sweep` and `qa-full-sweep` carry the block; the
+delivery-triggered definitions do not need it (they never fire on a quiet
+tree). `qa-full-sweep`'s cursor task is its roll-up chore, the one task of a
+sweep tagged `qa-full-sweep-rollup`, so neither the coordinator nor an area
+chore of a later sweep can shadow the last decided sweep.
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass
@@ -317,6 +320,14 @@ Orbit wrote for each shipped default, so a default dropped from a later release
 can be retired by content provenance instead of remaining loadable forever.
 Seeding still never overwrites an existing definition, and an operator-edited
 default is preserved under `.retired-managed/auto_tasks/` rather than deleted.
+
+A workspace definition that existed before a default of the same name shipped
+(Orbit's own `qa-full-sweep` predates the generic default) has no recorded
+digest. Sync preserves it in place byte for byte, records no provenance for
+it, and warns on each run that it occupies the bundled default's name; it is
+never retired, because retirement only considers names the previous manifest
+recorded. It stays the active definition and reports `body: forked` against
+the bundled body, so the settings-only fork migration leaves it alone too.
 
 ### 5c. Operator settings over bundled bodies
 

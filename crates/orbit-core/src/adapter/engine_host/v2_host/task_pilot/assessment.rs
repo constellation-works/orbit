@@ -550,9 +550,10 @@ pub(super) fn unauthorized_missing_targets(
 /// Tags the review templates stamp on the findings they file. Each template
 /// requires a finding to carry its evidence — every cited source path and
 /// the regression-test location — as `context_files`.
-const REVIEW_FINDING_TAGS: [&str; 4] = [
+const REVIEW_FINDING_TAGS: [&str; 5] = [
     "code-review",
     "delivery-code-review",
+    "qa-full-sweep",
     "qa-sweep",
     "security-review",
 ];

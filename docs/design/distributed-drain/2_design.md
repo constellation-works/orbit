@@ -102,8 +102,8 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   `allow_missing_context` governs explicit operator existence checks and records the exact
   creation intent task-pilot honours; it never affects admission. Admission, reservation,
   status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
-- A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-sweep` or
-  `security-review`) carries its evidence as selectors: every cited source path plus the
+- A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
+  `qa-sweep` or `security-review`) carries its evidence as selectors: every cited source path plus the
   regression-test location. Task-pilot may add modification targets to it but never drops one of
   those selectors that still resolves at the pinned source; apply keeps any the pilot omitted, in
   the filed order, and reports them as `context_evidence_retained`, so re-assessment does not
