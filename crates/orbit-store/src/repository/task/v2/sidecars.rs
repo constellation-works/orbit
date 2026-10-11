@@ -33,6 +33,12 @@ impl TaskV2Store {
     ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_history_read",
+            task_id = %id,
+        )
+        .entered();
         match self.bundle_store.read_bundle(id) {
             Ok(bundle) => Ok(Some(task_history_from_events(bundle.events))),
             Err(OrbitError::NotFound {

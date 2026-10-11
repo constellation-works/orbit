@@ -3,7 +3,8 @@
 
 import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
-import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, renderDenialCount, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
@@ -1101,6 +1102,7 @@ function renderKnowledgeDetailPlaceholder(prefix) {
 function resetSummaryCounts() {
   setRailCount("rail-count-diag-runs", null);
   setRailCount("rail-count-audit", null);
+  renderDenialCount(null);
   const runsCount = $("rail-count-diag-runs");
   if (runsCount) delete runsCount.dataset.window;
 }
@@ -1356,8 +1358,8 @@ function activeRefreshJobs() {
   }
 
   if (activeTab === "audit") {
-    if (getActiveAuditSubtab() === "policy") {
-      add("Audit › Policy", fetchAndRenderPolicy(auditContext()));
+    if (getActiveAuditSubtab() === "codebase") {
+      add("Audit › Codebase", fetchAndRenderCodebase());
     } else {
       add("Audit › Events", fetchAndRenderAudit(auditContext()));
     }
@@ -1646,7 +1648,8 @@ function setRailCount(id, value, alert = false, title = "") {
 }
 
 // The windowed counts of /api/audit/summary ride on the rail: failed runs on
-// Runs, audited events on Audit. Their titles keep each count's definition.
+// Runs, audited events and denials on Audit. Their titles keep each count's
+// definition.
 function renderSummaryCounts(data) {
   if (!data) return;
   const windowLabel = data.window || getWindow();
@@ -1658,6 +1661,7 @@ function renderSummaryCounts(data) {
     else delete runsCount.dataset.window;
   }
   setRailCount("rail-count-audit", data.events, false, `Audited events in the ${windowLabel} window.`);
+  renderDenialCount(data);
 }
 
 function formatBigInt(n) {
@@ -1820,6 +1824,7 @@ wireFrictionResponsiveDetail();
 wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
+wireCodebaseControls(() => { window.location.hash = buildAuditHash(); });
 $("refresh-btn").addEventListener("click", refreshDashboard);
 initHostResources();
 wireReliabilityWindowSelector();

@@ -288,81 +288,15 @@ impl Fixture {
         task_query_log: Option<&Path>,
         env: &[(&str, &std::ffi::OsStr)],
     ) -> Server {
-        orbit_common::test_env::assert_child_test_exists("server_child");
-        let log = tempfile::NamedTempFile::new_in(self.temp.path()).unwrap();
-        let mut command = fixture_command(self.temp.path());
-        command
-            .args(["--ignored", "--exact", "server_child", "--nocapture"])
-            .env(FIXTURE_ROOT, self.temp.path())
-            .env("ORBIT_HTTP_PORT", "0")
-            .env(
-                "ORBIT_HTTP_REPLAY_WORKER",
-                if replay_worker { "1" } else { "0" },
-            )
-            .env(
-                "ORBIT_HTTP_RESOURCE_FIXTURE",
-                if resources { "1" } else { "0" },
-            )
-            .env("ORBIT_HTTP_OPERATOR", if operator { "1" } else { "0" })
-            .env("ORBIT_LOG_PATH", log_path)
-            .stdout(Stdio::from(log.as_file().try_clone().unwrap()))
-            .stderr(Stdio::from(log.as_file().try_clone().unwrap()));
-        if let Some(path) = task_query_log {
-            command.env("ORBIT_HTTP_TASK_QUERY_TRACE", path);
-        }
-        command.envs(env.iter().copied());
-        let mut server = Server {
-            process: Process(command.spawn().unwrap()),
-            task_query_log: task_query_log.map(Path::to_owned),
-            // A hang guard on each request, including an SSE stream's reads.
-            // It outlasts the dashboard's own forward bound, so a forwarded
-            // request reports that typed failure instead of a client timeout.
-            client: Client::builder()
-                .no_proxy()
-                .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
-                .build()
-                .unwrap(),
-            origin: String::new(),
-            log,
-        };
-        let started = Instant::now();
-        loop {
-            let output = fs::read_to_string(server.log.path()).unwrap();
-            assert!(
-                server.process.0.try_wait().unwrap().is_none(),
-                "server exited: {output}"
-            );
-            // The child owns the port before announcing it. A probe of a
-            // released parent-selected port can accept another fixture's
-            // health response and send the first API request to its store.
-            let complete_output = output.rsplit_once('\n').map_or("", |(lines, _)| lines);
-            if server.origin.is_empty()
-                && let Some(authority) = complete_output
-                    .lines()
-                    .find_map(|line| line.strip_prefix("Dashboard listening on http://"))
-            {
-                let address: SocketAddr = authority.parse().expect("child listening address");
-                assert!(address.ip().is_loopback());
-                assert_ne!(address.port(), 0, "child must announce its bound port");
-                server.origin = format!("http://{address}");
-            }
-            if !server.origin.is_empty()
-                && server
-                    .client
-                    .get(format!("{}/healthz", server.origin))
-                    .send()
-                    .is_ok_and(|response| response.status().is_success())
-            {
-                return server;
-            }
-            assert!(
-                started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
-                "server not ready after {:.1?} ({}): {output}",
-                started.elapsed(),
-                orbit_common::test_env::host_load()
-            );
-            thread::sleep(Duration::from_millis(20));
-        }
+        spawn_server(
+            self.temp.path(),
+            operator,
+            resources,
+            replay_worker,
+            log_path,
+            task_query_log,
+            env,
+        )
     }
 
     pub(super) fn job(&self, name: &str) {
@@ -409,6 +343,94 @@ impl Fixture {
             .unwrap()
             .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), run, None)
             .unwrap();
+    }
+}
+
+/// Serve the fixture layout under `root` (`root/global` with a workspace named
+/// `fixture`) from an isolated server child.
+pub(super) fn spawn_server(
+    root: &Path,
+    operator: bool,
+    resources: bool,
+    replay_worker: bool,
+    log_path: &Path,
+    task_query_log: Option<&Path>,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> Server {
+    orbit_common::test_env::assert_child_test_exists("server_child");
+    let log = tempfile::NamedTempFile::new_in(root).unwrap();
+    let mut command = fixture_command(root);
+    command
+        .args(["--ignored", "--exact", "server_child", "--nocapture"])
+        .env(FIXTURE_ROOT, root)
+        .env("ORBIT_HTTP_PORT", "0")
+        .env(
+            "ORBIT_HTTP_REPLAY_WORKER",
+            if replay_worker { "1" } else { "0" },
+        )
+        .env(
+            "ORBIT_HTTP_RESOURCE_FIXTURE",
+            if resources { "1" } else { "0" },
+        )
+        .env("ORBIT_HTTP_OPERATOR", if operator { "1" } else { "0" })
+        .env("ORBIT_LOG_PATH", log_path)
+        .stdout(Stdio::from(log.as_file().try_clone().unwrap()))
+        .stderr(Stdio::from(log.as_file().try_clone().unwrap()));
+    if let Some(path) = task_query_log {
+        command.env("ORBIT_HTTP_TASK_QUERY_TRACE", path);
+    }
+    command.envs(env.iter().copied());
+    let mut server = Server {
+        process: Process(command.spawn().unwrap()),
+        task_query_log: task_query_log.map(Path::to_owned),
+        // A hang guard on each request, including an SSE stream's reads.
+        // It outlasts the dashboard's own forward bound, so a forwarded
+        // request reports that typed failure instead of a client timeout.
+        client: Client::builder()
+            .no_proxy()
+            .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
+            .build()
+            .unwrap(),
+        origin: String::new(),
+        log,
+    };
+    let started = Instant::now();
+    loop {
+        let output = fs::read_to_string(server.log.path()).unwrap();
+        assert!(
+            server.process.0.try_wait().unwrap().is_none(),
+            "server exited: {output}"
+        );
+        // The child owns the port before announcing it. A probe of a
+        // released parent-selected port can accept another fixture's
+        // health response and send the first API request to its store.
+        let complete_output = output.rsplit_once('\n').map_or("", |(lines, _)| lines);
+        if server.origin.is_empty()
+            && let Some(authority) = complete_output
+                .lines()
+                .find_map(|line| line.strip_prefix("Dashboard listening on http://"))
+        {
+            let address: SocketAddr = authority.parse().expect("child listening address");
+            assert!(address.ip().is_loopback());
+            assert_ne!(address.port(), 0, "child must announce its bound port");
+            server.origin = format!("http://{address}");
+        }
+        if !server.origin.is_empty()
+            && server
+                .client
+                .get(format!("{}/healthz", server.origin))
+                .send()
+                .is_ok_and(|response| response.status().is_success())
+        {
+            return server;
+        }
+        assert!(
+            started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+            "server not ready after {:.1?} ({}): {output}",
+            started.elapsed(),
+            orbit_common::test_env::host_load()
+        );
+        thread::sleep(Duration::from_millis(20));
     }
 }
 

@@ -21,6 +21,8 @@ let liveDrain = false;
 let readinessReads = 0;
 let crewReads = 0;
 let summaryReads = 0;
+let summaryDenials = 0;
+const codebaseQueries = [];
 let frictionTitle = 'stable friction title';
 let frictionBody = 'stable friction body';
 let frictionDuring = 'ORB-100';
@@ -144,7 +146,16 @@ function fixture(url) {
     }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
-    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0 };
+    case '/api/audit/summary': summaryReads++; return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h' };
+    case '/api/codebase/analytics': {
+      codebaseQueries.push(url.searchParams);
+      const empty = { rows: [], below_support: 0 };
+      return { window: url.searchParams.get('window'), rollup: url.searchParams.get('rollup'), min_support: Number(url.searchParams.get('min_support')),
+        touched: 'declared_footprint', tasks_scanned: 0, computed_at: new Date().toISOString(), cache_ttl_seconds: 300,
+        regressions: empty, lock_contention: { ...empty, wait_time_recorded: false }, footprint_misses: empty,
+        change_coupling: { ...empty, excluded_large: 0, large_footprint_cap: 12 }, blocked: { ...empty, causes: [] },
+        rejected: { ...empty, excluded_without_run: 0 } };
+    }
     case '/api/frictions': {
       const status = url.searchParams.get('status');
       const visible = status === null || status === 'all' || status === 'open';
@@ -782,6 +793,23 @@ refresh();
 await settle();
 check(frictionText().includes('during ORB-200') && !frictionText().includes('during ORB-100'), 'edited during-task replaces the list meta');
 check(frictionText().includes('retitled friction') && frictionText().includes('rewritten friction body'), 'later field edits keep the updated title and body');
+
+// Audit › Codebase replaced Audit › Policy: its hash restores the view through
+// the router, and the denial badge beside Audit opens Events filtered to denials.
+summaryDenials = 4;
+window.location.hash = '#audit/codebase?window=30d&rollup=crate';
+await settle();
+check(node('audit-codebase-body').style.display !== 'none' && node('audit-body').style.display === 'none', '#audit/codebase restores the Codebase view');
+check(node('codebase-window').value === '30d' && node('codebase-rollup').value === 'crate' && node('codebase-min-support').value === '15', 'the hash restores the codebase controls');
+const codebaseQuery = codebaseQueries.at(-1);
+check(codebaseQuery && codebaseQuery.get('window') === '30d' && codebaseQuery.get('rollup') === 'crate' && codebaseQuery.get('min_support') === '15', 'the restored view requests its selection');
+check(text('audit-codebase-body').includes('Touched = declared footprint'), 'the codebase view labels touched as the declared footprint');
+const denialBadge = node('rail-count-audit-denials');
+check(!denialBadge.hidden && denialBadge.textContent === '4 denied', 'the denial badge shows the canonical denial count');
+denialBadge.click();
+await settle();
+check(window.location.hash === '#audit?since=24h&status=denied' && node('audit-body').style.display !== 'none', `the denial badge opens Events filtered to denials: ${window.location.hash}`);
+summaryDenials = 0;
 
 globalThis.showTaskPaginationEvidence = async () => {
   networkDown = false;

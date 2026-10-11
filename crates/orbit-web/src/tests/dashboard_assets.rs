@@ -58,7 +58,7 @@ fn host_resource_chips_execute_topbar_aggregate_pressure_unknown_and_recovery_st
 }
 
 #[test]
-fn dashboard_drops_superseded_audit_policy_and_scoreboard_responses() {
+fn dashboard_drops_superseded_audit_codebase_and_scoreboard_responses() {
     let result = std::process::Command::new("node")
         .args([
             "--experimental-vm-modules",
@@ -70,6 +70,24 @@ fn dashboard_drops_superseded_audit_policy_and_scoreboard_responses() {
     assert!(
         result.status.success(),
         "dashboard panel race behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "src/tests/dashboard_codebase.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard codebase fixture");
+    assert!(
+        result.status.success(),
+        "dashboard codebase view behavior failed:\n{}\n{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );

@@ -65,7 +65,7 @@
 
           <div class="rail-group">
             <div class="rail-group-label">Observe</div>
-          <button class="tab" data-tab="audit" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3h9l3 3v11H4z"/><path d="M7 9h6M7 12h4"/></svg><span class="rail-label">Audit</span><span class="rail-count" id="rail-count-audit"></span></button>
+          <button class="tab" data-tab="audit" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3h9l3 3v11H4z"/><path d="M7 9h6M7 12h4"/></svg><span class="rail-label">Audit</span><span class="rail-count" id="rail-count-audit"></span><span class="rail-count alert" id="rail-count-audit-denials" hidden></span></button>
           <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span><span class="rail-count alert" id="rail-count-routine-failures" hidden></span></button>
             <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
               <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
@@ -217,7 +217,7 @@
             <header><span id="audit-title">Audit events</span><span class="count" id="audit-count">-</span></header>
             <nav class="subtabs" id="audit-subtabs">
               <button class="subtab" data-subtab="events" type="button">Events</button>
-              <button class="subtab" data-subtab="policy" type="button">Policy</button>
+              <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
             </nav>
             <div class="controls" id="audit-events-controls">
               <input type="search" id="audit-search" placeholder="Search command, tool, target..." autocomplete="off" spellcheck="false" />
@@ -231,7 +231,21 @@
                 <div class="skeleton skeleton-row" style="width: 70%"></div>
               </div>
             </div>
-            <div class="body" id="audit-policy-body" style="display: none;">
+            <div class="controls codebase-controls" id="audit-codebase-controls" style="display: none;">
+              <label>Window <select id="codebase-window" aria-label="Codebase analytics window">
+                <option value="7d">7d</option>
+                <option value="30d">30d</option>
+                <option value="90d" selected>90d</option>
+                <option value="all">all</option>
+              </select></label>
+              <label>Minimum support <input type="number" id="codebase-min-support" min="1" step="1" value="15" inputmode="numeric" /></label>
+              <label>Roll up by <select id="codebase-rollup" aria-label="Codebase analytics rollup">
+                <option value="file" selected>file</option>
+                <option value="dir">directory</option>
+                <option value="crate">crate</option>
+              </select></label>
+            </div>
+            <div class="body scoreboard-table-wrap" id="audit-codebase-body" tabindex="0" role="region" aria-label="Codebase analytics" style="display: none;">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
