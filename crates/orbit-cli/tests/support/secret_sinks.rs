@@ -294,18 +294,17 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
     test_env::clear_inherited_authority(|name| {
         server_cmd.env_remove(name);
     });
-    let mut server = BoundServer::new(
+    let mut server = BoundServer::spawn(
         server_cmd
             .current_dir(&fixture.work)
             .env("HOME", &fixture.home)
             .env("USERPROFILE", &fixture.home)
             .args(["web", "serve", "--port", "0", "--no-open"])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
+            .stderr(Stdio::piped()),
         Announcement::Dashboard,
-    );
+    )
+    .expect("spawn dashboard");
     let port = server
         .wait_for_address(Duration::from_secs(10))
         .expect("dashboard bound")
