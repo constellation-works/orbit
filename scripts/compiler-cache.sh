@@ -96,8 +96,13 @@ sccache_asset() {
 }
 
 cmd_status() {
-  local dir wrapper rustc_wrapper cache_bin
-  dir="$(compiler_dir)"
+  local dir wrapper rustc_wrapper cache_bin cache_size server_uds
+  dir="${SCCACHE_DIR:-$(compiler_dir)}"
+  cache_size="${SCCACHE_CACHE_SIZE:-$DEFAULT_SIZE}"
+  server_uds="${SCCACHE_SERVER_UDS:-}"
+  if [[ -z "$server_uds" && -z "${SCCACHE_SERVER_PORT:-}" ]]; then
+    server_uds="${ORBIT_COMPILER_CACHE_SERVER_UDS:-/tmp/orbit-sccache.sock}"
+  fi
   wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/rustc-compiler-cache.sh"
   rustc_wrapper="${RUSTC_WRAPPER:-}"
   printf 'compiler-cache status\n'
@@ -107,10 +112,10 @@ cmd_status() {
   printf '  wrapper:            %s\n' "$wrapper"
   printf '  RUSTC_WRAPPER:      %s\n' "${rustc_wrapper:-<unset>}"
   printf '  SCCACHE_DIR:        %s\n' "${SCCACHE_DIR:-<unset, wrapper default $dir>}"
-  printf '  SCCACHE_CACHE_SIZE: %s\n' "${SCCACHE_CACHE_SIZE:-<unset, wrapper default $DEFAULT_SIZE>}"
+  printf '  SCCACHE_CACHE_SIZE: %s (configured wrapper limit)\n' "$cache_size"
   printf '  ORBIT_COMPILER_CACHE=%s\n' "${ORBIT_COMPILER_CACHE:-<unset>}"
   printf '  SCCACHE_CLIENT_SIDE:  %s\n' "${SCCACHE_CLIENT_SIDE:-<unset, wrapper default 1>}"
-  printf '  SCCACHE_SERVER_UDS:   %s\n' "${SCCACHE_SERVER_UDS:-<unset, wrapper default /tmp/orbit-sccache.sock>}"
+  printf '  SCCACHE_SERVER_UDS:   %s\n' "${server_uds:-<unset, using TCP>}"
   printf '  SCCACHE_SERVER_PORT:  %s\n' "${SCCACHE_SERVER_PORT:-<unset>}"
   if cache_bin="$(resolve_sccache)"; then
     printf '  sccache:            %s\n' "$cache_bin"
@@ -120,7 +125,17 @@ cmd_status() {
     else
       printf '  effective:          sccache present but cache not usable; wrapper falls back to rustc\n'
     fi
-    SCCACHE_DIR="${SCCACHE_DIR:-$dir}" "$cache_bin" --show-stats 2>/dev/null || true
+    printf '  daemon stats: Max cache size is the running daemon limit; a changed configured limit requires restarting that daemon.\n'
+    (
+      export SCCACHE_DIR="$dir" SCCACHE_CACHE_SIZE="$cache_size"
+      export SCCACHE_CLIENT_SIDE="${SCCACHE_CLIENT_SIDE-1}"
+      if [[ -n "$server_uds" ]]; then
+        export SCCACHE_SERVER_UDS="$server_uds"
+      else
+        unset SCCACHE_SERVER_UDS
+      fi
+      "$cache_bin" --show-stats 2>/dev/null || true
+    )
   else
     printf '  sccache:            not found\n'
     printf '  effective:          disabled (ordinary rustc)\n'
@@ -182,14 +197,17 @@ compiler-cache: setup complete.
 
 Workers detect effectiveness with:
   make compiler-cache-status
-  # or: sccache --show-stats   (after a cargo build)
+  # after a cargo build; queries the wrapper's daemon endpoint
 
 The committed rustc wrapper enables sccache automatically when:
   - sccache is on PATH or at $HOME/.orbit/cache/bin/sccache
   - $dir is writable (Linux implementer sandbox grants ~/.orbit/cache)
 
-Disable without uninstalling: ORBIT_COMPILER_CACHE=0
+Disable without uninstalling: chmod a-w "$dir" (chmod u+w to re-enable)
+For an environment opt-out, workers need ORBIT_COMPILER_CACHE in execution.env.pass
+and ORBIT_COMPILER_CACHE=0 in the launching Orbit process environment.
 Bounded retention: SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-$DEFAULT_SIZE} (sccache LRU)
+Worker size overrides need SCCACHE_CACHE_SIZE in execution.env.pass; see docs/runbooks/compiler-cache.md.
 Remove: scripts/compiler-cache.sh remove --yes
 EOF
 }
