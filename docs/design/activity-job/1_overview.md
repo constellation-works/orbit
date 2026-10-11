@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Overview"
 owner: codex
 last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_validated: 2026-10-10
 status: Draft
 feature: activity-job
 doc_role: overview
