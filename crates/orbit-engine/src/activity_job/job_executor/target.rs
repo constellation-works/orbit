@@ -8,15 +8,27 @@ pub(super) fn run_target(
 ) -> Result<StepOutcome, DispatchError> {
     // Scoped so the shared step snapshot is released before this step's own
     // output is recorded, letting `record_pipeline` write in place.
-    let rendered_input = {
+    let mut rendered_input = {
         let tctx = ctx.template_ctx();
+        // Recovery's rationale and refused output are opaque data. An
+        // inherited input must not render template tokens inside that data;
+        // the engine-owned context is inserted unchanged after rendering.
+        let mut inherited_input = ctx.input.clone();
+        if let Some(input) = inherited_input.as_object_mut() {
+            input.remove("final_recovery_resume");
+        }
         render_input(
             t.default_input.as_ref(),
-            &ctx.input,
+            &inherited_input,
             &tctx,
             t.input_schema_json.as_ref(),
         )?
     };
+    if let Some(context) = ctx.input.get("final_recovery_resume")
+        && let Some(input) = rendered_input.as_object_mut()
+    {
+        input.insert("final_recovery_resume".to_string(), context.clone());
+    }
     // [ORB-10902] Rebind before dispatch so `system_crew: true` reaches the
     // activity input, not only the local copy used to resolve crew settings.
     // Recovery does the same; injection is independent of target spec type.

@@ -87,7 +87,7 @@ pub fn execute_job_with_resume(
         None
     };
 
-    let ctx = ExecCtx {
+    let mut ctx = ExecCtx {
         run_id: run_id.to_string(),
         audit: audit.clone(),
         host,
@@ -107,6 +107,9 @@ pub fn execute_job_with_resume(
     // After a final-recovery `resume`, every step from the resume point runs
     // again, whatever the seeding checkpoint recorded.
     let mut rerunning = false;
+    let mut resume_context = resume
+        .and_then(|state| state.final_recovery.as_ref())
+        .and_then(|checkpoint| checkpoint.resume_context.clone());
     let mut overall_ok = true;
     let mut overall_message = None;
     let mut evidence_hold = None;
@@ -135,6 +138,21 @@ pub fn execute_job_with_resume(
         // Compound steps write nested entries into the shared pipeline; the
         // pre-step map is what tells them apart from earlier steps' entries.
         let pipeline_before = step_is_compound(step).then(|| ctx.pipeline_snapshot());
+        // Only the resumed phase receives the context. Nested targets inherit
+        // it, even when their default_input replaces the job's input.
+        if let Some(input) = ctx.input.as_object_mut() {
+            input.remove("final_recovery_resume");
+            if let Some(context) = resume_context
+                .as_ref()
+                .filter(|context| context.step_id == step.id)
+            {
+                input.insert(
+                    "final_recovery_resume".to_string(),
+                    serde_json::to_value(context)
+                        .map_err(|error| DispatchError::JobExecution(error.to_string()))?,
+                );
+            }
+        }
         let failure = match run_step(step, &ctx) {
             Ok(outcome) if outcome.success => Ok(outcome),
             Ok(outcome) => {
@@ -196,7 +214,8 @@ pub fn execute_job_with_resume(
                     &error.to_string(),
                     &mut final_recovery,
                 );
-                if let FinalRecoveryVerdict::Resume(target) = verdict {
+                if let FinalRecoveryVerdict::Resume(target, context) = verdict {
+                    resume_context = Some(*context);
                     forget_step_outputs_from(&ctx, job, target);
                     rerunning = true;
                     index = target;
@@ -361,7 +380,7 @@ fn forget_step_outputs_from(ctx: &ExecCtx<'_>, job: &JobV2, index: usize) {
     }
 }
 
-fn collect_step_keys<'a>(step: &'a JobV2Step, keys: &mut Vec<&'a str>) {
+pub(super) fn collect_step_keys<'a>(step: &'a JobV2Step, keys: &mut Vec<&'a str>) {
     keys.push(&step.id);
     match &step.body {
         JobV2StepBody::Parallel { parallel } => {

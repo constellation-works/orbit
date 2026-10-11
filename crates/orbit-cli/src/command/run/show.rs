@@ -83,6 +83,11 @@ pub(crate) fn run_show_payload(
     // [ORB-12113].
     let audit = runtime.collect_run_audit_view(&run.run_id)?;
     let provider_processes = audit.provider_processes;
+    let recovery = runtime.collect_run_recovery_attempts(&run.run_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "recovery attempts unreadable");
+            orbit_core::runtime::audit::run::RunRecoveryAttempts::unavailable()
+        });
 
     let RunDisplaySteps {
         records: steps,
@@ -148,6 +153,7 @@ pub(crate) fn run_show_payload(
         });
     let doc = json!({
         "run": run_projection,
+        "recovery_attempts": recovery.to_json(),
         "pull_claim": pull_claim,
         "claimed_leaves": claimed_leaves,
         "refused_settlements": refused_settlements,
@@ -177,6 +183,19 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    for attempt in &recovery.attempts {
+        header.push_str(&format!(
+            "\nRecovery: {} at {}: {}{}",
+            attempt.recovery_activity,
+            attempt.failed_step_id,
+            attempt.outcome,
+            attempt
+                .diagnostic
+                .as_ref()
+                .map(|detail| format!("; {detail}"))
+                .unwrap_or_default(),
+        ));
+    }
     for process in &provider_processes {
         if let Some(waits) = &process.build_budget_waits {
             header.push_str(&format!(

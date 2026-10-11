@@ -270,6 +270,7 @@ impl Leaf {
                     admitted_at: Utc::now(),
                     decision: decision.clone(),
                     repair_commit: None,
+                    resume_context: None,
                     outcome: None,
                 });
                 Ok(())

@@ -496,6 +496,7 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
         task_id: task.clone(),
         observed: None,
         repair_commit: None,
+        resume_context: None,
         base_ref: Some("main".into()),
         admitted_at: Utc::now(),
         decision: Some(FinalRecoveryDecision::Reject {
@@ -641,6 +642,7 @@ fn a_friction_the_claimed_recovery_records_leaves_its_requeue_standing() {
         task_id: task.clone(),
         observed: None,
         repair_commit: None,
+        resume_context: None,
         base_ref: Some("main".into()),
         admitted_at: Utc::now(),
         decision: Some(FinalRecoveryDecision::Requeue {

@@ -62,7 +62,8 @@ pub struct RunRecoveryAttempt {
     pub failed_step_id: String,
     pub recovery_activity: String,
     /// Whether the recovery activity completed (`succeeded`) or not
-    /// (`failed`); completion alone is not a repair.
+    /// (`failed`); final recovery uses `skipped`, `resume`, `settled` or
+    /// `escalated`. Completion alone is not a repair.
     pub outcome: String,
     pub failure_phase: Option<String>,
     pub diagnostic: Option<String>,
@@ -100,6 +101,32 @@ pub struct RunRecoveryAttempts {
 }
 
 impl RunRecoveryAttempts {
+    /// Shared CLI and tool projection of bounded recovery evidence.
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "state": self.state,
+            "limit": self.limit,
+            "truncated": self.truncated,
+            "items": self.attempts.iter().map(|attempt| serde_json::json!({
+                "run_id": attempt.run_id,
+                "event_id": attempt.event_id,
+                "attempted_at": attempt.attempted_at.map(|value| value.to_rfc3339()),
+                "failed_step_id": attempt.failed_step_id,
+                "recovery_activity": attempt.recovery_activity,
+                "outcome": attempt.outcome,
+                "failure_phase": attempt.failure_phase,
+                "diagnostic": attempt.diagnostic,
+                "diagnostic_truncated": attempt.diagnostic_truncated,
+                "decision": attempt.decision.as_ref().map(|decision| serde_json::json!({
+                    "status": decision.status,
+                    "verdict": decision.verdict,
+                    "detail": decision.detail,
+                })),
+                "retry_admitted": attempt.retry_admitted,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     pub fn unavailable() -> Self {
         Self {
             state: "unavailable",
@@ -572,7 +599,7 @@ impl OrbitRuntime {
     ///
     /// [ORB-11625] The previous list path scanned each run's full v2 envelope
     /// (`limit: 50_000`) and opened the audit store once per row. This loads
-    /// only `step_recovery_attempted` rows, capped per run at
+    /// only step- and final-recovery rows, each capped per run at
     /// `RECOVERY_FETCH_PER_RUN`, and a presence set for `unavailable` vs
     /// `not_attempted`. A page-wide LIMIT is not used: it would starve later
     /// runs with shorter histories. Store-handle reuse is ORB-11632; this
@@ -592,13 +619,22 @@ impl OrbitRuntime {
 
         let workspace_id = self.workspace_id()?;
         let store = self.v2_audit_store()?;
-        let rows = store.list_v2_audit_events_for_runs_partitioned(
+        let mut rows = store.list_v2_audit_events_for_runs_partitioned(
             &workspace_id,
             run_ids,
             Some("v2_envelope"),
             Some("step_recovery_attempted"),
             RECOVERY_FETCH_PER_RUN,
         )?;
+        rows.extend(store.list_v2_audit_events_for_runs_partitioned(
+            &workspace_id,
+            run_ids,
+            Some("v2_envelope"),
+            Some("final_recovery_attempted"),
+            RECOVERY_FETCH_PER_RUN,
+        )?);
+        // Merge newest first before applying the shared per-run display limit.
+        rows.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
         let present =
             store.list_v2_audit_run_ids_with_events(&workspace_id, run_ids, Some("v2_envelope"))?;
 
@@ -619,7 +655,7 @@ impl OrbitRuntime {
 
         Ok(RunRecoveryAttemptsPage {
             by_run_id,
-            event_queries: 1,
+            event_queries: 2,
             presence_queries: 1,
             per_run_fetch_limit: RECOVERY_FETCH_PER_RUN,
         })
