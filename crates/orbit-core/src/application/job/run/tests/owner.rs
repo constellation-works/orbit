@@ -163,3 +163,183 @@ fn signal_owner_after_exit_returns_already_exited() {
         "already_exited"
     );
 }
+
+/// Deterministic exit/reuse at cancellation boundaries that the runtime API
+/// cannot force. Both callers share the same identity-bound teardown protocol.
+#[cfg(unix)]
+#[test]
+fn owner_and_provider_never_escalate_against_a_replacement_identity() {
+    use super::super::owner::{
+        TeardownTarget, signal_run_owner_with_binding, stop_provider_process_with_binding,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct State {
+        generation: u32,
+        signals: Vec<(u32, i32)>,
+        waits: usize,
+    }
+    struct Target {
+        state: Rc<RefCell<State>>,
+        change_at: usize,
+        grouped: bool,
+        ignore_term: bool,
+    }
+    impl TeardownTarget for Target {
+        fn pgid(&self) -> Option<libc::pid_t> {
+            self.grouped.then_some(43210)
+        }
+        fn signal(&self, signal: i32) -> Result<(), orbit_common::OrbitError> {
+            let mut state = self.state.borrow_mut();
+            // Exit/reuse immediately before the first signal's delivery.
+            if (self.change_at == 1 && state.signals.is_empty())
+                || (self.change_at == 5 && signal == libc::SIGKILL)
+            {
+                state.generation = 1;
+            }
+            // A bound handle still addresses generation 0; no numeric fallback.
+            if state.generation == 0 {
+                state.signals.push((0, signal));
+                if signal == libc::SIGKILL || !self.ignore_term {
+                    state.generation = 1;
+                }
+            }
+            Ok(())
+        }
+        fn liveness(&self) -> Result<(bool, bool), orbit_common::OrbitError> {
+            Ok((
+                self.state.borrow().generation == 0,
+                self.grouped && self.change_at == 4,
+            ))
+        }
+        fn wait(&self, _: Duration) -> Result<(), orbit_common::OrbitError> {
+            let mut state = self.state.borrow_mut();
+            state.waits += 1;
+            // Exit/reuse during the TERM grace interval.
+            if (self.change_at == 2 || self.change_at == 4) && state.waits == 1 {
+                state.generation = 1;
+            }
+            Ok(())
+        }
+    }
+    let token = format!("{STABLE_TOKEN_PREFIX}pidns=-:Sun Aug  2 20:13:45 2026");
+    for provider in [false, true] {
+        for grouped in [false, true] {
+            for (change_at, ignore_term, expected_signals) in [
+                (0, true, vec![]),               // after initial verification, before binding
+                (1, true, vec![]),               // bound original exits just before TERM
+                (2, true, vec![libc::SIGTERM]),  // reuse during grace
+                (3, false, vec![libc::SIGTERM]), // ordinary TERM
+                (3, true, vec![libc::SIGTERM, libc::SIGKILL]), // escalation
+                (4, true, vec![libc::SIGTERM]),  // unbound/reused group remains
+                (5, true, vec![libc::SIGTERM]),  // exit/reuse just before KILL
+            ] {
+                let state = Rc::new(RefCell::new(State::default()));
+                let bind = |_, _: Option<&str>| {
+                    if change_at == 0 {
+                        state.borrow_mut().generation = 1;
+                        return Ok(None);
+                    }
+                    Ok(Some(Target {
+                        state: state.clone(),
+                        change_at,
+                        grouped,
+                        ignore_term,
+                    }))
+                };
+                if provider {
+                    let result = stop_provider_process_with_binding(
+                        43210,
+                        Some(&token),
+                        |_, _| ProcessLiveness::Alive,
+                        |_| ProbeOutcome::Token(token.clone()),
+                        bind,
+                    );
+                    if grouped && change_at == 4 {
+                        assert!(
+                            matches!(
+                                result,
+                                Err(orbit_common::OrbitError::RunCancellationIncomplete {
+                                    group_alive: true,
+                                    leader_alive: false,
+                                    ..
+                                })
+                            ),
+                            "an uncertain group must never be reported stopped"
+                        );
+                    } else {
+                        let result = result.unwrap();
+                        assert_eq!(
+                            result,
+                            if change_at == 0 {
+                                ProviderStop::NotRunning
+                            } else {
+                                ProviderStop::Stopped
+                            }
+                        );
+                    }
+                } else {
+                    let result = signal_run_owner_with_binding(
+                        &owner_run(Some(43210), Some(token.clone())),
+                        OwnerIdentity::Verified,
+                        bind,
+                    );
+                    if grouped && change_at == 4 {
+                        assert!(
+                            matches!(
+                                result,
+                                Err(orbit_common::OrbitError::RunCancellationIncomplete {
+                                    group_alive: true,
+                                    leader_alive: false,
+                                    ..
+                                })
+                            ),
+                            "an uncertain group must never be reported stopped"
+                        );
+                    } else {
+                        let result = result.unwrap();
+                        assert_eq!(
+                            result,
+                            match (change_at, ignore_term, grouped) {
+                                (0, _, _) => "already_exited",
+                                (3 | 5, true, true) => "killed_process_group",
+                                (3 | 5, true, false) => "killed_owner",
+                                (_, _, true) => "terminated_process_group",
+                                (_, _, false) => "terminated_owner",
+                            }
+                        );
+                    }
+                }
+                assert_eq!(
+                    state.borrow().signals,
+                    expected_signals
+                        .into_iter()
+                        .map(|signal| (0, signal))
+                        .collect::<Vec<_>>(),
+                    "replacement must never receive TERM/KILL: provider={provider}, group={grouped}, boundary={change_at}"
+                );
+            }
+        }
+    }
+    // Even a matching second-resolution token must not adopt the PID if its
+    // kernel-resolution identity changed since the initial verification.
+    let replacement = orbit_common::test_env::spawn_unrelated_process();
+    let ProbeOutcome::Token(token) = probe_process_start_identity(replacement.pid()) else {
+        panic!("replacement identity must be readable");
+    };
+    let mut recorded_key =
+        orbit_common::process::ancestry::process_start_key(replacement.pid()).unwrap();
+    recorded_key.starttime ^= 1;
+    assert!(
+        super::super::owner::BoundTarget::bind(replacement.pid(), Some(&token), Some(recorded_key))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        process_is_alive(replacement.pid()),
+        "binding must refuse a changed kernel identity even when coarse tokens match"
+    );
+}

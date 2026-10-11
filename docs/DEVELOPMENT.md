@@ -115,6 +115,12 @@ Production code never waits on a child without a deadline. Spawn through `orbit_
 
 The production Clippy pass disallows `std::process::Command::output` and `Command::status`; an exception needs `#[allow(clippy::disallowed_methods, reason = "...")]`. The current exceptions have no natural deadline: the SSH stdio relay in `orbit-mcp` and the interactive or operator-watched `sudo` steps of `orbit init` on Linux. Fixtures may use both.
 
+### Recorded owner and provider cancellation
+
+Run cancellation captures a kernel-resolution start key before initial verification, so second-resolution persisted tokens cannot adopt a same-second replacement during binding. It retains identity-bound process handles across TERM, both two-second grace intervals, and KILL. Linux uses `pidfd_open`/`pidfd_send_signal` and descriptor liveness; macOS uses libproc unique process IDs and audit-token PID/version signalling. macOS refreshes an exec version only while the unique process ID still matches; a concurrent exec refuses the signal rather than treating the worker as gone. Missing kernel support, unreadable identity, and other Unix platforms fail closed without numeric PID signalling. Non-Unix cancellation remains unsupported.
+
+A verified group leader authorizes a snapshot of its group members, each bound to a separate identity before the leader is rechecked. Cancellation signals those retained identities individually, never a numeric PGID. Owners in shared groups are stopped individually. Exit or group change during snapshot acquisition refuses group teardown. Members created after the snapshot, a reused PGID, or unavailable group liveness can leave cancellation incomplete: group probes are evidence for refusal only and never authorize additional signals. Claims and reservations therefore stay held until teardown is confirmed. This favors protecting unrelated processes over forcibly clearing an uncertain group.
+
 ## Safe Mutable CLI Fixtures
 
 Fixtures and manual reproductions that mutate Orbit task, run, workspace or registry state run isolated from the process that launches them; authorized operator work keeps normal routing. Spawn the CLI as a child with absolute disposable paths, clearing inherited authority before setting `HOME` and `USERPROFILE`:

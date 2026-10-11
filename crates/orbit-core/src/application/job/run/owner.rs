@@ -44,68 +44,41 @@ pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitErro
     if !process_is_alive(pid) {
         return Ok("already_exited".to_string());
     }
-    if !matches!(classify_run_owner(run), OwnerIdentity::Verified) {
-        return Ok("owner_identity_mismatch".to_string());
+    // Capture the kernel-resolution start key before the initial token probe.
+    // Persisted lstart tokens have only second resolution; a same-second reuse
+    // between verification and binding must not silently adopt a replacement.
+    let start_key = orbit_common::process::ancestry::process_start_key(pid);
+    signal_run_owner_with_binding(run, classify_run_owner(run), |pid, token| {
+        BoundTarget::bind(pid, token, start_key)
+    })
+}
+
+// The binding seam forces exit/reuse after the initial identity check without
+// consuming real PIDs or depending on scheduler timing.
+#[cfg(unix)]
+pub(super) fn signal_run_owner_with_binding<T: TeardownTarget>(
+    run: &JobRun,
+    identity: OwnerIdentity,
+    bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
+) -> Result<String, OrbitError> {
+    if identity != OwnerIdentity::Verified {
+        return Ok("owner_identity_mismatch".into());
     }
-
-    let pgid = owner_process_group_id(pid);
-    if let Some(pgid) = pgid
-        && pgid > 1
-        && pgid as u32 == pid
-    {
-        if pgid == unsafe { libc::getpgrp() } {
-            return Ok("owner_process_group_matches_current_process".to_string());
-        }
-        match send_signal_to_process_group(pgid, libc::SIGTERM) {
-            Ok(()) => {}
-            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {
-                return verify_owner_termination(pid, Some(pgid), true, false)
-                    .map(|()| "already_exited".to_string());
-            }
-            Err(error) => {
-                return Err(OrbitError::Execution(format!(
-                    "failed to signal job run owner process group {pgid} for pid {pid}: {error}"
-                )));
-            }
-        }
-
-        if wait_for_process_group_exit(pgid, RUN_OWNER_TERMINATION_GRACE)
-            && verify_owner_termination(pid, Some(pgid), true, false).is_ok()
-        {
-            return Ok("terminated_process_group".to_string());
-        }
-
-        match send_signal_to_process_group(pgid, libc::SIGKILL) {
-            Ok(()) => {}
-            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {
-                return verify_owner_termination(pid, Some(pgid), true, true)
-                    .map(|()| "killed_process_group".to_string());
-            }
-            Err(error) => {
-                return Err(OrbitError::Execution(format!(
-                    "failed to kill job run owner process group {pgid} for pid {pid}: {error}"
-                )));
-            }
-        }
-        wait_for_process_group_exit(pgid, RUN_OWNER_TERMINATION_GRACE);
-        return verify_owner_termination(pid, Some(pgid), true, true)
-            .map(|()| "killed_process_group".to_string());
+    let Some(pid) = run.pid else {
+        return Ok("no_pid".into());
+    };
+    let Some(target) = bind(pid, run.pid_start_time.as_deref())? else {
+        return Ok("already_exited".into());
+    };
+    let grouped = target.pgid().is_some();
+    let killed = terminate_target(&target, pid)?;
+    Ok(match (grouped, killed) {
+        (true, false) => "terminated_process_group",
+        (true, true) => "killed_process_group",
+        (false, false) => "terminated_owner",
+        (false, true) => "killed_owner",
     }
-
-    // Foreground owners can inherit a group shared with their caller and
-    // siblings. Signal and verify only the owner unless it leads the group;
-    // also use this fallback when the group cannot be resolved. The identity
-    // guard above still protects against killing a reused PID.
-    send_signal_to_pid(pid, libc::SIGTERM)?;
-    if wait_for_owner_exit(pid, RUN_OWNER_TERMINATION_GRACE)
-        && verify_owner_termination(pid, None, true, false).is_ok()
-    {
-        Ok("terminated_owner".to_string())
-    } else {
-        send_signal_to_pid(pid, libc::SIGKILL)?;
-        wait_for_owner_exit(pid, RUN_OWNER_TERMINATION_GRACE);
-        verify_owner_termination(pid, None, true, true).map(|()| "killed_owner".to_string())
-    }
+    .into())
 }
 
 #[cfg(not(unix))]
@@ -213,6 +186,28 @@ where
     L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
     I: Fn(u32) -> ProbeOutcome,
 {
+    let start_key = orbit_common::process::ancestry::process_start_key(pid);
+    stop_provider_process_with_binding(
+        pid,
+        pid_start_time,
+        liveness_probe,
+        identity_probe,
+        |pid, token| BoundTarget::bind(pid, token, start_key),
+    )
+}
+
+#[cfg(unix)]
+pub(super) fn stop_provider_process_with_binding<L, I, T: TeardownTarget>(
+    pid: u32,
+    pid_start_time: Option<&str>,
+    liveness_probe: L,
+    identity_probe: I,
+    bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
+) -> Result<ProviderStop, OrbitError>
+where
+    L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+    I: Fn(u32) -> ProbeOutcome,
+{
     use orbit_common::process::identity::ProcessLiveness;
 
     if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
@@ -237,60 +232,154 @@ where
         }
     }
 
-    // Signal the whole group only when the provider leads its own (which is
-    // how Orbit spawns it); otherwise a shared group would take unrelated
-    // processes down with it.
-    let pgid = owner_process_group_id(pid)
-        .filter(|pgid| *pgid as u32 == pid && *pgid != unsafe { libc::getpgrp() });
-    let stopped = |pid: u32, pgid: Option<libc::pid_t>| match pgid {
-        Some(pgid) => !process_group_is_alive(pgid),
-        None => !process_is_alive(pid),
+    let Some(target) = bind(pid, pid_start_time)? else {
+        return Ok(ProviderStop::NotRunning);
     };
-    let signal = |signal: libc::c_int| match pgid {
-        Some(pgid) => match send_signal_to_process_group(pgid, signal) {
-            Err(error) if error.raw_os_error() != Some(libc::ESRCH) => Err(OrbitError::Execution(
-                format!("failed to signal provider process group {pgid}: {error}"),
-            )),
-            _ => Ok(()),
-        },
-        None => send_signal_to_pid(pid, signal),
-    };
-    let wait = |timeout: Duration| {
-        let started = Instant::now();
-        while started.elapsed() < timeout {
-            if stopped(pid, pgid) {
-                return true;
-            }
-            thread::sleep(RUN_OWNER_TERMINATION_POLL);
-        }
-        stopped(pid, pgid)
-    };
-
-    signal(libc::SIGTERM)?;
-    if !wait(RUN_OWNER_TERMINATION_GRACE) {
-        signal(libc::SIGKILL)?;
-        if !wait(RUN_OWNER_TERMINATION_GRACE) {
-            return Err(OrbitError::Execution(format!(
-                "provider process {pid} survived SIGTERM and SIGKILL"
-            )));
-        }
-    }
+    terminate_target(&target, pid)?;
     Ok(ProviderStop::Stopped)
 }
 
+/// One retained cancellation identity set, shared by owner and provider paths.
 #[cfg(unix)]
-fn send_signal_to_pid(pid: u32, signal: libc::c_int) -> Result<(), OrbitError> {
-    let rc = unsafe { libc::kill(pid as libc::pid_t, signal) };
-    if rc == 0 {
-        return Ok(());
+pub(super) trait TeardownTarget {
+    fn pgid(&self) -> Option<libc::pid_t>;
+    fn signal(&self, signal: libc::c_int) -> Result<(), OrbitError>;
+    fn liveness(&self) -> Result<(bool, bool), OrbitError>;
+    fn wait(&self, timeout: Duration) -> Result<(), OrbitError>;
+}
+
+#[cfg(unix)]
+fn terminate_target(target: &impl TeardownTarget, pid: u32) -> Result<bool, OrbitError> {
+    target.signal(libc::SIGTERM)?;
+    target.wait(RUN_OWNER_TERMINATION_GRACE)?;
+    if target.liveness()? == (false, false) {
+        return Ok(false);
     }
-    let err = std::io::Error::last_os_error();
-    if err.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
+    target.signal(libc::SIGKILL)?;
+    target.wait(RUN_OWNER_TERMINATION_GRACE)?;
+    let (leader_alive, group_alive) = target.liveness()?;
+    if leader_alive || group_alive {
+        return Err(OrbitError::RunCancellationIncomplete {
+            pid,
+            pgid: target.pgid(),
+            term_sent: true,
+            kill_sent: true,
+            leader_alive,
+            group_alive,
+        });
     }
-    Err(OrbitError::Execution(format!(
-        "failed to signal job run owner pid {pid}: {err}",
-    )))
+    Ok(true)
+}
+
+#[cfg(unix)]
+pub(super) struct BoundTarget {
+    leader: orbit_common::process::signal::BoundProcess,
+    members: Vec<orbit_common::process::signal::BoundProcess>,
+    pgid: Option<libc::pid_t>,
+}
+
+#[cfg(unix)]
+impl BoundTarget {
+    pub(super) fn bind(
+        pid: u32,
+        token: Option<&str>,
+        start_key: Option<orbit_common::process::ancestry::ProcessStartKey>,
+    ) -> Result<Option<Self>, OrbitError> {
+        use orbit_common::process::signal::{BoundProcess, process_group_members};
+        let Some(start_key) = start_key else {
+            return Err(OrbitError::Execution(
+                "kernel process start identity unavailable for cancellation binding".into(),
+            ));
+        };
+        let Some(leader) = BoundProcess::bind(pid, token)? else {
+            return Ok(None);
+        };
+        if !leader.is_alive()? {
+            return Ok(None);
+        }
+        match orbit_common::process::ancestry::process_start_key(pid) {
+            Some(current) if current == start_key => {}
+            Some(_) => return Ok(None),
+            None => {
+                return Err(OrbitError::Execution(
+                    "kernel process identity became unreadable during cancellation binding".into(),
+                ));
+            }
+        }
+        let pgid = leader
+            .process_group()?
+            .filter(|group| *group > 1 && *group as u32 == pid);
+        if pgid == Some(unsafe { libc::getpgrp() }) {
+            return Err(OrbitError::Execution(
+                "owner process group matches current process".into(),
+            ));
+        }
+        let mut members = Vec::new();
+        if let Some(pgid) = pgid {
+            for member_pid in process_group_members(pgid)? {
+                if member_pid == pid {
+                    continue;
+                }
+                if let Some(member) = BoundProcess::bind(member_pid, None)?
+                    && member.process_group()? == Some(pgid)
+                {
+                    members.push(member);
+                }
+            }
+            // A reused group may have been enumerated if the leader exited
+            // during the snapshot. Reject it before delivering any signal.
+            if !leader.is_alive()? || leader.process_group()? != Some(pgid) {
+                return Err(OrbitError::Execution("owner exited or left its group during identity binding; group teardown unverified".into()));
+            }
+        }
+        Ok(Some(Self {
+            leader,
+            members,
+            pgid,
+        }))
+    }
+}
+
+#[cfg(unix)]
+impl TeardownTarget for BoundTarget {
+    fn pgid(&self) -> Option<libc::pid_t> {
+        self.pgid
+    }
+
+    fn signal(&self, signal: libc::c_int) -> Result<(), OrbitError> {
+        // Never kill(-pgid): bind each initial member before TERM and retain
+        // those identities for KILL. A replacement PID or PGID is never used.
+        // Stop members first so a cooperative leader can reap its children.
+        for member in &self.members {
+            member.signal(signal)?;
+        }
+        self.leader.signal(signal)?;
+        Ok(())
+    }
+
+    fn liveness(&self) -> Result<(bool, bool), OrbitError> {
+        let leader_alive = self.leader.is_alive()?;
+        let mut group_alive = false;
+        for member in &self.members {
+            group_alive |= member.is_alive()?;
+        }
+        // New descendants and group reuse cannot be distinguished after all
+        // captured identities exit. A live/unknown numeric group is only
+        // evidence of incomplete teardown, never authority for a signal.
+        group_alive |= self.pgid.is_some_and(process_group_is_alive);
+        Ok((leader_alive, group_alive))
+    }
+
+    fn wait(&self, timeout: Duration) -> Result<(), OrbitError> {
+        let started = Instant::now();
+        while started.elapsed() < timeout {
+            if self.liveness()? == (false, false) {
+                return Ok(());
+            }
+            thread::sleep(RUN_OWNER_TERMINATION_POLL);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -299,68 +388,12 @@ fn owner_process_group_id(pid: u32) -> Option<libc::pid_t> {
         return None;
     }
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
-    if pgid > 0 { Some(pgid) } else { None }
-}
-
-#[cfg(unix)]
-fn send_signal_to_process_group(pgid: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
-    let rc = unsafe { libc::kill(-pgid, signal) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(unix)]
-fn wait_for_owner_exit(pid: u32, timeout: Duration) -> bool {
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        if !process_is_alive(pid) {
-            return true;
-        }
-        thread::sleep(RUN_OWNER_TERMINATION_POLL);
-    }
-    !process_is_alive(pid)
-}
-
-#[cfg(unix)]
-fn wait_for_process_group_exit(pgid: libc::pid_t, timeout: Duration) -> bool {
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        if !process_group_is_alive(pgid) {
-            return true;
-        }
-        thread::sleep(RUN_OWNER_TERMINATION_POLL);
-    }
-    !process_group_is_alive(pgid)
+    (pgid > 0).then_some(pgid)
 }
 
 #[cfg(unix)]
 fn process_group_is_alive(pgid: libc::pid_t) -> bool {
     !matches!(probe_process_group_liveness(pgid), KernelLiveness::Exited)
-}
-
-#[cfg(unix)]
-pub(super) fn verify_owner_termination(
-    pid: u32,
-    pgid: Option<libc::pid_t>,
-    term_sent: bool,
-    kill_sent: bool,
-) -> Result<(), OrbitError> {
-    let leader_alive = process_is_alive(pid);
-    let group_alive = pgid.is_some_and(process_group_is_alive);
-    if !leader_alive && !group_alive {
-        return Ok(());
-    }
-    Err(OrbitError::RunCancellationIncomplete {
-        pid,
-        pgid,
-        term_sent,
-        kill_sent,
-        leader_alive,
-        group_alive,
-    })
 }
 
 /// Returns true only for Running runs whose owner is conclusively stale
