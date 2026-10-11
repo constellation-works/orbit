@@ -34,7 +34,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use crate::runner::run_probe_process;
+use crate::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode};
 
 /// Variables a login shell contributes to the validation environment: PATH
 /// and the locators toolchains on it need to find their own installation.
@@ -316,7 +317,7 @@ impl LoginShell {
             "-c".to_string(),
             format!("exec /bin/sh -c '{}'", printer_script()),
         ]);
-        let outcome = run_process(
+        let outcome = run_probe_process(
             &ExecRequest {
                 program: shell.clone(),
                 args,

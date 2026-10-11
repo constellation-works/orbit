@@ -75,10 +75,36 @@ pub fn run_process(
     req: &ExecRequest,
     sandbox: &dyn Sandbox,
 ) -> Result<ExecutionResult, OrbitError> {
+    run_supervised(req, sandbox, false)
+}
+
+/// Run a probe: like [`run_process`], but a child still running at
+/// `timeout_ms` has its process group killed at once rather than signalled
+/// and given the termination grace period.
+///
+/// A probe only reports what it printed, so there is nothing for a grace
+/// period to protect, and its caller's time bound must hold even when the
+/// child ignores the termination signal (an interactive shell does until it
+/// execs).
+pub(crate) fn run_probe_process(
+    req: &ExecRequest,
+    sandbox: &dyn Sandbox,
+) -> Result<ExecutionResult, OrbitError> {
+    run_supervised(req, sandbox, true)
+}
+
+fn run_supervised(
+    req: &ExecRequest,
+    sandbox: &dyn Sandbox,
+    kill_on_deadline: bool,
+) -> Result<ExecutionResult, OrbitError> {
     sandbox.validate(req)?;
 
     let started = Instant::now();
-    let child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
+    let mut child = crate::supervision::SupervisedChild::spawn(|| sandbox.spawn(req))?;
+    if kill_on_deadline {
+        child = child.kill_on_deadline();
+    }
     let stdin_payload = match &req.stdin_mode {
         StdinMode::Bytes(bytes) => Some(bytes.clone()),
         StdinMode::Inherit | StdinMode::Null => None,

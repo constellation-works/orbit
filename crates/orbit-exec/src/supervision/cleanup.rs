@@ -17,10 +17,16 @@ pub(crate) fn terminate_process_group(
     if wait_for_process_group_exit(pid, Some(child), TERMINATION_GRACE_PERIOD, poll_interval)? {
         return Ok(());
     }
-    kill_process_group(pid);
+    kill_and_reap_process_group(child);
+    Ok(())
+}
+
+/// SIGKILL the child's process group and reap the child, with no grace
+/// period.
+pub(super) fn kill_and_reap_process_group(child: &mut Child) {
+    kill_process_group(child.id());
     child.kill().ok();
     child.wait().ok();
-    Ok(())
 }
 
 #[cfg(not(unix))]
