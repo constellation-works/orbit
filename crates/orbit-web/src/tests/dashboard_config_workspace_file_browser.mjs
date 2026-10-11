@@ -12,7 +12,9 @@
 // built-in-restating, a not-inherited and an unreported key, the Not set
 // sidebar, inline edit with its CLI preview, Add key's candidates, selecting
 // and removing the redundant keys with one refusal, and a 375px phone with
-// no horizontal page scroll. No Orbit store is contacted.
+// no horizontal page scroll. Promise-held mutation responses also check host
+// switches, workspace round trips, and ownership of a newer pending write.
+// No Orbit store is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -181,6 +183,11 @@ function api(rest, url, req, res) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/workspace-file-race') {
+    res.setHeader('content-type', 'text/html');
+    res.end('<!doctype html><html><body><div id="config-body"></div></body></html>');
+    return;
+  }
   if (!url.pathname.startsWith('/api/')) {
     const served = dashboardFile(url.pathname);
     if (!served) { res.writeHead(404); res.end(); return; }
@@ -228,6 +235,113 @@ const rows = () => page.locator('#config-body .cwf-row').evaluateAll((nodes) => 
 const rowOf = async (key) => (await rows()).find((entry) => entry.key === key);
 const row = (key) => page.locator(`#config-body .cwf-row[data-key="${key}"]`);
 const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+
+// Exercise the shipped modules in Chromium with explicit response barriers.
+// This small page has no dashboard poller: the only requests are mutations
+// dispatched by the real controls, and a frame drains settled promise callbacks.
+async function checkVisitRaces(browser, payload) {
+  const racePage = await browser.newPage();
+  try {
+    await racePage.goto(`${origin}/workspace-file-race`);
+    return await racePage.evaluate(async (payload) => {
+      const common = await import('/static/js/common.js');
+      const view = await import('/static/js/config-workspace-file.js');
+      const unsubscribe = common.onWorkspaceChange(view.resetWorkspaceFile);
+      const body = document.getElementById('config-body');
+      const assert = (condition, message) => { if (!condition) throw new Error(message); };
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const row = (key) => body.querySelector(`.cwf-row[data-key="${key}"]`);
+      const button = (root, label) => [...root.querySelectorAll('button')].find((node) => node.textContent === label);
+      const cases = [];
+      let reloads = 0;
+      const context = {
+        canEdit: true,
+        render: () => { body.replaceChildren(); view.renderWorkspaceFile(body, payload, context); },
+        reload: async () => { reloads += 1; context.render(); },
+      };
+      const save = (value) => {
+        button(row('review.minutes'), 'Edit').click();
+        const input = body.querySelector('#cwf-edit-value');
+        input.value = value;
+        input.dispatchEvent(new Event('input'));
+        input.closest('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      };
+      const originalFetch = window.fetch;
+      try {
+        for (const boundary of ['host-switch', 'workspace-round-trip']) {
+          for (const operation of ['remove', 'save', 'add']) {
+            for (const refused of [false, true]) {
+              common.setHost(boundary === 'host-switch' ? null : 'beta');
+              common.setWorkspace('ws_same');
+              view.resetWorkspaceFile();
+              context.render();
+              reloads = 0;
+              const requests = [];
+              window.fetch = (target, options) => new Promise((resolve) => {
+                requests.push({ target, method: options.method, body: options.body, release: (refused = false) => resolve({
+                  ok: !refused, status: refused ? 400 : 200,
+                  text: async () => JSON.stringify(refused ? { error: 'fixture write refused', code: 'invalid_value' } : { ok: true }),
+                }) });
+              });
+              const prefix = boundary === 'host-switch' ? '/api/' : '/api/on/beta/';
+              if (operation === 'remove') {
+                for (const key of ['workflow.base_branch', 'workflow.default_crew']) row(key).querySelector('input[type="checkbox"]').click();
+                button(body.querySelector('.cwf-bulk'), 'Remove from file').click();
+              } else if (operation === 'save') {
+                save('80');
+              } else {
+                button(body.querySelector('.cwf-head'), '+ Add key').click();
+                button(body.querySelector('.cwf-add'), 'Add to file').click();
+              }
+              const label = `${boundary}/${operation}/${refused ? 'refused' : 'success'}`;
+              assert(requests.length === 1, `${label}: the first mutation is held`);
+              const expectedKey = operation === 'remove' ? 'workflow.base_branch' : operation === 'save' ? 'review.minutes' : 'workflow.low_complexity_crews';
+              const expectedTarget = `${prefix}config/keys/${expectedKey}${operation === 'remove' ? '?scope=workspace&workspace=ws_same' : '?workspace=ws_same'}`;
+              assert(requests[0].target === expectedTarget, `${label}: mutation targets the starting host/workspace`);
+              if (boundary === 'host-switch') common.setHost('beta');
+              else { common.setWorkspace('ws_other'); common.setWorkspace('ws_same'); }
+              context.render();
+              save('45');
+              assert(requests.length === 2 && requests[1].target === '/api/on/beta/config/keys/review.minutes?workspace=ws_same', `${label}: a newer visit owns its Save`);
+              const before = body.innerHTML;
+              requests[0].release(refused);
+              await frame();
+              assert(requests.length === 2, `${label}: stale removal sends no further DELETE`);
+              assert(reloads === 0 && body.innerHTML === before, `${label}: stale settlement leaves the new visit untouched`);
+              // Re-render exposes an invisible pending-state change, and a
+              // programmatic submit checks admission even with a disabled button.
+              context.render();
+              const input = body.querySelector('#cwf-edit-value');
+              assert(input.disabled && input.value === '45', `${label}: the newer draft remains pending`);
+              input.closest('form').dispatchEvent(new Event('submit', { cancelable: true }));
+              assert(requests.length === 2, `${label}: an old result cannot unlock a duplicate write`);
+              requests[1].release();
+              await frame();
+              assert(reloads === 1 && !body.querySelector('.cwf-editor') && !button(row('review.minutes'), 'Edit').disabled,
+                `${label}: the newer Save settles normally`);
+              cases.push({ label, requests: requests.map(({ release, ...request }) => request), reloads });
+            }
+          }
+        }
+        const visit = common.captureWorkspaceVisit();
+        common.setHostWrites({ authorized: false, reason: 'fixture read-only host' });
+        const denied = await common.requestJson('/api/config/keys/review.minutes', 'PUT', { value: 45, scope: 'workspace' }, visit).catch((error) => error.code);
+        assert(denied === 'authorization_denied', 'visit-bound writes retain remote-host authorization checks');
+        common.setHost(null);
+        const expired = await common.requestJson('/api/config/keys/review.minutes', 'PUT', { value: 45, scope: 'workspace' }, visit).catch((error) => error.code);
+        assert(expired === 'stale_workspace_visit', 'an expired bound request is refused before fetch');
+      } finally {
+        window.fetch = originalFetch;
+        unsubscribe();
+      }
+      return cases;
+    }, payload);
+  } finally {
+    await racePage.close();
+  }
+}
+
+const racePayload = workspaceFile();
 
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
@@ -373,6 +487,7 @@ try {
     await page.screenshot({ path: path.join(evidence, `config-workspace-file-${width}.png`), fullPage: true });
   }
 
+  evidenceLog.visitRaces = await checkVisitRaces(browser, racePayload);
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'config-workspace-file-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -387,11 +502,16 @@ try {
       'browser-config-workspace-file-bulk-remove-per-key-outcome',
       'browser-config-workspace-file-refused-unset-on-row',
       'browser-config-workspace-file-phone-no-horizontal-scroll',
+      'browser-config-workspace-file-held-remove-host-switch',
+      'browser-config-workspace-file-held-remove-workspace-round-trip',
+      'browser-config-workspace-file-stale-save-and-add-settlement',
+      'browser-config-workspace-file-pending-operation-ownership',
+      'browser-config-workspace-file-visit-bound-write-admission',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard Settings › Workspace file browser checks passed at 1440px, 768px and 375px: counts, If removed, sidebar, edit, add key, bulk remove with a refused unset.');
+  console.log('Dashboard Settings › Workspace file browser checks passed at 1440px, 768px and 375px, including 12 held-response visit races and visit-bound write admission.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'config-workspace-file-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   await page?.screenshot({ path: path.join(evidence, 'config-workspace-file-failure.png'), fullPage: true }).catch(() => {});

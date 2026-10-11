@@ -16,7 +16,7 @@
 // PUT and DELETE key routes as every Settings view, one key per request, so a
 // refused removal is reported on its own row; the view then re-reads the file.
 
-import { copyWithFeedback, el, getWorkspace, requestJson } from './common.js';
+import { captureWorkspaceVisit, copyWithFeedback, el, getWorkspace, requestJson } from './common.js';
 import { button, cliCommand, display, draftText, draftValue, pill, valueField, valueTokens } from './config-effective.js';
 
 const CATEGORIES = [
@@ -38,7 +38,9 @@ let query = "";
 const checked = new Set();
 let draft = null;
 let adding = null;
-let pending = false;
+// The visit object also owns pending state; an old response cannot release a
+// newer operation after a scope reset.
+let pending = null;
 let status = null;
 const refusals = new Map();
 let lastRender = null;
@@ -50,7 +52,7 @@ export function resetWorkspaceFile() {
   checked.clear();
   draft = null;
   adding = null;
-  pending = false;
+  pending = null;
   status = null;
   refusals.clear();
 }
@@ -431,22 +433,24 @@ async function removeKeys(keys) {
   if (pending || !keys.length || !lastRender) return;
   const { context, payload } = lastRender;
   const before = buildModel(payload).byKey;
-  const workspace = getWorkspace();
-  pending = true;
+  const visit = captureWorkspaceVisit();
+  const current = () => visit.isCurrent() && pending === visit;
+  pending = visit;
   status = null;
   for (const key of keys) refusals.delete(key);
   rerender();
   const outcomes = [];
   for (const key of keys) {
+    if (!current()) return;
     try {
-      await requestJson(`/api/config/keys/${encodeURIComponent(key)}?scope=workspace`, "DELETE");
+      await requestJson(`/api/config/keys/${encodeURIComponent(key)}?scope=workspace`, "DELETE", undefined, visit);
       outcomes.push({ key, ok: true });
     } catch (error) {
       outcomes.push({ key, ok: false, text: error.message || String(error) });
     }
-    if (workspace !== getWorkspace()) return;
+    if (!current()) return;
   }
-  pending = false;
+  pending = null;
   for (const outcome of outcomes) {
     if (outcome.ok) {
       checked.delete(outcome.key);
@@ -573,7 +577,7 @@ function initChoices(payload, session, retry) {
 }
 
 /// One PUT to the workspace file, then a re-read. The outcome lands only on
-/// the draft that issued it, and only in the workspace it was opened in.
+/// the draft that issued it, and only in the host/workspace visit it began in.
 async function saveKey(row, session, init) {
   if (pending || !lastRender) return;
   const parsed = draftValue(row, session.text);
@@ -583,7 +587,9 @@ async function saveKey(row, session, init) {
     return;
   }
   const { context } = lastRender;
-  pending = true;
+  const visit = captureWorkspaceVisit();
+  const current = () => visit.isCurrent() && pending === visit;
+  pending = visit;
   session.error = null;
   rerender();
   try {
@@ -591,22 +597,24 @@ async function saveKey(row, session, init) {
       value: parsed.value,
       scope: "workspace",
       ...(init ? { init } : {}),
-    });
-    pending = false;
-    if (session.workspace !== getWorkspace()) return;
+    }, visit);
+    if (!current()) return;
     if (draft === session) draft = null;
     if (adding === session) adding = null;
     refusals.delete(row.key);
     status = { kind: "ok", text: `Saved ${row.key} to the workspace file.` };
     await context.reload();
   } catch (error) {
-    pending = false;
-    if (session.workspace !== getWorkspace()) return;
+    if (!current()) return;
     session.error = error.message || String(error);
-    rerender();
-    // The Save button was disabled while the write was in flight, which drops
-    // focus; the refused value is what the operator corrects next.
-    document.getElementById(session === adding ? "cwf-add-value" : "cwf-edit-value")?.focus();
+  } finally {
+    if (current()) {
+      pending = null;
+      rerender();
+      // A refused value is what the operator corrects next; restore focus once
+      // this operation has re-enabled its editor.
+      if (session.error) document.getElementById(session === adding ? "cwf-add-value" : "cwf-edit-value")?.focus();
+    }
   }
 }
 

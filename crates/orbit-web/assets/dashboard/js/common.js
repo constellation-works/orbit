@@ -899,7 +899,15 @@ export function listItems(payload) {
   return [];
 }
 
-export function requestJson(path, method, body) {
+// A supplied visit pins both host and workspace, including the serving host
+// whose unprefixed path must not be rewritten for a later host selection.
+// Expired visits cannot begin another request.
+export function requestJson(path, method, body, visit) {
+  if (visit && !visit.isCurrent()) {
+    const error = new Error("The host or workspace changed before the request began");
+    error.code = "stale_workspace_visit";
+    return Promise.reject(error);
+  }
   const headers = { accept: "application/json" };
   const opts = {
     method,
@@ -909,7 +917,7 @@ export function requestJson(path, method, body) {
     headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const target = withWorkspace(path);
+  const target = visit ? visit.path(path) : withWorkspace(path);
   const refusal = target.startsWith("/api/on/") && method !== "GET" ? hostWriteRefusal() : "";
   if (refusal) {
     const error = new Error(refusal);
