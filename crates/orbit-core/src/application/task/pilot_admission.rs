@@ -1,5 +1,6 @@
 //! Backlog holds from applied pilot findings, including assessments made
-//! without lifecycle promotion. Decisions are scoped to the latest assessment.
+//! without lifecycle promotion. Native-host decisions follow unchanged findings;
+//! other decisions are scoped to the latest assessment.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
@@ -189,6 +190,23 @@ impl NativeOsHold {
         }
     }
 
+    /// Requirement order and repetitions do not change the assessed finding.
+    fn same_finding(&self, other: &Self) -> bool {
+        let requirements = |hold: &Self| {
+            let mut requirements = hold
+                .requirements
+                .iter()
+                .map(|requirement| (requirement.criterion, requirement.os))
+                .collect::<Vec<_>>();
+            requirements.sort_unstable();
+            requirements.dedup();
+            requirements
+        };
+        self.criteria == other.criteria
+            && self.machine == other.machine
+            && requirements(self) == requirements(other)
+    }
+
     /// Whether anything is left for admission to judge under `tags`.
     fn outstanding(&self, tags: &TaskOsRequirement) -> bool {
         self.machine.is_some() || self.untagged(tags).next().is_some()
@@ -236,7 +254,7 @@ impl NativeOsHold {
                 |id| format!("machine {id}"),
             );
             return Some(format!(
-                "Machine requirement: criterion {criteria} needs evidence only machine {name} can produce, so {caller} cannot satisfy it. Run it on {name}, re-scope the criterion, or record an operator decision with evidence using `task-pilot-admission: clear` or `approve-anyway` as the comment's first line. A newer assessment supersedes the decision."
+                "Machine requirement: criterion {criteria} needs evidence only machine {name} can produce, so {caller} cannot satisfy it. Run it on {name}, re-scope the criterion, or record an operator decision with evidence using `task-pilot-admission: clear` or `approve-anyway` as the comment's first line. The decision remains valid across newer assessments with the same criteria digest and native-host requirements; changed criteria or requirements supersede it."
             ));
         }
         let unmet = self
@@ -265,7 +283,7 @@ impl NativeOsHold {
         let add = add.join(" or ");
         let host = host.map_or("an undeclared OS", HostOs::as_str);
         Some(format!(
-            "Native OS requirement: {needs}, and the task's tags lack {add}, so a host running {host} cannot satisfy it. Add {add} with `orbit.task.update` so admission routes it to a capable host, re-scope the criterion, or record an operator decision with evidence using `task-pilot-admission: clear` or `approve-anyway` as the comment's first line. A newer assessment supersedes the decision."
+            "Native OS requirement: {needs}, and the task's tags lack {add}, so a host running {host} cannot satisfy it. Add {add} with `orbit.task.update` so admission routes it to a capable host, re-scope the criterion, or record an operator decision with evidence using `task-pilot-admission: clear` or `approve-anyway` as the comment's first line. The decision remains valid across newer assessments with the same criteria digest and native-host requirements; changed criteria or requirements supersede it."
         ))
     }
 }
@@ -320,31 +338,37 @@ fn operator_resolved(
     operation_id: &str,
     (field, current): (&str, &str),
 ) -> bool {
-    history.iter().any(|entry| {
-        if entry.event != event || is_automation_actor(&entry.by) {
-            return false;
-        }
-        let Some(record) = entry
-            .note
-            .as_deref()
-            .and_then(|note| serde_json::from_str::<Value>(note).ok())
-        else {
-            return false;
-        };
-        record["operation_id"] == operation_id
-            && record["hold"][field] == current
-            && matches!(
-                record["decision"].as_str(),
-                Some(
-                    "task-pilot-admission: clear"
-                        | "task-pilot-admission: approve-anyway"
-                        | "task-pilot-admission: evaluated"
-                )
-            )
-            && record["evidence"]
-                .as_str()
-                .is_some_and(decision_has_evidence)
-    })
+    history
+        .iter()
+        .filter_map(|entry| trusted_operator_resolution(entry, event))
+        .any(|record| record["operation_id"] == operation_id && record["hold"][field] == current)
+}
+
+/// Native-host decisions answer the finding, independently of its pilot pass.
+fn native_os_resolved(history: &[TaskHistoryEntry], hold: &NativeOsHold) -> bool {
+    history
+        .iter()
+        .filter_map(|entry| trusted_operator_resolution(entry, NATIVE_OS_RESOLVED))
+        .filter_map(|record| serde_json::from_value::<NativeOsHold>(record["hold"].clone()).ok())
+        .any(|resolved| hold.same_finding(&resolved))
+}
+
+fn trusted_operator_resolution(entry: &TaskHistoryEntry, event: &str) -> Option<Value> {
+    if entry.event != event || is_automation_actor(&entry.by) {
+        return None;
+    }
+    let record: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
+    (matches!(
+        record["decision"].as_str(),
+        Some(
+            "task-pilot-admission: clear"
+                | "task-pilot-admission: approve-anyway"
+                | "task-pilot-admission: evaluated"
+        )
+    ) && record["evidence"]
+        .as_str()
+        .is_some_and(decision_has_evidence))
+    .then_some(record)
 }
 
 fn decision_header(message: &str) -> bool {
@@ -513,14 +537,8 @@ impl OrbitRuntime {
                         })?;
                     let tags = TaskOsRequirement::from_tags(&task.tags);
                     let current = hold.criteria == criteria_digest(task) && hold.outstanding(&tags);
-                    (current
-                        && !operator_resolved(
-                            &history()?,
-                            NATIVE_OS_RESOLVED,
-                            operation_id,
-                            ("criteria", &hold.criteria),
-                        ))
-                    .then_some(PilotAdmissionHold::NativeOs(hold))
+                    (current && !native_os_resolved(&history()?, &hold))
+                        .then_some(PilotAdmissionHold::NativeOs(hold))
                 }
                 None => None,
             };

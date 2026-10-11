@@ -159,6 +159,14 @@ Common reasons a backlog task waits:
   preserving its audit evidence. A later pilot assessment supersedes the
   decision. Ordinary edits, unrelated comments, and agent-authored decisions
   do not release it. All other admission checks still apply.
+- **`native_os_required`**: the pilot found native-host evidence requirements
+  this host cannot satisfy. Route to a capable host, re-scope the criteria, or
+  record an evidenced human `task-pilot-admission: clear` or `approve-anyway`
+  decision. This decision stays valid across later pilot passes with the same
+  criteria digest, OS requirement set and machine requirement; requirement
+  order does not matter. Changed criteria or requirements supersede it.
+  A new assessment still supersedes operator-validation and host-operational
+  decisions.
 - **`delivery_job_unavailable`**: the task's `delivery:<job>` tag selects a
   plugin delivery job whose plugin is disabled or uninstalled, or that does not
   declare the drain's ship mode. The detail names the plugin. Enable it or

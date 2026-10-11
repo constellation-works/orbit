@@ -243,8 +243,8 @@ every other machine (`deferred_conflicts`, shown as an `owner_hold` whose
 reason begins `Machine requirement:` and names the machine), while its own
 local drain may start the task. A pilot may name only the owner (by its
 registered machine name or id); a requirement on another machine stays a
-`utility_warnings` finding for an operator. The same re-scope, newer assessment
-or evidenced operator decision clears it.
+`utility_warnings` finding for an operator. A re-scope, a newer assessment without
+the finding, or an evidenced operator decision clears it.
 
 Admission honours an OS finding while the task's `os:` tags do not name the
 required OS. A local drain, ship discovery or `orbit run ship` on a host of
@@ -257,6 +257,12 @@ The wait clears when the tag is added, the acceptance criteria are re-scoped, a
 newer assessment carries no finding, or an operator records an evidenced
 `task-pilot-admission: clear` or `approve-anyway` decision through
 `orbit.task.update` (history event `native_os_requirement_resolved`).
+
+A trusted native-host decision remains valid across later pilot passes with the
+same acceptance-criteria digest, OS requirement set and machine requirement;
+requirement order does not matter. A pass with changed criteria or requirements
+supersedes it. Operator-validation and host-operational decisions still apply
+only to the assessment they answered; a new assessment supersedes them.
 
 Per-host compiler capacity is independent. Keep the shared build-budget
 defaults (two heavy slots, four Cargo jobs) unless you deliberately raise them;
