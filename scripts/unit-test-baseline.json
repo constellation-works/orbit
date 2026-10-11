@@ -158,7 +158,6 @@
         "fs/tests/io.rs::read_file_lock_holder_rejects_a_final_symlink_swapped_after_the_path_check",
         "fs/tests/io.rs::remove_path_if_exists_unlinks_a_directory_symlink_without_removing_its_target",
         "governance/tests/authorization.rs::agent_envelope_outranks_a_terminal",
-        "migration/tests/plan.rs::rejects_step_that_does_not_bump_version",
         "observability/tests/logging.rs::tracing_debug_field_redacts_secret_with_backslash_and_quote",
         "process/tests/bounded.rs::bounded_run_bounds_post_exit_drain_while_a_detached_writer_continues",
         "process/tests/bounded.rs::bounded_run_drains_output_past_pipe_capacity_with_capped_retention",
@@ -186,7 +185,8 @@
         "storage/tests/sqlite.rs::private_open_rejects_parent_directory_traversal",
         "storage/tests/sqlite.rs::private_open_rejects_symlink_database",
         "storage/tests/sqlite.rs::private_open_rejects_symlinked_sidecars_without_touching_their_targets",
-        "storage/tests/sqlite.rs::private_permission_hardening_follows_the_opened_file_across_a_swap"
+        "storage/tests/sqlite.rs::private_permission_hardening_follows_the_opened_file_across_a_swap",
+        "tests/migration.rs::rejects_step_that_does_not_bump_version"
       ]
     },
     "orbit-config": {
