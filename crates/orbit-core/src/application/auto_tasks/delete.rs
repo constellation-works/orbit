@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_store::compose::auto_task::{CursorSession, with_cursor_lock};
@@ -22,13 +21,16 @@ use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::OrbitRuntime;
 use crate::application::automation::{
     ConsumerTeardown, consumer_teardown_refusals, tear_down_auto_task_consumer,
 };
 use crate::application::managed_assets::{
     ManagedAssetLayout, ManagedAssetOptOut, record_managed_asset_opt_out, restore_managed_asset,
 };
-use crate::{AuditEventInsertParams, OrbitRuntime};
+use crate::runtime::audit::system::{
+    AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
+};
 
 use super::loader::{auto_tasks_dir, definition_path};
 use super::scheduler::open_auto_task_instances;
@@ -239,45 +241,23 @@ impl OrbitRuntime {
     /// Persist one definition-lifecycle audit event. The change it records is
     /// already on disk, so a failed audit write is logged, not returned.
     fn record_auto_task_audit(&self, subcommand: &str, name: &str, payload: Value) {
-        let params = AuditEventInsertParams {
-            execution_id: audit_execution_id(&format!("audit-auto-task-{subcommand}")),
-            command: "auto_task".to_string(),
-            subcommand: Some(subcommand.to_string()),
-            tool_name: Some(format!("orbit.auto_task.{subcommand}")),
-            target_type: Some(ASSET_KIND.to_string()),
-            target_id: Some(name.to_string()),
-            role: "admin".to_string(),
+        let execution_id_prefix = format!("audit-auto-task-{subcommand}");
+        let tool_name = format!("orbit.auto_task.{subcommand}");
+        let event = SystemAuditEvent {
+            execution_id_prefix: &execution_id_prefix,
+            command: "auto_task",
+            subcommand: Some(subcommand),
+            tool_name: Some(&tool_name),
+            target_type: ASSET_KIND,
+            target_id: Some(name),
+            role: "admin",
             status: AuditEventStatus::Success,
-            exit_code: 0,
-            duration_ms: 0,
-            working_directory: self.paths().repo_root.to_string_lossy().into_owned(),
-            arguments_json: Some(payload.to_string()),
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: None,
-            host: std::env::var("HOSTNAME").ok(),
-            pid: std::process::id(),
-            session_id: None,
+            arguments_json: payload.to_string(),
             workspace_id: None,
-            caller_machine_id: None,
-            caller_machine_name: None,
-            process_machine_id: None,
-            process_machine_name: None,
-            transport: None,
-            effective_capabilities: Default::default(),
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
             task_id: None,
-            job_run_id: std::env::var("ORBIT_RUN_ID").ok().filter(|s| !s.is_empty()),
-            activity_id: std::env::var("ORBIT_ACTIVITY_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            step_index: std::env::var("ORBIT_STEP_INDEX")
-                .ok()
-                .and_then(|s| s.parse().ok()),
+            attribution: AuditRunAttribution::Environment { run_id: None },
         };
-        if let Err(error) = self.record_audit_event(&params) {
+        if let Err(error) = record_system_audit_event(self, event) {
             tracing::error!(
                 target: "orbit.core.auto_tasks",
                 auto_task = name,
