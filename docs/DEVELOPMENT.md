@@ -36,6 +36,17 @@ make goldens           # CLI/MCP, CI log and sandbox profile goldens; UPDATE=1 r
 
 ### Affected-test selection
 
+Delivery remote-source and provider-attribution fixtures freeze monotonic source-budget time through
+`orbit_core::test_support::SOURCE_ELAPSED_ENV`, inherited by their isolated
+children and the built CLI. Zero elapsed milliseconds removes the assumption
+that real Git/provider commands finish within the two-second command budget,
+thirty-second source deadline, or twenty-second lookup window on a busy host.
+The runner still waits for command completion and enforces output limits.
+An expired injected clock exercises deadline refusal without sleeping or host
+load. The same clock covers instruction-tree preparation. This hook exists
+only with the dev-dependency `test-support` feature; production builds keep
+their monotonic wall-clock budgets and recognize no override.
+
 `make ci-test-affected` (`scripts/ci-test-affected.py`) reads Cargo metadata without compiling. It selects every crate with changed paths plus all transitive reverse workspace dependents (dev, build, renamed, optional and target-specific edges), then runs their library, binary and integration test targets with nextest (Cargo if nextest is missing) and Cargo doctests, under the shared [build-budget admission](runbooks/build-budget.md). A change under `crates/orbit-core/` selects `orbit-core`, `orbit-cmd`, `orbit-web` and `orbit-cli`.
 
 - **Diff:** committed, staged, unstaged and non-ignored untracked paths; a move selects both crates.

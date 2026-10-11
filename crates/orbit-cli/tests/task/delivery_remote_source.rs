@@ -45,6 +45,10 @@ fn in_isolated_child(test: &str) -> bool {
     let output = command
         .args(["--exact", test, "--nocapture"])
         .env(CHILD, test)
+        // Admission and fetch-sharing are functional checks, not assertions
+        // that this shared host finishes every command within two seconds.
+        // Freeze source time; commands still wait for exit and enforce size caps.
+        .env(orbit_core::test_support::SOURCE_ELAPSED_ENV, "0")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .current_dir(home.path())

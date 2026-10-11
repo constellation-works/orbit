@@ -63,6 +63,8 @@ pub fn mark_process_as_pipeline_worker_binary() {
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    /// Freeze source budget time in an isolated test process and its CLI children.
+    pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     /// Replaced with the run id in every argv entry of a substitute worker.
     pub use crate::application::job::pipeline::worker_command_override::RUN_ID_PLACEHOLDER;
     /// Substitute the detached pipeline worker program for this whole test

@@ -1028,6 +1028,9 @@ fn provider_landings_carry_the_tasks_that_recorded_the_pull_request() {
         let output = command
             .args(["--exact", TEST, "--nocapture"])
             .env(CHILD, TEST)
+            // Attribution requires every stubbed lookup, independent of the
+            // shared host's two-second command budget.
+            .env(orbit_core::test_support::SOURCE_ELAPSED_ENV, "0")
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
             .current_dir(home.path())

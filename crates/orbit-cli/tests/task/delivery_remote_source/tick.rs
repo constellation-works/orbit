@@ -113,6 +113,68 @@ fn tick(fixture: &Fixture, path: &str) -> Value {
 
 #[cfg(unix)]
 #[test]
+fn clock_tick_expired_source_preserves_debt_without_running_commands() {
+    const TEST: &str = "delivery_remote_source::tick::clock_tick_expired_source_preserves_debt_without_running_commands";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let runtime = consumers(&fixture);
+    land(&fixture, 1);
+    let path = recording_runner(&fixture);
+    let store = runtime.automation_store().unwrap();
+    let before = [CONSUMER, SECOND].map(|name| {
+        let key =
+            orbit_core::application::automation::consumer_key(&runtime, "auto-task", name).unwrap();
+        store.automation_state(&key).unwrap().unwrap()
+    });
+
+    // Expire before any command starts, without sleeping or host load. The
+    // CLI must see the same injected clock as in-process Core evaluation.
+    let output = fixture
+        .command(&["clock", "tick", "--format", "json"])
+        .env("PATH", &path)
+        .env(orbit_core::test_support::SOURCE_ELAPSED_ENV, "30001")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for name in [CONSUMER, SECOND] {
+        let row = report["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        assert_eq!(row["action"], "error", "{row}");
+        assert!(
+            row["reason"].as_str().unwrap().contains("source_deadline"),
+            "{row}"
+        );
+    }
+    assert!(recorded_commands(&fixture).is_empty());
+    for state in before {
+        assert_eq!(
+            store.automation_state(&state.consumer).unwrap().as_ref(),
+            Some(&state),
+            "expired source must preserve the consumer's debt and coverage"
+        );
+    }
+
+    // A separate pass uses frozen zero elapsed time and waits for real child
+    // completion. Neither pass retries a failed operation.
+    tick(&fixture, &path);
+    assert_eq!(
+        recorded_commands(&fixture)
+            .iter()
+            .filter(|command| *command == "fetch")
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn clock_tick_shares_fetch_and_each_lookup_across_consumers() {
     const TEST: &str =
         "delivery_remote_source::tick::clock_tick_shares_fetch_and_each_lookup_across_consumers";

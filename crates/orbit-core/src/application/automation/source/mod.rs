@@ -1,11 +1,15 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
+mod clock;
 mod command;
 mod inspection;
 mod observe;
 mod replay;
 mod revision;
 
+pub(super) use clock::BudgetClock;
+#[cfg(feature = "test-support")]
+pub use clock::SOURCE_ELAPSED_ENV;
 pub(super) use command::{LISTING_LIMIT, OUTPUT_LIMIT};
 #[cfg(test)]
 pub(super) use command::{arm_canonical_signature_deadline, clear_canonical_signature_deadline};
@@ -16,10 +20,7 @@ pub(super) use revision::{arm_expire_source_after_next_head, clear_expired_sourc
 
 use super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::{path::Path, time::Duration};
 
 /// Overall budget for every git and provider command one source pass runs.
 pub(super) const SOURCE_DEADLINE: Duration = Duration::from_secs(30);
@@ -35,7 +36,7 @@ struct ObservationLimits {
 
 pub(crate) struct Source<'a> {
     root: &'a Path,
-    started: Instant,
+    started: BudgetClock,
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,
     fetch_origin: bool,
