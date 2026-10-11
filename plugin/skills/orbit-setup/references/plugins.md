@@ -246,7 +246,9 @@ sources inside a workspace repository, so move the scaffold outside the reposito
 or give `--dir` an external path before installing it.
 
 `orbit plugin validate <dir> --render` uses the same profile and child-environment builders
-as a real call, but starts no backend. In a registered workspace it renders for that
+as a real call, but starts no backend. Human and JSON inspection retain environment
+names and non-sensitive values while redacting credential values; actual backend calls
+still receive the admitted values. In a registered workspace it renders for that
 workspace. From an unregistered directory it uses host-level config and does not
 initialize a workspace there. Pass the global `--workspace <selector>` option when
 rendering needs workspace config or to inspect another registered checkout.

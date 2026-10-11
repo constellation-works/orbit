@@ -1107,6 +1107,10 @@ schemas compile at read time (naming the tool on failure) and may reference only
 
 `orbit plugin validate <dir>` — manifest schema, path containment, namespace collisions,
 schema self-consistency, definition cross-references, and the `spec.web` rules of §4.7.
+With `--render`, it previews the effective sandbox profile and child environment without
+starting a backend. Human and JSON output preserve environment names and non-sensitive
+values while redacting credential values. Redaction applies only to this diagnostic
+projection; backend calls receive their admitted environment values unchanged.
 
 `orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol.
 
