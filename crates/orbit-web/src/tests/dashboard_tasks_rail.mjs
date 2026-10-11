@@ -69,6 +69,14 @@ class Node {
     else this.children.splice(index, 0, child);
     return child;
   }
+  replaceWith(...nodes) {
+    if (!this.parentNode) return;
+    const parent = this.parentNode;
+    const index = parent.children.indexOf(this);
+    parent.removeChild(this);
+    const before = parent.children[index] || null;
+    for (const node of nodes) parent.insertBefore(node, before);
+  }
   setAttribute(name, value) { this.attrs[name] = String(value); }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
@@ -146,7 +154,7 @@ const linker = async specifier => {
 const tasksModule = load('tasks.js');
 await tasksModule.link(linker);
 await tasksModule.evaluate();
-const { renderTasks, applyTasksHashQuery, buildTasksHash } = tasksModule.namespace;
+const { renderTasks, applyTasksHashQuery, buildTasksHash, setPinnedExternalTask, clearPinnedExternalTask } = tasksModule.namespace;
 const common = modules.get('common.js').namespace;
 
 // A matching set of 65 tasks read in pages of 50, as /api/tasks serves them.
@@ -542,6 +550,90 @@ for (const item of cardTasks) {
   title.parentNode.dispatch('click', { target: title });
 }
 drainWaits.setDrainReadiness({ tasks: [] });
+
+// ORB-15380: pinned readiness invalidation follows its rendered answer even
+// outside the active filter, and a draft keeps its controls while the answer
+// is refreshed in place.
+const pinnedVisibleTask = task(152);
+const pinnedContext = {
+  ...taskContext,
+  getActiveStatuses: () => new Set(['in-progress']),
+  statusOrder: ['in-progress'],
+};
+const paintPinned = () => {
+  served = { total: 1, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = [pinnedVisibleTask];
+  renderTasks(currentTasks, pinnedContext);
+};
+const pinnedWrap = () => byId['tasks-body'].querySelector('.pinned-task-wrap');
+const pinnedReadiness = () => pinnedWrap().querySelector('.readiness-list');
+const pinnedCardHead = () => pinnedReadiness().querySelector('.readiness-drain-head').children.map(node => node.textContent);
+const pinnedReads = [];
+context.fetch = path => {
+  const url = new URL(path, 'http://dashboard.test');
+  assert.equal(url.pathname, '/api/workflows/auto/readiness', `the pinned detail reads drain readiness: ${path}`);
+  const id = url.searchParams.get('task');
+  pinnedReads.push(id);
+  return heldReads.get(id).promise;
+};
+
+const pinnedSuccessTask = task(150, { status: 'backlog', workspace_id: 'ws_orbit', readiness: readyGaps });
+const pinnedSuccessEntry = { task_id: 'ORB-150', status: 'backlog', eligible: true, reason: 'ready' };
+heldReads.set('ORB-150', holdRead());
+const pinnedSuccessBefore = JSON.stringify(pinnedSuccessTask);
+setPinnedExternalTask(pinnedSuccessTask, pinnedContext);
+paintPinned();
+const pendingSuccessWrap = pinnedWrap();
+assert.ok(pinnedReadiness().textContent.includes('Checking whether the drain can take this task'), 'a pinned detail shows pending readiness');
+heldReads.get('ORB-150').resolve(readinessResponse({ tasks: [pinnedSuccessEntry] }));
+heldReads.delete('ORB-150');
+await settleReads();
+assert.notEqual(pinnedWrap(), pendingSuccessWrap, 'a settled pinned answer invalidates its wrapper');
+assert.deepEqual(pinnedCardHead(), ['', 'Eligible now', 'nothing holds it'], 'a pinned proposed or backlog task shows its completed answer');
+assert.ok(pinnedReadiness().textContent.includes('Ready: nothing is missing.'));
+assert.equal(JSON.stringify(pinnedSuccessTask), pinnedSuccessBefore, 'the readiness repaint needs no task field change');
+assert.deepEqual(pinnedReads, ['ORB-150'], 'settling readiness does not issue another per-task read');
+clearPinnedExternalTask(pinnedContext);
+
+const pinnedFailureTask = task(151, { status: 'backlog', workspace_id: 'ws_orbit', readiness: readyGaps });
+heldReads.set('ORB-151', holdRead());
+setPinnedExternalTask(pinnedFailureTask, pinnedContext);
+paintPinned();
+const pendingFailureWrap = pinnedWrap();
+assert.ok(pinnedReadiness().textContent.includes('Checking whether the drain can take this task'));
+heldReads.get('ORB-151').resolve(readinessResponse({ error: 'readiness offline' }, false));
+heldReads.delete('ORB-151');
+await settleReads();
+assert.notEqual(pinnedWrap(), pendingFailureWrap, 'a failed pinned answer invalidates its wrapper');
+assert.ok(pinnedReadiness().textContent.includes('Drain readiness unknown: readiness offline.'), pinnedReadiness().textContent);
+const commentButton = pinnedWrap().querySelector('.action.comment');
+commentButton.dispatch('click');
+const draftWrap = pinnedWrap();
+const draftTextarea = draftWrap.querySelector('.comment-form textarea');
+assert.ok(draftTextarea, 'the pinned detail opens its comment draft control');
+draftTextarea.value = 'keep this unsent draft';
+const readinessRepaints = [];
+const stopPinnedReadiness = drainWaits.onDrainReadinessChange(() => {
+  readinessRepaints.push('changed');
+  paintPinned();
+});
+const pinnedLock = { task_id: 'ORB-151', status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:src/locked.rs', locking_task_id: 'ORB-88' }] };
+drainWaits.setDrainReadiness({ tasks: [pinnedLock] });
+assert.equal(readinessRepaints.length, 1, 'a fallback snapshot repaints a pinned detail');
+assert.equal(pinnedWrap(), draftWrap, 'fallback repaint preserves the pinned wrapper holding a draft');
+assert.equal(pinnedWrap().querySelector('.comment-form textarea'), draftTextarea, 'fallback repaint preserves the live draft control');
+assert.equal(draftTextarea.value, 'keep this unsent draft', 'fallback repaint preserves the unsent text');
+assert.deepEqual(pinnedCardHead(), ['', 'Waiting on locks', 'waits on ORB-88 · lock'], 'the failed read now shows the known snapshot state');
+const pinnedCapacity = { task_id: 'ORB-151', status: 'backlog', eligible: false, reason: 'capacity_saturated', active_run_ids: ['jrun-7'] };
+drainWaits.setDrainReadiness({ tasks: [pinnedCapacity] });
+assert.equal(readinessRepaints.length, 2, 'a changed fallback answer repaints again');
+assert.equal(pinnedWrap(), draftWrap, 'a second fallback repaint still preserves the draft wrapper');
+assert.equal(pinnedWrap().querySelector('.comment-form textarea'), draftTextarea, 'a second fallback repaint keeps the same control');
+assert.equal(draftTextarea.value, 'keep this unsent draft');
+assert.deepEqual(pinnedCardHead(), ['', 'Waiting on capacity', 'no free slot'], 'the card shows the current fallback snapshot');
+stopPinnedReadiness();
+drainWaits.setDrainReadiness({ tasks: [] });
+clearPinnedExternalTask(pinnedContext);
 context.fetch = () => new Promise(() => {});
 
 // Review approval runs the shipped row handler and request client. Hold the
