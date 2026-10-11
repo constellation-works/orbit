@@ -385,8 +385,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     setDiagSubtabImpl(ctx, sub);
     hash = `#diagnostics/${sub}?window=${encodeURIComponent(getWindow())}`;
   } else if (top === "audit") {
-    ctx.applyAuditHashQuery(query);
-    const sub = ["events", "policy"].includes(segments[1]) ? segments[1] : ctx.getActiveAuditSubtab();
+    const sub = ["events", "codebase"].includes(segments[1]) ? segments[1] : ctx.getActiveAuditSubtab();
+    ctx.applyAuditHashQuery(query, sub);
     ctx.setAuditSubtab(sub);
     hash = ctx.buildAuditHash();
     ctx.syncAuditControls();
@@ -533,6 +533,13 @@ function initTabsImpl(ctx) {
         showAllFailedRuns();
         setActiveTabImpl(ctx, "diagnostics/runs", { refresh: false });
         if (windowChanged) notifyScopeChange();
+        return;
+      }
+      // The denial badge opens Audit › Events filtered to denials for the
+      // window it counted; the Audit label keeps the view already on screen.
+      const denials = event.target && event.target.closest && event.target.closest("#rail-count-audit-denials");
+      if (denials && denials.dataset.route && tab.dataset.tab === "audit") {
+        setActiveTabImpl(ctx, denials.dataset.route, { refresh: false });
         return;
       }
       setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false });

@@ -67,6 +67,9 @@ pub(super) struct StateInner {
     /// Per-server memo for `/api/diagnostics/friction`, keyed by month and
     /// bounded row limit. Collapses overlapping Runs-tab polls into one scan.
     diagnostics_friction: RuntimeMemo<(String, usize)>,
+    /// Per-server cache of the codebase analytics scan, one per workspace
+    /// runtime. Holds typed facts; every window and rollup slices them.
+    codebase: RuntimeMemo<(), crate::api::CodebaseFacts>,
     /// Per-server cache of the last `orbit doctor` report for each workspace
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
@@ -409,6 +412,7 @@ impl DashboardState {
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
+                codebase: RuntimeMemo::new("codebase analytics scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
@@ -491,6 +495,11 @@ impl DashboardState {
     /// Process-local plugin panel memo shared by every dashboard tab.
     pub(crate) fn plugin_panel_memo(&self) -> &RuntimeMemo<(String, String)> {
         &self.inner.plugin_panels
+    }
+
+    /// Process-local codebase analytics scan cache for this server instance.
+    pub(crate) fn codebase_memo(&self) -> &RuntimeMemo<(), crate::api::CodebaseFacts> {
+        &self.inner.codebase
     }
 
     /// Process-local `/api/diagnostics/errors` memo for this server instance.

@@ -100,12 +100,12 @@ pub(crate) use contracts::{
     AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall,
     ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationCheckParams,
     TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
-    TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
-    TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
-    TaskReservationReleaseResult, TaskReservationReserveResult, TaskReservationScope,
-    WorkspaceClaimAcquireParams, WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams,
-    WorkspaceClaimCheckResult, WorkspaceClaimHolder, WorkspaceClaimReleaseParams,
-    WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
+    TaskReservationOwnedConflictsResult, TaskReservationRecord,
+    TaskReservationReleaseByOwnerParams, TaskReservationReleaseByOwnerResult,
+    TaskReservationReleaseParams, TaskReservationReleaseResult, TaskReservationReserveResult,
+    TaskReservationScope, WorkspaceClaimAcquireParams, WorkspaceClaimAcquireResult,
+    WorkspaceClaimCheckParams, WorkspaceClaimCheckResult, WorkspaceClaimHolder,
+    WorkspaceClaimReleaseParams, WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
 };
 pub use contracts::{
     ActivityInvocationCount, ActivityInvocationMetrics, AuditEventFilter, AuditEventInsertParams,

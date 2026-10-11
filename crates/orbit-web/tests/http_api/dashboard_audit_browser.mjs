@@ -29,13 +29,22 @@ const summary = {
   ],
   mcp_vs_cli_split: [{ label: 'mcp', count: 12345 }],
 };
-const policy = {
-  total: 8, policy_decisions: { total: 4, sql: 3, v2: 1 }, evidence_scan_limit: 1000,
-  recent_denials: Array.from({ length: 8 }, (_, index) => ({
-    timestamp: events[0].timestamp, target: `fixture.denial.${index}`,
-    cause: index < 4 ? 'policy' : 'context refusal', denial_kind: 'tool_policy',
-  })),
+const rate = (numerator, denominator) => ({ rate: numerator / denominator, numerator, denominator });
+const analytics = {
+  window: '90d', rollup: 'file', min_support: 15, touched: 'declared_footprint', tasks_scanned: 5000,
+  computed_at: '2026-10-07T09:32:04Z', cache_ttl_seconds: 300,
+  regressions: { below_support: 3, population: 400, rows: [{
+    path: 'crates/orbit-core/src/runtime/task/a-long-module-name/with/nested/paths/mod.rs', ...rate(4, 20),
+    regressed_tasks: [{ task_id: 'ORB-1', title: 'Fixture regression', crew: 'opus', regression_tasks: ['ORB-2'] }],
+    by_crew: [{ crew: 'opus', ...rate(4, 20) }],
+  }] },
+  lock_contention: { below_support: 0, wait_time_recorded: false, rows: [{ path: 'Cargo.lock', ...rate(9, 30), contending_tasks: 9, reservations: 30, denials: 210, wait_ms: null }] },
+  footprint_misses: { below_support: 0, population: 400, rows: [{ path: 'docs/README.md', ...rate(6, 18), widenings: 7 }] },
+  change_coupling: { below_support: 0, reservations: 120, excluded_large: 4, large_footprint_cap: 12, rows: [{ paths: ['crates/a/src/lib.rs', 'crates/b/src/lib.rs'], ...rate(16, 20), reservations: [18, 18] }] },
+  blocked: { below_support: 0, causes: [{ cause: 'auth', kind: 'infrastructure', tasks: 3 }, { cause: 'unclassified', kind: 'unclassified', tasks: 2 }, { cause: 'run_failure', kind: 'attributed', tasks: 5 }], rows: [{ path: 'src/blocked.rs', ...rate(5, 16), unclassified: 2 }] },
+  rejected: { below_support: 0, rejected_with_run: 2, excluded_without_run: 6, rows: [{ path: 'src/rejected.rs', ...rate(2, 15) }] },
 };
+const analyticsRequests = [];
 // When set, /api/audit pages through it like the real endpoint: newest first,
 // `before` keyset cursor, `x-audit-next-before` while a full page may have more.
 let pagedEvents = null;
@@ -63,9 +72,9 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname.startsWith('/api/')) {
     let payload = events;
-    if (url.pathname === '/api/diagnostics/denials') {
-      payload = url.searchParams.has('kind') ? { ...policy, total: 2, recent_denials: policy.recent_denials.slice(0, 2) } : policy;
-      if (url.searchParams.get('agent') === 'absent') payload = { ...policy, total: 0, recent_denials: [] };
+    if (url.pathname === '/api/codebase/analytics') {
+      analyticsRequests.push(url.searchParams);
+      payload = analytics;
     }
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payload));
@@ -263,55 +272,39 @@ try {
   assert.equal((await rowTitles())[2], 'event 9000', 'the gap match follows the new head');
   pagedEvents = null;
   await page.evaluate(async () => {
-    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
-    auditFixture.setAuditSubtab('policy');
-    await auditFixture.fetchAndRenderPolicy(auditContext);
+    const codebase = await import('/js/codebase.js');
+    // app.js is stripped here, so wire the controls the way it does.
+    globalThis.codebaseChanges = 0;
+    codebase.wireCodebaseControls(() => { globalThis.codebaseChanges += 1; });
+    auditFixture.setActiveAuditSubtabFromButton('codebase');
+    await codebase.fetchAndRenderCodebase();
   });
-  assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 8);
-  const policyBadgeCount = Number(await page.locator('#audit-count').textContent());
-  const policyHeadline = await page.locator('.policy-count-headline').textContent();
-  assert.match(policyHeadline, new RegExp(`^${policyBadgeCount} policy denials\\b`));
-  assert.equal(policyBadgeCount, 4);
-  assert.equal(await page.locator('#audit-title').textContent(), 'Policy denials');
-  const countDetails = page.locator('.policy-count-details');
-  assert.equal(await countDetails.locator('summary').textContent(), 'How this is counted');
-  assert.equal(await countDetails.evaluate(details => details.open), false, 'count provenance is collapsed by default');
-  assert.equal(await countDetails.locator('.policy-count-explanation').isVisible(), false);
-  assert.match(await countDetails.locator('.policy-count-explanation').textContent(), /8 denial evidence rows/);
-  assert.match(await countDetails.locator('.policy-count-explanation').textContent(), /1000 rows per source/);
-  const recentTableLayout = await page.locator('.policy-recent-table').evaluate(table => {
-    const card = table.closest('.policy-section');
-    const tableBox = table.getBoundingClientRect();
-    const cardBox = card.getBoundingClientRect();
-    return {
-      tableLeft: tableBox.left, tableRight: tableBox.right,
-      cardLeft: cardBox.left, cardRight: cardBox.right,
-      cardClientWidth: card.clientWidth, cardScrollWidth: card.scrollWidth,
-    };
+  assert.equal(await page.locator('#audit-title').textContent(), 'Codebase analytics');
+  assert.equal(await page.locator('#audit-body').isVisible(), false, 'Codebase hides the Events listing');
+  assert.equal(await page.locator('#audit-codebase-controls').isVisible(), true);
+  assert.equal(await page.locator('#audit-codebase-body .codebase-section').count(), 6);
+  assert.match(await page.locator('#audit-codebase-body .codebase-caption').textContent(), /Touched = declared footprint/);
+  assert.equal(analyticsRequests.at(-1).get('min_support'), '15', 'minimum support defaults to 15');
+  const codebaseLayout = await page.locator('#audit-codebase-body').evaluate(body => {
+    const box = body.getBoundingClientRect();
+    return [...body.querySelectorAll('.codebase-section')].map(section => {
+      const table = section.querySelector('table');
+      const tableBox = table ? table.getBoundingClientRect() : null;
+      return { key: section.dataset.section, inside: !tableBox || (tableBox.left >= box.left - 1), scrolls: section.scrollWidth > section.clientWidth + 1 };
+    });
   });
-  assert.ok(recentTableLayout.tableLeft >= recentTableLayout.cardLeft, `recent table starts inside its card: ${JSON.stringify(recentTableLayout)}`);
-  assert.ok(recentTableLayout.tableRight <= recentTableLayout.cardRight + 1, `recent table ends inside its card at 1440x900: ${JSON.stringify(recentTableLayout)}`);
-  assert.ok(recentTableLayout.cardScrollWidth <= recentTableLayout.cardClientWidth + 1, `recent table does not overflow its card at 1440x900: ${JSON.stringify(recentTableLayout)}`);
-  await page.screenshot({ path: path.join(evidence, 'policy-1440.png'), fullPage: true, animations: 'disabled' });
+  for (const row of codebaseLayout) assert.ok(row.inside, `${row.key} table starts inside the panel: ${JSON.stringify(codebaseLayout)}`);
+  await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.selectOption('#codebase-rollup', 'crate');
+  assert.equal(await page.evaluate(() => globalThis.codebaseChanges), 1, 'the rollup select asks for a new hash');
   await page.evaluate(async () => {
-    auditFixture.applyAuditHashQuery(new URLSearchParams('kind=fs'));
-    await auditFixture.fetchAndRenderPolicy(auditContext);
+    const codebase = await import('/js/codebase.js');
+    await codebase.fetchAndRenderCodebase();
   });
-  assert.equal(Number(await page.locator('#audit-count').textContent()), 4, 'kind filters only restrict evidence, not canonical denials');
-  assert.match(await page.locator('.policy-count-headline').textContent(), /^4 policy denials\b/);
-  assert.match(await page.locator('.policy-count-explanation').textContent(), /2 denial evidence rows after the active filters/);
-  assert.equal(await page.locator('.policy-recent-table tbody tr').count(), 2);
-  await page.evaluate(async () => {
-    auditFixture.applyAuditHashQuery(new URLSearchParams('role=absent&since=7d'));
-    await auditFixture.fetchAndRenderPolicy(auditContext);
-  });
-  assert.equal(await page.locator('.policy-recent-table').count(), 0);
-  assert.match(await page.locator('.policy-count-headline').textContent(), /^4 policy denials in 7d\b/);
-  assert.match(await page.locator('#audit-policy-body .empty-state').textContent(), /No denial evidence matches the active filters/);
-  assert.equal(await page.locator('.policy-count-details').evaluate(details => details.open), false);
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup select changes the request');
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, policy: { canonical: 4, evidence: 8, additional: 4 }, errors }, null, 2));
-  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, policy counts/filters/windows and keyboard expansion passed');
+  fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: codebaseLayout, errors }, null, 2));
+  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, the codebase view and keyboard expansion passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;

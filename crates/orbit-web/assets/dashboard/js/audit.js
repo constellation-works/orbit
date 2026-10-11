@@ -1,14 +1,15 @@
 // Orbit dashboard audit-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW, formatDateTime } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, renderPanelPlaceholder, requestPanel, onWorkspaceChange, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { applyCodebaseHashQuery, codebaseHashParams } from './codebase.js';
 
 const $ = (id) => document.getElementById(id);
 
 const AUDIT_LIMIT = positiveIntParam("audit", 50);
 const INCIDENT_ID_BATCH_SIZE = 500;
 const AUDIT_STATUSES = ["success", "failure", "denied", "non_success"];
-const AUDIT_SUBTABS = ["events", "policy"];
+const AUDIT_SUBTABS = ["events", "codebase"];
 // Server header naming the `before` cursor that resumes the listing; absent
 // once the window is exhausted.
 const AUDIT_NEXT_BEFORE_HEADER = "x-audit-next-before";
@@ -40,58 +41,9 @@ let auditFilter = {
   metric: null,
   // Hides successful calls from the unconfirmed caller (probe traffic).
   hide_unverified: false,
-  // Policy sub-tab only: scopes /api/diagnostics/denials to fs vs tool denials.
-  policyKind: null,
 };
 let expandedAuditIds = new Set();
 let activeAuditSubtab = "events";
-let lastAuditPolicy = null;
-let policySort = {
-  by_profile: "count",
-  by_target: "count",
-  by_run: "count",
-  by_execution: "count",
-  by_agent: "count",
-};
-
-const POLICY_TABLES = [
-  {
-    id: "by_profile",
-    label: "By profile",
-    nameField: "name",
-    header: "profile",
-    filterKey: "profile",
-  },
-  {
-    id: "by_target",
-    label: "By target",
-    nameField: "name",
-    header: "target",
-    filterKey: null,
-  },
-  {
-    id: "by_run",
-    label: "By job run",
-    nameField: "run_id",
-    header: "job_run_id",
-    navigateTo: "job_run",
-  },
-  {
-    id: "by_execution",
-    label: "By audit invocation",
-    nameField: "execution_id",
-    header: "execution_id",
-    navigateTo: "audit_execution",
-  },
-  {
-    id: "by_agent",
-    label: "By agent",
-    nameField: "agent",
-    header: "agent",
-    filterKey: "role",
-  },
-];
-
 const AUDIT_COLUMNS = [
   { key: "time", label: "time" },
   { key: "status", label: "status" },
@@ -115,16 +67,8 @@ function fmtTimestampValue(ctx, v) {
   return hasCtx(ctx, "fmtTimestamp") ? ctx.fmtTimestamp(v) : (v || "-");
 }
 
-function fmtRelativeValue(ctx, v) {
-  return hasCtx(ctx, "fmtRelative") ? ctx.fmtRelative(v) : (v || "-");
-}
-
 function fmtAbsTimeValue(ctx, v) {
   return hasCtx(ctx, "fmtAbsTime") ? ctx.fmtAbsTime(v) : (v || "-");
-}
-
-function truncateValue(ctx, s, n = 18) {
-  return hasCtx(ctx, "truncate") ? ctx.truncate(s, n) : String(s || "").slice(0, n);
 }
 
 function doRefresh(ctx) {
@@ -139,22 +83,12 @@ function doSetActiveTab(ctx, route, opts) {
   }
 }
 
-function doNavigateToRun(ctx, runId) {
-  if (hasCtx(ctx, "navigateToRun")) {
-    try { ctx.navigateToRun(runId); } catch (_) {}
-  }
-}
-
 function buildAuditHash() {
   const sp = new URLSearchParams();
-  // The Audit Events tab and the Policy sub-tab serialize different filter
-  // axes. The shared `auditFilter` object holds all of them; here we project
-  // only the fields meaningful for the active sub-tab so the hash stays
-  // self-describing and reload-safe.
-  if (activeAuditSubtab === "policy") {
-    if (auditFilter.policyKind) sp.set("kind", auditFilter.policyKind);
-    if (auditFilter.profile) sp.set("profile", auditFilter.profile);
-    if (auditFilter.role) sp.set("role", auditFilter.role);
+  // The Events and Codebase sub-tabs serialize different axes; project only
+  // the active sub-tab's so the hash stays self-describing and reload-safe.
+  if (activeAuditSubtab === "codebase") {
+    codebaseHashParams(sp);
   } else if (auditFilter.eventIds.length > 0) {
     sp.set("ids", auditFilter.eventIds.join(","));
   } else {
@@ -184,12 +118,17 @@ function setAuditSubtab(name) {
   }
   const eventsCtl = $("audit-events-controls");
   const eventsBody = $("audit-body");
-  const policyBody = $("audit-policy-body");
+  const codebaseCtl = $("audit-codebase-controls");
+  const codebaseBody = $("audit-codebase-body");
   if (eventsCtl) eventsCtl.style.display = name === "events" ? "" : "none";
   if (eventsBody) eventsBody.style.display = name === "events" ? "" : "none";
-  if (policyBody) policyBody.style.display = name === "policy" ? "" : "none";
+  if (codebaseCtl) codebaseCtl.style.display = name === "codebase" ? "" : "none";
+  if (codebaseBody) codebaseBody.style.display = name === "codebase" ? "" : "none";
+  // The audit count is the Events listing's; Codebase states its own totals.
+  const count = $("audit-count");
+  if (count) count.style.display = name === "events" ? "" : "none";
   const title = $("audit-title");
-  if (title) title.textContent = name === "policy" ? "Policy denials" : "Audit events";
+  if (title) title.textContent = name === "codebase" ? "Codebase analytics" : "Audit events";
 }
 
 function syncAuditControls() {
@@ -294,9 +233,15 @@ function renderScopeChips() {
   }
 }
 
-function applyAuditHashQuery(query) {
+function applyAuditHashQuery(query, subtab = "events") {
   // Mutates auditFilter from URLSearchParams (hash query). Called from setActiveTab.
   // Legacy run_id alias for execution_id is preserved for old deep links.
+  // A Codebase hash carries only that view's selection, so it leaves the
+  // Events filter as it was.
+  if (subtab === "codebase") {
+    applyCodebaseHashQuery(query);
+    return;
+  }
   auditFilter.status = query.get("status") || null;
   auditFilter.tool = query.get("tool") || null;
   auditFilter.role = query.get("role") || null;
@@ -312,8 +257,6 @@ function applyAuditHashQuery(query) {
   auditFilter.since = query.get("since") || (getWindow() === "all" ? null : getWindow());
   auditFilter.metric = query.get("metric") || null;
   auditFilter.hide_unverified = query.get("hide_unverified") === "1";
-  const kindParam = query.get("kind");
-  auditFilter.policyKind = kindParam === "fs" || kindParam === "tool" ? kindParam : null;
 }
 
 function getActiveAuditSubtab() {
@@ -328,10 +271,9 @@ function setActiveAuditSubtabFromButton(name) {
 
 function placeholdAuditAggregate() {
   renderPanelPlaceholder("audit-body");
-  renderPanelPlaceholder("audit-policy-body");
+  renderPanelPlaceholder("audit-codebase-body");
   lastAudit = [];
   auditPaging = freshAuditPaging();
-  lastAuditPolicy = null;
   const count = $("audit-count");
   if (count) count.textContent = "—";
 }
@@ -593,6 +535,30 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
   return container;
 }
 
+// The canonical denial count of /api/audit/summary (`denials`: denied audit
+// rows plus v2 loop denials) rides on the rail beside Audit. Its route opens
+// Audit › Events filtered to denials for the window it counted.
+function renderDenialCount(data) {
+  const node = $("rail-count-audit-denials");
+  if (!node) return;
+  const denials = Number(data && data.denials) || 0;
+  const window = (data && data.window) || "24h";
+  node.hidden = denials === 0;
+  node.textContent = denials ? `${denials >= 10000 ? `${(denials / 1000).toFixed(1)}k` : denials} denied` : "";
+  if (!denials) {
+    node.title = "";
+    delete node.dataset.route;
+    return;
+  }
+  const sql = Number(data.denials_sql) || 0;
+  const v2 = Number(data.denials_v2) || 0;
+  node.title = `${denials} policy denials in the ${window} window (${sql} audit rows, ${v2} loop denials). Click to open Audit › Events filtered to denials.`;
+  const sp = new URLSearchParams();
+  if (window !== "all") sp.set("since", window);
+  sp.set("status", "denied");
+  node.dataset.route = `audit/events?${sp.toString()}`;
+}
+
 function renderAuditSummary(data, ctx) {
   const events = Number(data && data.events);
   auditWindowTotal = Number.isFinite(events) && data.window ? { events, window: data.window } : null;
@@ -808,293 +774,11 @@ function renderAuditSummary(data, ctx) {
   syncNodes(container, cards);
 }
 
-function fetchAndRenderPolicy(ctx) {
-  // ORB-00040: the audit Policy subtab reads /api/diagnostics/denials, which is
-  // also per-workspace (the `Ws` extractor 400s without a concrete workspace),
-  // so guard it the same way as the events subtab.
-  if (isAggregateView()) {
-    placeholdAuditAggregate();
-    return Promise.resolve();
-  }
-  const sp = new URLSearchParams();
-  sp.set("since", effectiveAuditWindow() || "24h");
-  if (auditFilter.policyKind) sp.set("kind", auditFilter.policyKind);
-  if (auditFilter.profile) sp.set("profile", auditFilter.profile);
-  if (auditFilter.role) sp.set("agent", auditFilter.role);
-  const path = `/api/diagnostics/denials?${sp.toString()}`;
-  // Same visit guard as events: a late denial report must not replace the
-  // policy tables or the snapshot their column sort re-renders.
-  return requestPanel("audit-policy-body", path, () => fetchJson(path), (data) => {
-    lastAuditPolicy = data;
-    renderPolicy(data, ctx);
-  }, "audit-count");
-}
-
 onWorkspaceChange(() => {
   lastAudit = [];
   auditPaging = freshAuditPaging();
   auditWindowTotal = null;
-  lastAuditPolicy = null;
 });
-
-function renderPolicy(data, ctx) {
-  const body = $("audit-policy-body");
-  if (!body) return;
-  const decisions = data && data.policy_decisions;
-  const canonicalTotal = Number.isFinite(decisions && decisions.total)
-    ? decisions.total
-    : Number(data && data.total) || 0;
-  $("audit-count").textContent = `${canonicalTotal}`;
-
-  const sections = [];
-  let countExplanation = null;
-  if (decisions) {
-    const filtered = auditFilter.policyKind || auditFilter.profile || auditFilter.role;
-    const window = effectiveAuditWindow() || "24h";
-    const scope = window === getWindow()
-      ? ""
-      : ` This Policy view uses its own ${window} window; the rest of the dashboard uses ${getWindow()}.`;
-    const note = el("div", { class: "policy-count-note" });
-    const extra = !filtered && data.total < data.evidence_scan_limit && data.total >= decisions.total
-      ? `, including ${data.total - decisions.total} additional evidence ${data.total - decisions.total === 1 ? "row" : "rows"} beyond the canonical decisions`
-      : "";
-    note.appendChild(el("p", {
-      class: "policy-count-headline",
-      text: `${canonicalTotal} policy denials in ${window}.`,
-    }));
-    sections.push(note);
-
-    countExplanation = el("details", { class: "policy-count-details" });
-    countExplanation.appendChild(el("summary", { text: "How this is counted" }));
-    const explanation = el("div", { class: "policy-count-explanation" });
-    explanation.appendChild(el("p", {
-      text: `${decisions.total} canonical decisions: ${decisions.sql} invocation decisions and ${decisions.v2} envelope decisions.${scope}`,
-    }));
-    explanation.appendChild(el("p", {
-      text: `${data.total} denial evidence ${data.total === 1 ? "row" : "rows"}${filtered ? " after the active filters" : ""}${extra}. Repeated evidence counts once in the canonical count; session, coordination and protocol refusals remain here for context. Filters restrict evidence only.`,
-    }));
-    explanation.appendChild(el("p", {
-      text: `Recent denials shows the newest ${(data.recent_denials || []).length} rows. Evidence scans are capped at ${data.evidence_scan_limit} rows per source; the canonical count covers every decision in its window.`,
-    }));
-    countExplanation.appendChild(explanation);
-  }
-
-  const recentRows = data && data.recent_denials || [];
-  if (!data || (data.total || 0) === 0) {
-    const emptyText = canonicalTotal === 0
-      ? `No policy denials in the last ${effectiveAuditWindow() || "24h"}.`
-      : "No denial evidence matches the active filters.";
-    sections.push(el("div", { class: "empty-state" }, [
-      el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: emptyText }),
-    ]));
-  } else {
-    const recent = buildRecentDenials(recentRows, ctx);
-    if (recent) sections.push(recent);
-  }
-  if (countExplanation) sections.push(countExplanation);
-
-  if (data && (data.total || 0) > 0) {
-    const causes = buildTopCauses(data.top_causes || [], ctx);
-    if (causes) sections.push(causes);
-
-    const grid = el("div", { class: "policy-grid" });
-    for (const tbl of POLICY_TABLES) {
-      const cell = el("div", { class: "policy-cell" });
-      cell.appendChild(el("h5", { class: "section-title", text: tbl.label }));
-      const rawRows = (data[tbl.id] || []).slice();
-      const sortMode = policySort[tbl.id] || "count";
-      rawRows.sort((a, b) => {
-        if (sortMode === "name") {
-          return String(a[tbl.nameField] || "").localeCompare(String(b[tbl.nameField] || ""));
-        }
-        return (b.count || 0) - (a.count || 0);
-      });
-      cell.appendChild(buildPolicyTable(tbl, rawRows, sortMode, ctx));
-      grid.appendChild(cell);
-    }
-    sections.push(grid);
-  }
-  syncNodes(body, sections);
-}
-
-function buildPolicyTable(spec, rows, sortMode, ctx) {
-  const table = el("table", { class: "policy-table" });
-  const thead = el("thead");
-  const headRow = el("tr");
-  const nameTh = el("th", { text: spec.header || spec.nameField });
-  if (sortMode === "name") {
-    const arrow = el("span", { class: "sort-arrow", text: "▼" });
-    nameTh.appendChild(arrow);
-  }
-  nameTh.addEventListener("click", () => {
-    policySort[spec.id] = "name";
-    if (lastAuditPolicy) renderPolicy(lastAuditPolicy, ctx);
-  });
-  headRow.appendChild(nameTh);
-  const countTh = el("th", { class: "num", text: "count" });
-  if (sortMode === "count") {
-    const arrow = el("span", { class: "sort-arrow", text: "▼" });
-    countTh.appendChild(arrow);
-  }
-  countTh.addEventListener("click", () => {
-    policySort[spec.id] = "count";
-    if (lastAuditPolicy) renderPolicy(lastAuditPolicy, ctx);
-  });
-  headRow.appendChild(countTh);
-  thead.appendChild(headRow);
-  table.appendChild(thead);
-
-  const tbody = el("tbody");
-  if (rows.length === 0) {
-    const tr = el("tr");
-    const td = el("td", { class: "value-name", text: "—" });
-    td.colSpan = 2;
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-  } else {
-    for (const row of rows) {
-      const name = String(row[spec.nameField] ?? "");
-      const tr = el("tr", { title: name });
-      tr.appendChild(el("td", { class: "value-name", text: name }));
-      tr.appendChild(el("td", { class: "num", text: String(row.count || 0) }));
-      if (spec.navigateTo === "job_run") {
-        tr.classList.add("clickable");
-        tr.addEventListener("click", () => doNavigateToRun(ctx, name));
-      } else if (spec.navigateTo === "audit_execution") {
-        tr.classList.add("clickable");
-        tr.addEventListener("click", () => navigateToAuditExecution(name, ctx));
-      } else if (spec.filterKey) {
-        tr.classList.add("clickable");
-        tr.addEventListener("click", () => {
-          auditFilter[spec.filterKey] = name;
-          activeAuditSubtab = "events";
-          window.location.hash = buildAuditHash();
-        });
-      }
-      tbody.appendChild(tr);
-    }
-  }
-  table.appendChild(tbody);
-  return table;
-}
-
-function buildTopCauses(rows, ctx) {
-  if (!rows.length) return null;
-  const section = el("div", { class: "policy-section" });
-  section.appendChild(el("h5", { class: "section-title", text: "Top causes" }));
-  const table = el("table", { class: "policy-table policy-cause-table" });
-  const thead = el("thead");
-  const headRow = el("tr");
-  for (const label of ["cause", "target", "count", "latest"]) {
-    headRow.appendChild(el("th", { class: label === "count" ? "num" : "", text: label }));
-  }
-  thead.appendChild(headRow);
-  table.appendChild(thead);
-  const tbody = el("tbody");
-  for (const row of rows) {
-    const tr = el("tr");
-    tr.appendChild(el("td", {
-      class: "value-name",
-      text: row.cause || "-",
-      title: row.cause || "",
-    }));
-    tr.appendChild(el("td", {
-      class: "value-name muted",
-      text: row.target || "-",
-      title: row.target || "",
-    }));
-    tr.appendChild(el("td", { class: "num", text: String(row.count || 0) }));
-    tr.appendChild(el("td", {
-      class: "muted mono",
-      text: row.latest_ts ? fmtRelativeValue(ctx, row.latest_ts) : "-",
-      title: row.latest_ts ? formatDateTime(row.latest_ts) : "",
-    }));
-    tbody.appendChild(tr);
-  }
-  table.appendChild(tbody);
-  section.appendChild(table);
-  return section;
-}
-
-function buildRecentDenials(rows, ctx) {
-  if (!rows.length) return null;
-  const section = el("div", { class: "policy-section" });
-  section.appendChild(el("h5", { class: "section-title", text: "Recent denials" }));
-  const table = el("table", { class: "policy-table policy-recent-table" });
-  const thead = el("thead");
-  const headRow = el("tr");
-  for (const label of ["time", "target", "cause", "identity", "details"]) {
-    headRow.appendChild(el("th", { text: label }));
-  }
-  thead.appendChild(headRow);
-  table.appendChild(thead);
-  const tbody = el("tbody");
-  for (const row of rows) {
-    const tr = el("tr");
-    tr.appendChild(el("td", {
-      class: "muted mono",
-      text: row.timestamp ? fmtRelativeValue(ctx, row.timestamp) : "-",
-      title: row.timestamp ? formatDateTime(row.timestamp) : "",
-    }));
-    tr.appendChild(el("td", {
-      class: "value-name",
-      text: row.target || "-",
-      title: row.target || "",
-    }));
-    tr.appendChild(el("td", {
-      class: "value-name",
-      text: row.cause || row.denial_kind || "-",
-      title: row.cause || "",
-    }));
-    const identity = el("td");
-    identity.appendChild(buildPolicyIdentityAction(row, ctx));
-    tr.appendChild(identity);
-    const details = policyDetailText(row);
-    tr.appendChild(el("td", { class: "policy-detail", text: details, title: details }));
-    tbody.appendChild(tr);
-  }
-  table.appendChild(tbody);
-  section.appendChild(table);
-  return section;
-}
-
-function buildPolicyIdentityAction(row, ctx) {
-  const identityId = row.identity_id || row.job_run_id || row.execution_id || "";
-  if (!identityId) return el("span", { class: "muted", text: "-" });
-  const isJobRun = row.identity_type === "job_run" && row.job_run_id;
-  const label = isJobRun ? "JobRun" : "Audit";
-  const btn = el("button", {
-    class: "policy-link",
-    text: `${label} ${truncateValue(ctx, identityId, 18)}`,
-    title: identityId,
-  });
-  btn.addEventListener("click", (event) => {
-    event.stopPropagation();
-    if (isJobRun) doNavigateToRun(ctx, identityId);
-    else navigateToAuditExecution(identityId, ctx);
-  });
-  return btn;
-}
-
-function policyDetailText(row) {
-  const parts = [];
-  if (row.actor) parts.push(`actor ${row.actor}`);
-  const taskIds = row.requested_task_ids || [];
-  if (taskIds.length) parts.push(`tasks ${taskIds.join(", ")}`);
-  const files = row.requested_files || [];
-  if (files.length) {
-    const suffix = files.length > 2 ? " +" + (files.length - 2) : "";
-    parts.push(`files ${files.slice(0, 2).join(", ")}${suffix}`);
-  }
-  const conflicts = row.conflicts || [];
-  if (conflicts.length) {
-    const first = conflicts[0] || {};
-    const holder = [first.held_by, first.held_by_id].filter(Boolean).join(" ");
-    parts.push(holder ? `held by ${holder}` : `${conflicts.length} conflicts`);
-  }
-  return parts.join(" · ") || row.denial_kind || "-";
-}
 
 function effectiveAuditWindow() {
   if (auditFilter.since) return auditFilter.since;
@@ -1114,7 +798,6 @@ function emptyAuditFilter() {
     since: getWindow() === "all" ? null : getWindow(),
     metric: null,
     hide_unverified: false,
-    policyKind: null,
   };
 }
 
@@ -1378,7 +1061,7 @@ export {
   effectiveAuditWindow,
   // refresh entry points
   fetchAndRenderAudit,
-  fetchAndRenderPolicy,
+  renderDenialCount,
   renderAuditSummary,
   // module init
   buildAuditChips,

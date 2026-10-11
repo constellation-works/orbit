@@ -442,7 +442,7 @@ pub(super) fn find_owned_reservation_conflicts(
     Ok(reservations)
 }
 
-fn parse_string_list(raw: &str) -> Result<Vec<String>, OrbitError> {
+pub(super) fn parse_string_list(raw: &str) -> Result<Vec<String>, OrbitError> {
     serde_json::from_str(raw)
         .map_err(|error| OrbitError::Store(format!("deserialize reservation string list: {error}")))
 }

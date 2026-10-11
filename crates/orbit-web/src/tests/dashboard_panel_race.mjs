@@ -1,4 +1,4 @@
-// Superseded audit, policy, and scoreboard responses must not paint.
+// Superseded audit, codebase, and scoreboard responses must not paint.
 // Holds the real module fetches, then releases an older request after a newer
 // one — a later search and a workspace A→B — and checks aggregate view clears
 // every scoreboard surface the previous workspace filled.
@@ -96,7 +96,7 @@ function matchesChain(path, chain) {
 }
 
 const ids = [
-  'audit-body', 'audit-policy-body', 'audit-count', 'audit-search',
+  'audit-body', 'audit-codebase-body', 'audit-count', 'audit-search',
   'plugins-body', 'plugins-count',
   'scoreboard-body', 'scoreboard-narrative', 'scoreboard-agent-strip', 'scoreboard-meta',
   'scoreboard-insights', 'scoreboard-orchestration', 'scoreboard-count',
@@ -131,6 +131,7 @@ const scoreboardModule = load('scoreboard.js');
 await scoreboardModule.link(specifier => load(specifier.replace(/^\.\//, '')));
 await scoreboardModule.evaluate();
 const audit = modules.get('audit.js').namespace;
+const codebase = modules.get('codebase.js').namespace;
 const scoreboard = scoreboardModule.namespace;
 const common = modules.get('common.js').namespace;
 const pluginsModule = load('plugins.js');
@@ -145,8 +146,9 @@ const placeheld = id => [...document.getElementById(id).children].some(child => 
 function event(marker) {
   return [{ id: marker, command: 'tool', subcommand: 'run-mcp', target_id: marker, status: 'success', timestamp: '2026-10-04T00:00:00Z', role: 'grok', tool_name: 'orbit.task.show', duration_ms: 1, exit_code: 0 }];
 }
-function policy(marker) {
-  return { total: 1, by_profile: [{ name: marker, count: 2 }], by_target: [], by_run: [], by_execution: [], by_agent: [], recent_denials: [], top_causes: [] };
+function analytics(marker) {
+  const row = { path: marker, rate: 0.5, numerator: 1, denominator: 2, regressed_tasks: [], by_crew: [] };
+  return { window: '90d', rollup: 'file', min_support: 1, regressions: { rows: [row], below_support: 0 } };
 }
 function summary(marker) {
   return {
@@ -215,22 +217,19 @@ await Promise.all([lateAudit, currentAudit]);
 shows('audit-body', 'audit-workspace-b', 'audit-workspace-a');
 
 common.setWorkspace('ws-a');
-await overlap(() => audit.fetchAndRenderPolicy(ctx), policy('policy-old-refresh'), policy('policy-new-refresh'));
-shows('audit-policy-body', 'policy-new-refresh', 'policy-old-refresh');
-const policyHeader = document.getElementById('audit-policy-body').querySelector('th');
-for (const listener of policyHeader.listeners.click || []) listener();
-await settle();
-shows('audit-policy-body', 'policy-new-refresh', 'policy-old-refresh');
+await overlap(() => codebase.fetchAndRenderCodebase(), analytics('codebase-old-refresh'), analytics('codebase-new-refresh'));
+shows('audit-codebase-body', 'codebase-new-refresh', 'codebase-old-refresh');
 
-const latePolicy = audit.fetchAndRenderPolicy(ctx);
+const lateCodebase = codebase.fetchAndRenderCodebase();
 common.setWorkspace('ws-b');
-const currentPolicy = audit.fetchAndRenderPolicy(ctx);
-pending.at(-1).resolve(response(policy('policy-workspace-b')));
+const currentCodebase = codebase.fetchAndRenderCodebase();
+assert.equal(pending.at(-1).url.searchParams.get('workspace'), 'ws-b');
+pending.at(-1).resolve(response(analytics('codebase-workspace-b')));
 await settle();
-pending.at(-2).resolve(response(policy('policy-workspace-a')));
+pending.at(-2).resolve(response(analytics('codebase-workspace-a')));
 await settle();
-await Promise.all([latePolicy, currentPolicy]);
-shows('audit-policy-body', 'policy-workspace-b', 'policy-workspace-a');
+await Promise.all([lateCodebase, currentCodebase]);
+shows('audit-codebase-body', 'codebase-workspace-b', 'codebase-workspace-a');
 
 common.setWorkspace('ws-a');
 await overlap(() => scoreboard.fetchAndRenderScoreboard(), summary('score-old-refresh'), summary('score-new-refresh'));
@@ -278,9 +277,9 @@ for (const id of ['scoreboard-body', 'scoreboard-narrative', 'scoreboard-agent-s
   assert.ok(!text(id).includes('score-after-aggregate'), `${id} painted a late workspace response in aggregate view`);
 }
 await audit.fetchAndRenderAudit(ctx);
-await audit.fetchAndRenderPolicy(ctx);
+await codebase.fetchAndRenderCodebase();
 assert.ok(placeheld('audit-body') && !text('audit-body').includes('audit-workspace-b'), 'aggregate audit drops the previous workspace');
-assert.ok(placeheld('audit-policy-body') && !text('audit-policy-body').includes('policy-workspace-b'), 'aggregate policy drops the previous workspace');
+assert.ok(placeheld('audit-codebase-body') && !text('audit-codebase-body').includes('codebase-workspace-b'), 'aggregate codebase drops the previous workspace');
 
 common.setWorkspace('ws-a');
 const initialPlugins = plugins.fetchAndRenderPlugins();
@@ -346,4 +345,4 @@ for (const [certified, host, behind] of [
   assert.equal(Boolean(chip), Boolean(certified), 'uncertified plugins have no certification chip');
 }
 
-console.log('audit, policy, scoreboard, and plugin panel behaviors passed');
+console.log('audit, codebase, scoreboard, and plugin panel behaviors passed');
