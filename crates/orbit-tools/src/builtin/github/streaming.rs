@@ -52,7 +52,8 @@ pub struct StreamedLog {
     pub checkout_evidence: CheckoutEvidence,
     /// Complete runner command evidence, independent of display truncation.
     pub diagnostic: Option<String>,
-    /// Selected failure regions when the complete command exceeds its bound.
+    /// Selected command regions or independently collected nextest blocks,
+    /// including original source byte ranges for recognized nextest failures.
     pub failure_regions: Option<Value>,
     /// False when a source limit, invalid line, or explicit truncation notice
     /// prevents complete diagnostic collection; independent of display size.
@@ -82,6 +83,7 @@ pub struct StreamedLogCollector {
     tail_preceding: Option<u8>,
     evidence: CheckoutEvidenceCollector,
     diagnostic: diagnostic::DiagnosticCollector,
+    nextest: super::nextest_regions::NextestRegions,
 }
 
 impl StreamedLogCollector {
@@ -112,6 +114,7 @@ impl StreamedLogCollector {
             head_following: None,
             tail_preceding: None,
             diagnostic: diagnostic::DiagnosticCollector::default(),
+            nextest: super::nextest_regions::NextestRegions::default(),
             evidence: CheckoutEvidenceCollector::new(
                 max_evidence_lines,
                 MAX_CHECKOUT_LOG_SCAN_BYTES,
@@ -123,6 +126,7 @@ impl StreamedLogCollector {
         self.total_bytes = self.total_bytes.saturating_add(chunk.len());
         self.evidence.push(chunk);
         self.diagnostic.push(chunk);
+        self.nextest.push(chunk);
 
         let head_limit = self.head_bytes;
         let head_take = head_limit.saturating_sub(self.head.len()).min(chunk.len());
@@ -148,7 +152,7 @@ impl StreamedLogCollector {
     pub fn finish(mut self) -> StreamedLog {
         let evidence = self.evidence.finish();
         let truncated = self.total_bytes > self.max_bytes;
-        let text = if truncated {
+        let mut text = if truncated {
             let omitted = self
                 .total_bytes
                 .saturating_sub(self.head.len() + self.tail.len());
@@ -168,8 +172,21 @@ impl StreamedLogCollector {
             self.head.extend_from_slice(&self.tail);
             redact_all(&String::from_utf8_lossy(&self.head))
         };
-        let source_complete = self.diagnostic.source_complete();
-        let (diagnostic, failure_regions) = self.diagnostic.finish();
+        let nextest_complete = self.nextest.source_complete();
+        let nextest = self.nextest.finish(self.total_bytes);
+        let source_complete = if nextest.is_some() {
+            nextest_complete
+        } else {
+            self.diagnostic.source_complete()
+        };
+        let (diagnostic, mut failure_regions) = self.diagnostic.finish();
+        if let Some(nextest) = nextest {
+            if truncated && let Some(blocks) = nextest["text"].as_str() {
+                text.push_str("\n[... retained nextest failure blocks ...]\n");
+                text.push_str(blocks);
+            }
+            failure_regions = Some(nextest);
+        }
         StreamedLog {
             returned_bytes: text.len(),
             text,
