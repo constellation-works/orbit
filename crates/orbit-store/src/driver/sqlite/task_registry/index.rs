@@ -166,20 +166,6 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))
     }
 
-    pub fn indexed_task_count_for_workspace(
-        &self,
-        partition_id: &str,
-    ) -> Result<usize, OrbitError> {
-        let partition_id = validate_partition_id(partition_id)?;
-        let conn = self.read()?;
-        let count: i64 = conn
-            .prepare_cached("SELECT COUNT(*) FROM task_bundle_index WHERE workspace_id = ?1")
-            .map_err(|e| OrbitError::Store(e.to_string()))?
-            .query_row([partition_id], |row| row.get(0))
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        usize::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))
-    }
-
     /// Status projection for every task in the coordination registry. Task
     /// lists remain workspace-scoped; dependency readiness is global because
     /// ORB task IDs are globally unique.

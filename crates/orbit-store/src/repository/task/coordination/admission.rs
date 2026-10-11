@@ -528,42 +528,6 @@ impl TaskCommitBoundary {
             .map(Some)
     }
 
-    /// Never compact an unsettled claim. Tombstones have no deletion API in v1.
-    pub fn compact_admission(
-        &self,
-        identity: &AdmissionIdentity,
-        request_id: &str,
-    ) -> Result<bool, OrbitError> {
-        self.with_admission(|| {
-            let Some(existing) = self.receipt_row(&identity.location().machine_id, request_id)?
-            else {
-                return Ok(false);
-            };
-            let StoredReceipt::Full { receipt } = decode(&existing.payload_json)? else {
-                return Ok(false);
-            };
-            if let Some(claim) = &receipt.claim {
-                let current = self
-                    .execution_claims()?
-                    .into_iter()
-                    .find(|c| c.claim_id == claim.claim_id)
-                    .ok_or_else(|| OrbitError::Store("admission claim is missing".into()))?;
-                if current.phase.is_unsettled() {
-                    return Ok(false);
-                }
-            }
-            self.store.replace_task_coordination_payload(
-                &self.workspace_id,
-                &existing,
-                &encode(&StoredReceipt::Tombstone {
-                    machine_id: receipt.machine_id.clone(),
-                    request_id: request_id.into(),
-                    input_digest: digest(&receipt.request)?,
-                })?,
-            )
-        })
-    }
-
     pub fn admission_storage_usage(&self) -> Result<AdmissionStorageUsage, OrbitError> {
         self.enter_ordinary(|| {
             let mut usage = AdmissionStorageUsage::default();

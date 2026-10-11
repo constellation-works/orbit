@@ -229,12 +229,6 @@ impl PublicationEnvelope {
         envelope.validate()?;
         Ok(envelope)
     }
-
-    /// Serialize a validated publication envelope in canonical field order.
-    pub fn to_yaml(&self) -> Result<String, OrbitError> {
-        self.validate()?;
-        serde_yaml::to_string(self).map_err(|error| OrbitError::Store(error.to_string()))
-    }
 }
 
 /// A scanner input whose bytes are never retained in the publication envelope.
