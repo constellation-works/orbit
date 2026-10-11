@@ -353,21 +353,40 @@ fn auto_drain_stop_to_json(result: &DrainAdmissionsStopResult) -> Value {
 pub(super) struct AutoDrainReadinessQuery {
     #[serde(default)]
     concurrency: Option<u32>,
+    /// Comma-separated task ids to explain instead of the bounded backlog
+    /// listing, so a task detail gets its own answer wherever it ranks.
+    #[serde(default)]
+    task: Option<String>,
 }
 
-/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N]` — the
-/// read-only eligible/waiting snapshot for backlog-discovery auto-drain,
-/// projected straight from `OrbitRuntime::workspace_auto_readiness` (the same
-/// snapshot `orbit run readiness` prints) rather than a dashboard-local
-/// recomputation of eligibility.
+/// The explicit selection a `?task=` value names; empty when it is absent.
+fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(|id| validate_id(id.trim()).map(str::to_string))
+        .collect()
+}
+
+/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…]`
+/// — the read-only eligible/waiting snapshot for backlog-discovery
+/// auto-drain, projected straight from `OrbitRuntime::workspace_auto_readiness`
+/// (the same snapshot `orbit run readiness` prints) rather than a
+/// dashboard-local recomputation of eligibility. `task` explains exactly
+/// those tasks, as `orbit run readiness <id>…` does; an unknown id is a 400.
 pub(super) async fn auto_drain_readiness(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
+    let task_ids = match readiness_task_ids(query.task.as_deref()) {
+        Ok(ids) => ids,
+        Err(message) => return bad_request(message),
+    };
     match blocking("auto-drain readiness", move || {
         let mut payload = runtime.workspace_auto_readiness(
-            &[],
+            &task_ids,
             query.concurrency,
             AUTO_DRAIN_READINESS_LIMIT,
             &[],

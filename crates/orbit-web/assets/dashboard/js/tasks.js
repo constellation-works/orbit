@@ -1,10 +1,10 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
-import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
+import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 
@@ -47,6 +47,13 @@ const FIELD_SAVED_NOTICE_MS = 4000;
 // retried until the list refreshes or the row is reopened.
 let taskDetails = new Map();
 let taskDetailLoads = new Map();
+// Drain readiness for an open proposed or backlog task: why the drain is or is
+// not taking it, read per task (`GET /api/workflows/auto/readiness?task=<id>`)
+// so the Readiness card answers without the Drain card's snapshot and for a
+// task past its bound. One read per summary object, like `taskDetailLoads`; a
+// read in flight keeps the last answer on screen.
+const DRAIN_READINESS_STATUSES = new Set(["proposed", "backlog"]);
+let taskDrainLoads = new Map();
 const reviewApprovalsInFlight = new Set();
 // ORB-12645: which comments the operator has opened, and which are showing
 // their Markdown source instead of the rendered body. Both are keyed
@@ -73,6 +80,7 @@ onWorkspaceChange(() => {
   fieldFeedback.clear();
   taskDetails.clear();
   taskDetailLoads.clear();
+  taskDrainLoads.clear();
   expandedComments.clear();
   rawComments.clear();
   restoredCommentHash = null;
@@ -450,6 +458,54 @@ function taskHistoryEventLabel(entry) {
 // Drop the recorded read so the next render issues a fresh one.
 function forgetTaskDetailLoad(taskId) {
   taskDetailLoads.delete(taskId);
+  taskDrainLoads.delete(taskId);
+}
+
+function loadTaskDrainReadiness(task, context) {
+  const previous = taskDrainLoads.get(task.id);
+  const load = { source: task, pending: true, error: null, entry: previous ? previous.entry : null };
+  taskDrainLoads.set(task.id, load);
+  if (isAggregateView() && !task.workspace_id) {
+    load.pending = false;
+    load.entry = null;
+    load.error = "Task workspace is unknown";
+    return;
+  }
+  fetchJson(taskWorkspacePath(task, `/api/workflows/auto/readiness?task=${encodeURIComponent(task.id)}`)).then(
+    (payload) => {
+      const entry = Array.isArray(payload?.tasks) ? payload.tasks.find((item) => item?.task_id === task.id) : null;
+      load.entry = entry || null;
+      load.error = entry ? null : "The readiness snapshot does not mention this task";
+    },
+    (error) => {
+      load.entry = null;
+      load.error = error.message || String(error);
+    },
+  ).finally(() => {
+    load.pending = false;
+    if (taskDrainLoads.get(task.id) === load) renderTasks(taskList(context), context);
+  });
+}
+
+// What the Readiness card knows of the drain for an open task: its own read's
+// entry, else the Drain card's snapshot entry, and whether a read is pending
+// or failed. Null for a status the drain does not consider.
+function taskDrainState(task, context) {
+  if (!DRAIN_READINESS_STATUSES.has(task.status)) return null;
+  const load = taskDrainLoads.get(task.id);
+  if (!load || load.source !== task) loadTaskDrainReadiness(task, context);
+  const current = taskDrainLoads.get(task.id);
+  return {
+    entry: current.entry || drainReadinessEntry(task.id),
+    pending: current.pending,
+    error: current.error,
+  };
+}
+
+// An answer diffs on what it says; until one arrives, on the read's state.
+function taskDrainSignature(drain) {
+  if (!drain) return "";
+  return drain.entry ? JSON.stringify(drain.entry) : `${drain.pending}-${drain.error || ""}`;
 }
 
 function stopRowInteraction(node) {
@@ -975,9 +1031,72 @@ function runCellSignature(task) {
   return JSON.stringify([host, elapsed, files]);
 }
 
-// The detail's Readiness block: each gap with its severity and its fix.
-function buildReadinessBlock(readiness) {
+// A task id in the Readiness card: a link to that task in the same workspace,
+// which opens it even when the Tasks filter hides it.
+function readinessTaskLink(taskId, workspace) {
+  const link = el("a", { class: "relation-target mono", text: taskId, title: `Open ${taskId}` });
+  return bindTaskLink(link, taskId, workspace ? { workspace } : {});
+}
+
+// The Readiness card's drain part: the pool and the row dot's badge text as
+// the headline, then what holds the task, each holder or dependency linked,
+// the server's detail and the raw reason. Without an entry it says whether a
+// read is pending, failed or found nothing, and never claims a pool.
+function buildDrainReadiness(drain, workspace) {
+  const entry = drain && drain.entry;
+  if (!entry) {
+    const text = drain && drain.pending
+      ? "Checking whether the drain can take this task…"
+      : `Drain readiness unknown${drain && drain.error ? `: ${drain.error}` : ""}.`;
+    return el("div", { class: "readiness-drain readiness-note", text });
+  }
+  const view = drainReadinessView(entry);
+  const badge = view.badge;
+  const dot = el("span", { class: "ready-dot", "aria-hidden": "true" });
+  dot.dataset.pool = view.pool;
+  const head = el("div", { class: "readiness-drain-head" }, [
+    dot,
+    el("strong", { text: view.poolLabel }),
+    el("span", { text: badge ? badge.text : "nothing holds it" }),
+  ]);
+  const wrap = el("div", { class: "readiness-drain" }, [head]);
+  wrap.dataset.pool = view.pool;
+  const line = (label, children) => el("div", { class: "readiness-drain-line" }, [
+    el("span", { class: "label", text: label }),
+    el("span", { class: "readiness-drain-value" }, children),
+  ]);
+  if (!badge) {
+    wrap.appendChild(el("div", { class: "readiness-fix", text: view.title }));
+    return wrap;
+  }
+  if (badge.holder) wrap.appendChild(line("Waits on", [readinessTaskLink(badge.holder, workspace)]));
+  else if (badge.runId) {
+    const run = el("a", { class: "mono", text: badge.runId });
+    run.href = runHref(badge.runId);
+    wrap.appendChild(line("Waits on", [run]));
+  }
+  if (badge.selectors.length > 0) {
+    wrap.appendChild(line("Lock", badge.selectors.map((selector) => el("span", { class: "mono", text: selector }))));
+  }
+  if (badge.dependencies.length > 0) {
+    wrap.appendChild(line("Depends on", badge.dependencies.map(({ taskId, status }) =>
+      el("span", { class: "readiness-dependency" }, [
+        readinessTaskLink(taskId, workspace),
+        status ? el("span", { class: "readiness-fix", text: status }) : null,
+      ]))));
+  }
+  if (badge.detail) wrap.appendChild(el("div", { class: "readiness-message", text: badge.detail }));
+  wrap.appendChild(el("div", { class: "readiness-fix mono", text: `Reason: ${badge.reason}` }));
+  return wrap;
+}
+
+// The detail's Readiness card: why the drain is or is not taking the task,
+// then each preparation gap with its severity and its fix. "Ready" is claimed
+// only for a task the drain reports eligible with nothing missing.
+function buildReadinessBlock(readiness, drain, workspace) {
   const wrap = el("div", { class: "readiness-list" });
+  if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace));
+  if (!readiness) return wrap;
   if (readiness.preparing) {
     wrap.appendChild(el("div", {
       class: "readiness-note",
@@ -986,7 +1105,8 @@ function buildReadinessBlock(readiness) {
   }
   const gaps = readinessGaps(readiness);
   if (gaps.length === 0) {
-    wrap.appendChild(el("div", { class: "readiness-note", text: "Ready: nothing is missing." }));
+    const eligible = drain && drain.entry && drain.entry.eligible === true;
+    wrap.appendChild(el("div", { class: "readiness-note", text: eligible ? "Ready: nothing is missing." : "No preparation gaps." }));
     return wrap;
   }
   for (const gap of gaps) {
@@ -2123,7 +2243,7 @@ function renderCommentsPanel(panel, task, context) {
   panel.replaceChildren(head, thread);
 }
 
-function buildTaskDetail(task, context) {
+function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail split-layout" });
   detail.addEventListener("click", (e) => e.stopPropagation());
   detail.teardown = () => disconnectCommentCards(detail);
@@ -2260,9 +2380,9 @@ function buildTaskDetail(task, context) {
   if (metaCount > 0) addField(rightCol, "Details", meta);
 
   const readiness = readinessOf(task);
-  if (readiness) {
-    const count = readinessGaps(readiness).length;
-    addField(rightCol, "Readiness", buildReadinessBlock(readiness), false, false, count > 0 ? { count } : {});
+  if (readiness || drain) {
+    const count = readiness ? readinessGaps(readiness).length : 0;
+    addField(rightCol, "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id), false, false, count > 0 ? { count } : {});
   }
 
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
@@ -3049,7 +3169,7 @@ function buildPinnedTask(ptask, context) {
   ]);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
-  const detail = buildTaskDetail(ptask, context);
+  const detail = buildTaskDetail(ptask, context, taskDrainState(ptask, context));
   const dismiss = el("button", { class: "action", text: "Close" });
   dismiss.title = "Dismiss global task detail";
   dismiss.addEventListener("click", (ev) => {
@@ -3606,18 +3726,19 @@ export function renderTasks(tasks, context) {
           groupNodes.push(draft);
         } else {
           const state = taskDetailState(t, context);
+          const drain = taskDrainState(t, context);
           // Diff by full task object stringified, plus the feedback the detail's
           // own controls render (the row hash only covers the crew). A
           // placeholder diffs on its read state instead; a detail rendered from
           // the cached projection must not be rebuilt just because a refresh
           // has a read in flight.
           const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${taskDrainSignature(drain)}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
           const existingDetail = existingRowNodes.get(key);
           let detail = existingDetail && existingDetail.dataset.hash === detailHash ? existingDetail : null;
           if (!detail) {
             detail = state.task
-              ? buildTaskDetail(state.task, context)
+              ? buildTaskDetail(state.task, context, drain)
               : buildTaskDetailPlaceholder(t, state, context);
             detail.dataset.key = key;
             // The row's `aria-controls` points here, so the detail needs a real id.
