@@ -13,6 +13,24 @@ mod child_guard;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "../support/generation_fixture.rs"]
 mod generation_fixture;
+#[cfg(unix)]
+#[path = "../support/git_authority.rs"]
+mod git_authority;
+#[path = "../support/git_repo.rs"]
+mod git_repo;
 
 mod mcp_roundtrip;
 mod mcp_setup_root;
+
+/// Re-execute the real setup, status/push and linked-worktree fixtures with
+/// repository locators aimed at a disposable sentinel. No process-wide scrub
+/// runs here: each fixture Git command must contain its own authority.
+#[cfg(unix)]
+#[test]
+fn mcp_git_fixtures_preserve_inherited_authority_decoy() {
+    git_authority::assert_fixtures_preserve_decoy(&[
+        "mcp_roundtrip::fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup",
+        "mcp_roundtrip::managed_mcp_config_routes_a_linked_worktree_by_its_logical_workspace_id",
+        "mcp_setup_root::mcp_init_binds_an_external_root_checkout_and_remove_reverses_it",
+    ]);
+}

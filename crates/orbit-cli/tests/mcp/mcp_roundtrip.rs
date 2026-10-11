@@ -184,12 +184,16 @@ impl McpWorkspace {
         // is rejected with `crew '<name>' is not defined in [crews.*]`.
         plant_agent_cli_stub(&Self::stub_bin_dir(&home), "codex");
 
-        let output = Command::new("git")
+        let output = crate::git_repo::command()
             .args(["init", "--quiet"])
             .current_dir(&work)
             .output()
             .expect("initialize Git checkout");
         assert!(output.status.success(), "git init failed: {output:?}");
+        assert!(
+            work.join(".git").is_dir(),
+            "fixture needs its own repository"
+        );
 
         let init_args = vec![
             "init",
@@ -733,7 +737,7 @@ fn mcp_friction_rehome_moves_a_record_into_its_registered_owner() {
     let workspace = McpWorkspace::init();
     let owner = workspace.home.join("owner");
     std::fs::create_dir_all(&owner).expect("create the owning checkout");
-    let output = Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&owner)
         .output()
@@ -1860,7 +1864,7 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
         plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&home), "codex");
 
         let git = |cwd: &Path, args: &[&str]| {
-            let output = Command::new("git")
+            let output = crate::git_repo::command()
                 .args(args)
                 .current_dir(cwd)
                 .output()
@@ -1925,7 +1929,7 @@ fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
             );
         }
         assert!(human_report.contains("commit"), "{human_report}");
-        let status = Command::new("git")
+        let status = crate::git_repo::command()
             .args(["status", "--porcelain", "--untracked-files=all"])
             .current_dir(&work)
             .output()
@@ -2174,7 +2178,7 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
 
     let elsewhere = workspace.home.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("create the second checkout");
-    let output = Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&elsewhere)
         .output()
@@ -2274,7 +2278,7 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
 
     let checkout_b = workspace.home.join("checkout-b");
     std::fs::create_dir_all(&checkout_b).expect("create the second checkout");
-    let output = Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&checkout_b)
         .output()
@@ -4622,7 +4626,7 @@ fn mcp_task_show_follows_the_global_id_and_explicit_workspace_stays_a_filter() {
 
     let elsewhere = workspace.home.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("create the second checkout");
-    let output = Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&elsewhere)
         .output()
@@ -4703,7 +4707,7 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
 
     let elsewhere = workspace.home.join("elsewhere");
     std::fs::create_dir_all(&elsewhere).expect("create the second checkout");
-    let output = Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&elsewhere)
         .output()
@@ -5893,7 +5897,7 @@ fn assert_readonly_diagnostic(
 /// Commit the checkout and attach a linked worktree, mirroring how the engine
 /// stages a managed run.
 fn add_linked_worktree(work: &Path) -> PathBuf {
-    let commit = Command::new("git")
+    let commit = crate::git_repo::command()
         .args([
             "-c",
             "user.email=mcp-roundtrip@orbit.test",
@@ -5914,7 +5918,7 @@ fn add_linked_worktree(work: &Path) -> PathBuf {
         .parent()
         .expect("checkout parent")
         .join("linked-worktree");
-    let added = Command::new("git")
+    let added = crate::git_repo::command()
         .args([
             "worktree",
             "add",
@@ -5927,6 +5931,10 @@ fn add_linked_worktree(work: &Path) -> PathBuf {
         .output()
         .expect("attach linked worktree");
     assert!(added.status.success(), "git worktree add failed: {added:?}");
+    assert!(
+        worktree.join(".git").is_file(),
+        "fixture needs a linked worktree"
+    );
     worktree
 }
 
@@ -5969,7 +5977,7 @@ fn workspace_tool_calls_reuse_one_runtime_until_the_registry_changes() {
     // against the file as it now stands rather than what it cached.
     let second = workspace._temp.path().join("second");
     std::fs::create_dir_all(&second).expect("create the second checkout");
-    let output = Command::new("git")
+    let output = crate::git_repo::command()
         .args(["init", "--quiet"])
         .current_dir(&second)
         .output()
@@ -6158,7 +6166,7 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
     let elsewhere = workspace.home.join("another-workspace");
     std::fs::create_dir(&elsewhere).expect("second workspace");
     orbit_ok(
-        Command::new("git")
+        crate::git_repo::command()
             .args(["init", "--quiet"])
             .current_dir(&elsewhere),
     );
