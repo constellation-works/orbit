@@ -28,12 +28,13 @@
 
 use std::collections::BTreeMap;
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
-    ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
+    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
     ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
     KnownRedObservation,
 };
@@ -41,7 +42,7 @@ use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_p
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
-    JobRunState,
+    ClaimFailureClass, JobRunState, ProviderFailureClass, ProviderFailureHold,
     handoff::{HandoffCandidate, HandoffDelivery, HandoffValidationLog, TaskHandoff},
 };
 use serde::Serialize;
@@ -222,11 +223,17 @@ impl crate::OrbitRuntime {
                 }
                 Ok(result)
             }
-            ClaimMutation::Release(evidence) => self.mutate_execution_claim(
-                Some(&context),
-                &release_mutation_id(&claim.claim_id),
-                &ClaimMutation::Release(evidence),
-            ),
+            ClaimMutation::Release(evidence) => {
+                let context = match self.refused_release_hold(&claim, run_id, &evidence) {
+                    Some(hold) => context.with_provider_hold(hold),
+                    None => context,
+                };
+                self.mutate_execution_claim(
+                    Some(&context),
+                    &release_mutation_id(&claim.claim_id),
+                    &ClaimMutation::Release(evidence),
+                )
+            }
             ClaimMutation::AcceptHandoff(handoff) => {
                 let mut observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
                 observation.known_red = self.observe_known_red(&handoff, &observation)?;
@@ -242,6 +249,41 @@ impl crate::OrbitRuntime {
                  revocation and recovery are owner-operator actions",
             )),
         }
+    }
+
+    /// [ORB-15573] The hold a release whose leaf its provider refused places
+    /// on the task: every crew of the refusing provider this owner configures
+    /// is excluded, as a local run's refusal excludes them. The owner builds
+    /// it from its own crews and the task's history, never from the payload.
+    /// A hold that cannot be built is logged and the task released unheld.
+    fn refused_release_hold(
+        &self,
+        claim: &ExecutionClaim,
+        run_id: Option<&str>,
+        evidence: &ClaimEvidence,
+    ) -> Option<ProviderFailureHold> {
+        let failure = evidence
+            .failure
+            .as_ref()
+            .filter(|failure| failure.class == ClaimFailureClass::Provider)
+            .filter(|failure| failure.provider_refusal)?;
+        let hold = self.get_task(&claim.task_id).and_then(|task| {
+            self.claimed_provider_failure_hold(
+                &task,
+                run_id.unwrap_or(&claim.claim_id),
+                failure.crew.as_deref(),
+                ProviderFailureClass::Refusal,
+                Some(&failure.reason),
+                Utc::now(),
+            )
+        });
+        hold.map_err(|error| {
+            tracing::warn!(
+                task_id = %claim.task_id,
+                "could not build the provider hold for a refused claimed leaf: {error}"
+            );
+        })
+        .ok()
     }
 
     /// The owner's own reading of the candidate a claim is settling.
@@ -510,6 +552,13 @@ impl crate::OrbitRuntime {
                 }
                 _ => {}
             }
+            // [ORB-15573] A standing provider hold keeps the task from an
+            // executor that would run it as an excluded crew: its own, or the
+            // executor's default for a task naming none. Another executor, or
+            // this owner's own draw, takes it on a crew the hold leaves.
+            if let Some(why) = self.pull_provider_hold(task, request) {
+                admission_holds.entry(task.id.clone()).or_insert(why);
+            }
         }
         // Match local dispatch's expiry boost and its best-effort fallback:
         // unreadable deadlines affect ordering, never admission eligibility.
@@ -550,6 +599,29 @@ impl crate::OrbitRuntime {
                 _ => Ok(None),
             },
         )
+    }
+
+    /// Why a standing provider hold keeps `task` from the executor `request`
+    /// comes from, or `None` when the crew it would run as is not excluded.
+    fn pull_provider_hold(&self, task: &Task, request: &AdmissionRequest) -> Option<String> {
+        let hold = self.admission_provider_hold(task)?;
+        let crew = task
+            .crew
+            .as_deref()
+            .map(str::trim)
+            .filter(|crew| !crew.is_empty())
+            .or_else(|| request.crews.as_ref()?.default_crew.as_deref())?;
+        hold.excludes(crew).then(|| {
+            format!(
+                "provider hold: run {} ended with {} on {}, so crews {} are excluded until {}; \
+                 this executor would run it as `{crew}`",
+                hold.run_id,
+                hold.class.as_str(),
+                hold.provider.as_deref().unwrap_or("its provider"),
+                hold.excluded_crews.join(", "),
+                hold.not_before.to_rfc3339()
+            )
+        })
     }
 
     /// Each `backlog` task a red base still holds, mapped to why

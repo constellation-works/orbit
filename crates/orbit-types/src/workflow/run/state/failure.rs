@@ -75,8 +75,10 @@ pub fn is_provider_capacity_exhausted(error_code: Option<&str>, message: Option<
 /// It is not an unavailability: the provider works, it declined this task's
 /// content, so a pull drain does not exclude the crew for its window. Step
 /// and final recovery skip it (a repair agent on the same provider is refused
-/// the same way), and a local run's task goes back to the backlog with every
-/// crew of that provider withheld for a while.
+/// the same way), and the task goes back to the backlog with every crew of
+/// that provider withheld for a while: a local run's finalization holds it,
+/// and a claimed leaf releases its claim as a `provider` failure that the
+/// owner holds the same way [ORB-15573].
 pub const PROVIDER_REFUSAL_ERROR_CODE: &str = "provider_refusal";
 
 /// The bracketed marker form of [`PROVIDER_REFUSAL_ERROR_CODE`].
@@ -176,7 +178,8 @@ pub enum ClaimFailureClass {
     OperatorCancel,
     /// The leaf could not reach the task's owner from where it ran.
     OwnerRoute,
-    /// The crew's provider could not be used on the executing host.
+    /// The crew's provider could not be used on the executing host, or its
+    /// content policy refused the task (`ClaimFailure::provider_refusal`).
     Provider,
     /// The leaf's committed candidate could not be synchronized onto a base
     /// that moved under it, and conflict recovery did not resolve it. The
@@ -220,7 +223,8 @@ impl ClaimFailureClass {
     /// Whether the executing drain stops running the leaf's crew for the
     /// rest of its window. A cancel excludes that crew, but does not suppress
     /// the whole host; a red base and a base conflict exclude neither, nor
-    /// does a `transient` release that carries a forge hold [ORB-14634].
+    /// does a `transient` release that carries a forge hold [ORB-14634] or a
+    /// `provider` release for a content refusal [ORB-15573].
     #[must_use]
     pub const fn excludes_crew(self) -> bool {
         matches!(
@@ -243,14 +247,15 @@ impl ClaimFailureClass {
     }
 
     /// The class a typed step failure names, or `None` for an untyped one.
-    /// A red base counts only when the failure carries its
+    /// A provider's refusal is a `provider` failure, as its unavailability
+    /// is. A red base counts only when the failure carries its
     /// [hold](super::super::BaselineRedHold), which the owner needs to lift it.
     #[must_use]
     pub fn of_step_failure(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
         let typed = |code: &str, marker: &str| {
             error_code == Some(code) || message.is_some_and(|message| message.contains(marker))
         };
-        if is_provider_unavailable(error_code, message) {
+        if is_provider_failure(error_code, message) {
             Some(Self::Provider)
         } else if is_validation_environment_failure(error_code, message) {
             Some(Self::Environment)

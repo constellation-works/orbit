@@ -4,7 +4,10 @@
 //! `[provider_limit]` or `[provider_refusal]` failed on the provider, not on
 //! the work. Run finalization moves its task to `backlog` under a
 //! `provider_failure_hold` history entry instead of blocking it
-//! ([`OrbitRuntime::provider_failure_hold`] builds the hold). Capacity and
+//! ([`OrbitRuntime::provider_failure_hold`] builds the hold). [ORB-15573] A
+//! claimed leaf its provider refused releases its claim, and the owner
+//! records the same hold with the release
+//! ([`OrbitRuntime::claimed_provider_failure_hold`]). Capacity and
 //! unavailability exclude the crew the run used; a refusal excludes every
 //! crew of the refusing provider, since the content would be refused again on
 //! any of them. A usage limit belongs to the provider account, so it excludes
@@ -112,7 +115,22 @@ impl OrbitRuntime {
             .input
             .as_ref()
             .and_then(|input| input.get("crew"))
-            .and_then(serde_json::Value::as_str)
+            .and_then(serde_json::Value::as_str);
+        self.claimed_provider_failure_hold(task, &run.run_id, run_crew, class, error_message, now)
+    }
+
+    /// [`Self::provider_failure_hold`] for a run this host does not hold: a
+    /// claimed leaf, named by its `run_id` and the crew it ran as.
+    pub(crate) fn claimed_provider_failure_hold(
+        &self,
+        task: &Task,
+        run_id: &str,
+        run_crew: Option<&str>,
+        class: ProviderFailureClass,
+        error_message: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<ProviderFailureHold, OrbitError> {
+        let run_crew = run_crew
             .and_then(non_empty)
             .map(ToOwned::to_owned)
             .or_else(|| {
@@ -203,7 +221,7 @@ impl OrbitRuntime {
             provider,
             excluded_crews: excluded,
             not_before,
-            run_id: run.run_id.clone(),
+            run_id: run_id.to_string(),
         })
     }
 }

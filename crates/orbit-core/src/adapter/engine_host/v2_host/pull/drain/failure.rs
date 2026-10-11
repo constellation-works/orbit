@@ -11,7 +11,7 @@ use orbit_types::workflow::{
     PROVIDER_CAPACITY_MARKER, PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
     ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER, UPGRADE_PENDING_MARKER,
     VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure, is_forge_unavailable,
-    is_provider_limit,
+    is_provider_limit, is_provider_refusal,
 };
 
 use super::super::candidate::{
@@ -30,10 +30,11 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// [blocks](ClaimFailureClass::blocks) — the candidate's, or the task's own —
 /// fails the claim, as does an operator's cancel that asked to block the task
 /// [ORB-14274]; any other (an operator's cancel, a provider this host
-/// could not use [ORB-13941], a missing validation tool, an unreachable
-/// owner, a red base, an inconclusive or interrupted run) releases it, and
-/// the drain excludes the leaf's crew for its window when the class
-/// [says so](ClaimFailureClass::excludes_crew).
+/// could not use [ORB-13941] or whose content policy refused the task
+/// [ORB-15573], a missing validation tool, an unreachable owner, a red base,
+/// an inconclusive or interrupted run) releases it, and the drain excludes
+/// the leaf's crew for its window when the failure
+/// [says so](ClaimFailure::excludes_crew).
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
@@ -103,7 +104,9 @@ pub(crate) fn leaf_failure_settlement(
         };
         evidence.baseline_red = hold;
         evidence.forge_hold = forge;
-        if failure.class == ClaimFailureClass::Provider {
+        // [ORB-15573] A refusal is no unavailability: the owner holds the
+        // task back from the provider instead.
+        if failure.class == ClaimFailureClass::Provider && !failure.provider_refusal {
             evidence.provider_unavailable = Some(ProviderUnavailable {
                 crew: failure.crew.clone(),
                 reason: failure.reason.clone(),
@@ -233,9 +236,13 @@ fn leaf_failure(
     };
     let stopped_at = state.and_then(|state| first_incomplete_step(run, state));
     // [ORB-14695] A provider's usage limit is read off its typed marker
-    // before the reason drops it.
+    // before the reason drops it. [ORB-15573] A refusal keeps its marker,
+    // which names the provider the owner's hold excludes.
     let provider_limit = typed.as_ref().is_some_and(|(class, reason)| {
         *class == ClaimFailureClass::Provider && is_provider_limit(None, Some(reason))
+    });
+    let provider_refusal = typed.as_ref().is_some_and(|(class, reason)| {
+        *class == ClaimFailureClass::Provider && is_provider_refusal(None, Some(reason))
     });
     let (class, reason) = typed.unwrap_or_else(|| {
         let reason = last_failed
@@ -300,6 +307,7 @@ fn leaf_failure(
         crew,
         candidate: state.and_then(|state| preserved_candidate(run, state)),
         provider_limit,
+        provider_refusal,
     }
 }
 
@@ -457,6 +465,12 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
              release does not count against the task's release budget",
             run.run_id, failure.reason
         ),
+        ClaimFailureClass::Provider if failure.provider_refusal => format!(
+            "leaf {} ended on a `provider` failure: the provider of crew `{crew}` refused the \
+             task's content ({}); the work was not judged, and the owner holds the task back \
+             from that provider's crews",
+            run.run_id, failure.reason
+        ),
         ClaimFailureClass::Provider => format!(
             "leaf {} ended on a `provider` failure: it could not use the provider of crew \
              `{crew}` on this host ({}); the work was not attempted",
@@ -481,7 +495,7 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
         why.push_str(", and this drain claims no more work on this host in its window");
     } else if failure.provider_limit {
         why.push_str(", and this drain runs no more tasks on that provider's crews in its window");
-    } else if failure.class.excludes_crew() {
+    } else if failure.excludes_crew() {
         why.push_str(&format!(
             ", and this drain runs no more `{crew}` tasks in its window"
         ));
@@ -518,6 +532,7 @@ pub(crate) fn operator_cancel_release(
             .and_then(|task| task.crew.clone()),
         candidate,
         provider_limit: false,
+        provider_refusal: false,
     };
     let mut evidence = release_evidence(record, &format!("{why}{}", candidate_note(&failure)));
     evidence.failure = Some(failure);

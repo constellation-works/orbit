@@ -6,9 +6,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_core::application::distributed::PullCrewWindow;
 use orbit_store::contracts::ClaimSettlementKind;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     BaselineRedHold, ClaimFailureClass, CrewExclusion, CrewExclusionSource,
-    FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold,
+    FORGE_UNAVAILABLE_ERROR_CODE, ForgeUnavailableHold, PROVIDER_FAILURE_HOLD_EVENT,
+    ProviderFailureClass, ProviderFailureHold,
 };
 
 use super::*;
@@ -1359,4 +1361,125 @@ model = \"claude-opus\"
         "every claim was released, none failed: {:#?}",
         pair.owner_claims()
     );
+}
+
+/// [ORB-15573] A claimed leaf whose provider's content policy refused the
+/// task did not judge the work. Its claim releases as a `provider` failure
+/// marked as a refusal, which excludes no crew from the drain's window: the
+/// provider works on this host. The owner instead returns the task to the
+/// backlog under a provider hold excluding every crew of the refusing
+/// provider, with the refusal in its history. Its next admission draws a
+/// crew of another provider; a follower that would run it as a held crew is
+/// refused it with the hold as the reason, and an owner with no other
+/// provider defers it with the same reason instead of looping.
+#[test]
+fn a_provider_refusal_releases_the_claim_under_an_owner_provider_hold() {
+    if !isolated(
+        module_path!(),
+        "a_provider_refusal_releases_the_claim_under_an_owner_provider_hold",
+    ) {
+        return;
+    }
+    const CODEX: &str = "\
+[crews.sol]
+provider = \"codex\"
+model = \"gpt-sol\"
+
+[crews.luna]
+provider = \"codex\"
+model = \"gpt-luna\"
+";
+    let mixed = format!(
+        "[workflow]\ndefault_crew = \"opus\"\n\n{CODEX}\n[crews.opus]\nprovider = \"claude\"\n\
+         model = \"claude-opus\"\n"
+    );
+    let codex_only = format!("[workflow]\ndefault_crew = \"sol\"\n\n{CODEX}");
+    let refusal = "[provider_refusal] provider=codex cli subprocess exited with code 1: codex \
+         provider refused the request: This content was flagged for possible cybersecurity risk.";
+    for (config, another_provider) in [(mixed.as_str(), true), (codex_only.as_str(), false)] {
+        let pair = Pair::with_configs(config, config, &[Some("sol")]);
+        let task = pair.tasks[0].clone();
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        pair.leaf_fails_with(&leaf, refusal);
+        let pass = settle_only(&pair, &drain);
+        assert_eq!(pair.owner_status(&task), "backlog", "not blocked: {pass}");
+
+        let release = &settlement_of(&pair, &leaf)["Release"];
+        assert_eq!(release["failure"]["class"], "provider", "{release}");
+        assert_eq!(release["failure"]["provider_refusal"], true, "{release}");
+        assert!(
+            release["provider_unavailable"].is_null(),
+            "a refusal is no unavailability: {release}"
+        );
+        assert_eq!(
+            sol_exclusion(&pair, &drain),
+            None,
+            "the provider works here, so the window keeps the crew"
+        );
+
+        let history = pair.wire.owner.get_task_history(&task).unwrap();
+        let entry = history.last().expect("history");
+        assert_eq!(entry.event, PROVIDER_FAILURE_HOLD_EVENT, "{entry:?}");
+        assert_eq!(entry.to_status, Some(TaskStatus::Backlog), "{entry:?}");
+        let note = entry.note.as_deref().unwrap_or_default();
+        assert!(
+            note.contains("flagged for possible cybersecurity risk"),
+            "the history carries the refusal: {note}"
+        );
+        let hold = ProviderFailureHold::from_text(note).expect("the note carries the hold");
+        assert_eq!(hold.class, ProviderFailureClass::Refusal);
+        assert_eq!(hold.provider.as_deref(), Some("codex"));
+        assert_eq!(hold.run_id, leaf);
+        assert!(
+            hold.excludes("sol") && hold.excludes("luna") && !hold.excludes("opus"),
+            "every Codex crew: {hold:?}"
+        );
+
+        // A follower drain that would run the task as `sol` is refused it.
+        let mut request = pair.wire.calls("orbit.task.pull")[0].clone();
+        request["request_id"] = json!("after-the-refusal");
+        request["run_context"]["run_id"] = json!("jrun-another-drain");
+        let pulled = pair.wire.call("", "orbit.task.pull", request).unwrap();
+        assert!(pulled["receipt"]["claim"].is_null(), "{pulled:#}");
+        let deferred = pulled["receipt"]["deferred_conflicts"]
+            .as_array()
+            .and_then(|held| held.iter().find(|held| held["task_id"] == task.as_str()))
+            .unwrap_or_else(|| panic!("the hold keeps the task from `sol`: {pulled:#}"));
+        assert!(
+            deferred["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("provider hold") && reason.contains(&leaf)),
+            "{deferred}"
+        );
+
+        // The owner's own admission draws another provider, or waits.
+        let backlog = pair
+            .wire
+            .owner
+            .run_deterministic(
+                "list_backlog_tasks",
+                &json!({}),
+                &json!({}),
+                ToolContext::default(),
+            )
+            .unwrap();
+        let admitted = backlog["task_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == task.as_str()));
+        assert_eq!(admitted, another_provider, "{backlog:#}");
+        if !another_provider {
+            let excluded = backlog["excluded"]
+                .as_array()
+                .and_then(|excluded| excluded.iter().find(|entry| entry["id"] == task.as_str()))
+                .unwrap_or_else(|| panic!("the task waits out the hold: {backlog:#}"));
+            assert_eq!(excluded["reason"], "provider_backoff", "{excluded}");
+            assert!(
+                excluded["detail"].as_str().is_some_and(|detail| detail
+                    .contains("provider_refusal")
+                    && detail.contains(&leaf)),
+                "the deferral names the refusal and its run: {excluded}"
+            );
+        }
+    }
 }
