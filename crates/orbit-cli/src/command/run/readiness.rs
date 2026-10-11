@@ -153,12 +153,14 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             // A host-OS wait names the host, and a native-OS requirement the
             // tag to add. A local-route review hold names the remedy, and
             // a provider limit its window, reset and skipped crews. A task
-            // with no footprint names its wait and fix [ORB-15191]. Other
+            // with no footprint names its wait and fix [ORB-15191], and an
+            // unverified review finding the verification job to run. Other
             // long repair instructions stay in JSON.
             let host = matches!(
                 reason,
                 "host_os_mismatch"
                     | "native_os_required"
+                    | "unverified_review_finding"
                     | "local_route_before_pr"
                     | "local_route_before_landing"
                     | "provider_limit"

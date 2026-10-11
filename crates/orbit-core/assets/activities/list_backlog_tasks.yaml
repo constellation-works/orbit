@@ -42,6 +42,12 @@ spec:
     re-scoping the acceptance criteria, a newer assessment without the
     finding, or the same evidenced operator decision (recorded as
     `native_os_requirement_resolved`) clears it.
+    A review-filed bug (type `bug`, tagged `code-review`,
+    `delivery-code-review`, `security-review` or `qa-sweep`) without a
+    CONFIRMED verdict from `finding_verification_pipeline` is withheld as
+    `unverified_review_finding`, with `detail` naming the job to run. A
+    CONFIRMED verdict, or an operator retyping or retagging the task, clears
+    it.
     Parent/child relations order nothing here:
     every task is a leaf admitted on its own declared footprint. The one
     exception is a root carrying the `epic` size tag that declares no
@@ -176,6 +182,7 @@ spec:
                 - pilot_already_landed
                 - operator_validation_handoff
                 - native_os_required
+                - unverified_review_finding
                 - pr_forge_remote_missing
                 - awaiting_footprint
                 - awaiting_exclusive_slot

@@ -18,6 +18,7 @@ pub(crate) fn is_automation_actor(label: &str) -> bool {
     let label = label.trim();
     label == SYSTEM_ACTOR_LABEL
         || label == "task-pilot"
+        || label == "finding-verification"
         || label.starts_with(MACHINE_ID_PREFIX)
         || all_agent_families().contains(&label)
         || agent_from_model(label).is_some()

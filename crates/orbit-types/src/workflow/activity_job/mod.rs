@@ -28,6 +28,7 @@ macro_rules! deterministic_action_catalog {
         $declare! {
             core {
                 ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
+                ApplyFindingVerification => "apply_finding_verification",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
                 AwaitApprovalPilot => "await_approval_pilot",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
@@ -45,6 +46,7 @@ macro_rules! deterministic_action_catalog {
                 PipelineSuccessGuard => "pipeline_success_guard",
                 PluginToolCall => "plugin.tool_call",
                 PrepareBlockedTaskRecovery => "prepare_blocked_task_recovery",
+                PrepareFindingVerification => "prepare_finding_verification",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
                 PullRefill => "pull_refill",

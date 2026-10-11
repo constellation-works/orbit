@@ -14,6 +14,7 @@ pub(super) mod ci_failure;
 pub(super) mod cli_executor;
 pub(super) mod dependabot;
 pub(super) mod dispatch;
+pub(super) mod finding_verification;
 pub(super) mod pipeline_actions;
 pub(crate) mod pull;
 pub(super) mod sandbox;

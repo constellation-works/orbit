@@ -14,6 +14,7 @@ mod provider_limit_ledger;
 mod provider_limit_view;
 pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
+mod finding_verification;
 mod helpers;
 mod lifecycle;
 mod lint;
@@ -52,6 +53,15 @@ pub use context_repair::ContextFileRestoration;
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
+};
+pub use finding_verification::{
+    FINDING_VERIFICATION_JOB, FINDING_VERIFICATION_SCHEMA_VERSION, FindingEvidence,
+    FindingRejection, FindingSeverity, FindingVerdict, FindingVerification, REVIEW_FINDING_TAGS,
+    RejectionReason, VerdictConfidence, VerifierReport, VerifierVerdict, is_review_finding,
+};
+pub(crate) use finding_verification::{
+    UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite, VerifierAssignment,
+    finding_fingerprint, needs_verification, next_tier,
 };
 pub use lint::{TaskLintFinding, TaskLintReport, TaskLintSeverity};
 pub use listing::{

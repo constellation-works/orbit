@@ -324,6 +324,7 @@ fn kept_off_cause(reason: &str) -> &str {
         "dependency_not_done" => "unmet dependencies",
         "host_os_mismatch" => "for another OS",
         "native_os_required" => "needing native evidence from another OS",
+        "unverified_review_finding" => "review findings awaiting verification",
         "crew_unavailable" => "needing a crew this host cannot run",
         "owner_hold" => "held on the owner",
         "invalid_candidate" => "invalid",
@@ -436,7 +437,8 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
     // A host-OS wait names the host it waits for, and a native-OS
     // requirement the tag to add. A local-route review hold names the
     // remedy. A verified-no-diff hold names the pilot's evidence and the
-    // commits it cites. Other details (long repair instructions) stay in `--json`.
+    // commits it cites, and an unverified review finding the verification
+    // job to run. Other details (long repair instructions) stay in `--json`.
     if matches!(
         task.reason.as_deref(),
         Some(
@@ -448,6 +450,7 @@ fn waiting_line(task: &WaitingTask, default_reason: &str) -> String {
                 | "owner_hold"
                 | "invalid_candidate"
                 | "pilot_verified_no_diff"
+                | "unverified_review_finding"
         )
     ) && let Some(detail) = &task.detail
     {

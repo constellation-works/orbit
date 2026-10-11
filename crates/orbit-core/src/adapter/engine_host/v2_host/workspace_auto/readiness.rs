@@ -347,6 +347,7 @@ pub fn explain_workspace_auto_readiness(
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
                     | BacklogTaskExclusionReason::HostOperationalHandoff
                     | BacklogTaskExclusionReason::NativeOsRequired
+                    | BacklogTaskExclusionReason::UnverifiedReviewFinding
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing
                     | BacklogTaskExclusionReason::AwaitingFootprint
                     | BacklogTaskExclusionReason::AwaitingExclusiveSlot => {

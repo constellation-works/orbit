@@ -550,6 +550,29 @@ fn assignment_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, Aut
 pub(crate) fn active_task_pilot_preparations(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    let mut prepared_by_task = active_preparations(runtime, "task_pilot_pipeline")?;
+    // A run holds its tasks from its reservation in prepare, before its
+    // checkpoint persists.
+    for (task_id, run_ids) in super::pilot_reservation::live_reservations(runtime)? {
+        prepared_by_task.entry(task_id).or_default().extend(run_ids);
+    }
+    Ok(prepared_by_task)
+}
+
+/// Tasks held by active finding verification runs, by their successful
+/// preparation checkpoints.
+pub(crate) fn active_finding_verifications(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    active_preparations(runtime, crate::application::task::FINDING_VERIFICATION_JOB)
+}
+
+/// The tasks each live run of `job_id` holds by a successful preparation
+/// checkpoint, keyed by task.
+fn active_preparations(
+    runtime: &OrbitRuntime,
+    job_id: &str,
+) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
     let workspace_root = runtime.paths().repo_root.canonicalize()?;
     let mut prepared_by_task = BTreeMap::<String, BTreeSet<String>>::new();
     for state in [
@@ -561,7 +584,7 @@ pub(crate) fn active_task_pilot_preparations(
             .stores()
             .jobs()
             .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some("task_pilot_pipeline".to_string()),
+                job_id: Some(job_id.to_string()),
                 state: Some(state),
                 terminal_only: false,
                 created_since: None,
@@ -590,11 +613,6 @@ pub(crate) fn active_task_pilot_preparations(
                     .insert(run.run_id.clone());
             }
         }
-    }
-    // A run holds its tasks from its reservation in prepare, before its
-    // checkpoint persists.
-    for (task_id, run_ids) in super::pilot_reservation::live_reservations(runtime)? {
-        prepared_by_task.entry(task_id).or_default().extend(run_ids);
     }
     Ok(prepared_by_task)
 }

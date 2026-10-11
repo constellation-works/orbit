@@ -1,0 +1,45 @@
+# Default finding verification routine. Seeded into `.orbit/routines/` on
+# `orbit init` with the routine name, this host's registered machine id
+# (`owner_machine`) and the workspace's registered base branch resolved at
+# seed time. It is intentionally disabled: enabling scheduled verification is
+# an explicit, versioned workspace decision.
+#
+# Approval, promotion to backlog and drain admission refuse a review-filed
+# bug (type `bug`, tagged `code-review`, `delivery-code-review`,
+# `security-review` or `qa-sweep`) until `finding_verification_pipeline`
+# records a CONFIRMED verdict for it. Enabled, this routine finds each such
+# task still owed a verdict in proposed, someday or backlog and, once it has
+# settled for debounce_minutes or waited max_wait_minutes, submits up to
+# batch_size of them that share one stored crew into one run. A recorded
+# verdict takes the task out of observation; an edit to the finding's title,
+# description, criteria, tags, type or selectors releases a failed claim.
+#
+# Only this host evaluates the trigger (`owner_machine`). Explicit runs
+# (`orbit run job finding_verification_pipeline --input 'task_ids=["<id>"]'`)
+# remain available and do not use this gate. See
+# docs/design/finding-verification/2_design.md.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Verify review-filed bug findings that carry no verdict, so a confirmed
+  finding can be promoted and a rejected one is closed with its evidence.
+  State-triggered: fires when such a finding is filed or edited and stays
+  quiet otherwise. Disabled by default; set enabled to true in this
+  versioned definition to opt this workspace in.
+enabled: false
+trigger:
+  state:
+    kind: finding_unverified
+    owner_machine: __ORBIT_OWNER_MACHINE__
+    branch: __ORBIT_BASE_BRANCH__
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+target: job:finding_verification_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {max: 1, backoff_minutes: 5}

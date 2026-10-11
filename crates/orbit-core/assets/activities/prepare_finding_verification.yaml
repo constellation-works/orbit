@@ -1,0 +1,87 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: prepare_finding_verification
+spec:
+  type: deterministic
+  description: >
+    Select the review-filed bug findings a finding verification run judges
+    and assign each its verifier. With task_ids it verifies those tasks; a
+    named task that is not a proposed, someday or backlog bug tagged
+    code-review, delivery-code-review, security-review or qa-sweep, or one
+    another live verification run holds, settles superseded with its reason.
+    Without task_ids it selects every such finding still owed a CONFIRMED
+    verdict, oldest first, up to max_tasks, and counts the rest in
+    `excluded_by_reason`. It pins one landing-branch revision without
+    changing the primary HEAD, index or working files, and fails before any
+    agent call outside a Git work tree. Each task's verifier crew is drawn
+    from the complexity pool of its tier (unassessed reads as medium), or is
+    the default crew when that pool has no enabled member, passing over the
+    filer's crew when the pool offers another. Tasks are partitioned by
+    crew, at most max_partition_size per partition. Nothing is written.
+  input_schema_json:
+    type: object
+    properties:
+      state_automation: {}
+      source_revision:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      base_branch:
+        type: string
+      max_tasks:
+        type: number
+        minimum: 1
+        maximum: 500
+      max_partition_size:
+        type: number
+        minimum: 1
+        maximum: 5
+  output_schema_json:
+    type: object
+    required:
+      [mode, workspace_path, source, round, task_count, task_ids, tasks,
+       partition_size, partition_count, partitions, excluded_by_reason,
+       superseded_during_preparation]
+    properties:
+      mode:
+        type: string
+        enum: [automatic, explicit]
+      workspace_path:
+        type: string
+      source:
+        type: object
+      round:
+        type: string
+        enum: [initial]
+      task_count:
+        type: number
+      task_ids:
+        type: array
+        items:
+          type: string
+      tasks:
+        type: array
+        items:
+          type: object
+      partition_size:
+        type: number
+      partition_count:
+        type: number
+      partitions:
+        type: array
+        items:
+          type: object
+          required: [partition_index, task_ids, crew]
+      excluded_by_reason:
+        type: object
+      superseded_during_preparation:
+        type: array
+        items:
+          type: object
+  action: prepare_finding_verification
+  config: {}

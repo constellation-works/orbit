@@ -22,7 +22,7 @@ use crate::OrbitRuntime;
 use super::action_failed;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct SourceSnapshot {
+pub(in super::super) struct SourceSnapshot {
     pub base_branch: String,
     pub source_ref: String,
     pub source_revision: String,
@@ -32,7 +32,7 @@ pub(super) struct SourceSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum GitPathKind {
+pub(in super::super) enum GitPathKind {
     Blob,
     Tree,
     Missing,
@@ -40,7 +40,7 @@ pub(super) enum GitPathKind {
 }
 
 impl SourceSnapshot {
-    pub(super) fn to_json(&self) -> Value {
+    pub(in super::super) fn to_json(&self) -> Value {
         json!({
             "base_branch": self.base_branch,
             "source_ref": self.source_ref,
@@ -49,7 +49,7 @@ impl SourceSnapshot {
         })
     }
 
-    pub(super) fn from_prepared(
+    pub(in super::super) fn from_prepared(
         prepared: &Value,
         action: &str,
     ) -> Result<Option<Self>, DispatchError> {
@@ -111,7 +111,7 @@ impl SourceSnapshot {
         }))
     }
 
-    pub(super) fn ensure_commit(
+    pub(in super::super) fn ensure_commit(
         &self,
         action: &str,
         workspace: &Path,
@@ -161,7 +161,36 @@ impl SourceSnapshot {
         }
     }
 
-    pub(super) fn path_kind(
+    /// How many lines the file at repository-relative `path` holds at the
+    /// pinned revision, or `None` when no file is there.
+    pub(in super::super) fn file_line_count(
+        &self,
+        action: &str,
+        workspace: &Path,
+        path: &str,
+    ) -> Result<Option<usize>, DispatchError> {
+        if self.path_kind(action, workspace, Path::new(path))? != GitPathKind::Blob {
+            return Ok(None);
+        }
+        let output = git(
+            action,
+            workspace,
+            &[
+                "cat-file",
+                "blob",
+                &format!("{}:{path}", self.source_revision),
+            ],
+        )?;
+        if !output.success {
+            return Err(action_failed(
+                action,
+                format!("read {path} at the pinned source: {}", output.stderr.trim()),
+            ));
+        }
+        Ok(Some(output.stdout.lines().count()))
+    }
+
+    pub(in super::super) fn path_kind(
         &self,
         action: &str,
         workspace: &Path,
@@ -216,7 +245,7 @@ impl SourceSnapshot {
     }
 }
 
-pub(super) fn resolve_source_snapshot(
+pub(in super::super) fn resolve_source_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,

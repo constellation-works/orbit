@@ -1,0 +1,154 @@
+# Verify review-filed defect findings before they can be promoted.
+#
+# A review job files what it believes is a defect as a `bug` task tagged
+# `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`.
+# Until this job records a CONFIRMED verdict for it, approval, promotion to
+# backlog and drain admission refuse the task and name this job. Design and
+# verdict schema: docs/design/finding-verification/2_design.md.
+#
+# Selection
+# - Explicit: `orbit run job finding_verification_pipeline --input
+#   'task_ids=["<id>"]'` verifies those tasks, re-verifying a confirmed one.
+#   A named task that is not a proposed, someday or backlog review finding
+#   settles superseded with its reason.
+# - Automatic (no task_ids): every review finding still owed a verdict,
+#   oldest first, up to max_tasks.
+# - State-triggered: the seeded `finding_verification` routine
+#   (`kind: finding_unverified`) submits one crew-homogeneous batch per run.
+#
+# Prepare pins one landing-branch revision without touching the primary
+# checkout and fails before any agent call outside a Git work tree.
+#
+# Crew resolution
+# - Each task's verifier is drawn from `workflow.<tier>_complexity_crews`,
+#   where the tier is the task's complexity (unassessed reads as medium), or
+#   from `workflow.default_crew` when that pool has no enabled member. When
+#   the pool offers another crew, the one that filed the finding is passed
+#   over. Prepare records every draw; the verifier step names the crew of its
+#   partition, so tasks are partitioned by crew, at most five per partition.
+# - A REJECTED verdict from the low tier, or any low-confidence verdict, is
+#   judged again by a crew from the next tier's pool (low -> medium -> hard ->
+#   xhard), preferring one that has not judged it, and that second verdict
+#   decides. With no next-tier pool the first verdict stands. There is one
+#   escalation round.
+#
+# Apply validates every verdict at the pinned revision: CONFIRMED needs
+# severity and `path:line` evidence naming lines of files that exist there;
+# REJECTED needs a reason, with the fixing commit or duplicate task it
+# implies. It then records the verdict — history entry, comment, and for
+# REJECTED the move to `rejected` — on tasks still in their prepared status.
+# A task with no valid verdict stays unverified and fails the run.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: finding_verification_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 3
+  default_input:
+    task_ids: []
+    workspace_path: .
+    max_tasks: 50
+    max_partition_size: 5
+    state_automation: null
+    source_revision: ""
+
+  steps:
+    - id: prepare
+      target: activity:prepare_finding_verification
+      default_input:
+        state_automation: "{{ input.state_automation }}"
+        source_revision: "{{ input.source_revision }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ input.workspace_path }}"
+        base_branch: "{{ input.base_branch }}"
+        max_tasks: "{{ input.max_tasks }}"
+        max_partition_size: "{{ input.max_partition_size }}"
+
+    - id: verdict_results
+      when: "{{ steps.prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_verifier
+          target: activity:verify_finding
+      fan_in:
+        join: { mode: all }
+        collect: verdicts
+
+    - id: verifiers
+      when: "{{ steps.prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: verifier
+          target: activity:verify_finding
+          default_input:
+            task_ids: "{{ item.task_ids }}"
+            partition_index: "{{ item.partition_index }}"
+            workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            base_branch: "{{ steps.prepare.output.source.base_branch }}"
+            source_revision: "{{ steps.prepare.output.source.source_revision }}"
+            inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
+            # The crew prepare drew for this partition's tasks.
+            crew: "{{ item.crew }}"
+      fan_in:
+        join:
+          mode: any
+        collect: verdict_results
+
+    - id: apply
+      target: activity:apply_finding_verification
+      default_input:
+        prepared: "{{ steps.prepare.output }}"
+        results: "{{ steps.verdict_results.output }}"
+        workspace_path: "{{ steps.prepare.output.workspace_path }}"
+
+    - id: escalation_verifiers
+      when: "{{ steps.apply.output.escalation_count }} != 0"
+      fan_out:
+        items: "{{ steps.apply.output.escalation_prepared.partitions }}"
+        max_workers: 5
+        worker:
+          id: escalation_verifier
+          target: activity:verify_finding
+          default_input:
+            task_ids: "{{ item.task_ids }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: true
+            workspace_path: "{{ steps.prepare.output.workspace_path }}"
+            base_branch: "{{ steps.prepare.output.source.base_branch }}"
+            source_revision: "{{ steps.prepare.output.source.source_revision }}"
+            inspection_revision: "{{ steps.prepare.output.source.source_revision }}"
+            crew: "{{ item.crew }}"
+      fan_in:
+        join:
+          mode: any
+        collect: escalation_results
+
+    - id: apply_escalations
+      when: "{{ steps.apply.output.escalation_count }} != 0"
+      target: activity:apply_finding_verification
+      default_input:
+        prepared: "{{ steps.apply.output.escalation_prepared }}"
+        results: "{{ steps.escalation_results.output }}"
+        workspace_path: "{{ steps.prepare.output.workspace_path }}"
+        carried_task_outcomes: "{{ steps.apply.output.task_outcomes }}"
+
+    - id: require_apply_success
+      when: "{{ steps.apply.output.escalation_count }} == 0"
+      target: activity:pipeline_success_guard
+      default_input:
+        context: finding verification apply
+        result: "{{ steps.apply.output }}"
+
+    - id: require_escalation_apply_success
+      when: "{{ steps.apply.output.escalation_count }} != 0"
+      target: activity:pipeline_success_guard
+      default_input:
+        context: finding verification escalation apply
+        result: "{{ steps.apply_escalations.output }}"

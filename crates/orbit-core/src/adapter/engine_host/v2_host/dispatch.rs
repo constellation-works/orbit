@@ -24,12 +24,20 @@ use crate::runtime::task::locks::{
 use super::admission::{backlog_exclusion, scan_unresolved};
 use super::ci_failure::filing as ci_failure_filing;
 use super::dependabot::{consolidate as dependabot_consolidate, filing as dependabot_filing};
-use super::{blocked_recovery, pipeline_actions, task_pilot, workspace_auto};
+use super::{blocked_recovery, finding_verification, pipeline_actions, task_pilot, workspace_auto};
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
 pub(crate) fn is_deterministic_action_registered(action: &str) -> bool {
     DeterministicAction::parse(action).is_some()
+}
+
+/// The run whose reservation this dispatch acts for.
+fn owner_run_id(tool_context: &ToolContext) -> Option<&str> {
+    tool_context
+        .reservation_owner
+        .as_ref()
+        .map(|owner| owner.owner_run_id.as_str())
 }
 
 pub(crate) fn run_deterministic(
@@ -57,7 +65,10 @@ pub(crate) fn run_deterministic(
         .insert(McpCapability::Runner);
     if matches!(
         deterministic_action,
-        CoreDeterministicAction::PrepareTaskPilot | CoreDeterministicAction::ApplyTaskPilotResults
+        CoreDeterministicAction::PrepareTaskPilot
+            | CoreDeterministicAction::ApplyTaskPilotResults
+            | CoreDeterministicAction::PrepareFindingVerification
+            | CoreDeterministicAction::ApplyFindingVerification
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
         let claim = crate::application::automation::members::claim(runtime, claim_input).map_err(
@@ -320,6 +331,20 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
+        // Select and assign review findings to verifiers, then record each
+        // validated verdict; both run at one pinned source revision.
+        CoreDeterministicAction::PrepareFindingVerification => finding_verification::prepare(
+            runtime,
+            action,
+            input,
+            finding_verification::run_id(owner_run_id(&tool_context), input),
+        ),
+        CoreDeterministicAction::ApplyFindingVerification => finding_verification::apply(
+            runtime,
+            action,
+            input,
+            finding_verification::run_id(owner_run_id(&tool_context), input),
+        ),
         // Re-check one blocked task's episode and open a detached base
         // checkout for final recovery, then apply its decision through the
         // shared final-recovery applier and remove that checkout.
