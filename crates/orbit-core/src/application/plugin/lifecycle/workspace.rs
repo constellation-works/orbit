@@ -108,19 +108,25 @@ fn workspace_config_path(runtime: &OrbitRuntime) -> Result<PathBuf, OrbitError> 
 /// Creating the file for a toggle is safe: a file holding only the toggle
 /// table is not a policy layer, so the replace-only security settings keep
 /// inheriting from global.
+///
+/// The read, edit, validation and save run under the config write lock every
+/// `config.toml` writer takes, so a concurrent config or toggle write is
+/// neither erased nor validated against a version this one replaces.
 pub(super) fn write_workspace_toggle(
     path: &Path,
     global_root: &Path,
     name: &str,
     enabled: bool,
 ) -> Result<(), OrbitError> {
-    let mut store = ConfigStore::open(ConfigScope::Workspace, path)?;
-    store.set_document_value(
-        &orbit_config::plugin_enablement_key(name),
-        if enabled { "true" } else { "false" },
-    )?;
-    store.validate_workspace_with_global(global_root)?;
-    store.save()
+    ConfigStore::with_write_lock(path, || {
+        let mut store = ConfigStore::open(ConfigScope::Workspace, path)?;
+        store.set_document_value(
+            &orbit_config::plugin_enablement_key(name),
+            if enabled { "true" } else { "false" },
+        )?;
+        store.validate_workspace_with_global(global_root)?;
+        store.save()
+    })
 }
 
 /// This workspace's toggles as they are on disk now, for the long-lived

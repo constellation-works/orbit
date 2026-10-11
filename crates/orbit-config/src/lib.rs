@@ -61,7 +61,8 @@
 //!   projection in sibling named modules.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
-//! - `store` — comment-preserving [`ConfigStore`] edits and atomic save.
+//! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
+//!   refuses to replace a file changed since the store read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod crew_pools;

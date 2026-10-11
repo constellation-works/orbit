@@ -267,20 +267,22 @@ pub fn set_key(
     init: ConfigWriteInit,
 ) -> Result<ConfigWriteOutcome, OrbitError> {
     admit_config_key(key)?;
-    let old_value = effective_value(runtime, key)?;
-    let mut store = open_store_for_write(runtime, scope, init)?;
-    store.set_value(key, &toml_literal(value)?)?;
-    match scope {
-        ConfigScope::Global => {
-            store.validate()?;
-            store.validate_global_for_set(key, &runtime.shared_root())?;
+    let literal = toml_literal(value)?;
+    let (store, old_value) = write_store(runtime, scope, init, |store| {
+        let old_value = effective_value(runtime, key)?;
+        store.set_value(key, &literal)?;
+        match scope {
+            ConfigScope::Global => {
+                store.validate()?;
+                store.validate_global_for_set(key, &runtime.shared_root())?;
+            }
+            ConfigScope::Workspace => {
+                let global_root = runtime.global_root();
+                store.validate_workspace_for_set(key, &global_root)?;
+            }
         }
-        ConfigScope::Workspace => {
-            let global_root = runtime.global_root();
-            store.validate_workspace_for_set(key, &global_root)?;
-        }
-    }
-    store.save()?;
+        Ok(old_value)
+    })?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
 
@@ -291,16 +293,18 @@ pub fn unset_key(
     scope: ConfigScope,
 ) -> Result<ConfigWriteOutcome, OrbitError> {
     admit_config_key(key)?;
-    let old_value = effective_value(runtime, key)?;
-    let mut store = open_store_for_write(runtime, scope, ConfigWriteInit::RequireExisting)?;
-    if !store.unset_value(key)? {
-        return Err(OrbitError::InvalidInput(format!(
-            "'{key}' is not set in the {} config; nothing to clear",
-            scope.label()
-        )));
-    }
-    validate_store(runtime, scope, &store)?;
-    store.save()?;
+    let (store, old_value) =
+        write_store(runtime, scope, ConfigWriteInit::RequireExisting, |store| {
+            let old_value = effective_value(runtime, key)?;
+            if !store.unset_value(key)? {
+                return Err(OrbitError::InvalidInput(format!(
+                    "'{key}' is not set in the {} config; nothing to clear",
+                    scope.label()
+                )));
+            }
+            validate_store(runtime, scope, store)?;
+            Ok(old_value)
+        })?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
 
@@ -326,27 +330,30 @@ pub fn set_crew(
     for key in &keys {
         admit_config_key(key)?;
     }
-    let old_value = crew_value(runtime, name)?;
-    let mut store = open_store_for_write(runtime, scope, init)?;
-    for (field, value) in fields {
-        let key = format!("crews.{name}.{field}");
-        if value.is_null() {
-            store.unset_value(&key)?;
-        } else {
-            store.set_value(&key, &toml_literal(value)?)?;
-        }
-    }
-    validate_store(runtime, scope, &store)?;
-    for key in &keys {
-        match scope {
-            ConfigScope::Global => store.validate_global_for_set(key, &runtime.shared_root())?,
-            ConfigScope::Workspace => {
-                let global_root = runtime.global_root();
-                store.validate_workspace_for_set(key, &global_root)?;
+    let (store, old_value) = write_store(runtime, scope, init, |store| {
+        let old_value = crew_value(runtime, name)?;
+        for (field, value) in fields {
+            let key = format!("crews.{name}.{field}");
+            if value.is_null() {
+                store.unset_value(&key)?;
+            } else {
+                store.set_value(&key, &toml_literal(value)?)?;
             }
         }
-    }
-    store.save()?;
+        validate_store(runtime, scope, store)?;
+        for key in &keys {
+            match scope {
+                ConfigScope::Global => {
+                    store.validate_global_for_set(key, &runtime.shared_root())?;
+                }
+                ConfigScope::Workspace => {
+                    let global_root = runtime.global_root();
+                    store.validate_workspace_for_set(key, &global_root)?;
+                }
+            }
+        }
+        Ok(old_value)
+    })?;
     write_outcome(runtime, scope, &store, old_value, &keys)
 }
 
@@ -356,39 +363,41 @@ pub fn delete_crew(
     name: &str,
     scope: ConfigScope,
 ) -> Result<ConfigWriteOutcome, OrbitError> {
-    let effective = load_effective_config(&config_roots(runtime))?;
-    let referenced_by = CREW_REFERENCE_KEYS
-        .iter()
-        .filter(|key| {
-            effective
-                .value_for(key)
-                .and_then(|value| value.as_str().map(str::to_string))
-                .as_deref()
-                == Some(name)
-        })
-        .copied()
-        .collect::<Vec<_>>();
-    if !referenced_by.is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
-            "crew '{name}' is named by {}; point {} at another crew before deleting it",
-            referenced_by.join(" and "),
-            if referenced_by.len() == 1 {
-                "it"
-            } else {
-                "them"
-            },
-        )));
-    }
-    let old_value = crew_value(runtime, name)?;
-    let mut store = open_store_for_write(runtime, scope, ConfigWriteInit::RequireExisting)?;
-    if !store.remove_crew_table(name)? {
-        return Err(OrbitError::InvalidInput(format!(
-            "crew '{name}' is not defined in the {} config",
-            scope.label()
-        )));
-    }
-    validate_store(runtime, scope, &store)?;
-    store.save()?;
+    let (store, old_value) =
+        write_store(runtime, scope, ConfigWriteInit::RequireExisting, |store| {
+            let effective = load_effective_config(&config_roots(runtime))?;
+            let referenced_by = CREW_REFERENCE_KEYS
+                .iter()
+                .filter(|key| {
+                    effective
+                        .value_for(key)
+                        .and_then(|value| value.as_str().map(str::to_string))
+                        .as_deref()
+                        == Some(name)
+                })
+                .copied()
+                .collect::<Vec<_>>();
+            if !referenced_by.is_empty() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "crew '{name}' is named by {}; point {} at another crew before deleting it",
+                    referenced_by.join(" and "),
+                    if referenced_by.len() == 1 {
+                        "it"
+                    } else {
+                        "them"
+                    },
+                )));
+            }
+            let old_value = crew_value(runtime, name)?;
+            if !store.remove_crew_table(name)? {
+                return Err(OrbitError::InvalidInput(format!(
+                    "crew '{name}' is not defined in the {} config",
+                    scope.label()
+                )));
+            }
+            validate_store(runtime, scope, store)?;
+            Ok(old_value)
+        })?;
     write_outcome(runtime, scope, &store, old_value, &[])
 }
 
@@ -559,19 +568,33 @@ fn config_layer_file(root: &Path) -> Result<ConfigLayerFile, OrbitError> {
     })
 }
 
-fn open_store_for_write(
+/// One write of `scope`'s file as a transaction: under the file's write lock,
+/// open it, let `edit` mutate and validate the staged document, then save
+/// exactly what was validated. A concurrent writer of the same file waits for
+/// the lock, so neither edit erases the other.
+fn write_store<T>(
     runtime: &OrbitRuntime,
     scope: ConfigScope,
     init: ConfigWriteInit,
-) -> Result<ConfigStore, OrbitError> {
-    match scope {
-        ConfigScope::Global => ConfigStore::open(ConfigScope::Global, global_config_path(runtime)),
-        ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
-            workspace_config_path(runtime),
-            &global_config_path(runtime),
-            init.mode(),
-        ),
-    }
+    edit: impl FnOnce(&mut ConfigStore) -> Result<T, OrbitError>,
+) -> Result<(ConfigStore, T), OrbitError> {
+    let path = match scope {
+        ConfigScope::Global => global_config_path(runtime),
+        ConfigScope::Workspace => workspace_config_path(runtime),
+    };
+    ConfigStore::with_write_lock(&path, || {
+        let mut store = match scope {
+            ConfigScope::Global => ConfigStore::open(ConfigScope::Global, path.clone())?,
+            ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
+                path.clone(),
+                &global_config_path(runtime),
+                init.mode(),
+            )?,
+        };
+        let edited = edit(&mut store)?;
+        store.save()?;
+        Ok((store, edited))
+    })
 }
 
 /// The layered value of one key before a write, so the audit record can name

@@ -37,34 +37,45 @@ impl Execute for ConfigSetArgs {
         // doesn't exist.
         admit_config_key(&self.key)?;
 
-        let mut store = if self.global {
-            ConfigStore::open(ConfigScope::Global, global_config_path(runtime))?
+        // Open, edit, validate and save under the file's write lock, so the
+        // version validated is the one replaced and a concurrent writer's
+        // edit is not erased.
+        let path = if self.global {
+            global_config_path(runtime)
         } else {
-            let mode = if self.seed_from_global {
-                WorkspaceInitMode::SeedFromGlobal
-            } else if self.fresh {
-                WorkspaceInitMode::Fresh
-            } else {
-                WorkspaceInitMode::RequireExisting
-            };
-            ConfigStore::open_for_workspace_set(
-                workspace_config_path(runtime),
-                &global_config_path(runtime),
-                mode,
-            )?
+            workspace_config_path(runtime)
         };
+        let store = ConfigStore::with_write_lock(&path, || {
+            let mut store = if self.global {
+                ConfigStore::open(ConfigScope::Global, path.clone())?
+            } else {
+                let mode = if self.seed_from_global {
+                    WorkspaceInitMode::SeedFromGlobal
+                } else if self.fresh {
+                    WorkspaceInitMode::Fresh
+                } else {
+                    WorkspaceInitMode::RequireExisting
+                };
+                ConfigStore::open_for_workspace_set(
+                    path.clone(),
+                    &global_config_path(runtime),
+                    mode,
+                )?
+            };
 
-        store.set_value(&self.key, &self.value)?;
-        match store.scope() {
-            ConfigScope::Global => {
-                store.validate_global_for_set(&self.key, &runtime.shared_root())?;
+            store.set_value(&self.key, &self.value)?;
+            match store.scope() {
+                ConfigScope::Global => {
+                    store.validate_global_for_set(&self.key, &runtime.shared_root())?;
+                }
+                ConfigScope::Workspace => {
+                    let global_root = runtime.global_root();
+                    store.validate_workspace_for_set(&self.key, &global_root)?;
+                }
             }
-            ConfigScope::Workspace => {
-                let global_root = runtime.global_root();
-                store.validate_workspace_for_set(&self.key, &global_root)?;
-            }
-        }
-        store.save()?;
+            store.save()?;
+            Ok(store)
+        })?;
 
         let scope = store.scope().label();
         let path = store.path().to_string_lossy().into_owned();
