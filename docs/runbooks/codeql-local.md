@@ -173,21 +173,33 @@ Before preparing anything, the script fingerprints the run's inputs:
 - every file and symlink in the checkout except `.git/`, `.orbit/`,
   `target/`, the scratch directory and earlier run directories
 - the effective configuration
-- the query selector, and the files of a query path that exists
+- the query selector string
 - the toolchain version and `codeql version`
 - the `CODEQL_*`, `RUSTFLAGS`, `RUSTDOCFLAGS` and Cargo build, profile and
   target variables, other than those the script overrides
 
-A passing run writes the digest to `inputs.sha256` after rechecking it, so a
-run whose checkout changed while it ran is never reused. When a run directory
-under the same scratch has a matching `inputs.sha256` and a `results.sarif`,
-the script prints that directory as its run directory, says it is reusing it,
-and exits zero without extracting or querying. The evidence there is the
-evidence of that invocation, and it is as trustworthy as the scratch that
-holds it, like any retained evidence; owner fulfilment always runs fresh.
-`--fresh` runs again regardless, and the new passing run can itself be
-reused. A failed run is never reused. Any input change, including an edit to
-a document, starts a fresh run.
+A selector that names an existing local path, including a `.ql` query or
+`.qls` suite, is not reusable: the script cannot fingerprint its complete
+dependency closure. A suite may reference queries outside the checkout, and a
+query may import `.qll` libraries outside the selected path. Such selectors run
+analysis every time, so edits to those dependencies cannot return stale SARIF.
+The script writes no `inputs.sha256` for those runs. Use a pack selector when
+you want reuse; for non-path selectors, the key includes the selector string,
+CodeQL version and checkout inputs, but does not hash pack files CodeQL
+resolves from an installation or package cache. Reuse is supported when that
+pack content is fixed by the pinned CodeQL installation; pass `--fresh` if it
+can change independently.
+
+For a reusable selector, a passing run writes the digest to `inputs.sha256`
+after rechecking it, so a checkout changed while the run was active is never
+reused. When a run directory under the same scratch has a matching digest and
+a `results.sarif`, the script prints that directory as its run directory, says
+it is reusing it, and exits zero without extracting or querying. The evidence
+there is the evidence of that invocation, and is as trustworthy as the scratch
+that holds it, like any retained evidence; owner fulfilment always runs fresh.
+`--fresh` runs again regardless, and the new passing run can itself be reused
+when its selector is supported. A failed run is never reused. Any input change,
+including an edit to a document, starts a fresh run.
 
 ## Source selection
 
@@ -418,11 +430,11 @@ The behavior tests use stubbed CodeQL, rustup and host platform without download
 stubbed CodeQL enumerates a fixture checkout's sources with the effective
 configuration, including build, scratch, and toolchain residue, and an earlier
 run under another scratch. They also cover toolchain cache reuse, reinstall
-and fallback, a third run queueing for two slots, the thread count, reuse of
-a passing run and what invalidates it, and what passing and failing runs
-keep. Off Linux, the cases supply each Linux command the script uses that
-the host lacks (util-linux `flock`, GNU `mv -T`, GNU `nproc`) as a shim and
-say so on stderr; a Linux host always runs its own:
+and fallback, a third run queueing for two slots, the thread count, pack
+selector reuse, local suite/query dependency edits that force analysis, and
+what passing and failing runs keep. Off Linux, the cases supply each missing
+Linux command (`flock`, GNU `mv -T`, GNU `nproc`) as a shim and say so on
+stderr; a Linux host always runs its own:
 
 ```bash
 python3 scripts/test-codeql-rust-local.py
