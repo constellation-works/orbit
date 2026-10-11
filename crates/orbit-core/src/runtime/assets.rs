@@ -94,8 +94,8 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/agent_invoke.yaml"),
     ),
     (
-        "gate_starvation_fail",
-        include_str!("../../assets/activities/gate_starvation_fail.yaml"),
+        "gate_starvation_defer",
+        include_str!("../../assets/activities/gate_starvation_defer.yaml"),
     ),
     (
         "resolve_delivery_job",

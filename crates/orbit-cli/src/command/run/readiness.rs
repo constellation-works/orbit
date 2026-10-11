@@ -140,6 +140,11 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
             let blocked_by = blocking_task_ids(&task["blocking_task_ids"])
                 .map(|ids| format!(" blocked-by={ids}"))
                 .unwrap_or_default();
+            // [ORB-15514] A blocker a follower's execution claim holds clears
+            // when that claim settles, on the machine named here.
+            let claimed = blocking_claims(&task["blocking_claims"])
+                .map(|claims| format!(" claimed-on={claims}"))
+                .unwrap_or_default();
             // A host-OS wait names the host, and a native-OS requirement the
             // tag to add. A local-route review hold names the remedy, and
             // a provider limit its window, reset and skipped crews. A task
@@ -171,7 +176,7 @@ fn readiness_lines(payload: &Value) -> Vec<String> {
                 .map(|deadline| format!(" frozen-batch-deadline={deadline}"))
                 .unwrap_or_default();
             lines.push(format!(
-                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{host}",
+                "{task_id}: {} ({reason}){light}{deadline}{crew}{blocked_by}{claimed}{host}",
                 if eligible { "eligible" } else { "waiting" }
             ));
         }
@@ -282,6 +287,21 @@ fn occupancy_phases(phases: &Value) -> Option<String> {
         })
         .collect::<Vec<_>>();
     (!named.is_empty()).then(|| named.join(", "))
+}
+
+fn blocking_claims(claims: &Value) -> Option<String> {
+    let named = claims
+        .as_array()?
+        .iter()
+        .filter_map(|claim| {
+            let task_id = claim["task_id"].as_str()?;
+            let machine = claim["machine_name"]
+                .as_str()
+                .or_else(|| claim["machine_id"].as_str())?;
+            Some(format!("{task_id}@{machine}"))
+        })
+        .collect::<Vec<_>>();
+    (!named.is_empty()).then(|| named.join(","))
 }
 
 fn blocking_task_ids(blocking: &Value) -> Option<String> {

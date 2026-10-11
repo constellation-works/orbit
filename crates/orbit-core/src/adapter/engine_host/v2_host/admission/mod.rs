@@ -3,6 +3,7 @@
 
 pub(super) mod auto_admission;
 pub(super) mod backlog_exclusion;
+pub(super) mod claim_holders;
 pub(super) mod cpu_light;
 pub(super) mod duplicate_tasks;
 pub(super) mod leaf_occupancy;

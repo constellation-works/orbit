@@ -1,0 +1,80 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: gate_starvation_defer
+spec:
+  type: deterministic
+  description: >
+    The admission-gate workflow's (`task_gate_pipeline`) post-wait step.
+    It runs on every gate run: when the reserve-wait loop reserved the
+    footprint it returns `deferred: false`. When the window never opened
+    within `max_wait_seconds` it emits a `gate.starvation` audit event and
+    returns a deferral: the task stays in backlog for a later drain pass, the
+    gate dispatches no child, and its run ends successfully. The deferral
+    names the blocking tasks (lock holders, the tasks behind a conflicting
+    reservation, and unmet dependencies) together with any live execution
+    claim holding them, plus the `conflicting_files` and `waiting_on_deps`
+    the gate last observed — it can starve on either axis.
+
+    It handles only legitimate waits that ran out of budget. A dependency
+    that can never be satisfied (archived before reaching `done`, rejected,
+    or dangling) fails earlier, inside `reserve_locks`, with a
+    `task.dependencies.unsatisfiable` error and never reaches the loop.
+  input_schema_json:
+    type: object
+    required: [task_ids]
+    properties:
+      reserved:
+        type: [boolean, string]
+      task_ids:
+        type: array
+        items:
+          type: string
+      conflicts:
+        type: array
+        items:
+          type: object
+      waiting_on_deps:
+        type: array
+        items:
+          type: string
+      max_wait_seconds:
+        type: number
+  output_schema_json:
+    type: object
+    required: [deferred]
+    properties:
+      deferred:
+        type: boolean
+      reason:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      blocking_task_ids:
+        type: array
+        items:
+          type: string
+      blocking_claims:
+        type: array
+        items:
+          type: object
+      conflicting_files:
+        type: array
+        items:
+          type: string
+      conflicts:
+        type: array
+        items:
+          type: object
+      waiting_on_deps:
+        type: array
+        items:
+          type: string
+      max_wait_seconds:
+        type: [number, "null"]
+      detail:
+        type: string
+  action: gate_starvation_defer
+  config: {}

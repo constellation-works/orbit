@@ -211,7 +211,13 @@ for a pull drain as for a local one.
    owner-local delivery run carries in its `input.task_ids` (any job declaring
    `spec.task_delivery`, such as a local drain's wrapper and its gate). A gate waiting for
    context locks has not yet moved the task out of `backlog` or reserved its footprint, so
-   status and reservations alone would hand it out a second time [ORB-13918]. Skip a candidate
+   status and reservations alone would hand it out a second time [ORB-13918]. A delivery run
+   is only dispatched after the owner's drain selects its wave, so the wave itself passes the
+   same exclusive section [ORB-15514]: it refuses a candidate a live claim holds or whose
+   footprint overlaps one, and publishes each admitted footprint as a coordination row. A pull
+   defers a candidate that overlaps such a row while the task is still `backlog` and the row is
+   unexpired (fifteen minutes, ample for its gate to reserve), so no grant lands between the
+   wave and its gate's first reservation. Skip a candidate
    whose crew the request's `crews` says the executor cannot run and record it in
    `crew_unavailable` [ORB-13941]. A malformed capability (a blank crew name) is `invalid_input`.
    Also skip, into `crew_unavailable`, a task the requesting machine's same drain run

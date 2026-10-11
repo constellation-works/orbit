@@ -71,6 +71,9 @@ pub(super) struct Screen<'a> {
     /// Each in-flight task's id and canonical footprint.
     pub(super) in_flight: &'a [(String, Vec<String>)],
     pub(super) reservations: &'a [ActiveTaskReservation],
+    /// Each task the owner's local drain admitted whose gate may not have
+    /// reserved yet, with its footprint [ORB-15514].
+    pub(super) owner_wave: &'a [(String, Vec<String>)],
 }
 
 impl Screen<'_> {
@@ -213,6 +216,12 @@ impl Screen<'_> {
                     .iter()
                     .find(|reservation| overlaps(&footprint, &reservation.files))
                     .map(|reservation| reservation.reservation_id.as_str())
+            })
+            .or_else(|| {
+                self.owner_wave
+                    .iter()
+                    .find(|(id, files)| *id == task.id || overlaps(&footprint, files))
+                    .map(|(id, _)| id.as_str())
             });
         if let Some(blocker) = blocker {
             receipt.deferred_conflicts.push(diagnostic(

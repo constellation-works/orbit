@@ -40,7 +40,11 @@ spec:
     parent. A task that keeps an admissible status but is refused by
     admission (a pilot hold, a native-OS wait or an unreadable pilot receipt)
     stops the same way, with the admission error as the `error`. A task id
-    that resolves to no task at all fails the activity.
+    that resolves to no task at all fails the activity. A gate whose wait
+    budget expired passes its `deferral` (`deferred: true`); the activity
+    then submits no child and returns a successful no-op with `skipped:
+    true` and that `deferral`, naming what blocked the task, which stays in
+    backlog.
   input_schema_json:
     type: object
     required: [job_name, run_input]
@@ -65,6 +69,8 @@ spec:
           type: string
       admission_workflow:
         type: string
+      deferral:
+        type: object
   output_schema_json:
     type: object
     required: [status, run_id]
@@ -89,5 +95,7 @@ spec:
         type: array
         items:
           type: object
+      deferral:
+        type: object
   action: invoke_and_wait
   config: {}

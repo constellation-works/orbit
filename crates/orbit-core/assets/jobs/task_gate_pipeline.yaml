@@ -32,6 +32,11 @@
 #   budget is enforced by `input.max_wait_seconds`, which the
 #   `starvation_check` step surfaces via the `gate.starvation` audit
 #   event when the loop exits without a reservation.
+# - A wait that expires is a deferral, not a failure (ORB-15514):
+#   `starvation_check` returns `deferred: true` naming the blocking tasks
+#   and any execution claim holding them, `dispatch_child` stops on it
+#   without launching a child, and the run succeeds with the task still in
+#   `backlog` for a later drain pass.
 # - The child wait covers the longest supported implementation activity (3h)
 #   plus a bounded delivery/review tail (1h). The default reservation TTL
 #   intentionally covers that full child dispatch wait budget. Keep
@@ -56,13 +61,12 @@
 #   `release_reservation` frees the reservation immediately before
 #   `require_child_success` fails the gate on a non-succeeded child. TTL
 #   remains the fallback for abandoned/crashed runs.
-# - `dispatch_child` and `require_child_success` carry no `when:` of their
-#   own: `starvation_check`'s `when: reserved == false` is the exact
-#   complement, and `gate_starvation_fail` always errors, which halts the run
-#   before these steps would otherwise be reached on that branch (ORB-11325).
-#   That makes `dispatch_child` a step `release_reservation` may safely read
-#   `steps.dispatch_child.output` from — see design doc §8.2 on why a
-#   condition may only read the output of a step that always runs.
+# - `starvation_check`, `dispatch_child` and `require_child_success` carry no
+#   `when:`: each always runs, so `release_reservation` may safely read
+#   `steps.starvation_check.output` and `steps.dispatch_child.output` — see
+#   design doc §8.2 on why a condition may only read the output of a step
+#   that always runs (ORB-11325). A deferred gate holds no reservation, so
+#   `release_reservation` skips it.
 
 schemaVersion: 2
 kind: Job
@@ -126,9 +130,9 @@ spec:
               seconds: "{{ input.poll_interval_seconds }}"
 
     - id: starvation_check
-      when: "{{ steps.reserve.output.reserved }} == false"
-      target: activity:gate_starvation_fail
+      target: activity:gate_starvation_defer
       default_input:
+        reserved: "{{ steps.reserve.output.reserved }}"
         task_ids: "{{ input.task_ids }}"
         conflicts: "{{ steps.reserve.output.conflicts }}"
         waiting_on_deps: "{{ steps.reserve.output.waiting_on_deps }}"
@@ -148,10 +152,11 @@ spec:
           auto_push: "{{ input.auto_push }}"
         admission_task_ids: "{{ input.task_ids }}"
         admission_workflow: worktree_setup
+        deferral: "{{ steps.starvation_check.output }}"
         timeout_seconds: "{{ input.dispatch_timeout_seconds }}"
 
     - id: release_reservation
-      when: "{{ steps.dispatch_child.output.status }} != timeout && {{ steps.dispatch_child.output.status }} != pending && {{ steps.dispatch_child.output.status }} != running"
+      when: "{{ steps.starvation_check.output.deferred }} == false && {{ steps.dispatch_child.output.status }} != timeout && {{ steps.dispatch_child.output.status }} != pending && {{ steps.dispatch_child.output.status }} != running"
       target: activity:release_locks
       default_input:
         reservation_id: "{{ steps.reserve.output.reservation_id }}"

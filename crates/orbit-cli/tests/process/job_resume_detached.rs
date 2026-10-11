@@ -421,7 +421,11 @@ spec:
             let dispatches = gate["run"]["child_dispatches"]
                 .as_array()
                 .expect("child dispatches");
-            assert_eq!(dispatches.len(), 1, "gate must dispatch a real child");
+            assert_eq!(
+                dispatches.len(),
+                1,
+                "gate must dispatch a real child: {gate:#}"
+            );
             let child_id = dispatches[0]["child_run_id"]
                 .as_str()
                 .expect("child run id");

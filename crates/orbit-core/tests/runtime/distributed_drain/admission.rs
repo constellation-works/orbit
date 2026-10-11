@@ -1642,6 +1642,190 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
     }
 }
 
+/// [ORB-15514] The owner's drain admits its wave through the pull admission
+/// section, so a follower pulling after the wave, but before the wave's gate
+/// has reserved anything, is handed neither the admitted task nor a task
+/// overlapping its footprint.
+#[test]
+fn a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted() {
+    if !isolated(
+        module_path!(),
+        "a_pull_after_an_owner_wave_cannot_take_the_footprint_it_admitted",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let owner = &pair.wire.owner;
+    let admitted = pair.tasks[0].clone();
+    let overlapping = backlog_task(owner, &pair.owner_repo, "src/f0.rs", None);
+
+    let wave = owner
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"max_active_leaf_runs": 4}),
+            ToolContext::default(),
+        )
+        .expect("classify");
+    assert_eq!(wave["loose_task_ids"], json!([admitted]), "{wave}");
+
+    // Nothing has reserved the footprint or carries the task in a live run
+    // yet: only the wave's admission stands between the pull and a claim.
+    let drain = pair.start_drain();
+    let pass = pair.pass(&drain);
+    assert!(error_of(&pass).is_empty(), "{pass}");
+    assert!(pair.owner_claims().is_empty(), "{:#?}", pair.owner_claims());
+    assert_eq!(pair.owner_status(&admitted), "backlog");
+    assert_eq!(pair.owner_status(&overlapping), "backlog");
+}
+
+/// [ORB-15514] A follower's live claim on a footprint is named wherever the
+/// owner waits on it: the drain's recorded hold reason, readiness, and a gate
+/// whose wait budget runs out, which defers its task to the backlog and ends
+/// its run successfully instead of failing it.
+#[test]
+fn a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers() {
+    if !isolated(
+        module_path!(),
+        "a_wait_on_a_claimed_footprint_names_the_claim_and_a_starved_gate_defers",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let claimed = pair.tasks[0].clone();
+    let drain = pair.start_drain();
+    // The owner commits the claim; the lost reply leaves it unbound and live.
+    pair.wire.lose_next_reply("orbit.task.pull");
+    let lost = pair.pass(&drain);
+    assert!(error_of(&lost).contains("dropped"), "{lost}");
+    let claim = pair.only_owner_claim();
+    let claim_id = claim["claim"]["claim_id"].as_str().unwrap().to_string();
+    let owner = &pair.wire.owner;
+    let waiting = backlog_task(owner, &pair.owner_repo, "src/f0.rs", None);
+
+    // The drain's hold reason.
+    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+        owner.sqlite_store().unwrap(),
+        owner.workspace_id().unwrap(),
+    );
+    let local_drain = owner_jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    owner
+        .write_run_state(
+            &local_drain.run_id,
+            &orbit_types::workflow::PipelineState::new(
+                local_drain.run_id.clone(),
+                local_drain.job_id,
+                json!({}),
+            ),
+        )
+        .unwrap();
+    let local_drain = local_drain.run_id;
+    let wave = owner
+        .run_deterministic(
+            "classify_workspace_auto_tasks",
+            &json!({}),
+            &json!({"run_id": local_drain, "max_active_leaf_runs": 4}),
+            ToolContext::default(),
+        )
+        .expect("classify");
+    assert_eq!(wave["loose_task_ids"], json!([]), "{wave}");
+    let pass = owner
+        .read_run_state(&local_drain)
+        .unwrap()
+        .unwrap()
+        .drain_last_pass
+        .expect("last pass");
+    let held = pass
+        .excluded
+        .iter()
+        .chain(&pass.deferred)
+        .find(|task| task.task_id == waiting)
+        .unwrap_or_else(|| panic!("the pass records the waiting task: {pass:#?}"));
+    assert_eq!(held.blocked_by, vec![claimed.clone()], "{held:?}");
+    let detail = held.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains(&claim_id) && detail.contains(FOLLOWER),
+        "the hold names the claim and its machine: {held:?}"
+    );
+
+    // Readiness.
+    let readiness = owner.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
+    let entry = readiness["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == waiting.as_str())
+        .unwrap_or_else(|| panic!("readiness lists the waiting task: {readiness:#}"));
+    assert_eq!(entry["eligible"], false, "{entry}");
+    let claims = entry["blocking_claims"]
+        .as_array()
+        .expect("blocking claims");
+    assert_eq!(claims.len(), 1, "{entry}");
+    assert_eq!(claims[0]["task_id"], claimed.as_str(), "{entry}");
+    assert_eq!(claims[0]["claim_id"], claim_id.as_str(), "{entry}");
+    assert_eq!(claims[0]["machine_id"], FOLLOWER, "{entry}");
+
+    // A gate whose wait budget runs out while the claim holds the footprint,
+    // run from the shipped job and activities.
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &owner.global_root(),
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .expect("seed shipped gate job and activities");
+    let owner = calm_host(
+        OrbitRuntime::from_roots(&owner.global_root(), &pair.owner_repo.join(".orbit"))
+            .unwrap()
+            .with_automation_machine_identity(Some(OWNER.into())),
+    );
+    let gate_job = owner.show_job_catalog_entry("task_gate_pipeline").unwrap();
+    let gate = owner
+        .run_job_v2_from_yaml(
+            &gate_job.path,
+            json!({
+                "task_ids": [waiting],
+                "mode": "local",
+                "max_wait_seconds": 0,
+                "poll_interval_seconds": 0,
+            }),
+        )
+        .expect("gate run");
+    assert!(
+        gate.success,
+        "a starved gate defers, never fails: {gate:#?}"
+    );
+    let deferral = &gate.pipeline["starvation_check"];
+    assert_eq!(deferral["deferred"], true, "{deferral}");
+    assert_eq!(
+        deferral["blocking_task_ids"],
+        json!([claimed]),
+        "{deferral}"
+    );
+    assert_eq!(
+        deferral["blocking_claims"][0]["claim_id"],
+        claim_id.as_str(),
+        "{deferral}"
+    );
+    let dispatch = &gate.pipeline["dispatch_child"];
+    assert_eq!(dispatch["skipped"], true, "{dispatch}");
+    assert_eq!(dispatch["status"], "success", "{dispatch}");
+    assert_eq!(dispatch["deferral"], *deferral, "{dispatch}");
+    assert!(
+        owner_jobs
+            .list_job_runs("task_local_pipeline")
+            .unwrap()
+            .is_empty(),
+        "a deferred gate dispatches no delivery run"
+    );
+    assert_eq!(pair.owner_status(&waiting), "backlog");
+    assert_eq!(pair.only_owner_claim()["claim"]["phase"], "claimed");
+}
+
 /// A task that keeps an admissible status but is refused at dispatch (a pilot
 /// hold, or a pilot receipt that cannot be decoded) stops the gate as a failed
 /// child whose reason and audit record carry the admission error, never a

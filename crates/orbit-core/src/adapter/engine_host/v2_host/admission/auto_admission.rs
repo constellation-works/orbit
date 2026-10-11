@@ -18,16 +18,23 @@
 //! `workspace_relative_paths_overlap`'s semantics through an `OverlapIndex`,
 //! so canonical file/directory/symbol normalization is the same semantics the
 //! gate will enforce later — answered as a prefix lookup per requested
-//! selector rather than a pass over every held one. Nothing here reserves anything: the wave is a prediction,
-//! and `reserve_locks` stays authoritative for the race.
+//! selector rather than a pass over every held one. Nothing here reserves
+//! anything: the wave is a prediction from a snapshot. The drain then passes
+//! it through the pull admission section [ORB-15514], which refuses a
+//! candidate a live execution claim holds ([`AdmissionSelection::refuse_claimed`])
+//! and makes every admitted footprint visible to pull grants until its gate
+//! reserves it; `reserve_locks` stays authoritative among local gates.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::fs::overlap_index::OverlapIndex;
+use orbit_common::fs::path::workspace_relative_paths_overlap;
+use orbit_store::contracts::ExecutionClaim;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
+use super::claim_holders::claim_detail;
 use super::unknown_footprint::{FootprintGuard, FootprintWave};
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -51,6 +58,9 @@ pub(in crate::adapter::engine_host::v2_host) enum ConflictProvenance {
     /// A higher-ranked task that declares no footprint waits to run alone and
     /// reserves the tree until it starts [ORB-15191].
     ExclusiveReservation,
+    /// A pull grant claimed the blocker, or the candidate itself, after this
+    /// wave's snapshot; the admission section found the claim [ORB-15514].
+    ExecutionClaim,
 }
 
 impl ConflictProvenance {
@@ -61,6 +71,7 @@ impl ConflictProvenance {
             ConflictProvenance::SameWave => "same_wave",
             ConflictProvenance::UnknownFootprint => "unknown_footprint",
             ConflictProvenance::ExclusiveReservation => "exclusive_reservation",
+            ConflictProvenance::ExecutionClaim => "execution_claim",
         }
     }
 }
@@ -170,6 +181,43 @@ impl AdmissionSelection {
             .iter()
             .map(DeferredAdmission::to_json)
             .collect()
+    }
+
+    /// Take `task_id` back out of the wave [ORB-15514]: the admission
+    /// section found `claim` holding it, or a footprint it overlaps, which
+    /// this wave's snapshot predates. It is deferred naming the claim, as a
+    /// conflict with the claimed task.
+    pub(in crate::adapter::engine_host::v2_host) fn refuse_claimed(
+        &mut self,
+        task: &Task,
+        claim: &ExecutionClaim,
+        workspace_root: &Path,
+    ) {
+        self.selected.retain(|selected| *selected != task.id);
+        let mut conflicts = lock_context_files_for_task(task, workspace_root)
+            .into_iter()
+            .flat_map(|requested_selector| {
+                claim
+                    .footprint
+                    .iter()
+                    .filter(|held| workspace_relative_paths_overlap(&requested_selector, held))
+                    .map(|held| AdmissionConflict {
+                        requested_selector: requested_selector.clone(),
+                        blocking_selector: held.clone(),
+                        blocking_task_id: claim.task_id.clone(),
+                        provenance: ConflictProvenance::ExecutionClaim,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        conflicts.sort();
+        conflicts.dedup();
+        self.deferred.push(DeferredAdmission {
+            task_id: task.id.clone(),
+            reason: DeferralReason::Conflict,
+            conflicts,
+            detail: Some(claim_detail(claim)),
+        });
     }
 }
 
