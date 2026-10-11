@@ -241,6 +241,10 @@ fn insert_run(db: &Connection, workspace: &str, id: &str, parent: Option<&str>, 
 }
 
 fn isolated(name: &str) -> bool {
+    // A local_shell waiter enters before this case creates its own resources.
+    if crate::workflow_gate::wait_if_requested() {
+        std::process::exit(0);
+    }
     const MARKER: &str = "ORBIT_RESUME_LIFECYCLE_CHILD";
     if std::env::var(MARKER).ok().as_deref() == Some(name) {
         return true;
@@ -441,8 +445,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
             json!({"id": "fail_resume", "default_input": {"result": {"status": "failed", "run_id": "fixture_failure"}},
                 "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}})
         } else {
-            json!({"id": "wait_resume", "default_input": {"seconds": 60},
-                "spec": {"type": "deterministic", "action": "sleep", "config": {}}})
+            fx.cli.gate.step("wait_resume")
         };
         fs::write(path, job.to_string()).unwrap();
         let retry = if case == "failed" {
@@ -450,6 +453,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
         } else {
             let submitted = fx.cli.json(&["job", "resume", &fx.run, "--json"]);
             let retry = submitted["run_id"].as_str().unwrap().to_string();
+            fx.cli.gate.wait_ready();
             let running = fx.cli.poll_run(&retry, "running", Duration::from_secs(20));
             assert_eq!(fx.status(), TaskStatus::InProgress);
             assert_eq!(
@@ -477,6 +481,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
             let pid = running["run"]["pid"].as_u64().unwrap() as i32;
             assert_ne!(pid as u32, std::process::id());
             assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+            fx.cli.gate.release();
             fx.cli
                 .poll_run(&retry, "interrupted", Duration::from_secs(20));
             retry
