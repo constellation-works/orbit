@@ -121,7 +121,9 @@ pub(super) struct TaskFacts {
 #[derive(Debug, Clone)]
 pub(super) struct ReservationFacts {
     pub(super) at: DateTime<Utc>,
-    pub(super) task_ids: Vec<String>,
+    /// Each requested task, or the owning run for a file-only reservation.
+    /// Without either, the reservation itself identifies one request.
+    pub(super) requesters: Vec<String>,
     pub(super) files: Vec<Anchor>,
 }
 
@@ -237,7 +239,11 @@ pub(super) fn scan(runtime: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> 
                 .with_timezone(&Utc);
             Some(ReservationFacts {
                 at,
-                task_ids: record.task_ids,
+                requesters: requester_identities(
+                    record.task_ids,
+                    record.owner_run_id,
+                    format!("reservation:{}", record.reservation_id),
+                ),
                 files: record
                     .files
                     .iter()
@@ -313,24 +319,39 @@ fn lock_denial(event: &AuditEvent) -> Option<LockDenial> {
     }
     files.sort();
     files.dedup();
-    let mut contenders = strings("task_ids");
-    if contenders.is_empty() {
-        let run = arguments
-            .get("owner_run_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| event.job_run_id.clone())
-            .filter(|run| !run.is_empty());
-        contenders.push(match run {
-            Some(run) => format!("run:{run}"),
-            None => format!("invocation:{}", event.execution_id),
-        });
-    }
+    let run = arguments
+        .get("owner_run_id")
+        .and_then(Value::as_str)
+        .filter(|run| !run.is_empty())
+        .map(str::to_string)
+        .or_else(|| event.job_run_id.clone());
+    let contenders = requester_identities(
+        strings("task_ids"),
+        run,
+        format!("invocation:{}", event.execution_id),
+    );
     Some(LockDenial {
         at: event.timestamp,
         contenders,
         files,
     })
+}
+
+/// Task retries retain their task identity across runs. Requests without
+/// tasks use the run, or one recorded request when no run is known.
+fn requester_identities(
+    task_ids: Vec<String>,
+    run: Option<String>,
+    fallback: String,
+) -> Vec<String> {
+    if !task_ids.is_empty() {
+        return task_ids;
+    }
+    vec![
+        run.filter(|run| !run.is_empty())
+            .map(|run| format!("run:{run}"))
+            .unwrap_or(fallback),
+    ]
 }
 
 /// Classify one entry into `blocked` from its status event and note. The

@@ -1,9 +1,9 @@
 //! The six rankings of the codebase view, computed from cached scan facts for
 //! one window, minimum support and rollup.
 //!
-//! Every ranking is a rate over distinct tasks (or reservations, for
-//! coupling) with its numerator and denominator, so a popular file does not
-//! lead merely because many tasks touch it. Rows whose denominator is below
+//! Every ranking is a rate over distinct tasks (or requesting identities for
+//! contention, reservations for coupling) with its numerator and denominator,
+//! so a popular file does not lead merely because many tasks touch it. Rows whose denominator is below
 //! the minimum support are omitted and counted in `below_support`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -260,8 +260,8 @@ fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
     json!({ "rows": rows, "below_support": below_support, "population": population })
 }
 
-/// Distinct tasks that waited on a path because of a lock conflict ÷
-/// distinct tasks that asked for it (reserved it or were refused it). A retry
+/// Distinct requesters that waited on a path because of a lock conflict ÷
+/// distinct requesters that asked for it (reserved it or were refused it). A retry
 /// loop repeats the same contender and counts once. Reservation and denial
 /// counts are reported beside, not folded into, the contention figure.
 fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
@@ -280,7 +280,8 @@ fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
         for key in params.rollup.keys(&reservation.files) {
             let row = rows.entry(key).or_default();
             row.reservations += 1;
-            row.requesters.extend(reservation.task_ids.iter().cloned());
+            row.requesters
+                .extend(reservation.requesters.iter().cloned());
         }
     }
     for denial in &facts.lock_denials {
