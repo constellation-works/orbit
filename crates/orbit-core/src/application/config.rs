@@ -18,14 +18,16 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
-    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigRoots, ConfigSection, ConfigStore,
-    ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason, WorkspaceInitMode,
-    admit_config_key, admit_settable_config_key, config_key_options, describe_config_key,
-    load_effective_config,
+    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigRoots, ConfigSection, ConfigSnapshot,
+    ConfigStore, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
+    WorkspaceInitMode, admit_config_key, admit_settable_config_key, config_key_options,
+    describe_config_key, load_effective_config,
 };
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::runtime::{CONFIG_TOML_FILE, OrbitRuntime, existing_config_file_path};
+
+mod provenance;
 
 /// Which physical `config.toml` a view or a write targets. Re-exported so a
 /// transport can name the scope without depending on `orbit-config` directly.
@@ -123,10 +125,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
     let global_file = config_layer_file(&runtime.global_root())?;
     let workspace_file = config_layer_file(&runtime.shared_root())?;
     let workspace_file_exists = workspace_file.exists;
-    // A workspace file holding only `[plugin_enablement]` is not a policy
-    // layer, so the security exception is not in force for it either.
-    let execution_not_inherited = runtime.shared_root() != runtime.global_root()
-        && orbit_config::workspace_config_sets_policy(&workspace_file.path);
+    let execution_not_inherited = execution_not_inherited(runtime, &workspace_file);
 
     let sections = effective_sections(values);
     Ok(json!({
@@ -144,6 +143,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         "workspace_binding": workspace_binding_json(runtime, values),
         "sections": sections,
         "crews": crew_rows(runtime, values),
+        "crews_enumerated": true,
         "paths": path_rows_json(runtime, None),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),
@@ -161,6 +161,12 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
 /// One physical file's settings and defaults, mirroring `orbit config show
 /// --scope global|workspace`. Workspace crew references use layered crew
 /// definitions, while displayed settings retain their scoped values.
+///
+/// Rows the file sets also say how they sit in the layered config: a
+/// workspace row's fallback and whether it restates the global or built-in
+/// value, a global row's reach into the bound workspace. Those facts need
+/// both layers to load; when they do not, they are null and the file itself
+/// still renders, so a broken layer stays repairable from here.
 pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue, OrbitError> {
     let global_file = config_layer_file(&runtime.global_root())?;
     let workspace_file = config_layer_file(&runtime.shared_root())?;
@@ -180,7 +186,25 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
         .snapshot_with_global(&runtime.global_root())
         .map_err(file_error)?;
     let settings = snapshot.all_values();
-    let sections = file_sections(&store, &settings);
+    let layered = match load_effective_config(&config_roots(runtime)) {
+        Ok(layered) => Some(layered),
+        Err(error) => {
+            tracing::warn!(%error, "layered config unavailable; file view omits fallback and reach");
+            None
+        }
+    };
+    let context = FileRowContext {
+        store: &store,
+        layer: match scope {
+            ConfigScope::Workspace if runtime.shared_root() != runtime.global_root() => {
+                ConfigValueSourceKind::Workspace
+            }
+            _ => ConfigValueSourceKind::Global,
+        },
+        layered: layered.as_ref().map(|layered| layered.values()),
+        built_in: ConfigSnapshot::default(),
+    };
+    let sections = file_sections(&context, &settings);
 
     Ok(json!({
         "scope": scope.label(),
@@ -189,14 +213,19 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
             "built_in": {"label": ConfigValueSourceKind::BuiltIn.label()},
             "global": global_file.json(),
             "workspace": workspace_file.json(),
-            "execution_not_inherited": workspace_file.exists,
+            "execution_not_inherited": execution_not_inherited(runtime, &workspace_file),
             "not_inherited_keys": JsonValue::Array(Vec::new()),
         },
         "workspace_binding": JsonValue::Null,
         "sections": sections,
         // Crew tables are not registry keys, so a single-file snapshot cannot
-        // enumerate them; the effective view is where crews are shown.
+        // build crew rows; the effective view is where crews are shown.
+        // `crews_enumerated: false` says so, and `crew_tables` names the
+        // tables this file defines, so an empty `crews` never reads as "no
+        // crew is defined".
         "crews": JsonValue::Array(Vec::new()),
+        "crews_enumerated": false,
+        "crew_tables": store.crew_table_names(),
         "paths": path_rows_json(runtime, Some(store.path())),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": scope.label(),
@@ -469,6 +498,14 @@ fn config_roots(runtime: &OrbitRuntime) -> ConfigRoots {
     ConfigRoots::new(runtime.global_root(), runtime.shared_root())
 }
 
+/// Whether the replace-only security keys have stopped inheriting from
+/// global. A workspace file holding only `[plugin_enablement]` is not a
+/// policy layer, so the exception is not in force for it either.
+fn execution_not_inherited(runtime: &OrbitRuntime, workspace_file: &ConfigLayerFile) -> bool {
+    runtime.shared_root() != runtime.global_root()
+        && orbit_config::workspace_config_sets_policy(&workspace_file.path)
+}
+
 fn validate_store(
     runtime: &OrbitRuntime,
     scope: ConfigScope,
@@ -657,7 +694,10 @@ fn effective_sections(values: &[EffectiveConfigValue]) -> JsonValue {
     )
 }
 
-fn file_sections(store: &ConfigStore, settings: &[(&'static str, JsonValue)]) -> JsonValue {
+fn file_sections(
+    context: &FileRowContext<'_>,
+    settings: &[(&'static str, JsonValue)],
+) -> JsonValue {
     JsonValue::Array(
         ConfigSection::ORDER
             .iter()
@@ -671,7 +711,7 @@ fn file_sections(store: &ConfigStore, settings: &[(&'static str, JsonValue)]) ->
                             settings
                                 .iter()
                                 .find(|(key, _)| *key == descriptor.key)
-                                .map(|(key, value)| file_row(store, descriptor, key, value))
+                                .map(|(key, value)| file_row(context, descriptor, key, value))
                         })
                         .collect::<Vec<_>>()
                 };
@@ -742,15 +782,43 @@ fn effective_row(entry: &EffectiveConfigValue) -> JsonValue {
                 .collect(),
         ),
     );
+    row.insert(
+        "built_in".to_string(),
+        provenance::built_in_json(&entry.built_in),
+    );
+    row.insert(
+        "fallback".to_string(),
+        provenance::fallback_json(entry.fallback.as_ref()),
+    );
+    row.insert(
+        "equals".to_string(),
+        provenance::equals_json(
+            &entry.value,
+            provenance::global_value(entry),
+            &entry.built_in,
+        ),
+    );
     JsonValue::Object(row)
 }
 
+/// What every row of one file view is read against.
+struct FileRowContext<'a> {
+    store: &'a ConfigStore,
+    /// The layer this file is in the layered config: the workspace view of a
+    /// checkout without its own root is the global file.
+    layer: ConfigValueSourceKind,
+    /// The layered values, or `None` when the layers do not load.
+    layered: Option<&'a [EffectiveConfigValue]>,
+    built_in: ConfigSnapshot,
+}
+
 fn file_row(
-    store: &ConfigStore,
+    context: &FileRowContext<'_>,
     descriptor: &'static ConfigKeyDescriptor,
     key: &str,
     value: &JsonValue,
 ) -> JsonValue {
+    let store = context.store;
     let mut row = base_row(key, Some(descriptor), value);
     // One file has one layer: it either defines the key, or the row shows the
     // built-in value that would apply if this file were the only one.
@@ -776,6 +844,45 @@ fn file_row(
         }),
     );
     row.insert("shadowed_by".to_string(), JsonValue::Array(Vec::new()));
+
+    let built_in = context.built_in.value_for(key).unwrap_or(JsonValue::Null);
+    row.insert("built_in".to_string(), provenance::built_in_json(&built_in));
+    let entry = context
+        .layered
+        .and_then(|values| values.iter().find(|entry| entry.key == key));
+    // Only a value this file sets can be removed or compared.
+    let (fallback, equals, reach) = match entry {
+        _ if state != ConfigValueState::Set => (JsonValue::Null, JsonValue::Null, JsonValue::Null),
+        None => (
+            JsonValue::Null,
+            provenance::equals_json(value, None, &built_in),
+            JsonValue::Null,
+        ),
+        Some(entry) => {
+            // The layered fallback is this file's only while this file is
+            // the layer in force; a global value the workspace overrides is
+            // described by its reach instead.
+            let fallback = (entry.source.kind() == context.layer)
+                .then_some(entry.fallback.as_ref())
+                .flatten();
+            let global = (context.layer == ConfigValueSourceKind::Workspace)
+                .then(|| provenance::global_value(entry))
+                .flatten();
+            let reach = if store.scope() == ConfigScope::Global {
+                provenance::reach_json(entry, value)
+            } else {
+                JsonValue::Null
+            };
+            (
+                provenance::fallback_json(fallback),
+                provenance::equals_json(value, global, &built_in),
+                reach,
+            )
+        }
+    };
+    row.insert("fallback".to_string(), fallback);
+    row.insert("equals".to_string(), equals);
+    row.insert("reach".to_string(), reach);
     JsonValue::Object(row)
 }
 

@@ -175,6 +175,24 @@ impl ConfigStore {
         !matches!(item, toml_edit::Item::None)
     }
 
+    /// Names of the `[crews.<name>]` tables this document defines, sorted.
+    pub fn crew_table_names(&self) -> Vec<String> {
+        let mut names = self
+            .doc
+            .get("crews")
+            .and_then(Item::as_table_like)
+            .map(|crews| {
+                crews
+                    .iter()
+                    .filter(|(_, item)| item.is_table_like())
+                    .map(|(name, _)| name.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
     /// Look up the value of `key` if it was explicitly defined in this document,
     /// returning `None` if the key is not set.
     pub fn explicit_value(&self, key: &str) -> Result<Option<JsonValue>, OrbitError> {

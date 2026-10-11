@@ -91,7 +91,7 @@ pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
 };
 pub use layering::{
-    ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
+    ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     load_effective_config,
 };
 pub use memory_limit::{MemoryLimit, MemoryUnit};

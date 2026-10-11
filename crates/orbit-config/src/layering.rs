@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
+use orbit_types::identity::Crew;
 
 use crate::ConfigRoots;
 use crate::crew_pools::reject_unpoolable_crew_names_in_document;
@@ -44,8 +45,8 @@ use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
-use crate::registry::{CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX};
-use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
+use crate::registry::{CONFIG_KEY_REGISTRY, ConfigSnapshot, GLOBAL_ONLY_KEY_PREFIX};
+use crate::resolved::{ResolvedConfig, default_crews, warn_compatibility_keys};
 
 /// Security-sensitive settings that a workspace file must restate to keep.
 /// Inheriting a machine-global sandbox, approval, or environment allowlist
@@ -55,6 +56,10 @@ const WORKSPACE_REPLACE_ONLY_KEYS: &[&str] = &[
     "execution.codex.sandbox",
     "execution.env.pass",
 ];
+
+/// The one key an environment variable can supply, below both files.
+const DEFAULT_CREW_KEY: &str = "workflow.default_crew";
+const DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
 
 /// Which layer supplied a resolved value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +141,17 @@ pub struct ShadowedConfigValue {
     pub reason: ShadowReason,
 }
 
+/// The layer and value a key resolves to once the layer that supplies it
+/// stops setting it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigFallback {
+    /// Layer that would supply the value.
+    pub layer: ConfigValueSourceKind,
+    /// The value that layer would supply, projected as JSON. Null when it is
+    /// the built-in layer and the key has no value there.
+    pub value: serde_json::Value,
+}
+
 /// Three-way state of one resolved value.
 ///
 /// `unset` and `default` are different facts that both used to render as
@@ -174,6 +190,16 @@ pub struct EffectiveConfigValue {
     /// Layers that define the key without supplying the effective value,
     /// highest-precedence first. Empty for the ordinary case.
     pub shadowed_by: Vec<ShadowedConfigValue>,
+    /// The value Orbit ships with, before any file, the environment, or a
+    /// configured crew registry; JSON null when the key has none. A crew
+    /// field reports the built-in crew of that name. A plugin key reports
+    /// null: its defaults belong to the plugin.
+    pub built_in: serde_json::Value,
+    /// What the key resolves to if the layer in `source` stopped setting it.
+    /// A replace-only security key the workspace sets falls to the built-in
+    /// value, never the global one, because the workspace file still exists.
+    /// `None` for a built-in value, which no layer can remove.
+    pub fallback: Option<ConfigFallback>,
 }
 
 impl EffectiveConfigValue {
@@ -618,6 +644,7 @@ fn effective_values(
     global: Option<&ConfigDocument>,
     workspace: Option<&ConfigDocument>,
 ) -> Vec<EffectiveConfigValue> {
+    let below = BelowFiles::new(&resolved.crews);
     let mut values = resolved
         .snapshot
         .all_values()
@@ -626,6 +653,8 @@ fn effective_values(
             let source = source_for_key(key, global, workspace);
             EffectiveConfigValue {
                 shadowed_by: shadowed_for_key(key, &source, global, workspace),
+                built_in: below.shipped_value(key),
+                fallback: fallback_for_key(key, &source, global, &below),
                 key: key.to_string(),
                 value,
                 source,
@@ -641,25 +670,14 @@ fn effective_values(
     // surfaces it separately as a derived field.
 
     for (name, crew) in &resolved.crews {
-        let mut fields = vec![
-            ("model", serde_json::json!(crew.assignment.model)),
-            ("provider", serde_json::json!(crew.assignment.provider)),
-            ("description", serde_json::json!(crew.description)),
-            ("tags", serde_json::json!(crew.tags)),
-            // Always projected: a table without the key is enabled, and the
-            // listing shows that rather than hiding the state.
-            ("enabled", serde_json::json!(crew.enabled)),
-        ];
-        // Configured effort only. An omitted field keeps the provider default
-        // and must not appear as a fabricated effective setting.
-        if let Some(effort) = crew.assignment.effort {
-            fields.push(("effort", serde_json::json!(effort)));
-        }
-        for (field, value) in fields {
+        for (field, value) in crew_field_values(crew) {
             let key = format!("crews.{name}.{field}");
             let source = source_for_crew_field(name, field, global, workspace);
+            let built_in = below.shipped_crew_field(name, field);
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_crew_field(name, field, &source, global),
+                fallback: fallback_for_crew_field(name, field, &source, global, &built_in),
+                built_in,
                 source,
                 key,
                 value,
@@ -679,6 +697,8 @@ fn effective_values(
             let source = source_for_key(&key, global, workspace);
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_key(&key, &source, global, workspace),
+                built_in: serde_json::Value::Null,
+                fallback: fallback_for_key(&key, &source, global, &below),
                 source,
                 key,
                 value: value.clone(),
@@ -687,6 +707,161 @@ fn effective_values(
     }
     values.sort_by(|left, right| left.key.cmp(&right.key));
     values
+}
+
+/// A crew's projected fields, as `crews.<name>.<field>` rows list them.
+fn crew_field_values(crew: &Crew) -> Vec<(&'static str, serde_json::Value)> {
+    let mut fields = vec![
+        ("model", serde_json::json!(crew.assignment.model)),
+        ("provider", serde_json::json!(crew.assignment.provider)),
+        ("description", serde_json::json!(crew.description)),
+        ("tags", serde_json::json!(crew.tags)),
+        // Always projected: a table without the key is enabled, and the
+        // listing shows that rather than hiding the state.
+        ("enabled", serde_json::json!(crew.enabled)),
+    ];
+    // Configured effort only. An omitted field keeps the provider default
+    // and must not appear as a fabricated effective setting.
+    if let Some(effort) = crew.assignment.effort {
+        fields.push(("effort", serde_json::json!(effort)));
+    }
+    fields
+}
+
+/// What a key resolves to when neither file sets it.
+struct BelowFiles {
+    /// Shipped defaults: no file, no environment, the built-in crew registry.
+    shipped: ConfigSnapshot,
+    shipped_crews: BTreeMap<String, Crew>,
+    /// Built-in values admitted against the crew registry the files define,
+    /// which is what an unset key resolves to here: the default crew and the
+    /// final-recovery pool depend on which crews exist. `None` when that
+    /// admission fails, in which case the shipped value stands in.
+    configured: Option<ConfigSnapshot>,
+    /// `workflow.default_crew` as `CONSTELLATION_DEFAULT_PROVIDER` selects it.
+    environment_default_crew: Option<serde_json::Value>,
+}
+
+impl BelowFiles {
+    fn new(crews: &BTreeMap<String, Crew>) -> Self {
+        let empty = empty_document();
+        let path = Path::new("<built-in defaults>");
+        let admit = |env_default: Option<&str>| {
+            ConfigSnapshot::admit_with_env(&empty, path, crews, env_default, false).ok()
+        };
+        let environment_default_crew = environment_default_provider()
+            .and_then(|provider| admit(Some(&provider)))
+            .and_then(|snapshot| snapshot.value_for(DEFAULT_CREW_KEY));
+        Self {
+            shipped: ConfigSnapshot::default(),
+            shipped_crews: default_crews(),
+            configured: admit(None),
+            environment_default_crew,
+        }
+    }
+
+    fn shipped_value(&self, key: &str) -> serde_json::Value {
+        self.shipped
+            .value_for(key)
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    fn shipped_crew_field(&self, crew: &str, field: &str) -> serde_json::Value {
+        self.shipped_crews
+            .get(crew)
+            .and_then(|crew| {
+                crew_field_values(crew)
+                    .into_iter()
+                    .find(|(name, _)| *name == field)
+            })
+            .map_or(serde_json::Value::Null, |(_, value)| value)
+    }
+
+    fn built_in(&self, key: &str) -> ConfigFallback {
+        ConfigFallback {
+            layer: ConfigValueSourceKind::BuiltIn,
+            value: self
+                .configured
+                .as_ref()
+                .unwrap_or(&self.shipped)
+                .value_for(key)
+                .unwrap_or(serde_json::Value::Null),
+        }
+    }
+
+    /// The environment for the one key it can supply, else the built-in value,
+    /// in the order `source_for_key` consults them.
+    fn below_files(&self, key: &str) -> ConfigFallback {
+        match &self.environment_default_crew {
+            Some(value) if key == DEFAULT_CREW_KEY => ConfigFallback {
+                layer: ConfigValueSourceKind::Environment,
+                value: value.clone(),
+            },
+            _ => self.built_in(key),
+        }
+    }
+}
+
+/// Where `key` resolves once the layer in `source` stops setting it.
+///
+/// Mirrors `source_for_key`: removing a workspace value reaches the global
+/// one, except for a replace-only key, which never inherits while the
+/// workspace file exists — and it still exists, since it set this key.
+fn fallback_for_key(
+    key: &str,
+    source: &ConfigValueSource,
+    global: Option<&ConfigDocument>,
+    below: &BelowFiles,
+) -> Option<ConfigFallback> {
+    match source.kind() {
+        ConfigValueSourceKind::BuiltIn => None,
+        ConfigValueSourceKind::Environment => Some(below.built_in(key)),
+        ConfigValueSourceKind::Global => Some(below.below_files(key)),
+        ConfigValueSourceKind::Workspace if WORKSPACE_REPLACE_ONLY_KEYS.contains(&key) => {
+            Some(below.built_in(key))
+        }
+        ConfigValueSourceKind::Workspace => Some(
+            match global.and_then(|document| value_at_path(&document.value, key)) {
+                Some(value) => ConfigFallback {
+                    layer: ConfigValueSourceKind::Global,
+                    value: json_from_toml(value),
+                },
+                None => below.below_files(key),
+            },
+        ),
+    }
+}
+
+/// Where a crew field resolves once the layer in `source` stops setting it:
+/// the global crew table's field under a workspace one, else the built-in
+/// crew's field.
+fn fallback_for_crew_field(
+    crew: &str,
+    field: &str,
+    source: &ConfigValueSource,
+    global: Option<&ConfigDocument>,
+    built_in: &serde_json::Value,
+) -> Option<ConfigFallback> {
+    let global_value = global
+        .and_then(|document| crew_entry(&document.value, crew))
+        .and_then(|entry| entry.get(field));
+    match (source.kind(), global_value) {
+        (ConfigValueSourceKind::BuiltIn, _) => None,
+        (ConfigValueSourceKind::Workspace, Some(value)) => Some(ConfigFallback {
+            layer: ConfigValueSourceKind::Global,
+            value: json_from_toml(value),
+        }),
+        _ => Some(ConfigFallback {
+            layer: ConfigValueSourceKind::BuiltIn,
+            value: built_in.clone(),
+        }),
+    }
+}
+
+fn environment_default_provider() -> Option<String> {
+    std::env::var(DEFAULT_PROVIDER_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Layers that define `key` without supplying the effective value.
@@ -773,10 +948,7 @@ fn source_for_key(
     {
         return file_source(ConfigValueSourceKind::Global, &document.path);
     }
-    if key == "workflow.default_crew"
-        && std::env::var("CONSTELLATION_DEFAULT_PROVIDER")
-            .is_ok_and(|value| !value.trim().is_empty())
-    {
+    if key == DEFAULT_CREW_KEY && environment_default_provider().is_some() {
         return ConfigValueSource {
             kind: ConfigValueSourceKind::Environment,
             path: None,
