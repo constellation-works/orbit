@@ -60,6 +60,9 @@ let logSnapshots = {};
 const logHolds = new Set();
 let heldLogs = [];
 let logStreams = [];
+// A held host's workspace list waits in `heldWorkspaces` the same way.
+const workspaceHolds = new Set();
+let heldWorkspaces = [];
 
 function tasksFor(host, workspace) {
   // On the serving host a run recorded on hostb links there; on hostb it
@@ -120,7 +123,10 @@ function hostApi(host, req, rest, url, res) {
     if (approved) return json({ ...tasksFor(host, workspace).find((task) => task.id === approved[1]), status: 'backlog' });
     return json({ ok: true });
   }
-  if (rest === 'workspaces') return json(workspaces);
+  if (rest === 'workspaces') {
+    if (workspaceHolds.has(host)) { heldWorkspaces.push({ host, res }); return; }
+    return json(workspaces);
+  }
   if (rest === 'tasks') return json({ items: tasksFor(host, workspace), total: 4, limit: 50, truncated: false });
   if (rest === 'tasks/all') return json({ items: workspaces.flatMap((ws) => tasksFor(host, ws.id)), total: 4 * workspaces.length });
   if (rest === 'tasks/locks') return json({ total_locked: 0, total_tasks: 0, by_task: [] });
@@ -572,6 +578,132 @@ try {
   evidenceLog.logRoutes = routeLog.filter((entry) => entry.path.includes('/log'));
   await page.close();
 
+  // 10. Back and Forward restore the host each entry names, through the host
+  // switch: API routing, both pickers, write capability and the host's
+  // workspaces follow the address, and an entry without a host is the serving
+  // host. A host switch rewrites its own entry, so the entry before it keeps
+  // the earlier host.
+  const scopeNow = () => page.evaluate(async () => {
+    const { getHost, getWorkspace, withHost, withWorkspace } = await import('/js/common.js');
+    const query = new URL(window.location.href).searchParams;
+    const workspaceSelect = document.getElementById('workspace-select');
+    return {
+      host: getHost(),
+      workspace: getWorkspace(),
+      read: withHost('/api/tasks'),
+      write: withWorkspace('/api/tasks/x/approve'),
+      addressHost: query.get('host'),
+      addressWorkspace: query.get('workspace'),
+      hostPicker: document.getElementById('host-select').value,
+      workspacePicker: workspaceSelect ? workspaceSelect.value : null,
+      workspaces: workspaceSelect ? [...workspaceSelect.options].map((option) => option.textContent).join(',') : null,
+      readOnly: !document.getElementById('host-read-only').hidden,
+    };
+  });
+  const traverse = async (step, label, predicate) => {
+    await page.evaluate((step) => history.go(step), step);
+    await until(label, async () => predicate(await scopeNow()));
+    return scopeNow();
+  };
+  // Rail clicks write each route's settled hash, so traversing back to one
+  // routes it without pushing an entry that would drop the Forward history.
+  const openRuns = async () => {
+    await page.click('.tab[data-tab="runs"]');
+    await page.locator('.tab-pane.active[data-tab="diagnostics"]').waitFor({ state: 'visible' });
+  };
+  const openTasks = () => page.click('.tab[data-tab="tasks"]');
+  const ALPHA_WORKSPACES = 'All workspaces,orbit,alpha-only';
+  const HOSTB_WORKSPACES = 'All workspaces,orbit,b-only';
+
+  // A workspace id both hosts list: only the host changes between the entries.
+  await openPage('/?workspace=ws_orbit', { fresh: true });
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await openRuns();
+  await openTasks();
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await switchHost('hostb');
+  await taskRow('hostb-RUN').waitFor({ state: 'visible' });
+  await until('hostb keeps ws_orbit', async () => {
+    const scope = await scopeNow();
+    return scope.workspaces === HOSTB_WORKSPACES && scope.workspacePicker === 'ws_orbit';
+  });
+  routeLog = [];
+  let scope = await traverse(-1, 'Back on the serving host', (now) => now.host === null && now.workspaces === ALPHA_WORKSPACES);
+  assert(scope.addressHost === null && scope.hostPicker === '' && scope.read === '/api/tasks'
+    && scope.write === '/api/tasks/x/approve?workspace=ws_orbit', `Back restores the serving host's routing and picker: ${JSON.stringify(scope)}`);
+  assert(scope.workspace === 'ws_orbit' && scope.workspacePicker === 'ws_orbit' && scope.addressWorkspace === 'ws_orbit',
+    `Back keeps the shared workspace: ${JSON.stringify(scope)}`);
+  await assertNamed(`${SERVING} (serving host)`);
+  await until('serving reads after Back', () => logged(/^GET \/api\/workspaces(\?|$)/));
+  evidenceLog.historySharedWorkspaceBack = routeLog;
+  routeLog = [];
+  scope = await traverse(1, 'Forward on hostb', (now) => now.host === 'hostb' && now.workspaces === HOSTB_WORKSPACES);
+  assert(scope.addressHost === 'hostb' && scope.hostPicker === 'hostb' && scope.read === '/api/on/hostb/tasks'
+    && scope.workspacePicker === 'ws_orbit', `Forward restores hostb: ${JSON.stringify(scope)}`);
+  await assertNamed('hostb');
+  await taskRow('hostb-RUN').waitFor({ state: 'visible' });
+  await until('hostb connection read after Forward', () => logged(/^GET \/api\/hosts\/hostb\/connection(\?|$)/));
+  // Writes follow the restored address too.
+  await page.locator('.task-quick.approve').first().click();
+  await until('the approve action on hostb after Forward', () => logged(/^POST \/api\/on\/hostb\/tasks\/hostb-NEW\/approve\?workspace=ws_orbit$/));
+  await traverse(-1, 'Back on the serving host again', (now) => now.host === null && now.workspaces === ALPHA_WORKSPACES);
+  await openTasks();
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  routeLog = [];
+  await page.locator('.task-quick.approve').first().click();
+  await until('the approve action on the serving host after Back', () => logged(/^POST \/api\/tasks\/alpha-NEW\/approve\?workspace=ws_orbit$/));
+  assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), `no write leaves for hostb after Back: ${JSON.stringify(routeLog)}`);
+  await page.close();
+
+  // Different workspace ids: the host and the workspace change together, and
+  // hostb's refused writes come and go with it.
+  forwardWrites = { authorized: false, reason: READ_ONLY_REASON };
+  await openPage('/?workspace=ws_alpha', { fresh: true });
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await openRuns();
+  await openTasks();
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await switchHost('hostb');
+  await until('hostb on its default workspace', async () => {
+    const now = await scopeNow();
+    return now.workspacePicker === 'ws_b' && now.addressWorkspace === 'ws_b' && now.readOnly;
+  });
+  scope = await traverse(-1, 'Back on the serving host in ws_alpha', (now) => now.host === null && now.workspaces === ALPHA_WORKSPACES);
+  assert(scope.workspace === 'ws_alpha' && scope.workspacePicker === 'ws_alpha' && scope.addressWorkspace === 'ws_alpha' && scope.addressHost === null,
+    `Back restores the serving host and ws_alpha: ${JSON.stringify(scope)}`);
+  assert(scope.write === '/api/tasks/x/approve?workspace=ws_alpha' && scope.hostPicker === '' && !scope.readOnly,
+    `Back restores serving routing and write capability: ${JSON.stringify(scope)}`);
+  scope = await traverse(1, 'Forward on hostb in ws_b', (now) => now.host === 'hostb' && now.workspaces === HOSTB_WORKSPACES && now.readOnly);
+  assert(scope.workspace === 'ws_b' && scope.workspacePicker === 'ws_b' && scope.addressHost === 'hostb' && scope.hostPicker === 'hostb'
+    && scope.write === '/api/on/hostb/tasks/x/approve?workspace=ws_b', `Forward restores hostb, ws_b and its refusal: ${JSON.stringify(scope)}`);
+  await assertNamed('hostb');
+  await taskRow('hostb-NEW').waitFor({ state: 'visible' });
+  assert(await page.locator('.task-quick.approve').first().isDisabled(), 'hostb writes are disabled again after Forward');
+
+  // A retired visit: hostb's workspace list is still loading when Back leaves
+  // it. The serving host loads without waiting for it, and when it settles it
+  // repaints neither picker nor the address.
+  await traverse(-1, 'Back on the serving host before the hold', (now) => now.host === null && now.workspaces === ALPHA_WORKSPACES);
+  workspaceHolds.add('hostb');
+  await page.evaluate(() => history.forward());
+  await until('the held hostb workspace list', () => heldWorkspaces.some((entry) => entry.host === 'hostb'));
+  routeLog = [];
+  await traverse(-1, 'Back on the serving host while hostb is held', (now) => now.host === null && now.workspacePicker === 'ws_alpha' && now.workspaces === ALPHA_WORKSPACES);
+  await until('serving reads while hostb is held', () => logged(/^GET \/api\/(?!on\/|hosts)[^?]+\?(.*&)?workspace=ws_alpha(&|$)/));
+  workspaceHolds.clear();
+  for (const { res } of heldWorkspaces.splice(0)) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(WORKSPACES.hostb));
+  }
+  await page.waitForTimeout(300);
+  scope = await scopeNow();
+  assert(scope.host === null && scope.workspace === 'ws_alpha' && scope.workspacePicker === 'ws_alpha' && scope.workspaces === ALPHA_WORKSPACES
+    && scope.addressWorkspace === 'ws_alpha' && scope.addressHost === null && !scope.readOnly,
+  `hostb's retired workspace list does not repaint the serving host: ${JSON.stringify(scope)}`);
+  await assertNamed(`${SERVING} (serving host)`);
+  forwardWrites = { authorized: true, reason: null };
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
@@ -585,6 +717,7 @@ try {
       'browser-remote-writes-disabled-with-reason',
       'browser-host-picker-keyboard-and-focus',
       'browser-log-tail-retires-the-old-host-at-the-switch',
+      'browser-history-restores-the-host-each-entry-names',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,

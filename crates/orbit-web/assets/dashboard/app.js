@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, fmtDuration } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, renderDenialCount, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
@@ -1221,6 +1221,7 @@ function fetchAndRenderTasks() {
 // resolve false so the next refresh tries again.
 async function initWorkspaceSelector() {
   const wasAggregate = isAggregateView() || isAggregateLinked();
+  const hostRevision = getHostRevision();
   let entries;
   try {
     entries = await fetchJson("/api/workspaces");
@@ -1228,6 +1229,9 @@ async function initWorkspaceSelector() {
     console.error(e);
     return false;
   }
+  // A host switch while the list was in flight retired it: the next host's
+  // workspaces are loaded on its own.
+  if (hostRevision !== getHostRevision()) return false;
   dashboardWorkspaces = Array.isArray(entries) ? entries : [];
   // Feed the shared aggregate-view predicate (common.js): multi-workspace mode
   // is what makes the "All workspaces" (no concrete workspace) view possible.
@@ -1706,7 +1710,8 @@ function markRefreshStale(stale) {
 }
 
 // ORB-14680: the selected host's workspaces are read once it is reachable, and
-// again after it has failed, so a host that comes back gets its own list.
+// again after it has failed, so a host that comes back gets its own list. A
+// rebuild belongs to the host visit that started it.
 let workspacesWanted = false;
 let workspaceRebuild = null;
 
@@ -1718,23 +1723,28 @@ async function ensureHostScope() {
     workspacesWanted = true;
     return false;
   }
+  // A rebuild still loading for a host since switched away from applies
+  // nothing when it settles; the selected host's list is not made to wait.
+  if (workspaceRebuild && workspaceRebuild.hostRevision !== getHostRevision()) workspaceRebuild = null;
   if (workspacesWanted && !workspaceRebuild) {
     workspacesWanted = false;
-    workspaceRebuild = initWorkspaceSelector()
-      .then((loaded) => { if (!loaded) workspacesWanted = true; })
-      .finally(() => { workspaceRebuild = null; });
+    const rebuild = { hostRevision: getHostRevision() };
+    workspaceRebuild = rebuild;
+    rebuild.done = initWorkspaceSelector()
+      .then((loaded) => { if (!loaded && workspaceRebuild === rebuild) workspacesWanted = true; })
+      .finally(() => { if (workspaceRebuild === rebuild) workspaceRebuild = null; });
   }
-  if (workspaceRebuild) await workspaceRebuild;
+  if (workspaceRebuild) await workspaceRebuild.done;
   return true;
 }
 
-function selectHost(name) {
-  if (!chooseHost(name)) {
-    refreshDashboard();
-    return;
-  }
-  persistScopeToUrl();
-  workspacesWanted = true;
+/// Back and Forward switch with `fromHistory`: the entry's address already
+/// names its scope, and the router refreshes after the traversal.
+function selectHost(name, { fromHistory = false } = {}) {
+  const changed = chooseHost(name);
+  if (changed) workspacesWanted = true;
+  if (fromHistory) return;
+  if (changed) persistScopeToUrl();
   refreshDashboard();
 }
 

@@ -15,6 +15,7 @@ import {
   fetchJson,
   findRegisteredHost,
   getHost,
+  getHostRevision,
   getRegisteredHosts,
   getServingHost,
   hostDisplayName,
@@ -167,9 +168,11 @@ function announce(text) {
 /// Read the selected host's connection state. True when it can be shown; on
 /// the serving host there is nothing to read. An unreachable host is a 200
 /// with `reachable: false`; a failed read of the route itself is treated the
-/// same, with its own code.
+/// same, with its own code. A read that a host switch retired, including a
+/// return to the same host, answers false and records nothing.
 export async function checkHostConnection() {
   const host = getHost();
+  const revision = getHostRevision();
   if (!host) {
     clearHostFailure();
     return true;
@@ -180,7 +183,7 @@ export async function checkHostConnection() {
   } catch (error) {
     state = { reachable: false, error: { code: error.code || "connection_state_unavailable", message: error.message } };
   }
-  if (host !== getHost()) return false;
+  if (revision !== getHostRevision()) return false;
   connection = state;
   setHostWrites(state && state.forward_writes);
   if (!state || state.reachable !== true) {
