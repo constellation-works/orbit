@@ -211,7 +211,45 @@ fn print_initial_window<W: Write + ?Sized>(
 
 struct InitialWindow {
     reader: BufReader<File>,
-    pending: Vec<u8>,
+    pending: RecordBuffer,
+}
+
+// Excludes the newline delimiter. Oversized records are silently skipped,
+// just like malformed JSON; keep discarding across EOF until their newline.
+const MAX_RECORD_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct RecordBuffer {
+    bytes: Vec<u8>,
+    discarding: bool,
+}
+
+impl RecordBuffer {
+    /// Consume at most one reader-buffer chunk, retaining only admitted bytes.
+    /// The caller clears the record after a delimiter or a file change.
+    fn read_chunk(&mut self, reader: &mut impl BufRead) -> io::Result<(usize, bool)> {
+        let available = reader.fill_buf()?;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let payload_len = newline.unwrap_or(available.len());
+        let consumed = payload_len + usize::from(newline.is_some());
+        if !self.discarding {
+            if payload_len > MAX_RECORD_BYTES - self.bytes.len() {
+                self.bytes.clear();
+                self.discarding = true;
+            } else {
+                // Exact growth avoids geometric allocation above the byte cap.
+                self.bytes.reserve_exact(payload_len);
+                self.bytes.extend_from_slice(&available[..payload_len]);
+            }
+        }
+        reader.consume(consumed);
+        Ok((consumed, newline.is_some()))
+    }
+
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.discarding = false;
+    }
 }
 
 fn print_initial_window_with_hook<W: Write + ?Sized>(
@@ -237,33 +275,35 @@ fn read_initial_window(
 ) -> io::Result<(InitialWindow, VecDeque<String>)> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
-    let mut buf = Vec::new();
-    let mut pending = Vec::new();
+    let mut pending = RecordBuffer::default();
     let mut matching_lines = MatchingLineWindow::new(args.lines);
     let mut after_first_read = Some(after_first_read);
     loop {
-        buf.clear();
-        // Bytes, not `read_line`: one torn or non-UTF-8 line must not end the
-        // whole tail.
-        let n = reader.read_until(b'\n', &mut buf)?;
-        if n == 0 {
+        // Read incrementally even with zero history: neither complete nor
+        // delimiter-free records may allocate beyond the admission bound.
+        let (n, complete) = pending.read_chunk(&mut reader)?;
+        if n == 0 && (args.follow || pending.bytes.is_empty() || pending.discarding) {
             break;
         }
         if let Some(hook) = after_first_read.take() {
             hook()?;
         }
-        if args.follow && buf.last() != Some(&b'\n') {
-            // The final record may be completed after follow starts. Its
-            // bytes belong to the follow reader, even with zero history.
-            pending = std::mem::take(&mut buf);
-            break;
+        if n > 0 && !complete {
+            continue;
         }
-        let line = String::from_utf8_lossy(&buf);
+        // A one-shot tail still accepts a final record without a newline.
+        // Follow carries both admitted partial bytes and discard state at EOF.
+        let line = String::from_utf8_lossy(&pending.bytes);
         if args.lines > 0
+            && !pending.discarding
             && let Ok(value) = serde_json::from_str::<Value>(&line)
             && filters.matches(&value)
         {
-            matching_lines.push(line.trim_end_matches('\n').to_owned());
+            matching_lines.push(line.into_owned());
+        }
+        pending.clear();
+        if n == 0 {
+            break;
         }
     }
 
@@ -395,7 +435,7 @@ fn follow_files<W: Write + ?Sized>(
                     Ok(file) => {
                         *initial = Some(InitialWindow {
                             reader: BufReader::new(file),
-                            pending: Vec::new(),
+                            pending: RecordBuffer::default(),
                         })
                     }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -406,14 +446,15 @@ fn follow_files<W: Write + ?Sized>(
             let reader = &mut initial.reader;
             let pending = &mut initial.pending;
             let mut offset = reader.stream_position()?;
-            // Bound each feed's batch so a busy relay cannot starve operations.
+            // Bound bytes as well as records per batch: each read consumes at
+            // most one fixed-size BufReader chunk, including discarded input.
             for _ in 0..256 {
                 if reader.get_ref().metadata()?.len() < offset {
                     reader.seek(SeekFrom::Start(0))?;
                     offset = 0;
                     pending.clear();
                 }
-                let n = reader.read_until(b'\n', pending)?;
+                let (n, complete) = pending.read_chunk(reader)?;
                 if n == 0 {
                     let replacement = match File::open(&*path) {
                         Ok(file) => Some(file),
@@ -437,11 +478,14 @@ fn follow_files<W: Write + ?Sized>(
                 }
                 progressed = true;
                 offset += n as u64;
-                if pending.last() != Some(&b'\n') {
+                if !complete {
                     continue;
                 }
-                pending.pop();
-                let full_line = String::from_utf8_lossy(pending).into_owned();
+                if pending.discarding {
+                    pending.clear();
+                    continue;
+                }
+                let full_line = String::from_utf8_lossy(&pending.bytes).into_owned();
                 pending.clear();
                 if let Ok(value) = serde_json::from_str::<Value>(&full_line)
                     && filters.matches(&value)

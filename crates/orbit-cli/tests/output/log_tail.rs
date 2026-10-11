@@ -1,4 +1,4 @@
-//! Follow the public CLI through rename/create and copy-truncate rotations.
+//! Bound JSONL records and follow the public CLI through log rotations.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -209,6 +209,153 @@ fn one_shot_tail(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Output
         .arg("--json")
         .output()
         .expect("log tail output")
+}
+
+// A few MiB of fixture data exercise the production bound without a stress
+// workload or an operator-configurable override of the memory safeguard.
+const RECORD_LIMIT: usize = 1024 * 1024;
+
+fn padded_event(message: &str, bytes: usize) -> String {
+    let record = event(message, "WARN", "orbit.test");
+    format!("{}{record}", " ".repeat(bytes - record.len()))
+}
+
+#[test]
+fn history_skips_oversized_records_and_bounds_delimiter_free_zero_history() {
+    let fixture = crate::git_repo::WorkCheckout::new();
+    // Exercise both the single-file and merged-feed entrypoints.
+    for name in ["custom.jsonl", "orbit.jsonl"] {
+        let path = fixture.work.join(name);
+        let content = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            event("before", "WARN", "orbit.test"),
+            padded_event("at-limit", RECORD_LIMIT),
+            padded_event("oversized-valid", RECORD_LIMIT + 1),
+            "x".repeat(RECORD_LIMIT + 1),
+            event("filtered", "INFO", "orbit.test"),
+            event("after", "ERROR", "orbit.test.child"),
+            // An oversized valid record without a delimiter must also be
+            // discarded by the one-shot reader, including with no history.
+            padded_event("oversized-eof", RECORD_LIMIT + 1),
+        );
+        fs::write(&path, content).unwrap();
+        for lines in ["50", "0"] {
+            let mut command = assert_cmd::Command::from_std(tail_command(&fixture, &path));
+            command.timeout(test_env::FIXTURE_STEP_DEADLINE).args([
+                "--json",
+                "-n",
+                lines,
+                "--level",
+                "warn",
+                "--target",
+                "orbit.test",
+            ]);
+            let started = std::time::Instant::now();
+            let output = command.output().unwrap();
+            test_env::assert_step_finished("log tail", started.elapsed(), &output.status);
+            assert!(output.status.success(), "stderr: {:?}", output.stderr);
+            let records: Vec<Value> = String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let messages: Vec<&str> = records
+                .iter()
+                .map(|record| record["fields"]["message"].as_str().unwrap())
+                .collect();
+            let expected = if lines == "0" {
+                vec![]
+            } else {
+                vec!["before", "at-limit", "after"]
+            };
+            assert_eq!(messages, expected);
+        }
+    }
+}
+
+#[test]
+fn follow_discards_oversized_initial_and_growing_partials_through_the_delimiter() {
+    for (name, prefix_len) in [
+        ("custom.jsonl", RECORD_LIMIT / 2),
+        ("orbit.jsonl", RECORD_LIMIT + 1),
+    ] {
+        let fixture = crate::git_repo::WorkCheckout::new();
+        let path = fixture.work.join(name);
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}",
+                event("ready", "WARN", "orbit.test"),
+                " ".repeat(prefix_len)
+            ),
+        )
+        .unwrap();
+        let follower = Follower::start(&fixture, &path, true);
+        // Initial history is emitted only after reading to EOF, so readiness
+        // proves this partial was read before any of the following appends.
+        follower.expect_record("ready", true);
+        append(&path, " ".repeat(RECORD_LIMIT + 1 - prefix_len).as_bytes());
+        append(
+            &path,
+            format!(
+                "{}\n{}\n{}\n{}\n",
+                event("discard-this-suffix", "WARN", "orbit.test"),
+                event("filtered-level", "INFO", "orbit.test"),
+                event("filtered-target", "WARN", "orbit.other"),
+                event("after-oversized", "ERROR", "orbit.test.child"),
+            )
+            .as_bytes(),
+        );
+        // If discard state were lost at EOF, the JSON suffix would be
+        // emitted instead. Positive delivery also proves delimiter recovery.
+        follower.expect_record("after-oversized", true);
+        append(
+            &path,
+            format!("{}\n", padded_event("oversized-live", RECORD_LIMIT + 1)).as_bytes(),
+        );
+        let partial = event("completed-🌍", "WARN", "orbit.test");
+        let split = partial.find('🌍').unwrap() + 1;
+        append(&path, &partial.as_bytes()[..split]);
+        follower.expect_no_record();
+        append(&path, &partial.as_bytes()[split..]);
+        append(&path, b"\n");
+        follower.expect_record("completed-🌍", true);
+    }
+}
+
+#[test]
+fn follow_rotation_and_truncation_reset_oversized_partial_discard_state() {
+    for rotate in [true, false] {
+        let fixture = crate::git_repo::WorkCheckout::new();
+        let path = fixture.work.join("orbit.jsonl");
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}",
+                event("ready", "WARN", "orbit.test"),
+                " ".repeat(RECORD_LIMIT + 1)
+            ),
+        )
+        .unwrap();
+        let follower = Follower::start(&fixture, &path, true);
+        follower.expect_record("ready", true);
+        if rotate {
+            fs::rename(&path, fixture.work.join("archive.jsonl")).unwrap();
+        }
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                event("replacement", "ERROR", "orbit.test"),
+                event("filtered", "INFO", "orbit.test"),
+                event("replacement-sentinel", "WARN", "orbit.test"),
+            ),
+        )
+        .unwrap();
+        // The first replacement record must not inherit the old discard flag.
+        follower.expect_record("replacement", true);
+        follower.expect_record("replacement-sentinel", true);
+    }
 }
 
 #[test]
