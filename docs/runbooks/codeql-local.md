@@ -1,6 +1,6 @@
 ---
 type: runbook
-summary: Run local Rust CodeQL for every change touching Rust sources with a verified host toolchain cache and bounded concurrency, and reject incomplete semantic extraction.
+summary: Run local Rust CodeQL once per delivery for every change touching Rust sources, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
 last_validated: 2026-10-11
@@ -54,7 +54,16 @@ scripts/codeql-rust-local.sh --ram 16384 \
 a previous targeted query exhausted the heap at 4096. Choose a value appropriate
 to the executor's available memory.
 
-Each invocation creates a fresh `codeql-rust-local.*` directory under
+Run it once per delivery, after the last Rust change, against the final
+candidate. A run takes minutes, plus any wait for a [slot](#concurrent-runs),
+so run it in the foreground with a timeout of at least 45 minutes: an
+interrupted run leaves no SARIF and must start over. Read the `results.sarif`
+of that run rather than running again. Run again only when Rust sources, the
+CodeQL configuration or model extensions change, the run failed, or the review
+needs another query. An identical invocation [reuses](#reusing-a-passing-run)
+the passing run instead of repeating it.
+
+Each run creates a fresh `codeql-rust-local.*` directory under
 `$ORBIT_SCRATCH_DIR` (or `<checkout>/.orbit/tmp` when unset). It isolates
 `CARGO_HOME`, Cargo build output, temporary files, and CodeQL caches there.
 The run directory is printed before preparation. It contains:
@@ -67,6 +76,8 @@ The run directory is printed before preparation. It contains:
   `database/log/`: extraction evidence, including extractor-only warnings.
   `database/src.zip` holds every extracted source file.
 - `analysis.log` and `results.sarif`: query execution and results.
+- `inputs.sha256`: written by a passing run whose inputs did not change while
+  it ran; see [Reusing a passing run](#reusing-a-passing-run).
 
 A run that fails keeps everything, including the database dataset
 (`database/db-rust/`), `cargo/`, `target/`, `tmp/` and CodeQL caches, for
@@ -132,6 +143,52 @@ first prints `waiting for a CodeQL slot` and repeats a progress line every
 45 seconds. Toolchain verification and installation are outside the slot. If
 the slot locks cannot be opened, the run warns and proceeds without one.
 
+### Threads and run time
+
+CodeQL imports and evaluates on one thread unless told otherwise. The script
+passes `--threads` to extraction (TRAP import, and a hint to the extractor)
+and to analysis: `ORBIT_CODEQL_THREADS` when set (1 through 1024), else the
+processors available divided by the slot count, so full slots share the host
+without oversubscribing it. The thread count does not change results. Each
+run reports `extraction took Xs` and `query analysis took Ys` with the thread
+count.
+
+On the 32-processor Linux box with two slots, nine completed single-threaded
+runs of `rust-security-extended` spent 3.5–9.8 minutes extracting (the
+extractor itself 2.7–6.7, then TRAP import 0.8–3.0) and 11.2–15.8 minutes
+evaluating. Query compilation took 2–5 seconds, because the bundle ships the
+suite's queries precompiled (`.qlx`), so a shared compiled-query cache would
+save nothing and each run keeps its private one. With 16 threads, evaluation
+took 6.0 minutes and TRAP import 1.2. The extractor's cost is loading the Cargo
+workspace (fetching dependencies into the run's `CARGO_HOME` and building
+build scripts and proc macros in its own target directory) and extracting
+library and crate sources. Sharing those across runs would break the
+per-run isolation above, so a run on this repository still takes about
+12 minutes when the host is busy.
+
+### Reusing a passing run
+
+Before preparing anything, the script fingerprints the run's inputs:
+
+- every file and symlink in the checkout except `.git/`, `.orbit/`,
+  `target/`, the scratch directory and earlier run directories
+- the effective configuration
+- the query selector, and the files of a query path that exists
+- the toolchain version and `codeql version`
+- the `CODEQL_*`, `RUSTFLAGS`, `RUSTDOCFLAGS` and Cargo build, profile and
+  target variables, other than those the script overrides
+
+A passing run writes the digest to `inputs.sha256` after rechecking it, so a
+run whose checkout changed while it ran is never reused. When a run directory
+under the same scratch has a matching `inputs.sha256` and a `results.sarif`,
+the script prints that directory as its run directory, says it is reusing it,
+and exits zero without extracting or querying. The evidence there is the
+evidence of that invocation, and it is as trustworthy as the scratch that
+holds it, like any retained evidence; owner fulfilment always runs fresh.
+`--fresh` runs again regardless, and the new passing run can itself be
+reused. A failed run is never reused. Any input change, including an edit to
+a document, starts a fresh run.
+
 ## Source selection
 
 CodeQL extracts every `.rs` file under the checkout that the configuration does
@@ -177,8 +234,9 @@ production paths; never attach archives or full listings.
 ## Verification and failures
 
 Exit zero means preparation, extraction-log checks, and query execution
-completed. **It does not mean the rule is clean.** Inspect `results.sarif` for
-the findings relevant to the selected query and change; for an identified
+completed, in this run or in the passing run it reused. **It does not mean
+the rule is clean.** Inspect `results.sarif` for the findings relevant to the
+selected query and change; for an identified
 repair, inspect that rule and each affected location. Retain the full logs
 and `src.zip` locally under `.orbit/tmp/`. Attach a compact JSON record
 with the query selector, CodeQL version, validated source tree, extraction
@@ -210,7 +268,10 @@ extractor skips its semantic analysis and the run refuses; declare it with
 
 ## Reusing a verified implementer database
 
-Before a reviewer starts a fresh extraction, inspect the implementer's local
+A reviewer working in the implementer's checkout and scratch, with nothing
+changed, gets the implementer's run back from the script (see
+[Reusing a passing run](#reusing-a-passing-run)). Otherwise, before a
+reviewer starts a fresh extraction, inspect the implementer's local
 CodeQL evidence. The reviewer may reuse the retained evidence and its results
 when the extraction checks passed and the source verification matches the
 candidate being reviewed. A passing run removes the database dataset, so
@@ -305,7 +366,8 @@ these steps:
    The [host toolchain cache](#host-toolchain-cache) is read-only too: a
    valid cached toolchain and existing slot locks are used as is, and a cold
    cache falls back to a per-run install inside the checkout.
-   The checkout is removed afterwards, run directory included.
+   A fresh checkout holds no earlier run, so nothing is reused. The
+   checkout is removed afterwards, run directory included.
 
 The result is `passed` only when the script exits zero, reports completed
 analysis, and its `results.sarif` has runs and no results. The run then
@@ -352,8 +414,9 @@ The behavior tests use stubbed CodeQL, rustup and host platform without download
 stubbed CodeQL enumerates a fixture checkout's sources with the effective
 configuration, including build, scratch, and toolchain residue, and an earlier
 run under another scratch. They also cover toolchain cache reuse, reinstall
-and fallback, a third run queueing for two slots, and what passing and
-failing runs keep:
+and fallback, a third run queueing for two slots, the thread count, reuse of
+a passing run and what invalidates it, and what passing and failing runs
+keep:
 
 ```bash
 python3 scripts/test-codeql-rust-local.py

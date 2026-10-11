@@ -44,6 +44,9 @@ def ignored_by(config):
 
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
+if name == "codeql" and args == ["version", "--format=terse"]:
+    print(os.environ.get("STUB_CODEQL_VERSION", "2.27.1"))
+    sys.exit(0)
 keys = ("RUSTUP_HOME", "CARGO_HOME", "CARGO_TARGET_DIR", "TMPDIR",
         "XDG_CACHE_HOME", "RUSTUP_TOOLCHAIN", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")
 call = dict(name=name, args=args, env={k: os.environ[k] for k in keys})
@@ -100,6 +103,9 @@ elif args[:2] == ["database", "create"]:
     (registry / "config.json").write_text("{}")
     (Path(os.environ["CARGO_TARGET_DIR"]) / "debug").mkdir(parents=True)
     (Path(os.environ["CARGO_TARGET_DIR"]) / "debug/out").write_text("build")
+    if os.environ.get("STUB_EDIT_DURING_CREATE"):
+        with open(os.environ["STUB_EDIT_DURING_CREATE"], "a") as edited:
+            edited.write("pub fn edited() {}\n")
     log = os.environ.get("STUB_EXTRACTION_LOG", "INFO semantic crate graph extracted")
     if os.environ.get("STUB_LOG_FILE_ONLY"):
         (database / "log/extractor.log").write_text(log)
@@ -132,7 +138,8 @@ SELECTED = ["crates/core/src/added.rs", "crates/core/src/lib.rs"]
 # What a passing run keeps as evidence; a failed run also keeps the dataset
 # and build scratch.
 EVIDENCE = ["analysis.log", "codeql-config.yml", "codeql-logs", "database",
-            "extraction-problems.log", "extraction.log", "results.sarif", "toolchain.log"]
+            "extraction-problems.log", "extraction.log", "inputs.sha256", "results.sarif",
+            "toolchain.log"]
 BULK = ["cache", "cargo", "database/db-rust", "target", "tmp"]
 
 
@@ -424,7 +431,7 @@ class LocalCodeqlTests(unittest.TestCase):
         first = self.run_script("fixture.ql")
         self.assertEqual(first.returncode, 0, first.stderr)
         self.calls_file.write_text("")
-        second = self.run_script("fixture.ql")
+        second = self.run_script("--fresh", "fixture.ql")
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
         self.assertIn("no rustup install ran", (self.run_dir(second) / "toolchain.log").read_text())
@@ -446,7 +453,7 @@ class LocalCodeqlTests(unittest.TestCase):
         for toolchain, damaged in (("1.97.0", "missing rust-src file"), ("1.98.1", "wrong version")):
             with self.subTest(damaged):
                 self.calls_file.write_text("")
-                result = self.run_script("--toolchain", toolchain, "fixture.ql")
+                result = self.run_script("--fresh", "--toolchain", toolchain, "fixture.ql")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual([call["name"] for call in self.calls()], ["rustup", "codeql", "codeql"])
                 version_dir = self.cache / f"rust-{toolchain}"
@@ -477,7 +484,7 @@ class LocalCodeqlTests(unittest.TestCase):
                                                           self.cache / "slots")])
         before = sorted(self.cache.rglob("*"))
         self.calls_file.write_text("")
-        result = self.run_script("fixture.ql")
+        result = self.run_script("--fresh", "fixture.ql")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
         self.assertIn("acquired CodeQL slot", result.stderr)
@@ -499,7 +506,7 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
             with self.subTest(warm=warm):
                 self.use_cache(self.root / f"count cache {warm}")
                 if warm:
-                    primed = self.run_script("fixture.ql")
+                    primed = self.run_script("--fresh", "fixture.ql")
                     self.assertEqual(primed.returncode, 0, primed.stderr)
                 slot_dir = self.cache / "slots"
                 slot_dir.mkdir(parents=True, exist_ok=True)
@@ -517,8 +524,8 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
                     inode = lock.stat().st_ino
                     env = dict(self.env, ORBIT_CODEQL_SLOTS="", STUB_ADMISSION_EVENT=str(events),
                                STUB_ADMISSION_RELEASE=str(release))
-                    process = subprocess.Popen(["bash", str(self.script), "fixture.ql"], cwd=self.root,
-                                               env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    process = subprocess.Popen(["bash", str(self.script), "--fresh", "fixture.ql"],
+                                               cwd=self.root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                                process_group=0)
                     try:
                         ready, _, _ = select.select([event_pipe], [], [], 180)
@@ -624,7 +631,7 @@ os.execv({real_mv!r}, sys.argv)
         for index in range(3):
             stderr = (self.root / f"run-{index}.stderr").open("w")
             self.addCleanup(stderr.close)
-            runs.append((subprocess.Popen(["bash", str(self.script), "fixture.ql"], cwd=self.root,
+            runs.append((subprocess.Popen(["bash", str(self.script), "--fresh", "fixture.ql"], cwd=self.root,
                                           env=env, stdout=subprocess.DEVNULL, stderr=stderr),
                          self.root / f"run-{index}.stderr"))
 
@@ -656,13 +663,91 @@ os.execv({real_mv!r}, sys.argv)
             peak = max(peak, active)
         self.assertEqual(peak, 2)
 
+    def test_threads_default_to_each_slots_share_of_the_processors(self):
+        # nproc counts the processors this process may use, less any OpenMP limit.
+        for name in ("OMP_NUM_THREADS", "OMP_THREAD_LIMIT"):
+            self.env.pop(name, None)
+        share = max(1, len(os.sched_getaffinity(0)) // 2)
+        for label, env, expected in (("share", dict(ORBIT_CODEQL_SLOTS="2"), share),
+                                     ("override", dict(ORBIT_CODEQL_THREADS="3"), 3)):
+            with self.subTest(label):
+                self.calls_file.write_text("")
+                result = self.run_script("--fresh", "fixture.ql", **env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                create, analyze = (call for call in self.calls() if call["name"] == "codeql")
+                self.assertIn(f"--threads={expected}", create["args"])
+                self.assertIn(f"--threads={expected}", analyze["args"])
+                self.assertIn("query analysis took", result.stderr)
+        for invalid in ("0", "many"):
+            with self.subTest(invalid=invalid):
+                self.calls_file.write_text("")
+                result = self.run_script("--fresh", "fixture.ql", ORBIT_CODEQL_THREADS=invalid)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(self.calls(), [])
+                self.assertFalse((self.run_dir(result) / "results.sarif").exists())
+                self.assertIn("ORBIT_CODEQL_THREADS", result.stderr)
+
+    def test_identical_inputs_reuse_the_passing_run_without_extracting(self):
+        first = self.run_script("fixture.qls")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        passed = self.run_dir(first)
+        # Orbit state and Cargo output are never extraction inputs.
+        for ignored in (".orbit/state.json", "target/debug/build/serde-1/out/other.rs"):
+            (self.repo / ignored).write_text("changed\n")
+        self.calls_file.write_text("")
+        again = self.run_script("fixture.qls")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.run_dir(again), passed)
+        self.assertEqual(again.stdout.strip(), "codeql-rust-local: analysis completed; inspect rule and "
+                         f"affected locations in {passed / 'results.sarif'}")
+        self.assertEqual(list(self.scratch.glob("codeql-rust-local.??????")), [passed])
+
+        source = self.repo / "crates/core/src/lib.rs"
+        changes = [
+            ("--fresh", lambda: None, {}, "fixture.qls"),
+            ("query", lambda: None, {}, "other.qls"),
+            ("codeql version", lambda: None, dict(STUB_CODEQL_VERSION="2.28.0"), "fixture.qls"),
+            ("extractor option", lambda: None, dict(CODEQL_EXTRACTOR_RUST_OPTION_CARGO_FEATURES="x"), "fixture.qls"),
+            ("tracked source", lambda: source.write_text("pub fn g() {}\n"), {}, "fixture.qls"),
+            ("untracked source", lambda: (self.repo / "crates/core/src/new.rs").write_text("fn n() {}\n"), {},
+             "fixture.qls"),
+            ("configuration", lambda: self.config.write_text(self.config.read_text() + "\n# edited\n"), {},
+             "fixture.qls"),
+        ]
+        for label, change, env, query in changes:
+            with self.subTest(label):
+                change()
+                args = ["--fresh", query] if label == "--fresh" else [query]
+                self.calls_file.write_text("")
+                result = self.run_script(*args, **env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([call["args"][:2] for call in self.calls()],
+                                 [["database", "create"], ["database", "analyze"]])
+                self.assertNotEqual(self.run_dir(result), passed)
+                self.assert_isolated()
+
+    def test_failed_or_edited_run_is_never_reused(self):
+        failed = self.run_script("fixture.ql", STUB_ANALYZE_FAIL="1")
+        self.assertNotEqual(failed.returncode, 0)
+        edited = self.run_script("fixture.ql", STUB_EDIT_DURING_CREATE=str(self.repo / "crates/core/src/lib.rs"))
+        self.assertEqual(edited.returncode, 0, edited.stderr)
+        self.assertIn("the checkout changed during this run", edited.stderr)
+        self.assertFalse((self.run_dir(edited) / "inputs.sha256").exists())
+        self.calls_file.write_text("")
+        result = self.run_script("fixture.ql")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call["args"][:2] for call in self.calls()],
+                         [["database", "create"], ["database", "analyze"]])
+        self.assertTrue((self.run_dir(result) / "inputs.sha256").is_file())
+
     def test_passing_run_keeps_evidence_and_failing_run_keeps_everything(self):
         passed = self.run_dir(self.run_script("fixture.ql"))
         self.assertEqual(sorted(p.name for p in passed.iterdir()), EVIDENCE)
         self.assertEqual(sorted(p.name for p in (passed / "database").iterdir()), ["log", "src.zip"])
         for case, env in (("extraction", dict(STUB_CREATE_EXIT="12")), ("analysis", dict(STUB_ANALYZE_FAIL="1"))):
             with self.subTest(case):
-                result = self.run_script("fixture.ql", **env)
+                result = self.run_script("--fresh", "fixture.ql", **env)
                 self.assertNotEqual(result.returncode, 0)
                 failed = self.run_dir(result)
                 for bulk in BULK:

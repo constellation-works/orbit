@@ -83,7 +83,7 @@ CLI behavior, state layout, or recovery semantics change.
 | --- | --- |
 | [Runbook Conventions](./runbooks/CONVENTIONS.md) | Authoring and maintenance conventions for Orbit operator, contributor, and release runbooks. |
 | [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
-| [Run local Rust CodeQL for every change touching Rust sources](./runbooks/codeql-local.md) | Run local Rust CodeQL for every change touching Rust sources with a verified host toolchain cache and bounded concurrency, and reject incomplete semantic extraction. |
+| [Run local Rust CodeQL for every change touching Rust sources](./runbooks/codeql-local.md) | Run local Rust CodeQL once per delivery for every change touching Rust sources, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction. |
 | [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, and validate before/after builds with it off. |
 | [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
