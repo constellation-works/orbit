@@ -90,7 +90,12 @@ fn git_with_env(
     }
     let result = run_process(&request, &NoSandbox)?;
     if !result.success {
-        return Err(git_failure_error(workspace_path, args, &result.stderr));
+        return Err(git_failure_error(
+            workspace_path,
+            args,
+            result.exit_code,
+            &result.stderr,
+        ));
     }
     Ok(result.stdout.trim().to_string())
 }

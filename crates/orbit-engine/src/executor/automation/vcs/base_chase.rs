@@ -133,6 +133,7 @@ pub(super) fn chase_advanced_base<H: RuntimeHost + ?Sized>(
         return Err(git_failure_error(
             workspace,
             &["rebase", base_sha],
+            chased.exit_code,
             &chased.stderr,
         ));
     }

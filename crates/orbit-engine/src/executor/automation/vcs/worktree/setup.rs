@@ -440,7 +440,12 @@ fn add_worktree(
         ));
     }
     if !outcome.success {
-        return Err(git_failure_error(repo_root, &arg_refs, &outcome.stderr));
+        return Err(git_failure_error(
+            repo_root,
+            &arg_refs,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
     }
     let head = git_output(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     refuse_stale_branch(branch_name, &head, target, worktree_path)?;

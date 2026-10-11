@@ -364,6 +364,7 @@ pub(super) fn perform_rebase_onto_base(
             return Err(git_failure_error(
                 workspace_path,
                 &["rebase", base_sha],
+                rebase_outcome.exit_code,
                 &rebase_outcome.stderr,
             ));
         }

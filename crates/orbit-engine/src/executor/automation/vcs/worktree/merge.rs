@@ -179,6 +179,7 @@ fn merge_with_rebase_retry(
                     git_failure_error(
                         workspace_path,
                         &["rebase", &updated_base],
+                        rebase_outcome.exit_code,
                         &rebase_outcome.stderr,
                     )
                 )));
@@ -186,6 +187,7 @@ fn merge_with_rebase_retry(
             return Err(git_failure_error(
                 workspace_path,
                 &["rebase", &updated_base],
+                rebase_outcome.exit_code,
                 &rebase_outcome.stderr,
             ));
         }

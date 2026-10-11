@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc;
@@ -12,7 +13,64 @@ use orbit_common::fs::io::with_exclusive_file_lock_options;
 use orbit_common::test_env::canonical_temp_dir;
 use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
 
-use super::super::git::{GitTimeoutBudget, GitTimeoutBudgetGuard, fetch_remote_base_within};
+use super::super::git::{
+    GitTimeoutBudget, GitTimeoutBudgetGuard, fetch_remote_base_within, git_failure_error,
+    git_output_raw, git_run, git_run_bytes,
+};
+
+// Fault injection: each shell alias fails silently, either by exiting or by
+// signalling only its own Git parent. This reproduces the missing diagnostic
+// without load or a process-global PATH shim (F2026-10-252).
+#[test]
+fn quiet_git_failures_keep_exit_status_and_signal_diagnostics() {
+    let repo = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+    git_ok(repo.path(), &["init", "-q", "--template=", "."]);
+    for (alias, exit_code, signal, diagnostic) in [
+        (
+            "alias.quiet-failure=!exit 37",
+            Some(37),
+            None,
+            "exit status: 37",
+        ),
+        (
+            "alias.quiet-failure=!kill -KILL \"$PPID\"",
+            None,
+            Some(libc::SIGKILL),
+            "signal: 9",
+        ),
+    ] {
+        let args = ["-c", alias, "quiet-failure"];
+        let raw = Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(!raw.status.success());
+        assert_eq!(raw.status.code(), exit_code);
+        assert_eq!(raw.status.signal(), signal);
+        assert!(raw.stderr.is_empty(), "the Git fixture must fail silently");
+
+        let outcome = git_run(repo.path(), &args).unwrap();
+        assert!(!outcome.success && !outcome.timed_out);
+        assert_eq!(outcome.exit_code, exit_code);
+        let message =
+            git_failure_error(repo.path(), &args, outcome.exit_code, &outcome.stderr).to_string();
+        assert!(message.contains(diagnostic), "lost child status: {message}");
+
+        let error = git_output_raw(repo.path(), &args).unwrap_err().to_string();
+        assert!(error.contains(diagnostic), "lost child status: {error}");
+
+        let bytes = git_run_bytes(repo.path(), &args, None).unwrap();
+        assert!(!bytes.success && !bytes.timed_out);
+        assert_eq!(bytes.exit_code, exit_code);
+        let message =
+            git_failure_error(repo.path(), &args, bytes.exit_code, &bytes.stderr).to_string();
+        assert!(
+            message.contains(diagnostic),
+            "lost streaming child status: {message}"
+        );
+    }
+}
 
 fn git_ok(repo: &Path, args: &[&str]) {
     let output = Command::new("git")

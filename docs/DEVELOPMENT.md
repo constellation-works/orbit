@@ -87,6 +87,12 @@ State and task-artifact writers must use the private helpers; `orbit doctor --fi
 
 ## Child processes
 
+Git failure diagnostics retain the child's exit code even when stderr is empty.
+When a supervised child exits without a code, the executor appends its actual
+termination status (including the signal number and name on Unix) to captured
+stderr. Timeout, cancellation and output-capture limits remain separate causes;
+an absent exit code alone does not identify a signal.
+
 Production code never waits on a child without a deadline. Spawn through `orbit_common::process::run_bounded` or `run_bounded_capped`, which put the child in its own process group, kill the group at the deadline and cap captured output. `run_bounded_capped_typed` returns a failed spawn as its `io::Error` for callers that branch on the kind (the `ETXTBSY` retry in `orbit update`, the sandbox probes).
 
 The production Clippy pass disallows `std::process::Command::output` and `Command::status`; an exception needs `#[allow(clippy::disallowed_methods, reason = "...")]`. The current exceptions have no natural deadline: the SSH stdio relay in `orbit-mcp` and the interactive or operator-watched `sudo` steps of `orbit init` on Linux. Fixtures may use both.
