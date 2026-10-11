@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Exercise local CodeQL's subprocess boundary without CodeQL or downloads."""
 
+import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import re
+import select
+import signal
 import tempfile
 import time
 import unittest
@@ -53,6 +56,9 @@ if args[:2] == ["database", "create"]:
         if not any(glob.match(rel) for glob in globs))
 with open(os.environ["STUB_CALLS"], "a") as log:
     log.write(json.dumps(call) + "\n")
+if args[:2] == ["database", "create"] and os.environ.get("STUB_ADMISSION_EVENT"):
+    with open(os.environ["STUB_ADMISSION_EVENT"], "w") as pipe:
+        pipe.write("create\n")
 
 
 def event(kind):
@@ -476,6 +482,137 @@ class LocalCodeqlTests(unittest.TestCase):
         self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
         self.assertIn("acquired CodeQL slot", result.stderr)
         self.assertEqual(sorted(self.cache.rglob("*")), before)
+
+    def test_persistent_count_waits_for_existing_lock_on_cold_and_warm_caches(self):
+        # Pause the admission retry at a FIFO, rather than infer ordering from
+        # elapsed time. Premature extraction signals the same FIFO and fails.
+        sleep = self.bin / "sleep"
+        sleep.write_text('''#!/usr/bin/env python3
+import os
+with open(os.environ["STUB_ADMISSION_EVENT"], "w") as pipe:
+    pipe.write("waiting\\n")
+with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
+    pipe.read(1)
+''')
+        sleep.chmod(0o755)
+        for warm in (False, True):
+            with self.subTest(warm=warm):
+                self.use_cache(self.root / f"count cache {warm}")
+                if warm:
+                    primed = self.run_script("fixture.ql")
+                    self.assertEqual(primed.returncode, 0, primed.stderr)
+                slot_dir = self.cache / "slots"
+                slot_dir.mkdir(parents=True, exist_ok=True)
+                count = self.cache / "slot-count"
+                count.write_text(" 1\n")
+                events, release = self.root / f"events-{warm}", self.root / f"release-{warm}"
+                os.mkfifo(events)
+                os.mkfifo(release)
+                self.calls_file.write_text("")
+                lock = slot_dir / "slot-001.lock"
+                with lock.open("a+") as held, \
+                        os.fdopen(os.open(events, os.O_RDWR | os.O_NONBLOCK), "r+b", buffering=0) as event_pipe, \
+                        os.fdopen(os.open(release, os.O_RDWR | os.O_NONBLOCK), "r+b", buffering=0) as release_pipe:
+                    fcntl.flock(held, fcntl.LOCK_EX)
+                    inode = lock.stat().st_ino
+                    env = dict(self.env, ORBIT_CODEQL_SLOTS="", STUB_ADMISSION_EVENT=str(events),
+                               STUB_ADMISSION_RELEASE=str(release))
+                    process = subprocess.Popen(["bash", str(self.script), "fixture.ql"], cwd=self.root,
+                                               env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                               process_group=0)
+                    try:
+                        ready, _, _ = select.select([event_pipe], [], [], 180)
+                        self.assertTrue(ready, "child never reached admission or extraction")
+                        self.assertEqual(event_pipe.read(64), b"waiting\n", "extraction started before admission")
+                        self.assertFalse(any(call["name"] == "codeql" for call in self.calls()))
+                        self.assertEqual(lock.stat().st_ino, inode, "a live slot lock must not be replaced")
+                        fcntl.flock(held, fcntl.LOCK_UN)
+                        release_pipe.write(b"1")
+                        stdout, stderr = process.communicate(timeout=180)
+                        self.assertEqual(process.returncode, 0, stdout + stderr)
+                        self.assertEqual([call["args"][:2] for call in self.calls() if call["name"] == "codeql"],
+                                         [["database", "create"], ["database", "analyze"]])
+                        self.assertIn("acquired CodeQL slot 1 of 1", stderr)
+                        self.assertNotIn("running without a host slot", stderr)
+                        self.assertEqual(count.read_text(), " 1\n")
+                        self.assertEqual(lock.stat().st_ino, inode)
+                        # The completed run releases the very same lock inode.
+                        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    finally:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        process.communicate(timeout=180)
+                self.assert_isolated()
+
+    def test_environment_count_overrides_persistent_count_and_keeps_existing_locks(self):
+        slot_dir = self.cache / "slots"
+        slot_dir.mkdir(parents=True)
+        # An invalid persistent value is ignored when an override is present.
+        (self.cache / "slot-count").write_text("not a count\n")
+        lock = slot_dir / "slot-001.lock"
+        with lock.open("a+") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            inode = lock.stat().st_ino
+            result = self.run_script("fixture.ql", ORBIT_CODEQL_SLOTS="2")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("acquired CodeQL slot 2 of 2", result.stderr)
+            self.assertNotIn("running without a host slot", result.stderr)
+            self.assertEqual(lock.stat().st_ino, inode)
+        self.assertEqual([call["name"] for call in self.calls()], ["rustup", "codeql", "codeql"])
+        self.assert_isolated()
+
+    def test_legacy_count_is_migrated_without_losing_its_value(self):
+        self.cache.mkdir()
+        legacy = self.cache / "slots"
+        legacy.write_text(" 1\n")
+        inode = legacy.stat().st_ino
+        result = self.run_script("fixture.ql", ORBIT_CODEQL_SLOTS="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        count = self.cache / "slot-count"
+        self.assertEqual(count.read_text(), " 1\n")
+        self.assertEqual(count.stat().st_ino, inode)
+        self.assertEqual([path.name for path in legacy.iterdir()], ["slot-001.lock"])
+        self.assertIn("acquired CodeQL slot 1 of 1", result.stderr)
+        self.assertNotIn("running without a host slot", result.stderr)
+        self.assertEqual([call["name"] for call in self.calls()], ["rustup", "codeql", "codeql"])
+        self.assert_isolated()
+
+    def test_legacy_migration_denial_stops_before_extraction(self):
+        self.cache.mkdir()
+        legacy = self.cache / "slots"
+        legacy.write_text("1\n")
+        # Inject a rename denial without relying on UID-dependent permissions.
+        real_mv = shutil.which("mv")
+        self.assertIsNotNone(real_mv)
+        mv = self.bin / "mv"
+        mv.write_text(f'''#!/usr/bin/env python3
+import os, sys
+cache = os.environ["ORBIT_CODEQL_CACHE_DIR"]
+if sys.argv[1:] == ["-T", "--", cache + "/slots", cache + "/slot-count"]:
+    print("mv: injected migration permission denied", file=sys.stderr)
+    sys.exit(1)
+os.execv({real_mv!r}, sys.argv)
+''')
+        mv.chmod(0o755)
+        result = self.run_script("fixture.ql", ORBIT_CODEQL_SLOTS="2")
+        self.assert_no_result(result, ["rustup"])
+        self.assertIn("cannot migrate", result.stderr)
+        self.assertNotIn("running without a host slot", result.stderr)
+        self.assertEqual(legacy.read_text(), "1\n")
+        self.assertFalse((self.cache / "slot-count").exists())
+
+    def test_conflicting_legacy_and_current_count_files_are_preserved(self):
+        self.cache.mkdir()
+        legacy, current = self.cache / "slots", self.cache / "slot-count"
+        legacy.write_text("1\n")
+        current.write_text("2\n")
+        result = self.run_script("fixture.ql")
+        self.assert_no_result(result, ["rustup"])
+        self.assertIn("reconcile the CodeQL slot counts", result.stderr)
+        self.assertEqual(legacy.read_text(), "1\n")
+        self.assertEqual(current.read_text(), "2\n")
 
     def test_third_concurrent_run_queues_for_one_of_two_slots(self):
         # Warm the cache so only the slots, not the install lock, order the runs.

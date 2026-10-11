@@ -15,7 +15,8 @@ or this checkout's .orbit/tmp when unset; a passing run then removes the
 database dataset and build scratch. The pinned toolchain is installed once
 per host into ORBIT_CODEQL_CACHE_DIR (default ~/.orbit/cache/codeql-rust-local),
 or into the run directory when that cache is unusable. Extraction and analysis
-wait for one of ORBIT_CODEQL_SLOTS host slots (else <cache>/slots, default 2).
+wait for one of ORBIT_CODEQL_SLOTS host slots (else <cache>/slot-count, default 2).
+Locks stay under <cache>/slots/; a legacy count file there is migrated first.
 See docs/runbooks/codeql-local.md for confirmation and failure handling.
 EOF
 }
@@ -260,11 +261,35 @@ if [[ -z "$cache_dir" ]] || ! use_cached_toolchain; then
   fi
 fi
 
+# The old count file occupied the lock directory's path. Rename only that
+# regular file, never the directory or its live locks. Lock the file read-only
+# so concurrent migrations serialize on its inode without recreating it after
+# another run has renamed it. A failed migration must not run unbounded.
+migrate_slot_count() {
+  local legacy="$cache_dir/slots" count="$cache_dir/slot-count" migration_fd
+  [[ -n "$cache_dir" && -f "$legacy" ]] || return 0
+  if { exec {migration_fd}<"$legacy"; } 2>/dev/null; then
+    flock -x "$migration_fd" || fail "cannot lock the legacy CodeQL slot count $legacy; no extraction was run"
+    # Another migrator may already have renamed the locked inode.
+    if [[ -f "$legacy" ]]; then
+      [[ ! -e "$count" && ! -L "$count" ]] \
+        || fail "both $legacy and $count exist; reconcile the CodeQL slot counts before running; no extraction was run"
+      mv -T -- "$legacy" "$count" \
+        || fail "cannot migrate the legacy CodeQL slot count $legacy to $count; no extraction was run"
+      note "migrated the legacy CodeQL slot count to $count"
+    fi
+    exec {migration_fd}>&-
+  elif [[ -f "$legacy" || ! -f "$count" ]]; then
+    fail "cannot open the legacy CodeQL slot count $legacy for migration; no extraction was run"
+  fi
+}
+migrate_slot_count
+
 # A counted host lock bounds concurrent extraction and analysis, which saturate
-# the disk well before the CPUs. ORBIT_CODEQL_SLOTS overrides <cache>/slots.
+# the disk well before the CPUs. ORBIT_CODEQL_SLOTS overrides <cache>/slot-count.
 slots="${ORBIT_CODEQL_SLOTS:-}"
-if [[ -z "$slots" && -n "$cache_dir" && -f "$cache_dir/slots" ]]; then
-  slots="$(tr -d '[:space:]' <"$cache_dir/slots")" || fail "cannot read the CodeQL slot count from $cache_dir/slots"
+if [[ -z "$slots" && -n "$cache_dir" && -f "$cache_dir/slot-count" ]]; then
+  slots="$(tr -d '[:space:]' <"$cache_dir/slot-count")" || fail "cannot read the CodeQL slot count from $cache_dir/slot-count"
 fi
 slots="${slots:-2}"
 [[ "$slots" =~ ^[1-9][0-9]*$ && "$slots" -le 128 ]] || fail "the CodeQL slot count must be from 1 through 128; got '$slots'"
