@@ -21,9 +21,152 @@ use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::actions::CancellationRequest;
-use super::{insert_pending_run, test_runtime};
+use super::super::drain_cancel::set_drain_cancel_state_init_hook;
+use super::{
+    assert_worker_checkpoint_preserved, insert_pending_run, running_run_without_state,
+    test_runtime, worker_checkpoint,
+};
 use crate::OrbitRuntime;
 use crate::application::tests::run_isolated_test;
+
+#[test]
+fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control,
+    )) {
+        return;
+    }
+    for worker_wins in [false, true] {
+        let (_root, runtime) = test_runtime();
+        let run =
+            running_run_without_state(&runtime, crate::application::distributed::PULL_DRAIN_JOB);
+        let checkpoint = worker_wins.then(|| worker_checkpoint(&runtime, &run));
+        let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+        let worker = runtime.clone();
+        let run_id = run.run_id.clone();
+        let progress = checkpoint.clone();
+        let observed = reached.clone();
+        set_drain_cancel_state_init_hook(move || {
+            assert!(!observed.replace(true), "NoState seam must run once");
+            assert!(worker.read_run_state(&run_id).unwrap().is_none());
+            if let Some(state) = progress {
+                assert!(
+                    worker
+                        .stores()
+                        .jobs()
+                        .initialize_run_state(&run_id, &state)
+                        .unwrap()
+                );
+            }
+        });
+
+        let cancel = || {
+            runtime
+                .cancel_job_run_with_options_and_policy(
+                    &run.run_id,
+                    "operator",
+                    "fixture",
+                    Some("finish admitted work"),
+                    false,
+                    false,
+                )
+                .unwrap()
+        };
+        let result = cancel();
+        assert!(reached.get(), "force the NoState initialization window");
+        assert_eq!(result.outcome, "cancelling");
+        assert_eq!(result.final_state, "running");
+        assert!(!result.signal_attempted);
+        let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
+        assert!(state.admissions_stopped());
+        let control = state.drain_cancel.as_ref().unwrap();
+        assert_eq!(control.actor, "operator");
+        assert_eq!(control.source, "fixture");
+        assert_eq!(control.reason.as_deref(), Some("finish admitted work"));
+        let policy = state.task_cancellation_policy.as_ref().unwrap();
+        assert!(!policy.block);
+        assert!(!policy.note.is_empty());
+        if let Some(checkpoint) = checkpoint {
+            assert_worker_checkpoint_preserved(&state, &checkpoint);
+        }
+        assert_eq!(cancel().outcome, "cancelling");
+        assert_eq!(runtime.read_run_state(&run.run_id).unwrap().unwrap(), state);
+    }
+}
+
+#[test]
+fn graceful_cancel_initialization_refuses_concurrent_terminalization() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &graceful_cancel_initialization_refuses_concurrent_terminalization,
+    )) {
+        return;
+    }
+    for terminal in [JobRunState::Success, JobRunState::Failed] {
+        for worker_wins in [false, true] {
+            let (_root, runtime) = test_runtime();
+            let run = running_run_without_state(
+                &runtime,
+                crate::application::distributed::PULL_DRAIN_JOB,
+            );
+            let checkpoint = worker_wins.then(|| worker_checkpoint(&runtime, &run));
+            let worker = runtime.clone();
+            let run_id = run.run_id.clone();
+            let progress = checkpoint.clone();
+            set_drain_cancel_state_init_hook(move || {
+                assert!(worker.read_run_state(&run_id).unwrap().is_none());
+                if let Some(state) = progress {
+                    assert!(
+                        worker
+                            .stores()
+                            .jobs()
+                            .initialize_run_state(&run_id, &state)
+                            .unwrap()
+                    );
+                }
+                assert!(
+                    worker
+                        .stores()
+                        .jobs()
+                        .finalize_job_run(&run_id, terminal, Utc::now(), None)
+                        .unwrap()
+                );
+            });
+
+            let result = runtime
+                .cancel_job_run_with_options_and_policy(
+                    &run.run_id,
+                    "operator",
+                    "fixture",
+                    Some("finish admitted work"),
+                    false,
+                    false,
+                )
+                .unwrap();
+            assert_eq!(result.outcome, "already_terminal");
+            assert_eq!(result.final_state, terminal.to_string());
+            assert!(!result.signal_attempted);
+            assert_eq!(
+                runtime
+                    .get_job_run_backend(&run.run_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                terminal
+            );
+            let state = runtime.read_run_state(&run.run_id).unwrap().unwrap();
+            assert!(
+                !state.drain_cancelling(),
+                "a terminal drain must receive no new control"
+            );
+            assert!(!state.admissions_stopped());
+            assert!(state.task_cancellation_policy.is_none());
+            if let Some(mut checkpoint) = checkpoint {
+                checkpoint.compact_for_terminal(terminal);
+                assert_worker_checkpoint_preserved(&state, &checkpoint);
+            }
+        }
+    }
+}
 
 /// State at the owner transport boundary: a received Release removes the
 /// claim. Retain receipts to exercise an admission whose reply was lost.
