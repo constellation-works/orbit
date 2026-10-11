@@ -17,6 +17,8 @@ Reference for Orbit's `config.toml`: every fixed key, its default and what it do
 
 Settings inherit per key: workspace overrides global, global fills omissions, built-in defaults fill the rest. Keep a workspace file to genuine overrides.
 
+Both config files must be regular files. Runtime loads and workspace plugin-toggle polling refuse symlink leaves (including dangling links), directories, FIFOs and other non-regular leaves. Symlinked parent directories are supported and resolved before opening the file. A missing file or parent directory contributes no layer, so global settings and built-in defaults still apply.
+
 - **Tables** layer down to individual settings; **scalars and arrays** replace the global value.
 - **Named crews** layer by crew name and field: a workspace `[crews.sol]` holding only `model = "gpt-6-astra"` overrides that one field of the global `sol` crew.
 - **Security keys** (`execution.codex.sandbox`, `execution.codex.approval_policy`, `execution.env.pass`) never inherit from global once a workspace file exists; an omitted one takes its built-in default. A workspace file holding only `[plugin_enablement]` does not count, so those keys keep inheriting.

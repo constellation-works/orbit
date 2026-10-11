@@ -144,6 +144,8 @@ impl ResolvedConfig {
     /// Load config with per-key workspace-over-global layering.
     ///
     /// Persistence paths are always derived from the two roots (not configurable).
+    /// Config leaves must be regular files, never symlinks; missing files or
+    /// parent directories contribute no layer. Symlinked parents are supported.
     ///
     /// Ordinary keys inherit from global when absent from the workspace file.
     /// Sandbox mode, approval policy, and the environment allowlist are the

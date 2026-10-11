@@ -29,7 +29,6 @@
 //! translated value.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -47,6 +46,7 @@ use crate::plugin_enablement::{
 };
 use crate::registry::{CONFIG_KEY_REGISTRY, ConfigSnapshot, GLOBAL_ONLY_KEY_PREFIX};
 use crate::resolved::{ResolvedConfig, default_crews, warn_compatibility_keys};
+use crate::store::read_config_file;
 
 /// Security-sensitive settings that a workspace file must restate to keep.
 /// Inheriting a machine-global sandbox, approval, or environment allowlist
@@ -530,15 +530,9 @@ pub(crate) fn reject_workspace_machine_table(
 }
 
 fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>, OrbitError> {
-    if !path.exists() {
+    let Some(raw) = read_config_file(path)? else {
         return Ok(None);
-    }
-    let raw = fs::read_to_string(path).map_err(|err| {
-        OrbitError::Io(format!(
-            "failed to read runtime config '{}': {err}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })?;
+    };
     parse_config_document(path, &raw).map(Some)
 }
 
