@@ -83,6 +83,12 @@ know why it failed and that a rerun can succeed. A sandbox denial or provider
 failure is not inherently transient; repeated identical failures need a repair
 or configuration correction before another attempt.
 
+When a run stops on a rebase conflict, final recovery can repair the conflict
+files and resume. The next conflict recovery adopts those repairs and continues
+the stopped rebase, so don't abort it or stage files by hand. Adoption still
+refuses leftover conflict markers, whitespace errors, an untouched conflict, and
+a moved HEAD or index.
+
 A live process is not stopped merely because a tool observation timed out.
 Re-poll the same run and inspect current process liveness. Conversely, a stale
 lock file alone does not prove a worker is alive. Follow

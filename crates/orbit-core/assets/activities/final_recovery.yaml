@@ -258,7 +258,11 @@ spec:
          `resume` from the failed step or an earlier allowed step so the
          pipeline reruns the failed contract over your repair.
        - Git conflict or a broken worktree you can repair without Git writes:
-         repair the files, then `resume`.
+         repair the files, then `resume`. For a stopped rebase, leave every
+         conflict file free of conflict markers with `git diff --check`
+         clean, and make companion edits only to tracked files. The next
+         conflict recovery adopts these repairs and the host continues the
+         existing rebase; new untracked files are not committed with it.
        - Nothing to commit because the outcome already landed: find the commit
          on the base branch that delivers it, then `complete_no_diff` with that
          commit. Orbit verifies it is reachable from the base branch and
