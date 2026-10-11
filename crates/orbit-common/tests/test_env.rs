@@ -239,7 +239,7 @@ fn env_probe_child() {
 #[cfg(unix)]
 mod orphaned_fixture_children {
     use super::*;
-    use orbit_common::test_env::run_child_test_within;
+    use orbit_common::test_env::{PsRun, ps_stat, report_ps_denied, run_child_test_within};
     use std::io::Write;
     use std::path::Path;
     use std::time::Instant;
@@ -283,25 +283,48 @@ mod orphaned_fixture_children {
     }
 
     /// Running and not a zombie: a killed process nobody has reaped yet is gone.
-    fn is_running(pid: u32) -> bool {
-        let output = Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
-            .unwrap();
+    fn is_running(pid: u32) -> Result<bool, String> {
+        let output = match ps_stat(pid) {
+            PsRun::Ran(output) => output,
+            PsRun::Denied(reason) => return Err(reason),
+        };
+        assert!(
+            output.status.success()
+                || (output.status.code() == Some(1)
+                    && output.stdout.is_empty()
+                    && output.stderr.is_empty()),
+            "ps failed: {output:?}"
+        );
         let state = String::from_utf8_lossy(&output.stdout);
         let state = state.trim();
-        !state.is_empty() && !state.starts_with('Z')
+        Ok(!state.is_empty() && !state.starts_with('Z'))
     }
 
-    fn assert_gone_within_bound(what: &str, pid: u32) {
+    // Probe before spawning long-lived fixtures, so a denied ps leaves no
+    // children behind. Later denials still propagate through fixture cleanup.
+    fn ps_available(test: &str) -> bool {
+        match is_running(std::process::id()) {
+            Ok(running) => {
+                assert!(running, "ps must see this live test process");
+                true
+            }
+            Err(reason) => {
+                report_ps_denied(test, &reason);
+                false
+            }
+        }
+    }
+
+    fn assert_gone_within_bound(what: &str, pid: u32) -> Result<(), String> {
         let started = Instant::now();
-        while is_running(pid) {
+        while is_running(pid)? {
             assert!(
                 started.elapsed() < BOUND,
                 "{what} (pid {pid}) still running {BOUND:?} after its test parent died"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+        Ok(())
     }
 
     fn kill_leftovers(pids: &[u32]) {
@@ -315,6 +338,11 @@ mod orphaned_fixture_children {
 
     #[test]
     fn a_killed_test_parent_takes_its_fixture_child_group_with_it() {
+        let test =
+            "orphaned_fixture_children::a_killed_test_parent_takes_its_fixture_child_group_with_it";
+        if !ps_available(test) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let mut parent = reexec("orphan_parent_entry", dir.path());
         let mut parent = parent
@@ -325,26 +353,31 @@ mod orphaned_fixture_children {
             .unwrap();
         let child = wait_for_pid(&dir.path().join("child.pid"));
         let grandchild = wait_for_pid(&dir.path().join("grandchild.pid"));
-        assert!(
-            is_running(child) && is_running(grandchild),
-            "fixture started"
-        );
+        let running = is_running(child)
+            .and_then(|child| is_running(grandchild).map(|grandchild| child && grandchild));
 
         parent.kill().unwrap();
         parent.wait().unwrap();
 
         let outcome = std::panic::catch_unwind(|| {
-            assert_gone_within_bound("fixture child", child);
-            assert_gone_within_bound("fixture grandchild", grandchild);
+            assert!(running?, "fixture started");
+            assert_gone_within_bound("fixture child", child)?;
+            assert_gone_within_bound("fixture grandchild", grandchild)
         });
-        if outcome.is_err() {
+        if !matches!(outcome, Ok(Ok(()))) {
             kill_leftovers(&[child, grandchild]);
         }
-        outcome.unwrap();
+        if let Err(reason) = outcome.unwrap() {
+            report_ps_denied(test, &reason);
+        }
     }
 
     #[test]
     fn an_overrunning_child_is_reported_with_its_output_and_its_group_is_killed() {
+        let test = "orphaned_fixture_children::an_overrunning_child_is_reported_with_its_output_and_its_group_is_killed";
+        if !ps_available(test) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let mut command = reexec("orphan_child_entry", dir.path());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -368,13 +401,15 @@ mod orphaned_fixture_children {
         let child = wait_for_pid(&dir.path().join("child.pid"));
         let grandchild = wait_for_pid(&dir.path().join("grandchild.pid"));
         let outcome = std::panic::catch_unwind(|| {
-            assert_gone_within_bound("overrun child", child);
-            assert_gone_within_bound("overrun grandchild", grandchild);
+            assert_gone_within_bound("overrun child", child)?;
+            assert_gone_within_bound("overrun grandchild", grandchild)
         });
-        if outcome.is_err() {
+        if !matches!(outcome, Ok(Ok(()))) {
             kill_leftovers(&[child, grandchild]);
         }
-        outcome.unwrap();
+        if let Err(reason) = outcome.unwrap() {
+            report_ps_denied(test, &reason);
+        }
     }
 
     /// ORB-15293: a child that keeps reporting progress is slow, not hung, so

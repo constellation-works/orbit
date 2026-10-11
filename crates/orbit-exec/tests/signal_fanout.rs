@@ -458,6 +458,20 @@ const SIGTERM_MARKER_ENV: &str = "ORBIT_EXEC_SIGTERM_MARKER";
 #[test]
 fn sigterm_with_default_disposition_exits_the_supervisor() {
     if std::env::var_os(SIGTERM_HELPER_ENV).is_some() {
+        // Reproduce the default disposition with SA_SIGINFO retained by
+        // macOS exec under nextest, even when launched by cargo test. It is
+        // still SIG_DFL, so the supervisor must announce before re-raising.
+        // SAFETY: this re-executed helper owns its signal disposition.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = libc::SIG_DFL;
+            action.sa_flags = libc::SA_SIGINFO;
+            libc::sigemptyset(&mut action.sa_mask);
+            assert_eq!(
+                libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut()),
+                0
+            );
+        }
         let marker =
             PathBuf::from(std::env::var(SIGTERM_MARKER_ENV).expect("marker dir")).join("ready");
         let _ = supervise_sleep_after_ready(&marker);
@@ -500,10 +514,10 @@ fn sigterm_with_default_disposition_exits_the_supervisor() {
         "SIGTERM should exit the supervisor within the child-termination grace period, took {:?}",
         started.elapsed()
     );
-    assert!(
-        !output.status.success(),
-        "SIGTERM must exit the supervisor non-zero, got {:?}",
-        output.status
+    assert_eq!(
+        output.status.signal(),
+        Some(libc::SIGTERM),
+        "the supervisor must re-raise SIGTERM with its default disposition"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
