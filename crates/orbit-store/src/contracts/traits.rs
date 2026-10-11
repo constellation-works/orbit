@@ -292,6 +292,9 @@ pub trait TaskStoreBackend: Send + Sync {
     /// Read a stable dependency snapshot while another task is mutated.
     /// This grants no write authority over the dependency, including a task
     /// protected by an execution claim; every mutation retains its own guard.
+    /// The lock is shared: it excludes writers of the task, not other readers.
+    /// Never write the task inside it — a nested write lock does not upgrade
+    /// it.
     fn with_task_read_lock(
         &self,
         _id: &str,

@@ -301,6 +301,7 @@
         "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit",
         "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::malformed_component_map_fails_apply_without_writing",
         "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::meaning_edits_name_the_drifted_component_and_write_nothing",
+        "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge",
         "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::proposed_to_backlog_still_applies",
         "adapter/engine_host/v2_host/task_pilot/tests/persist.rs::task_prepared_in_progress_is_not_rewritten",
         "adapter/engine_host/v2_host/task_pilot/tests/prepare.rs::automatic_admission_between_selection_and_hydration_settles_superseded",

@@ -468,17 +468,18 @@ impl TaskV2Store {
         })
     }
 
-    /// Run `op` under this task's exclusive bundle lock.
+    /// Run `op` under this task's shared bundle lock.
     ///
     /// The lock target belongs to the bundle store, which hands the same file
-    /// to the shared lock its full-bundle reads take, so a write and a
-    /// concurrent read cannot disagree about what coordinates them.
+    /// to the exclusive lock its writes take, so a write and a concurrent read
+    /// cannot disagree about what coordinates them. Concurrent readers of one
+    /// task are admitted together.
     pub(crate) fn with_task_read_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
         // Same lock order as writers, without requesting mutation authority.
-        self.in_boundary(|| self.bundle_store.with_bundle_write_lock(id, op))
+        self.in_boundary(|| self.bundle_store.with_bundle_read_lock(id, op))
     }
 
     pub(crate) fn with_task_lock<T, F>(&self, id: &str, op: F) -> Result<T, OrbitError>

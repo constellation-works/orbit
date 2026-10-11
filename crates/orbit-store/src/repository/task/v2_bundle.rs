@@ -89,6 +89,22 @@ impl TaskBundleStoreV2 {
         })
     }
 
+    /// Run `op` while holding this task's shared bundle lock.
+    ///
+    /// Holders exclude writers of this bundle but not each other. No
+    /// pending-write recovery runs: that is a mutation, and the full-bundle
+    /// read already hides an aborted write's rows.
+    pub(crate) fn with_bundle_read_lock<T, F>(&self, task_id: &str, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+            read_envelope_at(&bundle_dir)?;
+            op()
+        })
+    }
+
     /// The caller has durably reserved this ID for one action and input digest.
     /// Re-enter after a crash under the canonical bundle lock. A readable bundle
     /// wins; unreadable bytes are retained for explicit recovery.

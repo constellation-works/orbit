@@ -20,6 +20,13 @@ use super::admission::{Admission, PreparedTaskSnapshot, ValidatedTask};
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 
+/// Lock rounds before an assessment whose dependency graph keeps growing
+/// between discovery and its locks is refused as stale.
+const GRAPH_LOCK_ATTEMPTS: usize = 4;
+const DEPENDENCY_GRAPH_CHANGED: &str = "dependency_graph_changed";
+const DEPENDENCY_GRAPH_CHANGED_DETAIL: &str =
+    "the dependency graph kept changing while task-pilot locked it";
+
 /// Stale reason when the task's durable context creation grant is no longer
 /// the one preparation recorded.
 const CONTEXT_CREATION_CHANGED: &str = "context_creation_changed";
@@ -65,23 +72,35 @@ pub(super) fn apply_task(
     }
     let named_blockers = crate::application::task::pilot_blocker_task_ids(&task.assessment);
     let mut snapshot = snapshot.clone();
-    for attempt in 0..=1 {
-        let mut lock_ids = vec![task.task_id.clone()];
-        lock_ids.extend(runtime.get_task(&task.task_id)?.dependencies());
-        // Lock local named targets before reading their status at publication.
-        // Missing and other-workspace IDs remain warning text.
-        let mut local_blockers = BTreeSet::new();
-        for id in &named_blockers {
-            if runtime.stores().tasks().get_task(id)?.is_some() {
-                lock_ids.push(id.clone());
-                local_blockers.insert(id.clone());
-            }
+    // Local named targets are locked before their status is read at
+    // publication. Missing and other-workspace IDs remain warning text.
+    let mut local_blockers = BTreeSet::new();
+    for id in &named_blockers {
+        if runtime.stores().tasks().get_task(id)?.is_some() {
+            local_blockers.insert(id.clone());
         }
+    }
+    let mut attempt = 0;
+    let mut graph_locks = 0;
+    loop {
+        // Discover the graph the cycle check reads while holding no task
+        // lock, then lock all of it in one sorted order. A walk under fewer
+        // locks would take a later task's lock out of order and could wait
+        // forever on another application doing the same [ORB-15408].
+        let graph = runtime
+            .discover_pilot_dependency_graph(&runtime.get_task(&task.task_id)?, &local_blockers)?;
+        let mut lock_ids = vec![task.task_id.clone()];
+        lock_ids.extend(graph.task_ids().cloned());
         lock_ids.sort();
         lock_ids.dedup();
+        #[cfg(test)]
+        lock_hook::fire(lock_hook::Point::Discovered);
         let mut outcome = None;
         let mut retry_fingerprint = None;
+        let mut graph_changed = false;
         let mut operation = || {
+            #[cfg(test)]
+            lock_hook::fire(lock_hook::Point::Locked);
             let claim = crate::application::automation::members::claim(runtime, prepared)?;
             // Re-checked under the task locks: the branch may have moved
             // under this task's material since apply's own check [ORB-14476].
@@ -167,7 +186,15 @@ pub(super) fn apply_task(
                 return Ok(());
             }
 
-            let add_dependencies = runtime.pilot_blocker_dependencies(&current, &local_blockers)?;
+            // The locks cover the discovered graph. When the locked task now
+            // reaches past it, release them and discover again.
+            let Some(graph) =
+                runtime.reread_pilot_dependency_graph(&current, &local_blockers, &graph)?
+            else {
+                graph_changed = true;
+                return Ok(());
+            };
+            let add_dependencies = graph.blocker_dependencies(&current, &local_blockers)?;
             current
                 .relations
                 .extend(add_dependencies.iter().map(|target| TaskRelation {
@@ -336,6 +363,16 @@ pub(super) fn apply_task(
             }
             return Err(error);
         }
+        if graph_changed {
+            graph_locks += 1;
+            if graph_locks == GRAPH_LOCK_ATTEMPTS {
+                return Ok(ApplyTaskOutcome::Stale(
+                    DEPENDENCY_GRAPH_CHANGED,
+                    DEPENDENCY_GRAPH_CHANGED_DETAIL.to_string(),
+                ));
+            }
+            continue;
+        }
         if let Some((fingerprint, status)) = retry_fingerprint {
             // Admit this fresh fingerprint only once. The next pass releases
             // and reacquires the task/dependency locks, then reads them again.
@@ -343,14 +380,12 @@ pub(super) fn apply_task(
                 .material
                 .map(|(_, revision)| (fingerprint, revision));
             snapshot.status = status;
+            attempt += 1;
             continue;
         }
         return outcome
             .ok_or_else(|| OrbitError::Execution("task-pilot operation did not run".to_string()));
     }
-    Err(OrbitError::Execution(
-        "task-pilot status retry loop did not settle".to_string(),
-    ))
 }
 
 /// Only applied no-target assessments carry this marker. The status is kept
@@ -866,4 +901,37 @@ pub(super) fn failed_partition(
         "unresolved_count": unresolved,
         "applied_task_ids": [],
     })
+}
+
+/// A test seam at the two points of an application's lock protocol, so a test
+/// can order concurrent applications deterministically.
+#[cfg(test)]
+pub(super) mod lock_hook {
+    use std::cell::RefCell;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(in super::super) enum Point {
+        /// The graph is discovered and no task lock is held yet.
+        Discovered,
+        /// Every lock is held and nothing has been read under them.
+        Locked,
+    }
+
+    pub(in super::super) type Hook = Box<dyn FnMut(Point)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = RefCell::new(None);
+    }
+
+    pub(in super::super) fn set(hook: Option<Hook>) {
+        HOOK.with(|slot| *slot.borrow_mut() = hook);
+    }
+
+    pub(super) fn fire(point: Point) {
+        HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().as_mut() {
+                hook(point);
+            }
+        });
+    }
 }
