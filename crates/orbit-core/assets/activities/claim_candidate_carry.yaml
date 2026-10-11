@@ -13,7 +13,11 @@ spec:
     settlement names: `carry` is `published` (the leaf's push already put the
     branch on `origin`), `durable` (with `durable_ref`), `failed` (with
     `reason`; the candidate stays on this host) or `none` (nothing was
-    committed). It never changes the run's failure or the worktree.
+    committed or left dirty). Before the normal commit, it snapshots dirty
+    files as one marked partial implementation commit without moving the
+    branch or changing the index or worktree. Protected paths, environment
+    files, symlinks and gitlinks refuse the snapshot with a reason; scratch
+    under `.orbit/tmp/` is excluded. It never changes the run's failure.
   input_schema_json:
     type: object
     additionalProperties: false
@@ -57,6 +61,8 @@ spec:
         type: string
       head_sha:
         type: string
+      partial:
+        type: boolean
       durable_ref:
         type: string
       reason:

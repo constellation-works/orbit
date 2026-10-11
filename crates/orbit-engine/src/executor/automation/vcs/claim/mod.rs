@@ -21,7 +21,8 @@
 //! - [`claim_candidate_carry`] is the PR leaf's failure hook: it pushes a
 //!   committed candidate the leaf never published to a durable ref on
 //!   `origin`, so the task's next claim can resume it on any host
-//!   [ORB-14338].
+//!   [ORB-14338]. Dirty implementer output is preserved as a detached,
+//!   marked partial commit before publication, with the claimed-path policy.
 //!
 //! Neither activity trusts its input. Task, claim, machine and bound run come
 //! from [`RuntimeHost::claim_execution_context`](crate::context::RuntimeHost::claim_execution_context), which the runtime derives

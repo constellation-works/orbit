@@ -52,6 +52,7 @@ const CLAIMED_LOCAL_DELIVERY_STEPS: [&str; 2] = ["commit", "validate"];
 
 /// The first delivery step the leaf did not complete, from its pipeline
 /// state; `None` when it stopped before its commit or after them all.
+/// A partial candidate records its failed step in the failure checkpoint.
 pub(super) fn first_incomplete_step(run: &JobRun, state: &PipelineState) -> Option<&'static str> {
     let done = |step: &str| {
         state
@@ -71,7 +72,8 @@ pub(super) fn first_incomplete_step(run: &JobRun, state: &PipelineState) -> Opti
 }
 
 /// The committed candidate the leaf ended with, from its pipeline state.
-/// `None` before its commit.
+/// Before its normal commit, only a partial candidate preserved by the
+/// failure hook qualifies.
 ///
 /// A PR leaf's is the branch it pushed — last by a before-landing reviewer's
 /// fix — with the pull request it opened for it, or the one an earlier claim
@@ -131,6 +133,16 @@ pub(super) fn preserved_candidate(
         .as_ref()
         .filter(|checkpoint| checkpoint.activity_name == CANDIDATE_CARRY_ACTIVITY)
         .map(|checkpoint| &checkpoint.output);
+    if carry
+        .and_then(|carry| carry.get("partial"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        candidate.failed_step_id = state
+            .failure_activity_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.failed_step_id.clone());
+    }
     (candidate.branch, candidate.head_sha) = both(carry, "branch", "head_sha")
         .or_else(|| both(step(SYNC_BASE_STEP), "head", "head_sha"))
         .or_else(|| both(step("prepare_branch"), "head", "head_sha"))?;

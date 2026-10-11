@@ -1,4 +1,4 @@
-//! Carry a failed claimed leaf's committed candidate to a durable ref
+//! Carry a failed claimed leaf's candidate to a durable ref
 //! [ORB-14338].
 //!
 //! `claim_candidate_carry` is the claimed PR leaf's terminal
@@ -9,10 +9,13 @@
 //! `origin`, and its output, checkpointed on the run, tells the drain's
 //! failure settlement where the candidate is: `published` (the leaf's own
 //! push already put its branch on `origin`), `durable` (the ref it pushed),
-//! `failed` (with why the push did not happen), or `none` (nothing was
-//! committed). The hook never fails the run further: every outcome is
-//! evidence for the owner, which decides from it whether the task's next
-//! claim may resume the candidate.
+//! `failed` (with why preservation or push did not happen), or `none` (no
+//! candidate). Before the normal commit, dirty files are preserved as one
+//! marked partial commit without moving the branch or changing the index or
+//! files. Protected paths refuse the snapshot before any push. The hook
+//! never fails the run further: every outcome is evidence for the owner,
+//! which decides from it whether the task's next claim may resume the
+//! candidate.
 
 use std::path::Path;
 
@@ -23,6 +26,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 use crate::executor::automation::input::{input_string_field, required_input_string};
 
+use super::super::commit::commit_claimed_partial;
 use super::super::git::git_output;
 use super::super::operations::{CANDIDATE_REF_PREFIX, CANDIDATE_REF_PUSH};
 use super::super::push::ensure_origin_publishes_elsewhere;
@@ -30,7 +34,7 @@ use super::super::push::ensure_origin_publishes_elsewhere;
 /// Largest push diagnostic the carry output keeps.
 const MAX_CARRY_REASON_BYTES: usize = 1024;
 
-/// Make the failed leaf's committed, unpublished candidate fetchable from
+/// Make the failed leaf's unpublished candidate fetchable from
 /// `origin`, and report where it is.
 pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -53,9 +57,6 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
     let [task_id] = task_ids.as_slice() else {
         return Ok(none("the leaf names no single task"));
     };
-    if step("commit", "commit_sha").is_none() {
-        return Ok(none("the leaf committed no candidate"));
-    }
     if let (Some(branch), Some(head_sha)) = (step("push", "branch"), step("push", "local_sha")) {
         return Ok(json!({
             "phase": "candidate_carry",
@@ -81,7 +82,7 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
     else {
         return Ok(none("the leaf recorded no candidate branch"));
     };
-    let head_sha = match git_output(
+    let mut head_sha = match git_output(
         workspace_path,
         &[
             "rev-parse",
@@ -93,12 +94,35 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
         Ok(sha) if !sha.trim().is_empty() => sha.trim().to_string(),
         _ => return Ok(none(&format!("branch '{branch}' no longer resolves"))),
     };
+    let partial = step("commit", "commit_sha").is_none();
+    if partial {
+        let failed_step = input_string_field(input, "failed_step_id").unwrap_or_default();
+        let message = format!(
+            "Partial implementation candidate [{task_id}]\n\nOrbit-Partial-Candidate-Run: {run_id}\n\
+             Orbit-Failed-Step: {failed_step}"
+        );
+        match commit_claimed_partial(workspace_path, &message) {
+            Ok(Some(commit)) => head_sha = commit,
+            Ok(None) => return Ok(none("the leaf left no uncommitted candidate")),
+            Err(error) => {
+                return Ok(json!({
+                    "phase": "candidate_carry",
+                    "carry": "failed",
+                    "task_id": task_id,
+                    "reason": error.to_string(),
+                }));
+            }
+        }
+    }
     let mut output = json!({
         "phase": "candidate_carry",
         "task_id": task_id,
         "branch": branch,
         "head_sha": head_sha,
     });
+    if partial {
+        output["partial"] = json!(true);
+    }
     match carry_to_durable_ref(host, workspace_path, &branch, &head_sha, task_id, run_id) {
         Ok(durable_ref) => {
             output["carry"] = json!("durable");
