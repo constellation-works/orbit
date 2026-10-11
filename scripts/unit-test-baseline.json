@@ -376,6 +376,7 @@
         "application/job/tests/crew_pools.rs::empty_final_recovery_pool_refuses_to_draw",
         "application/job/tests/crew_pools.rs::final_recovery_crew_draw_honours_the_run_allowlist",
         "application/job/tests/crew_pools.rs::final_recovery_crew_is_drawn_once_and_frozen_for_the_run",
+        "application/job/tests/exec.rs::a_claimed_leaf_provider_limit_holds_and_records_a_deferral",
         "application/job/tests/exec.rs::held_and_unsuccessful_runs_finalize_despite_summary_store_faults",
         "application/job/tests/pipeline/admission.rs::audit_failure_preserves_admitted_runs_and_submission_errors",
         "application/job/tests/pipeline/admission.rs::definition_snapshot_refuses_external_internal_and_dangling_symlinks",
@@ -788,6 +789,7 @@
     },
     "orbit-store": {
       "test_function_paths": [
+        "contracts/incident/tests/classify.rs::deferral_rows_and_provider_usage_limits_classify_as_deferred",
         "contracts/incident/tests/classify.rs::doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected",
         "contracts/incident/tests/grouping.rs::cached_citations_preserve_recorded_folds_and_combinatorial_precedence",
         "driver/file/scoreboard/tests/mod.rs::increment_refuses_a_symlink_swapped_in_after_validation",

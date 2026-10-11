@@ -18,10 +18,10 @@
 //! Grouping runs in three passes:
 //!
 //! 1. **Classify** each failed row as [`FailureClass::Denied`],
-//!    [`FailureClass::Expected`], [`FailureClass::Diagnostic`], or
-//!    [`FailureClass::Unexpected`] so a policy refusal, caller/input negative,
-//!    and lifecycle diagnostic stay distinguishable from a genuine unexpected
-//!    failure.
+//!    [`FailureClass::Expected`], [`FailureClass::Diagnostic`],
+//!    [`FailureClass::Deferred`], or [`FailureClass::Unexpected`] so a policy
+//!    refusal, caller/input negative, lifecycle diagnostic, and deferral stay
+//!    distinguishable from a genuine unexpected failure.
 //! 2. **Cluster** rows by `(run scope, signature)`, where the signature is
 //!    `class | role | surface | normalized message`. Volatile tokens (paths,
 //!    numbers, ids, timestamps, hashes, quoted literals) are replaced with
@@ -52,5 +52,5 @@ pub use types::{
     CASCADE_WINDOW_SECS, DEFAULT_SCAN_LIMIT, DOCTOR_FINDINGS_MESSAGE_PREFIX,
     FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass, FailureIncident, FailureIncidentQuery,
     FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
-    PropagationLink,
+    PropagationLink, RUN_DEFERRED_SURFACE,
 };

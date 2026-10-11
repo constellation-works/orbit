@@ -54,9 +54,9 @@ use super::cancellation::{
 };
 use super::cluster::FailureCluster;
 use super::evidence::{
-    audit_summary, bounded_error, deferral_audit, deferred_errors, exclude_already_repaired,
-    filing_audit, normalize_retryable_error, partition_retryable_errors, pending_audit,
-    repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
+    audit_summary, bounded_error, deferral_audit, deferral_is_bounded, deferred_errors,
+    exclude_already_repaired, filing_audit, normalize_retryable_error, partition_retryable_errors,
+    pending_audit, repaired_audit, retryable_pipeline_error, run_id_key, split_deferred_failures,
 };
 use super::fields::value_string;
 use super::grouping::cluster_failures;
@@ -66,11 +66,14 @@ use super::runner_os;
 
 /// Wire contract with `collect_ci_evidence` (`orbit-engine`'s
 /// `executor::automation::ci`), also stated in both activity assets' schemas.
-/// The three endings must never collapse into one another, and none of them is
-/// a CI pass.
+/// The endings must never collapse into one another, and none of them is a
+/// CI pass.
 const OUTCOME_CAPABILITY_UNAVAILABLE: &str = "capability_unavailable";
 const OUTCOME_NO_CURRENT_FAILURE: &str = "no_current_failure";
 const OUTCOME_CURRENT_FAILURES: &str = "current_failures";
+/// [ORB-15517] Current failures exist, but every one waits on evidence a
+/// later sweep can complete; nothing was filed and nothing failed.
+const OUTCOME_DEFERRED: &str = "deferred";
 
 /// Snapshot schema this step knows how to read.
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
@@ -95,9 +98,26 @@ pub(crate) fn file_ci_failure_tasks(
     runtime: &OrbitRuntime,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    file_ci_failure_tasks_with_ops(runtime, input, runtime, |params| {
+    let output = file_ci_failure_tasks_with_ops(runtime, input, runtime, |params| {
         runtime.add_task(params).map(|task| task.id)
-    })
+    })?;
+    // [ORB-15517] A sweep that deferred its findings succeeds, so Incidents
+    // learns of the deferral from its own row rather than a failed run.
+    if output["outcome"] == OUTCOME_DEFERRED {
+        let run_id = ["job_run_id", "run_id"]
+            .into_iter()
+            .find_map(|key| input.get(key).and_then(Value::as_str));
+        runtime.record_run_deferral(
+            run_id,
+            OUTCOME_DEFERRED,
+            "ci_failure_sweep deferred current failures with incomplete evidence to a later sweep",
+            json!({
+                "deferred_count": output["deferred_count"],
+                "deferred_failure_run_ids": output["audit"]["deferred_failure_run_ids"],
+            }),
+        );
+    }
+    Ok(output)
 }
 
 fn file_ci_failure_tasks_with_ops<L, F>(
@@ -348,16 +368,22 @@ where
     note_branch_retention(&mut audit, &retention);
 
     if clusters.is_empty() {
-        // Nothing was complete enough to file. The gaps are the whole result,
-        // so this stays a retryable error rather than a clean sweep.
-        if !deferred.is_empty() {
+        // Nothing was complete enough to file. [ORB-15517] When every gap is
+        // a run-scoped collection error, the sweep defers them to a later one
+        // rather than failing: `deferred` is never a clean
+        // `no_current_failure`, and a gap that repeats for three sweeps still
+        // degrades or escalates in collection. Any other gap has no such
+        // bound, so it stays a retryable error.
+        if !deferred.is_empty() && !deferral_is_bounded(&deferred) {
             return Err(retryable_pipeline_error(
                 "collection_or_investigation",
                 &audit,
                 deferred_errors(&deferred),
             ));
         }
-        let outcome = if retention.attributed.is_empty()
+        let outcome = if !deferred.is_empty() {
+            OUTCOME_DEFERRED
+        } else if retention.attributed.is_empty()
             && retention.deferred_attribution.is_empty()
             && excluded_branch_failures.is_empty()
             && evidence_incomplete.is_empty()
@@ -367,10 +393,16 @@ where
         } else {
             OUTCOME_CURRENT_FAILURES
         };
-        let detail = empty_snapshot_detail(
-            inconclusive.is_empty(),
-            retention.deferred_attribution.is_empty(),
-        );
+        let detail = if deferred.is_empty() {
+            empty_snapshot_detail(
+                inconclusive.is_empty(),
+                retention.deferred_attribution.is_empty(),
+            )
+        } else {
+            "every current failure's evidence is incomplete for a retryable, run-scoped reason; \
+             each is deferred to a later sweep, which files it once its evidence is complete, \
+             and nothing here is a CI pass"
+        };
         return Ok(json!({
             "outcome": outcome,
             "capability": capability,
@@ -382,7 +414,8 @@ where
             "skipped_existing": [],
             "withheld": [],
             "skipped_over_cap": [],
-            "deferred": [],
+            "deferred_count": deferred.len(),
+            "deferred": deferred,
             "evidence_incomplete": evidence_incomplete,
             "inconclusive": inconclusive,
             "already_repaired": already_repaired,
@@ -696,6 +729,7 @@ where
         "deferred_attribution": retention.deferred_attribution,
         "excluded_branch_failures": excluded_branch_failures,
         "skipped_over_cap": skipped_over_cap,
+        "deferred_count": deferred.len(),
         "deferred": deferred,
         "evidence_incomplete": evidence_incomplete,
         "inconclusive": inconclusive,

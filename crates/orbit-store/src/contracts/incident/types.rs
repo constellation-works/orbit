@@ -14,10 +14,10 @@ pub const CASCADE_WINDOW_SECS: i64 = 60;
 
 /// How an audit failure should be read by an operator.
 ///
-/// The four classes are kept separate at every layer: an incident never
+/// The five classes are kept separate at every layer: an incident never
 /// merges rows of different classes, so a policy denial, expected negative,
-/// or lifecycle diagnostic can never be counted as an unexpected failure (or
-/// hide one).
+/// lifecycle diagnostic, or deferral can never be counted as an unexpected
+/// failure (or hide one).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureClass {
@@ -31,15 +31,30 @@ pub enum FailureClass {
     Diagnostic,
     /// Everything else: a failure that is not a known negative path.
     Unexpected,
+    /// Work deferred, not failed [ORB-15517]: a provider's usage limit, or
+    /// a run that stopped without failing because its work was deferred
+    /// (a claimed leaf held on that limit, a CI sweep whose only gaps were
+    /// retryable). Nothing about the work was judged.
+    Deferred,
 }
 
 impl FailureClass {
+    /// Every class, in the order an operator reads them.
+    pub const ALL: [FailureClass; 5] = [
+        FailureClass::Unexpected,
+        FailureClass::Expected,
+        FailureClass::Denied,
+        FailureClass::Diagnostic,
+        FailureClass::Deferred,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             FailureClass::Denied => "denied",
             FailureClass::Expected => "expected",
             FailureClass::Diagnostic => "diagnostic",
             FailureClass::Unexpected => "unexpected",
+            FailureClass::Deferred => "deferred",
         }
     }
 
@@ -51,6 +66,7 @@ impl FailureClass {
             FailureClass::Expected => "expected negative path",
             FailureClass::Diagnostic => "lifecycle diagnostic",
             FailureClass::Unexpected => "unexpected failure",
+            FailureClass::Deferred => "deferred, not failed",
         }
     }
 }
@@ -152,6 +168,11 @@ pub const DEFAULT_SCAN_LIMIT: usize = 20_000;
 /// activity lifecycle events, not a synthetic tool named `unknown`.
 pub const JOB_RUN_LIFECYCLE_LABEL: &str = "job-run lifecycle";
 
+/// The audit surface a run records when it stopped without failing because
+/// its work was deferred [ORB-15517]. Its rows classify as
+/// [`FailureClass::Deferred`].
+pub const RUN_DEFERRED_SURFACE: &str = "pipeline.run.deferred";
+
 /// Lifecycle audit surfaces that are emitted only when an abnormal path
 /// occurs. Unlike callable tools and direct CLI commands, they cannot have a
 /// healthy-call denominator. `Start` is the legacy no-tool job-start record;
@@ -161,6 +182,7 @@ pub const FAILURE_ONLY_DIAGNOSTIC_SURFACES: &[&str] = &[
     "pipeline.run.terminal_conflict",
     "pipeline.worker.exit",
     "pipeline.worker.startup",
+    RUN_DEFERRED_SURFACE,
 ];
 
 /// Prefix of the audit `error_message` that `orbit doctor` records when it ran

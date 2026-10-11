@@ -30,8 +30,20 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
+use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
+
+/// The hold an unsuccessful run of `job_id` ends on instead of failing, if
+/// its failure `message` names one. A claimed leaf also holds on its
+/// provider's usage limit [ORB-15517].
+fn held_failure(job_id: &str, message: Option<&str>) -> Option<HeldFailure> {
+    if CLAIMED_LEAF_JOBS.contains(&job_id) {
+        HeldFailure::of_claimed_leaf(None, message)
+    } else {
+        HeldFailure::of(None, message)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct V2JobRunResult {
@@ -399,11 +411,11 @@ impl OrbitRuntime {
             Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
             Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
             Ok(o) if o.success => ("success", None),
-            Ok(o) if HeldFailure::of(None, o.message.as_deref()).is_some() => {
+            Ok(o) if held_failure(&asset.name, o.message.as_deref()).is_some() => {
                 ("held", o.message.clone())
             }
             Ok(o) => ("failed", o.message.clone()),
-            Err(err) if HeldFailure::of(None, Some(&err.to_string())).is_some() => {
+            Err(err) if held_failure(&asset.name, Some(&err.to_string())).is_some() => {
                 ("held", Some(err.to_string()))
             }
             Err(err) => ("error", Some(err.to_string())),
@@ -606,8 +618,10 @@ impl OrbitRuntime {
             Ok(result) => {
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
-                let held = HeldFailure::of(None, Some(message));
+                let held = held_failure(&run.job_id, Some(message));
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
+                let message =
+                    held.map_or_else(|| message.to_string(), |held| held.diagnostic(message));
                 log_best_effort(
                     if held.is_some() {
                         "persist held run state"
@@ -625,18 +639,24 @@ impl OrbitRuntime {
                         started_at,
                         finished_at,
                         held.map(HeldFailure::error_code),
-                        message,
+                        &message,
                         final_state,
                     ),
                 );
+                self.record_held_deferral(run, held, &message);
                 final_state
             }
             Err(error) => {
-                let message = error.to_string();
                 // [ORB-15202] A red base or a refusal awaiting a recorded
                 // decision kept its candidate: the run holds, it did not fail.
-                let held = HeldFailure::of(None, Some(&message));
+                // [ORB-15517] So does a claimed leaf its provider's usage
+                // limit stopped.
+                let held = held_failure(&run.job_id, Some(&error.to_string()));
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
+                let message = held.map_or_else(
+                    || error.to_string(),
+                    |held| held.diagnostic(&error.to_string()),
+                );
                 let code = match held {
                     Some(held) => Some(held.error_code()),
                     None => matches!(error, OrbitError::ProtocolSkew(_)).then_some("protocol_skew"),
@@ -653,6 +673,7 @@ impl OrbitRuntime {
                         final_state,
                     ),
                 );
+                self.record_held_deferral(run, held, &message);
                 final_state
             }
         };

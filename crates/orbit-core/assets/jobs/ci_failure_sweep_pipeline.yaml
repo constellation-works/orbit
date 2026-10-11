@@ -53,11 +53,16 @@
 # - Errors are separated by blast radius. One that names a run defers only that
 #   finding: it is reported in `file`'s `deferred` list with its reasons and
 #   left for a later sweep, while every complete finding in the same snapshot
-#   still files, dedupes, and pilots. One that names no run — a repository or
-#   listing read, a registration, dedupe, or task-creation failure — or a
-#   snapshot in which nothing was complete enough to file, fails `file` with a
-#   bounded `retryable_error` payload. The job retry wrapper retries the
-#   handoff; no current failure is consumed as a clean result.
+#   still files, dedupes, and pilots. When every current failure is deferred
+#   for a run-scoped collection error, which the sweep history degrades or
+#   escalates after three sweeps, `file` reports `deferred` with a
+#   `deferred_count` and the sweep succeeds; it records a
+#   `pipeline.run.deferred` audit row, which Incidents lists as `deferred`.
+#   That is never `no_current_failure`. One that names no run — a repository
+#   or listing read, a registration, dedupe, or task-creation failure — or a
+#   snapshot in which nothing else was complete enough to file, fails `file`
+#   with a bounded `retryable_error` payload. The job retry wrapper retries
+#   the handoff; no current failure is consumed as a clean result.
 # - Bounded investigation makes progress across sweeps rather than re-spending
 #   its budget on the same refs: red runs on branches origin no longer has are
 #   reported as `ref_no_longer_exists`, and those whose pull request closed at

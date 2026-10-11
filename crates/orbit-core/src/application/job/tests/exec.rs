@@ -1,6 +1,8 @@
 //! Deterministic final-summary faults at the shared crate-private finalizer
 //! (unit admission criterion 2). Targeting this seam keeps worker checkpoint
 //! writes available and exercises unsuccessful outcomes without a provider.
+//! The same seam finalizes a claimed leaf, which the boundary executes only
+//! under an owner-bound worker binding it refuses to fabricate (criterion 3).
 
 use chrono::Utc;
 use orbit_types::workflow::automation::SourceRevision;
@@ -207,6 +209,112 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                     "the rejected summary must emit a warning correlated with its run: {events:?}"
                 );
             }
+        }
+    }
+}
+
+/// [ORB-15517] A claimed leaf its provider's usage limit stopped holds on
+/// the provider and its reset, through either finalization branch, and
+/// records the deferral Incidents lists; any other job fails on the same
+/// text. Targets the finalizer because only an owner-bound worker can
+/// execute a claimed leaf, which no crate-root fixture can stand up.
+#[test]
+fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_claimed_leaf_provider_limit_holds_and_records_a_deferral,
+    )) {
+        return;
+    }
+    let limit = "step `implement` failed: [provider_limit] provider=codex \
+                 resets_at=2026-10-09T22:42:00Z cli subprocess exited with code 1: You've hit \
+                 your usage limit.";
+    for job in [
+        "task_claimed_local_pipeline",
+        "task_claimed_pr_pipeline",
+        "task_local_pipeline",
+    ] {
+        for as_error in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let global = root.path().join("global");
+            let workspace = root.path().join("repo/.orbit");
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::create_dir_all(&workspace).unwrap();
+            let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+            let started = Utc::now();
+            let input = json!({});
+            let run = runtime
+                .stores()
+                .jobs()
+                .insert_job_run(job, 1, started, Some(input.clone()), None)
+                .unwrap();
+            runtime
+                .stores()
+                .jobs()
+                .mark_job_run_running(&run.run_id, started, std::process::id())
+                .unwrap();
+            let seeded = PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone());
+            runtime.write_run_state(&run.run_id, &seeded).unwrap();
+            let result = V2JobRunResult {
+                run_id: run.run_id.clone(),
+                job_name: run.job_id.clone(),
+                success: false,
+                pipeline: json!({}),
+                evidence_hold: None,
+                forge_hold: None,
+                child_cancelled: false,
+                message: Some(limit.into()),
+                events_emitted: 0,
+            };
+            let error = crate::OrbitError::Execution(limit.into());
+            let outcome = if as_error { Err(&error) } else { Ok(&result) };
+            runtime
+                .finalize_v2_pipeline_run(
+                    &run,
+                    &input,
+                    started,
+                    Utc::now(),
+                    outcome,
+                    V2RunFinalizationOptions::DETACHED_WORKER,
+                )
+                .unwrap();
+
+            let stored = runtime.get_job_run_backend(&run.run_id).unwrap().unwrap();
+            let claimed = job.starts_with("task_claimed_");
+            let case = format!("{job}, as_error={as_error}: {:?}", stored.steps);
+            let deferred = runtime
+                .audit_failure_incidents(&orbit_store::contracts::FailureIncidentQuery::default())
+                .unwrap()
+                .incidents
+                .into_iter()
+                .filter(|incident| {
+                    incident.surface == orbit_store::contracts::RUN_DEFERRED_SURFACE
+                        && incident.run_ids.contains(&run.run_id)
+                })
+                .map(|incident| incident.class)
+                .collect::<Vec<_>>();
+            if !claimed {
+                assert_eq!(stored.state, JobRunState::Failed, "{case}");
+                assert!(deferred.is_empty(), "{case}: {deferred:?}");
+                continue;
+            }
+            assert_eq!(stored.state, JobRunState::Held, "{case}");
+            let step = stored.steps.last().expect("held diagnostic step");
+            assert_eq!(step.error_code.as_deref(), Some("provider_limit"), "{case}");
+            let text = step.error_message.as_deref().unwrap_or_default();
+            assert!(
+                text.contains("`codex`") && text.contains("2026-10-09T22:42:00Z"),
+                "the hold names the provider and its reset: {case}"
+            );
+            assert_eq!(
+                orbit_types::workflow::failed_provider(text),
+                Some("codex"),
+                "claim settlement still reads the provider: {case}"
+            );
+            assert_eq!(
+                deferred,
+                [orbit_store::contracts::FailureClass::Deferred],
+                "{case}"
+            );
         }
     }
 }

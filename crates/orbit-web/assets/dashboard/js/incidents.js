@@ -19,18 +19,20 @@ import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
 
-const CLASS_ORDER = ["unexpected", "expected", "denied", "diagnostic"];
+const CLASS_ORDER = ["unexpected", "expected", "denied", "diagnostic", "deferred"];
 const CLASS_TITLES = {
   unexpected: "Unexpected failures",
   expected: "Expected refusals",
   denied: "Policy denials",
   diagnostic: "Lifecycle diagnostics",
+  deferred: "Deferred, not failed",
 };
 const CLASS_NAMES = {
   unexpected: "Unexpected failure",
   expected: "Expected refusal",
   denied: "Policy denial",
   diagnostic: "Lifecycle diagnostic",
+  deferred: "Deferred, not failed",
 };
 // The shared dashboard windows this page offers, plus 6h, which only it
 // offers. 6h is kept here rather than in the shared scope, so it never

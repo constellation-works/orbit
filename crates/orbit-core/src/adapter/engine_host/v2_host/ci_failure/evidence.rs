@@ -344,14 +344,26 @@ pub(super) fn valid_failure_regions(unit: &Value) -> bool {
         })
 }
 
-/// The deferred entries flattened back into the error list shape, for the
-/// ending where nothing could be filed at all.
+/// The deferred entries' reasons, flattened back into the error list shape.
 pub(super) fn deferred_errors(deferred: &[Value]) -> Vec<Value> {
     deferred
         .iter()
         .filter_map(|entry| entry.get("reasons").and_then(Value::as_array))
         .flat_map(|reasons| reasons.iter().cloned())
         .collect()
+}
+
+/// [ORB-15517] Whether every deferred gap is a run-scoped collection error,
+/// the only kind collection's sweep history counts toward degrading or
+/// escalating. A registration gap (owner lookup, missing investigation) has
+/// no such threshold, so deferring it would defer it forever.
+pub(super) fn deferral_is_bounded(deferred: &[Value]) -> bool {
+    let errors = deferred_errors(deferred);
+    !errors.is_empty()
+        && errors.iter().all(|error| {
+            error.get("stage").and_then(Value::as_str) != Some("registration")
+                && error.get("run_id").is_some_and(|run_id| !run_id.is_null())
+        })
 }
 
 /// Make partial registration legible: an operator reading the audit must be
