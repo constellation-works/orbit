@@ -40,7 +40,7 @@ scripts/build-budget.py -- cargo test -p orbit-core command::job
 
 An ordinary `cargo ...` remains the explicit escape path when admission is inappropriate.
 For a Make target, `ORBIT_BUILD_BUDGET=0 make check` bypasses only slot admission and still
-sets the resolved Cargo job count.
+sets the resolved Cargo job count and test-thread setting.
 
 ## Configuration
 
@@ -71,6 +71,24 @@ default of 4. These environment and file settings are deliberate capacity decisi
 may exceed the defaults. `ORBIT_BUILD_BUDGET` must be `0` or `1`; invalid values exit with
 status 64 before running the command. `ORBIT_BUILD_BUDGET=0` bypasses only slot admission
 and still applies the resolved Cargo job count.
+
+The optional `test-threads` file, or `ORBIT_TEST_THREADS`, sets how many test threads each
+admitted command may use, as a decimal integer from 1 through 1024. Precedence is
+`ORBIT_TEST_THREADS`, then `test-threads`, then unset. When a value resolves, the wrapper
+exports it as `NEXTEST_TEST_THREADS` and `RUST_TEST_THREADS` for the command, including
+bypassed and nested commands, unless the caller already exported that variable. A caller's
+value wins for that variable only, so a drain that exports `NEXTEST_TEST_THREADS` keeps its
+own count until that export is removed. Unset leaves both variables as the caller provided
+them, and nextest then defaults to the core count.
+
+Set the test-thread count so that slots × test threads ≤ cores. Every admitted gate starts
+its own test processes, so the product is the number of test threads competing for the CPU.
+On the Mac follower (14 cores, 3 slots), leaving the count unset let three concurrent
+`make ci-test-affected` gates each start 14 test threads, about 42 test processes on 14
+cores. Timing-bounded fixtures then failed under contention, including on unchanged code.
+With `test-threads` set to 4 (3 × 4 = 12 ≤ 14), the host stays within its cores. The file
+has no effect on that host while its drains export `NEXTEST_TEST_THREADS` and
+`RUST_TEST_THREADS`; remove those exports before relying on it.
 
 When `ORBIT_BUILD_BUDGET_DIR` is set for a command, the files are read from that directory.
 For allowlisted commands that receive only `HOME` and `PATH`, put them in the host user's
@@ -134,8 +152,9 @@ scripts/test-build-budget.sh
 
 It exercises separate worktree paths, a two-slot concurrency ceiling, progress after
 success, failure, and termination, release despite a surviving detached child, signal
-forwarding and status preservation, nested admission, job-count precedence, bypass,
-invalid settings, `make run` releasing its slot before application runtime, and
+forwarding and status preservation, nested admission, job-count and test-thread precedence
+and export, bypass, invalid settings, `make run` releasing its slot before application
+runtime, and
 `make watch` admitting each check/test iteration without retaining a slot while idle.
 Commands expected to run have a 30-second bound to allow delayed admission or
 interpreter startup. The wait-reporting case polls for an elapsed-time progress

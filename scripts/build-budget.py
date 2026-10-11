@@ -20,6 +20,9 @@ DEFAULT_BUILD_SLOTS = 2
 DEFAULT_CARGO_JOBS = 4
 MAX_BUILD_SLOTS = 128
 MAX_CARGO_JOBS = 1024
+MAX_TEST_THREADS = 1024
+TEST_THREADS_ENV = "ORBIT_TEST_THREADS"
+TEST_THREAD_VARIABLES = ("NEXTEST_TEST_THREADS", "RUST_TEST_THREADS")
 DEFAULT_WAIT_REPORT_INTERVAL_SECONDS = 45.0
 TEST_WAIT_REPORT_INTERVAL_ENV = "_ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS"
 WAIT_DIRECTORY_ENV = "ORBIT_ACTIVITY_BUILD_BUDGET_DIR"
@@ -94,7 +97,8 @@ def command_arguments(arguments: list[str]) -> list[str]:
             "\n"
             "Configuration: ORBIT_BUILD_SLOTS overrides <budget-dir>/slots "
             "(default 2); ORBIT_CARGO_JOBS, then CARGO_BUILD_JOBS, override "
-            "<budget-dir>/cargo-jobs (default 4). The budget directory is "
+            "<budget-dir>/cargo-jobs (default 4); ORBIT_TEST_THREADS overrides "
+            "<budget-dir>/test-threads (default unset). The budget directory is "
             "ORBIT_BUILD_BUDGET_DIR or ~/.orbit/cache/build-budget. "
             "ORBIT_BUILD_BUDGET=0 bypasses admission."
         )
@@ -113,6 +117,18 @@ def budget_directory_path() -> Path:
     return Path.home() / ".orbit" / "cache" / "build-budget"
 
 
+def optional_host_setting(directory: Path, filename: str, name: str, maximum: int) -> int | None:
+    path = directory / filename
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError) as error:
+        fail(f"cannot read {name} from {path}: {error}", 73)
+
+    return positive_integer(name, value, maximum)
+
+
 def host_setting(
     directory: Path,
     filename: str,
@@ -120,18 +136,11 @@ def host_setting(
     default: int,
     maximum: int,
 ) -> int:
-    path = directory / filename
-    try:
-        value = path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return default
-    except (OSError, UnicodeError) as error:
-        fail(f"cannot read {name} from {path}: {error}", 73)
-
-    return positive_integer(name, value, maximum)
+    value = optional_host_setting(directory, filename, name, maximum)
+    return default if value is None else value
 
 
-def configured_budget() -> tuple[int, int, bool]:
+def configured_budget() -> tuple[int, int, int | None, bool]:
     directory = budget_directory_path()
     if directory.is_symlink():
         fail(f"lock directory must not be a symbolic link: {directory}")
@@ -163,11 +172,16 @@ def configured_budget() -> tuple[int, int, bool]:
         )
     jobs = positive_integer("ORBIT_CARGO_JOBS/CARGO_BUILD_JOBS", jobs_source, MAX_CARGO_JOBS)
 
+    if TEST_THREADS_ENV in os.environ:
+        test_threads = positive_integer(TEST_THREADS_ENV, os.environ[TEST_THREADS_ENV], MAX_TEST_THREADS)
+    else:
+        test_threads = optional_host_setting(directory, "test-threads", TEST_THREADS_ENV, MAX_TEST_THREADS)
+
     enabled = os.environ.get("ORBIT_BUILD_BUDGET", "1")
     if enabled not in {"0", "1"}:
         fail(f"ORBIT_BUILD_BUDGET must be 0 or 1; got {enabled!r}")
 
-    return slots, jobs, enabled == "1"
+    return slots, jobs, test_threads, enabled == "1"
 
 
 def lock_directory() -> Path:
@@ -264,10 +278,14 @@ def acquire_slot(directory: Path, slots: int) -> tuple[int, int]:
 
 def main() -> None:
     command = command_arguments(sys.argv[1:])
-    slots, cargo_jobs, enabled = configured_budget()
+    slots, cargo_jobs, test_threads, enabled = configured_budget()
 
     environment = os.environ.copy()
     environment["CARGO_BUILD_JOBS"] = str(cargo_jobs)
+    if test_threads is not None:
+        for name in TEST_THREAD_VARIABLES:
+            # A value the caller exported is more specific than the host setting.
+            environment.setdefault(name, str(test_threads))
 
     already_admitted = environment.get("ORBIT_BUILD_BUDGET_HELD") == "1"
     if not enabled or already_admitted:
