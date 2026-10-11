@@ -144,6 +144,85 @@ fn streamed_log_fixture_goldens() {
 }
 
 #[test]
+fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
+    // F2026-10-271: nextest reports a failure when its test finishes, long
+    // before the final summary in a multi-megabyte CI log.
+    let block = "FAIL [ 0.123s] (2021/2810) suite failing_test\n──────── STDOUT ────────\noutput from the failing test\n──────── STDERR ────────\nthread 'failing_test' panicked at tests/sample.rs:12:3:\nexpected a completed operation\n";
+    let padding = "PASS [ 0.001s] suite passing_test\n".repeat(32_768);
+    for (prefix, suffix) in [
+        ("##[group]Run cargo nextest run\n".to_string(), "##[error]Process completed with exit code 100.\n"),
+        (String::new(), ""),
+        (format!("{}\n##[group]Run cargo nextest run\n", "unrelated".repeat(4096)), "##[error]Process completed with exit code 100.\n"),
+        ("##[group]Run earlier\n##[error]Process completed with exit code 1.\n##[group]Run cargo nextest run\n".to_string(), "##[error]Process completed with exit code 100.\n"),
+    ] {
+        let raw = format!("{prefix}{padding}{block}{padding}Summary [ 1.0s] 2810 tests run: 1 failed\n{suffix}");
+        assert!(raw.len() > 2_000_000);
+        for chunk in [7, 4096, raw.len()] {
+            let mut collector = gh::StreamedLogCollector::new(262_144, 40);
+            for bytes in raw.as_bytes().chunks(chunk) {
+                collector.push(bytes);
+            }
+            let log = collector.finish();
+            assert!(log.truncated && log.source_complete);
+            assert!(log.text.contains(block), "F2026-10-271: retain the mid-log panic");
+            assert!(log.returned_bytes <= 262_144 + 65_536 + 256);
+            let regions = log.failure_regions.unwrap();
+            let range = &regions["byte_ranges"][0];
+            let start = range["start_byte"].as_u64().unwrap() as usize;
+            let end = range["end_byte"].as_u64().unwrap() as usize;
+            assert_eq!(&raw[start..end], block);
+            assert_eq!(regions["text"], block);
+            assert_eq!(regions["selection_complete"], true);
+        }
+    }
+
+    let huge = format!(
+        "{block}{}",
+        "captured payload with unicode λ\n".repeat(4096)
+    );
+    let second = block.replace("failing_test", "second_test");
+    let raw = format!("{padding}{huge}{second}{padding}");
+    let mut collector = gh::StreamedLogCollector::new(128, 40);
+    collector.push(raw.as_bytes());
+    let log = collector.finish();
+    let regions = log.failure_regions.unwrap();
+    assert_eq!(regions["byte_ranges"].as_array().unwrap().len(), 2);
+    assert!(log.text.contains("output block cut;"));
+    assert!(
+        log.text.contains(&second),
+        "an oversized first failure must leave room for the next"
+    );
+    assert!(regions["text"].as_str().unwrap().len() <= 65_536);
+    assert!(regions["byte_ranges"][0]["omitted_bytes"].as_u64().unwrap() > 0);
+
+    for count in [8, 129] {
+        let raw = if count == 8 {
+            huge.repeat(count)
+        } else {
+            block.repeat(count)
+        };
+        let mut collector = gh::StreamedLogCollector::new(128, 40);
+        for bytes in raw.as_bytes().chunks(4096) {
+            collector.push(bytes);
+        }
+        let log = collector.finish();
+        let regions = log.failure_regions.unwrap();
+        assert!(regions["text"].as_str().unwrap().len() <= 65_536);
+        assert_eq!(regions["failure_anchor_count"], count);
+        if count == 8 {
+            assert_eq!(regions["byte_ranges"].as_array().unwrap().len(), count);
+            assert_eq!(regions["selection_complete"], true);
+        } else {
+            assert_eq!(regions["byte_ranges"].as_array().unwrap().len(), 128);
+            assert_eq!(
+                regions["selection_complete"], false,
+                "the block cap must disclose incomplete selection"
+            );
+        }
+    }
+}
+
+#[test]
 fn request_fixture_goldens() {
     golden("requests", &read("requests.json"), |case| {
         let input = &case["input"];

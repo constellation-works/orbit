@@ -345,7 +345,7 @@ fn is_test_block_anchor(payload: &str) -> bool {
         || payload.starts_with("assertion ")
 }
 
-fn is_nextest_status_line(payload: &str) -> bool {
+pub(super) fn is_nextest_status_line(payload: &str) -> bool {
     if let Some((status, rest)) = payload.split_once(" [")
         && is_nextest_status_label(status)
         && let Some((inside, _)) = rest.split_once(']')
@@ -395,7 +395,7 @@ fn is_captured_section_header(payload: &str) -> bool {
 }
 
 /// Nextest prints a rule of box-drawing dashes before the summary.
-fn is_section_rule(payload: &str) -> bool {
+pub(super) fn is_section_rule(payload: &str) -> bool {
     let trimmed = payload.trim();
     trimmed.chars().count() >= 8 && trimmed.chars().all(|ch| ch == '\u{2500}')
 }
@@ -411,7 +411,7 @@ fn output_block_cut_marker(columns: Option<&str>, bytes: usize) -> String {
     )
 }
 
-fn runner_payload(line: &str) -> (Option<&str>, &str) {
+pub(super) fn runner_payload(line: &str) -> (Option<&str>, &str) {
     // Raw job API logs start with a timestamp. In gh's display format only
     // the first two tabs delimit job/step; tabs inside assertions are data.
     if let Some((_, payload)) = timestamp_payload(line) {

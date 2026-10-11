@@ -1182,5 +1182,64 @@
     "cwds": [
       "caller_directory"
     ]
+  },
+  "registered_tool_retains_a_mid_log_nextest_failure_in_a_two_megabyte_job_log": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "2026-10-11T09:00:00Z \n[... 2200443 bytes omitted; raise the byte budget for more ...]\n 2810 tests run: 1 failed\n2026-10-11T09:20:00Z ##[error]Process completed with exit code 100.\n\n[... retained nextest failure blocks ...]\n2026-10-11T09:10:00Z FAIL [ 0.123s] (2021/2810) suite failing_test\n2026-10-11T09:10:00Z ──────── STDOUT ────────\n2026-10-11T09:10:00Z captured output\n2026-10-11T09:10:00Z ──────── STDERR ────────\n2026-10-11T09:10:00Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-10-11T09:10:00Z expected a completed operation\n",
+      "diagnostic_unit": null,
+      "failure_regions": {
+        "kind": "runner_failure_regions",
+        "complete": false,
+        "command_complete": true,
+        "selection_complete": true,
+        "text": "2026-10-11T09:10:00Z FAIL [ 0.123s] (2021/2810) suite failing_test\n2026-10-11T09:10:00Z ──────── STDOUT ────────\n2026-10-11T09:10:00Z captured output\n2026-10-11T09:10:00Z ──────── STDERR ────────\n2026-10-11T09:10:00Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-10-11T09:10:00Z expected a completed operation\n",
+        "returned_bytes": 389,
+        "command_bytes": 2200571,
+        "retained_source_bytes": 389,
+        "omitted_bytes": 2200182,
+        "assertion_payload_omitted_bytes": 0,
+        "failure_anchor_count": 1,
+        "byte_ranges": [
+          {
+            "start_byte": 1100052,
+            "end_byte": 1100441,
+            "retained_source_bytes": 389,
+            "omitted_bytes": 0
+          }
+        ]
+      },
+      "source_complete": true,
+      "truncated": true,
+      "returned_bytes": 612,
+      "total_bytes": 2200571,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [],
+      "checkout_evidence": [],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 2200571,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
   }
 }

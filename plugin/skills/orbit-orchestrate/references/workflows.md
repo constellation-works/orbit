@@ -232,12 +232,36 @@ block cuts or ordinary gaps. The structured `command_bytes`,
 `failure_anchor_count` make these limits auditable. A failure-anchor count
 includes repeated reports of the same test.
 The standalone log tool exposes this alternative as `failure_regions`.
+Nextest `FAIL [` blocks are also scanned independently of command selection,
+including outside a `Run` group and in logs with several failed commands.
+They survive unrelated overlong lines and command-region overflow. The
+truncated `log` appends these blocks to its usual head/tail excerpt, allowing
+up to 64 KiB of failure text in addition to `max_bytes` and omission markers.
+The separate `failure_regions.text` is also capped at 64 KiB; its range metadata
+is bounded by 128 records. These two text views add at most 128 KiB in total.
+Each block retains up to 16 KiB of whole lines; the total allowance is shared
+across at most 128 blocks, so a large early block cannot erase later anchors.
+Cuts carry the output-block marker. `byte_ranges` contains zero-based,
+end-exclusive `start_byte` and `end_byte` offsets into the original source
+(before redaction), and retained/omitted source counts. Source or block-count
+limits set `selection_complete: false`; collected blocks remain available to
+a human. When nextest failures are recognized, the independent selection
+supplies `failure_regions`. These regions use `command_bytes` for the scanned
+log's total size and only claim
+`command_complete` when every block belongs to a completed runner command.
+CI investigation requires both completeness flags before binding regions to
+the known failed step. Logs without nextest failures keep the usual head/tail
+behavior.
 
-Exactly one failing command and one known failed step are required; all primary
-command log columns, including omitted lines, must match that job and step.
+Complete-command diagnostics require exactly one failing command. CI attribution
+requires one known failed step; all primary command log columns, including
+omitted lines, must match that job and step. Nextest regions can cover several
+completed commands in that same step when gh supplies consistent step columns.
+Raw job API logs require exactly one failing command for automatic attribution;
+otherwise their blocks remain available with `command_complete: false`.
 Filing validates the evidence contract and uses selected evidence for signatures;
-`log_excerpt`, `log_truncated`, and byte counts still describe the head/tail
-display. Complete command descriptions use a 4,000-byte diagnostic display cap.
+`log_excerpt`, `log_truncated`, and byte counts describe the head/tail display
+plus any appended nextest blocks. Complete command descriptions use a 4,000-byte diagnostic display cap.
 Failure-region descriptions retain the entire bounded selection (at most 64 KiB)
 and its omission accounting so offline workers receive every selected failure.
 Partial command retention cannot establish a complete compiler set for cross-job

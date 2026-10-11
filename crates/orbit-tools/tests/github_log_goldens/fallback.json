@@ -1932,5 +1932,71 @@
     "tool": "github.run.view",
     "selected": false,
     "registered": true
+  },
+  {
+    "name": "registered_tool_retains_a_mid_log_nextest_failure_in_a_two_megabyte_job_log",
+    "input": {
+      "run": "34060485218"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-10-11T09:00:00Z ##[group]Run cargo nextest run\n",
+        {
+          "text": "2026-10-11T09:00:01Z PASS [ 0.001s] suite passing_test\n",
+          "repeat": 20000
+        },
+        "2026-10-11T09:10:00Z FAIL [ 0.123s] (2021/2810) suite failing_test\n2026-10-11T09:10:00Z ──────── STDOUT ────────\n2026-10-11T09:10:00Z captured output\n2026-10-11T09:10:00Z ──────── STDERR ────────\n2026-10-11T09:10:00Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-10-11T09:10:00Z expected a completed operation\n",
+        {
+          "text": "2026-10-11T09:10:01Z PASS [ 0.001s] suite passing_test\n",
+          "repeat": 20000
+        },
+        "2026-10-11T09:20:00Z Summary [ 1.0s] 2810 tests run: 1 failed\n2026-10-11T09:20:00Z ##[error]Process completed with exit code 100.\n"
+      ]
+    },
+    "max_bytes": 128,
+    "registered": true
   }
 ]

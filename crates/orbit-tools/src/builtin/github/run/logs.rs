@@ -55,7 +55,7 @@ impl crate::Tool for GithubRunLogsTool {
                 ),
                 super::super::tool_param(
                     "max_bytes",
-                    "Maximum display excerpt bytes (default 16384, capped at 262144), plus an omission marker. The separate complete diagnostic_unit is capped at 262144 bytes.",
+                    "Maximum head/tail excerpt bytes (default 16384, capped at 262144), plus omission markers and up to 64 KiB of nextest failure blocks (16 KiB per block, at most 128 blocks). failure_regions includes original byte ranges; selection_complete is false if the scan or block-count limit is reached. The separate complete diagnostic_unit is capped at 262144 bytes.",
                     "integer",
                     false,
                 ),

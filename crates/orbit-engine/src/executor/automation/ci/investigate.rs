@@ -489,7 +489,11 @@ pub(super) fn bound_diagnostic(
         let clean = strip_ansi_sequences(text);
         json!({"kind": "runner_command", "complete": true, "text": clean, "returned_bytes": clean.len()})
     } else {
-        log.failure_regions.clone()?
+        let regions = log.failure_regions.clone()?;
+        if regions["command_complete"] != true || regions["selection_complete"] != true {
+            return None;
+        }
+        regions
     };
     let text = unit["text"].as_str()?;
     let job = failure["failed_jobs"].as_array()?.first()?;
