@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379"]
-last_validated: 2026-10-09
+last_validated: 2026-10-11
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -15,23 +15,25 @@ sandbox, including a working `astro preview` and a Chromium launch.
 
 ## Prerequisites and safety
 
-This procedure assumes a Debian- or Ubuntu-like host with `node`, `git`, `apt-get`,
-`dpkg-deb`, and `ldd`. It does not require root. Replace `<task>` with a short unique
+The build-only procedure needs Node and npm on either Linux or macOS. The rootless
+browser fallback assumes a Debian- or Ubuntu-like host with `node`, `git`, `apt-get`,
+`dpkg-deb`, and `ldd`. Neither requires root. Replace `<task>` with a short unique
 identifier, and set the repository path from the checkout in which the run is executing:
 
 ```bash
 export REPO="$(git rev-parse --show-toplevel)"
-export SANDBOX_ROOT="$(mktemp -d /tmp/orbit-website-<task>.XXXXXX)"
+mkdir -p "$REPO/.orbit/tmp"
+export SANDBOX_ROOT="$(mktemp -d "$REPO/.orbit/tmp/orbit-website-<task>.XXXXXX")"
 export npm_config_cache="$SANDBOX_ROOT/npm-cache"
 mkdir -p "$npm_config_cache"
-trap 'rm -rf "$SANDBOX_ROOT"' EXIT
 ```
 
 Keep the Playwright package and browser, npm cache, downloaded `.deb` files, extracted
-libraries, and logs under `SANDBOX_ROOT` or another `/tmp` directory. `npm ci` necessarily
+libraries, and logs under `SANDBOX_ROOT` in `.orbit/tmp/`. `npm ci` for interactive preview
 populates `website/node_modules`; record whether that directory existed before the run and
-remove it at handoff only when this run created it. The Playwright package and its browsers
-must remain outside the worktree, so Playwright-specific handoff cleanup has nothing to undo.
+remove it at handoff only when this run created it. Disposable Playwright packages
+and browsers stay under `.orbit/tmp/`; a prepared host kit stays outside the
+checkout and is read-only.
 
 ## Establish the Node and npm environment
 
@@ -40,7 +42,7 @@ run and use the npm installation from the same Node toolchain when possible:
 
 ```bash
 NODE_BIN="$(command -v node)"
-NODE_DIR="$(dirname "$(readlink -f "$NODE_BIN")")"
+NODE_DIR="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().parent)' "$NODE_BIN")"
 if [ -x "$NODE_DIR/npm" ]; then
   NPM_BIN="$NODE_DIR/npm"
 else
@@ -62,25 +64,55 @@ cache is also required because the sandbox may not permit npm's default `~/.npm/
 npm --prefix "$REPO/website" ci
 ```
 
-Check the output, not only the runner status. A background command can report exit code 0
-while its output contains `npm: command not found` (for example, the shell may have launched
-the background wrapper successfully). A safe background form records and checks both:
+Run preparation in the foreground and check its output and exit status:
 
 ```bash
 LOG="$SANDBOX_ROOT/npm-ci.log"
-npm --prefix "$REPO/website" ci >"$LOG" 2>&1 &
-NPM_PID=$!
-wait "$NPM_PID"
-NPM_STATUS=$?
-if [ "$NPM_STATUS" -ne 0 ] || grep -Eq 'npm: command not found|command not found: npm' "$LOG"; then
+if ! npm --prefix "$REPO/website" ci >"$LOG" 2>&1; then
   sed -n '1,160p' "$LOG" >&2
   exit 1
 fi
 ```
 
+## Isolated build-only sweep
+
+For a build-only check, keep dependencies and generated output in a scratch
+copy instead of populating the candidate's `website/node_modules`. Establish
+the Node/npm environment above, then copy website sources while excluding
+prior build output. Include the repository changelog at the same relative
+location because website components import it:
+
+```bash
+python3 - "$REPO" "$SANDBOX_ROOT/source" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+repo, staged = map(Path, sys.argv[1:])
+staged.mkdir()
+shutil.copytree(repo / "website", staged / "website",
+                ignore=shutil.ignore_patterns("node_modules", "dist", ".astro"))
+shutil.copyfile(repo / "CHANGELOG.md", staged / "CHANGELOG.md")
+PY
+npm --prefix "$SANDBOX_ROOT/source/website" ci
+npm --prefix "$SANDBOX_ROOT/source/website" run build
+```
+
+`scripts/qa-full-sweep.sh --website-build --run-commands` performs this
+procedure automatically with a clean child environment, a private npm cache
+and a disposable scratch copy. It captures the `npm ci` command, output and
+exit code in the website row's `preparation`, then runs the inventory's
+`npm --prefix website run build` from the staged root. Dependency preparation
+failure makes the row `FAIL` and prevents the build. A completed build earns
+`PASS`; this procedure starts no preview and performs no deployment. Existing
+candidate dependencies, generated pages and output directories are untouched.
+
 ## Stage Playwright and Chromium without root
 
-Install Playwright and its browser outside the worktree. `playwright install-deps` is not a
+Prefer sourcing `~/.local/chromium-deps/env.sh` if the host already has a
+[prepared browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md).
+The disposable installation below is the fallback when that file is absent.
+
+Install Playwright and its browser under the scratch root. `playwright install-deps` is not a
 solution in a job-run sandbox: it installs operating-system packages and therefore needs
 root. `sudo` cannot elevate when the sandbox has Linux `no-new-privs` enabled; it fails with
 `The 'no new privileges' flag is set, which prevents sudo from running as root.`
@@ -90,6 +122,7 @@ export PLAYWRIGHT_ROOT="$SANDBOX_ROOT/playwright"
 export PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_ROOT/browsers"
 mkdir -p "$PLAYWRIGHT_ROOT" "$PLAYWRIGHT_BROWSERS_PATH"
 npm --prefix "$PLAYWRIGHT_ROOT" install --no-save playwright
+export PLAYWRIGHT_MODULE="$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs"
 PLAYWRIGHT="$PLAYWRIGHT_ROOT/node_modules/.bin/playwright"
 test -x "$PLAYWRIGHT"
 "$PLAYWRIGHT" install chromium
@@ -190,7 +223,7 @@ task:
 
 ```bash
 PAGES=(/ /getting-started/install/ /getting-started/first-task/ /reference/cli/)
-node --input-type=module - "$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs" "$PREVIEW_URL" "${PAGES[@]}" <<'NODE'
+node --input-type=module - "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" "${PAGES[@]}" <<'NODE'
 const [playwrightEntry, baseUrl, ...pages] = process.argv.slice(2);
 const { chromium } = await import(`file://${playwrightEntry}`);
 const browser = await chromium.launch({ headless: true });
@@ -265,7 +298,7 @@ the browser check against the local preview using the staged Playwright module a
 
 ```bash
 node website/scripts/check-project.mjs \
-  "$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs" "$PREVIEW_URL" .orbit/tmp/project-links-browser
+  "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" .orbit/tmp/project-links-browser
 ```
 
 The check opens `/project/`, activates the Contributing and Privacy cards, and verifies
@@ -281,7 +314,7 @@ Chromium" above satisfies this):
 
 ```bash
 node website/scripts/check-inline-code.mjs \
-  "$PLAYWRIGHT_ROOT/node_modules/playwright/index.mjs" "$PREVIEW_URL" .orbit/tmp/inline-code-browser
+  "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" .orbit/tmp/inline-code-browser
 ```
 
 The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
@@ -386,9 +419,10 @@ than adding privileged installation commands here.
 
 ## Handoff and escalation
 
-Playwright, Chromium, npm's cache, downloaded packages, extracted libraries, logs, and any
-temporary validation scripts all live outside the worktree under `SANDBOX_ROOT` and are
-removed by the trap. Therefore handoff cleanup has nothing to undo in the repository. Before
+Disposable Playwright, Chromium, npm's cache, downloaded packages, extracted libraries,
+logs and validation scripts stay under `SANDBOX_ROOT` in `.orbit/tmp/`. Attach
+retained evidence from there; the host kit remains read-only. The build-only sweep
+removes its disposable source copy after capturing the report. Before
 handoff, confirm the worktree contains only the intended website changes and report the
 preview URL, routes, viewport results, browser launch result, and any console/page errors in
 the task execution summary. If Chromium still fails, retain the exact `ldd ... | grep 'not

@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-10-10
+last_validated: 2026-10-11
 ---
 
 # Full pre-release QA sweep
@@ -21,8 +21,9 @@ This workspace's own `.orbit/auto_tasks/qa-full-sweep.yaml` predates it and
 overrides it: `orbit workspace sync` and `orbit update` keep the file byte for
 byte and never retire it, and sync warns that it occupies the bundled
 default's name. That warning is expected here; do not move or rename the file.
-The rest of this runbook describes this workspace's definition and harness,
-which the generic default never references.
+The rest of this runbook describes this workspace's definition and harness.
+The generic default's area brief also points workers here when the repository
+provides this harness, including browser-kit and website preparation.
 
 ## Mint and run
 
@@ -85,18 +86,59 @@ which stays fail-closed until `orbit doctor providers` reports it ready. If a
 disposable init or another prerequisite step fails, the report keeps that FAIL
 and marks every scenario it blocked `NOT_RUN` with the reason in `stderr`.
 
-For the browser leg, pass all three prepared capability inputs from the
-worker's own disposable namespace. The harness forwards only these browser
-paths to the dashboard process; it does not inherit the worker's Orbit or
-general host environment. The report records the launched Chromium version and
-retains screenshots plus `result.json` in the output-side evidence directory.
+For the browser leg, prefer the prepared host kit. Source
+`~/.local/chromium-deps/env.sh` when it exists, then pass its module, browser
+directory and optional Linux loader/font inputs explicitly. macOS needs only
+the module and browsers; a loader search path may contain multiple directories
+separated by colons. The harness forwards these declared inputs into its clean
+browser child environment. The report records the launched Chromium version,
+the capability probe and the declared paths, and retains screenshots and JSON
+results in the output-side evidence directory.
+
+The worker sandbox permits reads of `~/.local/chromium-deps` on both Linux
+(`linux-bwrap`) and macOS (`sandbox-exec`). The plugin build sandbox is a
+different boundary and is not used by this sweep. See the
+[browser kit reference](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)
+for host preparation and sandbox checks. Do not install into or modify the
+shared kit during a sweep.
+
+```bash
+browser_args=()
+if [ -f "$HOME/.local/chromium-deps/env.sh" ]; then
+  . "$HOME/.local/chromium-deps/env.sh"
+  browser_args+=(--playwright-module "$PLAYWRIGHT_MODULE"
+    --playwright-browsers-path "$PLAYWRIGHT_BROWSERS_PATH")
+  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+    browser_args+=(--browser-ld-library-path "$LD_LIBRARY_PATH")
+  fi
+  if [ -n "${FONTCONFIG_FILE:-}" ]; then
+    browser_args+=(--browser-fontconfig-file "$FONTCONFIG_FILE")
+  fi
+else
+  # Prepare the disposable kit first using website-validation.md's rootless
+  # Playwright recipe with SANDBOX_ROOT="$PWD/.orbit/tmp/orbit-browser-check".
+  browser_args+=(--playwright-module .orbit/tmp/orbit-browser-check/playwright/node_modules/playwright/index.mjs
+    --playwright-browsers-path .orbit/tmp/orbit-browser-check/playwright/browsers)
+  # On Linux, add --browser-ld-library-path with the extracted libs search
+  # path, and --browser-fontconfig-file if a font configuration was prepared.
+fi
+
+./scripts/qa-full-sweep.sh --build-candidate --run-commands --website-build \
+  --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json \
+  "${browser_args[@]}" --browser-evidence-dir .orbit/tmp/qa-full-sweep/browser
+```
+
+When the host kit is absent, keep the disposable recipe under `.orbit/tmp/`:
+follow [website validation](website-validation.md#stage-playwright-and-chromium-without-root)
+to install Playwright/Chromium and unpack missing Linux libraries without root.
+Pass the resulting paths, for example:
 
 ```bash
 ./scripts/qa-full-sweep.sh --build-candidate --run-commands \
   --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json \
-  --playwright-module .orbit/tmp/orbit-browser-check/node_modules/playwright/index.mjs \
-  --playwright-browsers-path .orbit/tmp/orbit-browser-check/browsers \
-  --browser-ld-library-path .orbit/tmp/orbit-browser-check/sysroot/usr/lib/x86_64-linux-gnu \
+  --playwright-module .orbit/tmp/orbit-browser-check/playwright/node_modules/playwright/index.mjs \
+  --playwright-browsers-path .orbit/tmp/orbit-browser-check/playwright/browsers \
+  --browser-ld-library-path .orbit/tmp/orbit-browser-check/libs/usr/lib/x86_64-linux-gnu \
   --browser-evidence-dir .orbit/tmp/qa-full-sweep/browser
 ```
 
@@ -106,9 +148,13 @@ path is absent or Chromium cannot launch, the browser scenario remains
 `NOT_RUN` rather than passing; retain its capability probe in the report for
 operator-owned post-merge verification.
 
-Add `--website-build` only after preparing the website dependencies through
-the isolated procedure in [website validation](website-validation.md). It
-authorizes the harness's build check, never deployment.
+Include `--website-build` for a complete sweep. It prepares dependencies and
+builds through the [isolated build-only procedure](website-validation.md#isolated-build-only-sweep)
+in a scratch copy of the candidate website and its imported changelog, using
+the worker's Node/npm toolchain and a private npm cache. Preparation output,
+exit code and build working directory are retained on the website row. A failed
+install or build is `FAIL`; omitting the flag remains `NOT_RUN`. Candidate
+dependencies and generated files are preserved. This flag never deploys.
 
 Hosted evidence can be combined with `--platform-evidence <report.json>`. A
 schema-version 2 full-sweep report must name the exact candidate ID and exact
@@ -154,7 +200,8 @@ provider, macOS, and website-build legs require explicit operator capability.
 Each must retain its exact command, output/log reference, and PASS, FAIL,
 BLOCKED, or NOT_RUN outcome in the attached report. Provider execution must be
 bounded in advance and may not recursively dispatch agents or jobs from the
-sweep. Browser setup may use the documented disposable Playwright recipe; an
+sweep. Browser setup uses the host kit when available and the documented
+disposable Playwright recipe otherwise; an
 unavailable browser is NOT_RUN, not a clean dashboard result.
 
 The local `npm-package` row runs

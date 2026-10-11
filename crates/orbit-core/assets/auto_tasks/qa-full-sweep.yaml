@@ -142,6 +142,34 @@ template:
     > summary line); its absence means "did not run" regardless of the exit
     > status.
     >
+    > Prepare capabilities before marking a browser or website scenario unrun.
+    > When `~/.local/chromium-deps/env.sh` exists, source it in the worker
+    > shell and use its `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`.
+    > Also forward `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` on Linux when
+    > provided; macOS needs no Linux loader or font inputs. Read the shared
+    > kit without modifying it. If it is absent, use the repository's
+    > disposable Playwright/Chromium recipe under `.orbit/tmp/` (for this
+    > repository, docs/runbooks/website-validation.md), unpacking missing
+    > Linux libraries without root. Do not install host packages or bypass
+    > the worker sandbox. A genuinely unavailable path or failed Chromium
+    > launch remains `NOT_RUN` with the capability probe retained.
+    >
+    > For repositories with `scripts/qa-full-sweep.sh`, pass the sourced kit
+    > explicitly: `--playwright-module "$PLAYWRIGHT_MODULE"`,
+    > `--playwright-browsers-path "$PLAYWRIGHT_BROWSERS_PATH"`, and, when
+    > nonempty, `--browser-ld-library-path "$LD_LIBRARY_PATH"` and
+    > `--browser-fontconfig-file "$FONTCONFIG_FILE"`. Preserve a
+    > colon-separated library search path as one quoted argument. Retain
+    > the launched Chromium version and screenshots with
+    > `--browser-evidence-dir .orbit/tmp/qa-full-sweep/browser`. Follow
+    > docs/runbooks/qa-full-sweep.md for the full invocation and disposable
+    > fallback paths. Include `--website-build --run-commands`: the website
+    > leg prepares dependencies with `npm ci` and a private npm cache in a
+    > scratch source copy through the isolated procedure in
+    > docs/runbooks/website-validation.md, then builds and records `PASS`
+    > or `FAIL`. It never deploys. For other repositories, use their own
+    > isolated dependency preparation and build commands.
+    >
     > Write `.orbit/tmp/qa-progress.json` with `schema_version: 1`,
     > `pinned_sha`, `area`, `candidate` (how the build was made and its
     > identity) and `scenarios`. Each scenario records its `id`, `required`,
