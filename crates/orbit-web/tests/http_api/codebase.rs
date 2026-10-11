@@ -649,7 +649,7 @@ fn codebase_block_causes_require_failure_evidence() {
                 (
                     "sandbox",
                     "execution_failed",
-                    "bwrap: No permissions to create a new namespace",
+                    "bwrap: No permissions to create new namespace",
                 ),
                 (
                     "sandbox",

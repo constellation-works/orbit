@@ -1829,7 +1829,7 @@ fn missing_host_snapshot_is_not_an_empty_requirement_list() {
 const CONFINED: &str =
     "cargo test -p orbit-exec --test sandbox bwrap_child_gets_only_the_supplied_environment";
 const DEFERRAL: &str = "DEFERRED: bubblewrap unavailable: \
-     bwrap_child_gets_only_the_supplied_environment: No permissions to create a new namespace";
+     bwrap_child_gets_only_the_supplied_environment: No permissions to create new namespace";
 
 fn deferred(mut record: ReviewValidation, notices: &[&str]) -> ReviewValidation {
     record.deferred = notices.iter().map(|notice| (*notice).to_string()).collect();

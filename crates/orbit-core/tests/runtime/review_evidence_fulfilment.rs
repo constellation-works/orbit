@@ -618,7 +618,7 @@ const HOST_EVIDENCE: &str = "evidence/host-sandbox-probe.json";
 const HOST_EVIDENCE_LOG: &str = "evidence/host-sandbox-probe.log.json";
 /// What a sandbox-gated test prints inside an agent lane.
 const LANE_DEFERRAL: &str =
-    "DEFERRED: bubblewrap unavailable: probe: bwrap: No permissions to create a new namespace";
+    "DEFERRED: bubblewrap unavailable: probe: bwrap: No permissions to create new namespace";
 /// A probe that executes and reports libtest's summary, naming its `HEAD`.
 const PASSING_PROBE: &str = "set -e\n\
     echo \"ORBIT_HOST_PROBE_RAN $(git rev-parse HEAD)\"\n\

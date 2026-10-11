@@ -573,7 +573,7 @@ impl RuntimeHost for ProbeHost {
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
         if self.unresolvable {
             return Err(DispatchError::CliInvocationPermanent(format!(
-                "no sandbox for `{provider}`: bwrap: No permissions to create a new namespace"
+                "no sandbox for `{provider}`: bwrap: No permissions to create new namespace"
             )));
         }
         Ok(None)
@@ -619,7 +619,7 @@ fn the_deferral_probe_records_what_the_lane_answers() {
         argv: &[
             "/bin/sh",
             "-c",
-            "echo 'bwrap: No permissions to create a new namespace' >&2; exit 1",
+            "echo 'bwrap: No permissions to create new namespace' >&2; exit 1",
         ],
     };
     let unrunnable = orbit_types::workflow::DeferralProbe {
@@ -650,7 +650,7 @@ fn the_deferral_probe_records_what_the_lane_answers() {
         (
             orbit_types::workflow::BUBBLEWRAP_NAMESPACE_PROBE,
             1,
-            "bwrap: No permissions to create a new namespace"
+            "bwrap: No permissions to create new namespace"
         )
     );
     assert_ne!(missing.exit_code, 0);

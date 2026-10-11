@@ -469,7 +469,7 @@ fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
                 "command": "make ci-test-affected", "exit_code": 0, "tests_run": 1,
                 "base": "0123456789abcdef0123456789abcdef01234567",
                 "notices": ["DEFERRED: bubblewrap unavailable: fixture: unavailable"],
-                "probe": {"exit_code": 1, "output": "bwrap: No permissions to create a new namespace"}
+                "probe": {"exit_code": 1, "output": "bwrap: No permissions to create new namespace"}
             }
         });
         let rationale = "Name only the gate summary instead of hand-writing the deferral record";

@@ -178,7 +178,7 @@ Test design (boundary first, unit tests by exception, binary layout) is in [test
     ```
 
   Orbit builds the record itself [ORB-15516]. The implement step reads the summary, which must be a file under the checkout's `.orbit/tmp/`, and takes the gate's `command`, `exit_code`, `tests_run`, `base` and `notices` from it. It refuses, before commit and before any probe, unless the command is one of the owner's `workflow.required_validation_commands` or `review.baseline_commands`, the run finished with exit 0, executed tests and compared against the step's `base_sha`, and every notice is one sandbox's. It then runs that sandbox's probe in the implementer's lane (under the sandbox the implementer's provider resolves for the step, in the checkout) and refuses unless the lane refused the sandbox:
-  - **Linux (Bubblewrap):** every notice is a `DEFERRED: bubblewrap unavailable:` line; the probe `bwrap --unshare-user --ro-bind / / -- /bin/true` must exit nonzero with `No permissions to create a new namespace`.
+  - **Linux (Bubblewrap):** every notice is a `DEFERRED: bubblewrap unavailable:` line; the probe `bwrap --unshare-user --ro-bind / / -- /bin/true` must exit nonzero with `No permissions to create new namespace`.
   - **macOS (Seatbelt):** every notice is a `SKIP: sandbox-exec cannot apply a profile:` line; the probe `/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true` must exit 71 with `sandbox_apply: Operation not permitted`.
 
   Only an executed probe's exit status can justify a deferral. A failure to resolve or prepare the lane, a spawn failure, a timeout or a missing exit status is recorded as `-1` and is refused, even when its diagnostic contains the sandbox-refusal text.

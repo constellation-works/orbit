@@ -98,7 +98,7 @@ impl Gate {
     fn notice() -> String {
         orbit_exec::bwrap_deferral_notice(
             "spawn_under_linux_bwrap",
-            "bwrap: No permissions to create a new namespace",
+            "bwrap: No permissions to create new namespace",
         )
     }
 
@@ -1339,7 +1339,7 @@ impl CleanLeaf {
                 json!({
                     "command": orbit_types::workflow::BUBBLEWRAP_NAMESPACE_PROBE,
                     "exit_code": 1,
-                    "output": "bwrap: No permissions to create a new namespace",
+                    "output": "bwrap: No permissions to create new namespace",
                 }),
             )
         };

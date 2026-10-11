@@ -1819,7 +1819,7 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure() {
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
             let notice = orbit_exec::bwrap_deferral_notice(
                 "sandboxed_path",
-                "bwrap: No permissions to create a new namespace",
+                "bwrap: No permissions to create new namespace",
             );
             let remote_before = fx.remote_tip(BRANCH);
 
@@ -2086,7 +2086,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                 (
                     "a Seatbelt probe carrying the namespace refusal",
                     seatbelt.clone(),
-                    seatbelt_probe(71, "bwrap: No permissions to create a new namespace"),
+                    seatbelt_probe(71, "bwrap: No permissions to create new namespace"),
                     none.clone(),
                     "no refused Seatbelt apply probe",
                 ),
@@ -2475,7 +2475,7 @@ fn reported_tests(tests: u64) -> String {
 fn bwrap_notice() -> String {
     orbit_exec::bwrap_deferral_notice(
         "spawn_under_linux_bwrap",
-        "bwrap: No permissions to create a new namespace",
+        "bwrap: No permissions to create new namespace",
     )
 }
 
@@ -2540,7 +2540,7 @@ fn deferral(fx: &Fixture, command: &str) -> Value {
         "probe": {
             "command": BUBBLEWRAP_NAMESPACE_PROBE,
             "exit_code": 1,
-            "output": "bwrap: No permissions to create a new namespace",
+            "output": "bwrap: No permissions to create new namespace",
         },
     })
 }
@@ -3380,7 +3380,7 @@ fn known_red_failures_cannot_waive_host_notices_or_replay_coverage() {
                 ),
                 (
                     "raw-refusal",
-                    Some("bwrap: No permissions to create a new namespace".to_string()),
+                    Some("bwrap: No permissions to create new namespace".to_string()),
                     false,
                     false,
                     Some(3),
@@ -6123,7 +6123,7 @@ impl RuntimeHost for DeliveryHost {
         let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
             (71, "sandbox-exec: sandbox_apply: Operation not permitted")
         } else {
-            (1, "bwrap: No permissions to create a new namespace")
+            (1, "bwrap: No permissions to create new namespace")
         };
         NamespaceProbe {
             command: probe.command.to_string(),

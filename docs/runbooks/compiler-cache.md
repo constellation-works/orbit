@@ -167,7 +167,7 @@ under Bubblewrap, which refuses the nested namespaces this regression creates.
 There, with the cache enabled, the script prints one line and exits 0:
 
 ```text
-test-compiler-cache-namespaces: not applicable inside the Orbit agent sandbox, which refuses nested namespaces (bwrap: No permissions to create a new namespace, ...); covered outside the sandbox by the owner's candidate_validate or the claim host's claim_validate run of the required commands
+test-compiler-cache-namespaces: not applicable inside the Orbit agent sandbox, which refuses nested namespaces (bwrap: No permissions to create new namespace, ...); covered outside the sandbox by the owner's candidate_validate or the claim host's claim_validate run of the required commands
 ```
 
 The parenthesis holds Bubblewrap's own refusal.

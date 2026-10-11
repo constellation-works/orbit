@@ -365,7 +365,7 @@ one of these cases before commit:
 
 | Host | Notices | Probe Orbit runs | Probe result |
 |---|---|---|---|
-| Linux | `DEFERRED: bubblewrap unavailable:` | `bwrap --unshare-user --ro-bind / / -- /bin/true` | nonzero, `No permissions to create a new namespace` |
+| Linux | `DEFERRED: bubblewrap unavailable:` | `bwrap --unshare-user --ro-bind / / -- /bin/true` | nonzero, `No permissions to create new namespace` |
 | macOS [ORB-15409] | `SKIP: sandbox-exec cannot apply a profile:` | `/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true` | exit 71, `sandbox_apply: Operation not permitted` |
 
 The gate must be one of the owner's `workflow.required_validation_commands` or
