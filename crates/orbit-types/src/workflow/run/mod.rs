@@ -24,7 +24,7 @@ pub use baseline::{
 };
 pub use deferred_sandbox::{
     BUBBLEWRAP_NAMESPACE_PROBE, DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact,
-    DeferredSandboxValidation, NamespaceProbe, deferred_sandbox_validation,
+    DeferredSandboxValidation, NamespaceProbe, SEATBELT_APPLY_PROBE, deferred_sandbox_validation,
 };
 pub use delivery::{
     CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, DeliveryEvidenceProvenance,

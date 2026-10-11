@@ -1,27 +1,34 @@
 //! The implementer's `deferred_sandbox_validation` output field [ORB-15287].
 //!
-//! On Linux an agent lane's own sandbox refuses the nested user namespace
-//! Bubblewrap needs, so a test of a Bubblewrap-confined path prints a
-//! [`BUBBLEWRAP_DEFERRAL_PREFIX`] notice and passes without running it. An
-//! affected-test gate can therefore exit 0 although those paths never ran.
-//! The implementer hands that gap off with this record instead of failing,
-//! and Orbit enforces it at two points:
+//! An agent lane's own sandbox refuses the nested sandbox Orbit's sandbox
+//! tests apply, so those tests print a notice and pass without running their
+//! confined path: on Linux a [`BUBBLEWRAP_DEFERRAL_PREFIX`] notice, because
+//! Bubblewrap cannot create a nested user namespace; on macOS a
+//! [`SEATBELT_DEFERRAL_PREFIX`] notice, because `sandbox-exec` cannot apply a
+//! nested profile [ORB-15409]. An affected-test gate can therefore exit 0
+//! although those paths never ran. The implementer hands that gap off with
+//! this record instead of failing, and Orbit enforces it at two points:
 //!
 //! - the implement step boundary calls [`deferred_sandbox_validation`] and
 //!   fails the step, before anything is committed, for a record that is not
-//!   exactly that case. An owner run keeps the accepted record on the task as
-//!   [`DEFERRED_SANDBOX_ARTIFACT`], so a resumed candidate still carries it;
+//!   exactly one sandbox's case: its notices and its probe. An owner run keeps
+//!   the accepted record on the task as [`DEFERRED_SANDBOX_ARTIFACT`], so a
+//!   resumed candidate still carries it;
 //! - the validation step that runs the owner's required commands outside any
-//!   agent sandbox replays the record's command there before delivery. A
-//!   replay that still defers is the validation environment's failure, and
-//!   one that executed no tests is refused.
+//!   agent sandbox (a claimed leaf's on its claim host) replays the record's
+//!   command there before delivery. A replay that still defers is the
+//!   validation environment's failure, and one that executed no tests is
+//!   refused.
 //!
 //! The record only ever adds a native run; it never stands in for one.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::workflow::host_evidence::{BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL};
+use crate::workflow::host_evidence::{
+    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, SEATBELT_APPLY_REFUSAL,
+    SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
+};
 
 /// The task artifact an owner run keeps an accepted record in.
 pub const DEFERRED_SANDBOX_ARTIFACT: &str = "deferred-sandbox-validation.json";
@@ -29,8 +36,13 @@ pub const DEFERRED_SANDBOX_ARTIFACT: &str = "deferred-sandbox-validation.json";
 /// The probe that shows the lane refuses a nested user namespace.
 pub const BUBBLEWRAP_NAMESPACE_PROBE: &str = "bwrap --unshare-user --ro-bind / / -- /bin/true";
 
-/// An affected-test gate that passed with only Bubblewrap deferrals, as the
-/// implementer ran it.
+/// The probe that shows the lane refuses to apply a nested Seatbelt profile:
+/// the permissive profile Orbit's own test guard applies.
+pub const SEATBELT_APPLY_PROBE: &str =
+    "/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true";
+
+/// An affected-test gate that passed with only one sandbox's deferrals, as
+/// the implementer ran it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeferredSandboxValidation {
@@ -43,11 +55,13 @@ pub struct DeferredSandboxValidation {
     pub base: String,
     /// Every skip or deferral line the gate printed.
     pub notices: Vec<String>,
-    /// [`BUBBLEWRAP_NAMESPACE_PROBE`] as run in the same lane.
+    /// The deferring sandbox's probe ([`BUBBLEWRAP_NAMESPACE_PROBE`] or
+    /// [`SEATBELT_APPLY_PROBE`]) as run in the same lane.
     pub probe: NamespaceProbe,
 }
 
-/// One run of [`BUBBLEWRAP_NAMESPACE_PROBE`].
+/// One run of a sandbox probe: [`BUBBLEWRAP_NAMESPACE_PROBE`] or
+/// [`SEATBELT_APPLY_PROBE`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NamespaceProbe {
@@ -109,15 +123,25 @@ impl DeferredSandboxValidation {
         if self.notices.is_empty() {
             return Some("lists no deferral notice".to_string());
         }
+        let first = self.notices[0].trim();
+        let Some(sandbox) = DeferringSandbox::of_notice(first) else {
+            return Some(format!(
+                "lists `{first}`, which is neither a Bubblewrap nor a Seatbelt deferral; only \
+                 `{BUBBLEWRAP_DEFERRAL_PREFIX}` or `{SEATBELT_DEFERRAL_PREFIX}` notices are \
+                 deferrable"
+            ));
+        };
         if let Some(notice) = self
             .notices
             .iter()
-            .find(|notice| !notice.trim_start().starts_with(BUBBLEWRAP_DEFERRAL_PREFIX))
+            .find(|notice| DeferringSandbox::of_notice(notice.trim()) != Some(sandbox))
         {
             return Some(format!(
-                "lists `{}`, which is not a Bubblewrap deferral; only \
-                 `{BUBBLEWRAP_DEFERRAL_PREFIX}` notices are deferrable",
-                notice.trim()
+                "lists `{}`, which is not a {} deferral; a record defers only `{}` notices, \
+                 one sandbox's",
+                notice.trim(),
+                sandbox.name(),
+                sandbox.prefix()
             ));
         }
         let probe = self
@@ -126,18 +150,81 @@ impl DeferredSandboxValidation {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        if probe != BUBBLEWRAP_NAMESPACE_PROBE {
+        if probe != sandbox.probe() {
             return Some(format!(
-                "names the probe `{probe}`, not `{BUBBLEWRAP_NAMESPACE_PROBE}`"
+                "names the probe `{probe}`, not `{}`",
+                sandbox.probe()
             ));
         }
-        if self.probe.exit_code == 0 || !self.probe.output.contains(BUBBLEWRAP_NAMESPACE_REFUSAL) {
-            return Some(format!(
-                "has no failing namespace probe: it must exit nonzero with \
-                 `{BUBBLEWRAP_NAMESPACE_REFUSAL}` in the same run"
-            ));
+        if !sandbox.refused(&self.probe) {
+            return Some(sandbox.probe_requirement());
         }
         None
+    }
+}
+
+/// The sandbox whose refusal a record defers. A record defers one sandbox:
+/// every notice and the probe are that sandbox's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeferringSandbox {
+    /// Linux: Bubblewrap cannot create a nested user namespace.
+    Bubblewrap,
+    /// macOS: `sandbox-exec` cannot apply a nested profile [ORB-15409].
+    Seatbelt,
+}
+
+impl DeferringSandbox {
+    fn of_notice(notice: &str) -> Option<Self> {
+        [Self::Bubblewrap, Self::Seatbelt]
+            .into_iter()
+            .find(|sandbox| notice.starts_with(sandbox.prefix()))
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "Bubblewrap",
+            Self::Seatbelt => "Seatbelt",
+        }
+    }
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => BUBBLEWRAP_DEFERRAL_PREFIX,
+            Self::Seatbelt => SEATBELT_DEFERRAL_PREFIX,
+        }
+    }
+
+    fn probe(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => BUBBLEWRAP_NAMESPACE_PROBE,
+            Self::Seatbelt => SEATBELT_APPLY_PROBE,
+        }
+    }
+
+    /// Whether `probe` shows this sandbox's refusal in the lane.
+    fn refused(self, probe: &NamespaceProbe) -> bool {
+        match self {
+            Self::Bubblewrap => {
+                probe.exit_code != 0 && probe.output.contains(BUBBLEWRAP_NAMESPACE_REFUSAL)
+            }
+            Self::Seatbelt => {
+                probe.exit_code == SEATBELT_APPLY_REFUSAL_EXIT
+                    && probe.output.contains(SEATBELT_APPLY_REFUSAL)
+            }
+        }
+    }
+
+    fn probe_requirement(self) -> String {
+        match self {
+            Self::Bubblewrap => format!(
+                "has no failing namespace probe: it must exit nonzero with \
+                 `{BUBBLEWRAP_NAMESPACE_REFUSAL}` in the same run"
+            ),
+            Self::Seatbelt => format!(
+                "has no refused Seatbelt apply probe: it must exit \
+                 {SEATBELT_APPLY_REFUSAL_EXIT} with `{SEATBELT_APPLY_REFUSAL}` in the same run"
+            ),
+        }
     }
 }
 

@@ -50,6 +50,14 @@ fn only_exit_71_with_sandbox_apply_can_skip_a_test() {
             "only the nested apply refusal may skip: {outcome:?}"
         );
         if expected_kind == "refused" {
+            let notice = String::from_utf8(output).expect("the notice is text");
+            assert!(
+                notice.starts_with(&format!(
+                    "{} fixture: ",
+                    orbit_types::workflow::SEATBELT_DEFERRAL_PREFIX
+                )),
+                "the skip must be the notice a deferred sandbox validation accepts: {notice}"
+            );
             assert!(
                 outcome
                     .guard_with_writer("fixture", true, &mut Vec::new())

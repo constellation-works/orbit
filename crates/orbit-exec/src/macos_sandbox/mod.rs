@@ -47,4 +47,7 @@ pub use spawn::{
     sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 
-pub use probe::{SandboxExecApplyProbe, macos_sandbox_test_guard, probe_sandbox_exec_apply};
+pub use probe::{
+    SandboxExecApplyProbe, macos_sandbox_test_guard, probe_sandbox_exec_apply,
+    seatbelt_deferral_notice,
+};

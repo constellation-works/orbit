@@ -91,7 +91,7 @@ pub use macos_sandbox::{
     append_macos_subpath_mask, claude_state_dir_from_env, compile_macos_sandbox_profile,
     macos_login_keychain_access, macos_sandbox_test_guard, probe_sandbox_exec_apply,
     sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
-    sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
+    sandbox_exec_unavailable_message, seatbelt_deferral_notice, spawn_under_macos_sandbox,
 };
 pub use path_identity::{lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};

@@ -265,22 +265,34 @@ into the record's `deferred`, and such a pass never counts as running that
 path: settlement reads it as `not_run` (`validation_incomplete`).
 
 The same holds earlier, for the implementer [ORB-15287]. An affected-test
-gate that exits 0 with only `DEFERRED: bubblewrap unavailable:` notices does
-not fail the implementation step. The implementer returns a
-`deferred_sandbox_validation` record (the gate's command, exit code, executed
-tests, pinned base, notices and a probe with `probe.command` exactly
-`bwrap --unshare-user --ro-bind / / -- /bin/true`, `probe.exit_code` nonzero,
-and `probe.output` showing the namespace refusal), and the implement step refuses any record
-that is not exactly that case before commit. The gate
-must be one of the owner's `workflow.required_validation_commands` or
+gate that exits 0 with only one sandbox's deferral notices does not fail the
+implementation step. The implementer returns a `deferred_sandbox_validation`
+record (the gate's command, exit code, executed tests, pinned base, notices
+and a probe), and the implement step refuses any record that is not exactly
+one of these cases before commit:
+
+| Host | Notices | `probe.command` (exactly) | Probe result |
+|---|---|---|---|
+| Linux | `DEFERRED: bubblewrap unavailable:` | `bwrap --unshare-user --ro-bind / / -- /bin/true` | nonzero, `No permissions to create a new namespace` |
+| macOS [ORB-15409] | `SKIP: sandbox-exec cannot apply a profile:` | `/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true` | exit 71, `sandbox_apply: Operation not permitted` |
+
+A Mac claimed implementer's record, complete:
+
+```json
+{"deferred_sandbox_validation": {"command": "make ci-test-affected", "exit_code": 0, "tests_run": 1650, "base": "<base_sha>", "notices": ["SKIP: sandbox-exec cannot apply a profile: cli_ctrl_c_during_proc_spawn_reports_interrupt: permissive profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not permitted"], "probe": {"command": "/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true", "exit_code": 71, "output": "sandbox-exec: sandbox_apply: Operation not permitted"}}}
+```
+
+The gate must be one of the owner's `workflow.required_validation_commands` or
 `review.baseline_commands`. The owner's `candidate_validate` (and a claim's
-`claim_validate`) then runs the gate after the required commands, outside the
-agent sandbox. A pass that still prints a `DEFERRED:` line is a
+`claim_validate`, on the claim host before publication) then runs the gate
+after the required commands, outside the agent sandbox. A pass that still
+prints a `DEFERRED:` or `SKIP: sandbox-exec cannot apply a profile:` line is a
 `validation_environment` failure, and a run that reports no executed tests is
-refused, so the path runs natively before delivery or the candidate is held.
-Real failures, `SKIP:` or `skipping` notices, empty gates, notices with no
-failing probe and the other required commands are not deferrable
-([development guide](../DEVELOPMENT.md#test-process-environment)).
+refused, so the path runs natively before delivery or the candidate is held;
+a passing replay is pinned as the gate's evidence. Real failures, any other
+`SKIP:` or `skipping` notice, empty gates, notices with no failing probe, a
+record mixing both sandboxes' notices and the other required commands are not
+deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
 `host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside

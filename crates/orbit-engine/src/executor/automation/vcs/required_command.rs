@@ -56,7 +56,7 @@ use orbit_exec::{
     StdinMode, TERMINATION_STATUS_NOTE, ValidationEnvironment, program_on_path, run_process,
 };
 use orbit_types::workflow::{
-    HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
+    HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand, SEATBELT_DEFERRAL_PREFIX,
     VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
 };
 use regex::Regex;
@@ -95,8 +95,9 @@ pub(super) struct RequiredCommandRun {
     pub(super) output: String,
     /// Why a successful host run cannot count as passing evidence.
     pub(super) host_output_refusal: Option<HostEvidenceRefusal>,
-    /// The first `DEFERRED:` line a successful run printed: a test returned
-    /// without running its sandbox-confined path.
+    /// The first `DEFERRED:` or Seatbelt `SKIP: sandbox-exec cannot apply a
+    /// profile:` line a successful run printed: a test returned without
+    /// running its sandbox-confined path.
     pub(super) deferred_notice: Option<String>,
     /// The environment the command ran in.
     pub(super) environment: ValidationEnvironment,
@@ -201,20 +202,21 @@ impl RequiredCommandRun {
         ))
     }
 
-    /// The refusal for a command that exited zero but printed a `DEFERRED:`
+    /// The refusal for a command that exited zero but printed a deferral
     /// notice, so a sandbox-confined path never ran on the host that validates
-    /// the candidate. Only a `DEFERRED:` line counts: `SKIP:` and `skipping`
-    /// lines are common in other tools' output and stay with the host judge.
-    /// Typed as the validation environment's failure, which no recovery
-    /// repairs: the candidate was not judged.
+    /// the candidate. Only a `DEFERRED:` line or the Seatbelt guard's
+    /// `SKIP: sandbox-exec cannot apply a profile:` line counts [ORB-15409]:
+    /// other `SKIP:` and `skipping` lines are common in other tools' output
+    /// and stay with the host judge. Typed as the validation environment's
+    /// failure, which no recovery repairs: the candidate was not judged.
     pub(super) fn deferral_failure(&self, candidate: &str) -> Option<OrbitError> {
         let notice = self.deferred_notice.as_ref().filter(|_| self.passed)?;
         Some(OrbitError::Execution(format!(
             "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' exited zero on candidate \
              {candidate} but deferred a sandbox-confined path, so it never ran before delivery \
-             (`{notice}`). The candidate was not judged: this host cannot create the namespaces \
-             the path needs. Run the command on a Linux owner host outside any agent sandbox, \
-             then resume the run.",
+             (`{notice}`). The candidate was not judged: this host cannot apply the sandbox the \
+             path needs. Run the command outside any agent sandbox on a host of the OS that \
+             printed the notice, then resume the run.",
             self.command
         )))
     }
@@ -226,7 +228,7 @@ impl RequiredCommandRun {
         let executed = self.summary.as_ref().and_then(|summary| summary.tests_run);
         (executed.unwrap_or(0) == 0).then(|| {
             OrbitError::PolicyDenied(format!(
-                "required validation '{}' was handed off to replay the Bubblewrap tests an \
+                "required validation '{}' was handed off to replay the sandbox tests an \
                  agent sandbox deferred, but its native run on candidate {candidate} reported \
                  {} through `{VALIDATION_SUMMARY_ENV}`, so it replayed nothing. Only an \
                  affected-test gate that reports what it executed can carry a deferral.",
@@ -364,7 +366,11 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
                 .stdout
                 .lines()
                 .chain(outcome.stderr.lines())
-                .find(|line| line.trim_start().starts_with(HOST_TEST_DEFERRED_PREFIX))
+                .find(|line| {
+                    let line = line.trim_start();
+                    line.starts_with(HOST_TEST_DEFERRED_PREFIX)
+                        || line.starts_with(SEATBELT_DEFERRAL_PREFIX)
+                })
                 .map(|line| line.trim().to_string())
         })
         .flatten();
