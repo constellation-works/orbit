@@ -196,31 +196,45 @@ pub(super) fn stop_provider_process(
         pid,
         pid_start_time,
         orbit_common::process::identity::probe_process_liveness,
+        probe_process_start_identity,
     )
 }
 
+// Separate probe seams let sibling fault-injection tests exercise a live PID
+// whose identity cannot be read, without changing host probing permissions.
 #[cfg(unix)]
-fn stop_provider_process_with_probe<P>(
+pub(super) fn stop_provider_process_with_probe<L, I>(
     pid: u32,
     pid_start_time: Option<&str>,
-    probe: P,
+    liveness_probe: L,
+    identity_probe: I,
 ) -> Result<ProviderStop, OrbitError>
 where
-    P: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+    L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+    I: Fn(u32) -> ProbeOutcome,
 {
     use orbit_common::process::identity::ProcessLiveness;
 
     if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
         return Ok(ProviderStop::Unverified);
     }
-    match probe(pid, pid_start_time) {
+    match liveness_probe(pid, pid_start_time) {
         ProcessLiveness::Exited => return Ok(ProviderStop::NotRunning),
         ProcessLiveness::Unknown => return Ok(ProviderStop::Unverified),
         ProcessLiveness::Alive => {}
     }
     // An unversioned token cannot prove the pid still names the provider.
-    if !pid_start_time.is_some_and(is_stable_token) {
+    let Some(persisted) = pid_start_time.filter(|token| is_stable_token(token)) else {
         return Ok(ProviderStop::Unverified);
+    };
+    // Observational Alive is conservative when identity probing fails. It
+    // cannot authorize signalling: require a positively matching live token.
+    match identity_probe(pid) {
+        ProbeOutcome::Token(current) if stable_tokens_match(persisted, &current) => {}
+        ProbeOutcome::Token(_) => return Ok(ProviderStop::NotRunning),
+        ProbeOutcome::NoProcess | ProbeOutcome::Unavailable => {
+            return Ok(ProviderStop::Unverified);
+        }
     }
 
     // Signal the whole group only when the provider leads its own (which is

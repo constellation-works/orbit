@@ -376,8 +376,9 @@ pub fn legacy_lstart_matches(_pid: u32, _persisted: &str) -> bool {
 /// and must never be read as "dead".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessLiveness {
-    /// The PID exists and is not a reaped zombie. When an identity token was
-    /// recorded it also still matches, so this is the same process.
+    /// The PID exists and is not a zombie. A recorded identity token either
+    /// matches or could not be checked. This conservative observation is not
+    /// proof of identity and must not authorize signalling the process.
     Alive,
     /// The PID is gone, is an unreaped zombie, or is now held by a different
     /// process (recorded identity token no longer matches).

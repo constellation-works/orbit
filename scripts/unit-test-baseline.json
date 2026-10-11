@@ -371,6 +371,7 @@
         "application/job/run/tests/drain_cancel.rs::graceful_cancel_initialization_refuses_concurrent_terminalization",
         "application/job/run/tests/drain_cancel.rs::operator_leaf_cancel_requeues_with_reason_by_default_and_block_preserves_legacy_behavior",
         "application/job/run/tests/owner.rs::foreign_pid_namespace_never_condemns_a_live_owner",
+        "application/job/run/tests/owner.rs::provider_signalling_requires_a_verified_live_identity",
         "application/job/run/tests/owner.rs::same_pid_namespace_still_detects_a_genuinely_dead_owner",
         "application/job/run/tests/owner.rs::signal_owner_after_exit_returns_already_exited",
         "application/job/run/tests/owner.rs::signal_owner_in_foreign_pid_namespace_never_signals_the_local_process",
