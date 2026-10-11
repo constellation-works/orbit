@@ -173,7 +173,11 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
                 false,
             ));
         }
-        PushDecision::FastForward => ("performed_fast_forward", false),
+        // [ORB-15351] An adopted branch's fast-forward is leased on the
+        // published head too. The guard above fixed the observed remote to it
+        // (a fast-forward differs from local), so a branch deleted or rewound
+        // since observation is refused, not recreated or moved.
+        PushDecision::FastForward => ("performed_fast_forward", adopted_head.is_some()),
         PushDecision::RemoteAhead => {
             return Err(OrbitError::Execution(format!(
                 "git_push: remote branch 'origin/{branch}' contains commits not present in local '{branch}'; refusing to overwrite remote-only history"
