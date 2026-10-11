@@ -12,7 +12,7 @@ use std::{
 
 #[cfg(test)]
 use super::revision::source_deadline_forced;
-use super::{SOURCE_DEADLINE, Source, budget_now};
+use super::{BudgetClock, SOURCE_DEADLINE, Source};
 
 /// Budget for one local git or provider command. A fetch uses the time left
 /// on [`SOURCE_DEADLINE`] instead: two seconds is not a network fetch.
@@ -55,7 +55,7 @@ impl<'a> Source<'a> {
     pub(crate) fn at(root: &'a Path, now: DateTime<Utc>) -> Self {
         Self {
             root,
-            started: budget_now(),
+            started: BudgetClock::start(),
             cache: None,
             now,
             fetch_origin: true,
@@ -224,7 +224,7 @@ impl<'a> Source<'a> {
                 })?,
         );
 
-        let start = budget_now();
+        let start = self.started.restart();
 
         loop {
             if let Some(status) = child
@@ -242,7 +242,7 @@ impl<'a> Source<'a> {
                 break;
             }
 
-            let over_budget = budget_now().saturating_duration_since(start) > budget
+            let over_budget = start.elapsed() > budget
                 || self.elapsed() > SOURCE_DEADLINE
                 || file
                     .metadata()

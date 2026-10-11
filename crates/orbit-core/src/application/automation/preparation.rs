@@ -1,6 +1,6 @@
 //! Authoritative task/source inputs for the shared material fingerprint.
 
-use super::source::{LISTING_LIMIT, OUTPUT_LIMIT, SOURCE_DEADLINE, Source};
+use super::source::{BudgetClock, LISTING_LIMIT, OUTPUT_LIMIT, SOURCE_DEADLINE, Source};
 use crate::OrbitRuntime;
 use orbit_automation::AutomationError;
 use orbit_automation::members::preparation::{self, MaterialEvidence};
@@ -153,7 +153,7 @@ fn instructions_in_process(
         .revparse_single(revision)
         .and_then(|object| object.peel_to_tree())
         .map_err(local_git_error)?;
-    let started = std::time::Instant::now();
+    let started = BudgetClock::start();
     let mut paths = Vec::new();
     let mut failure = None;
     let mut listed_bytes = 0u64;
