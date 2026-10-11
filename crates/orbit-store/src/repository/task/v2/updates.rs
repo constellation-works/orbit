@@ -100,6 +100,15 @@ impl TaskV2Store {
                 now,
             )?;
             bundle.envelope.context_files = fields.context_files.clone();
+            for target in &fields.add_dependencies {
+                let relation = TaskRelation {
+                    relation_type: TaskRelationType::BlockedBy,
+                    target: target.clone(),
+                };
+                if !bundle.envelope.relations.contains(&relation) {
+                    bundle.envelope.relations.push(relation);
+                }
+            }
             if let Some(tags) = tags {
                 bundle.envelope.tags = tags;
             }

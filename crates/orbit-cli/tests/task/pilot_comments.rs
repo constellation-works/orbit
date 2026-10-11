@@ -4,6 +4,67 @@ use crate::isolated_cli_fixture::Fixture;
 use serde_json::json;
 
 #[test]
+fn approval_prints_latest_pilot_blocker_warnings_in_text_and_json() {
+    let fixture = Fixture::new();
+    for json_output in [false, true] {
+        let task = fixture.json(&[
+            "task",
+            "add",
+            "--title",
+            "Blocked proposal",
+            "--complexity",
+            "low",
+            "--json",
+        ]);
+        let id = task["id"].as_str().unwrap();
+        let warning = "Await operator credentials before executing the repair";
+        let receipt = |blocked_by: serde_json::Value| {
+            format!(
+                "operation_id={}\n{}",
+                "a".repeat(64),
+                json!({"assessment": {"blocked_by": blocked_by}})
+            )
+        };
+        let old = receipt(json!(["Superseded prerequisite"]));
+        let current = receipt(json!([warning]));
+        for comment in [&old, &current] {
+            fixture
+                .command(&["task", "update", id, "--comment", comment, "--json"])
+                .env("ORBIT_ACTOR", "task-pilot")
+                .assert()
+                .success();
+        }
+        // Ordinary comments, even receipt-shaped ones, do not clear findings.
+        let clean = receipt(json!([]));
+        fixture.json(&["task", "update", id, "--comment", &clean, "--json"]);
+        let mut args = vec!["task", "update", id, "--approve"];
+        if json_output {
+            args.push("--json");
+        }
+        let output = fixture
+            .command(&args)
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(warning), "{stderr}");
+        assert!(!stderr.contains("Superseded prerequisite"), "{stderr}");
+        if json_output {
+            let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(
+                document["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value.as_str().unwrap().contains(warning))
+            );
+            assert_eq!(document["status"], "backlog");
+        }
+    }
+}
+
+#[test]
 fn task_show_summarizes_pilot_comments_without_changing_json_or_fallback() {
     let fixture = Fixture::new();
     let id = fixture.json(&["task", "list", "--json"])[0]["id"]

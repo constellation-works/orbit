@@ -208,6 +208,20 @@ assessment without another hold admits as before. `no-diff-expected` does not
 exempt host-operational work, even if an auto-task lane grants relevant tools.
 An operator decision releases admission only; task prose never grants tools.
 
+Applied task-pilot `blocked_by` findings that name an unfinished task in the
+same workspace add a dependency in the assessment's atomic write. Proposed,
+backlog, in-progress, blocked and review targets qualify; done, archived,
+rejected, missing and other-workspace targets do not. Existing dependencies
+are preserved, repeated findings add no duplicate edge, and self-dependencies
+or cycles refuse the assessment. Human approval cannot release an unfinished
+dependency: readiness reports `unmet_dependency` until the prerequisite is done.
+
+Prerequisite prose remains a promotion warning, including findings that add no
+edge. The dashboard shows it in the pilot comment's **Blocked by** list, and
+`orbit task update --approve` prints the latest assessment's blocker warnings
+to stderr and includes them in JSON `warnings`. A newer clean assessment clears
+the warning text; ordinary comments do not.
+
 Task-pilot checks acceptance criteria for native host evidence requirements.
 It records each one as a typed finding, committed with the applied assessment
 as `native_os_hold`: `required_os` (the one-based criterion and the OS) for an

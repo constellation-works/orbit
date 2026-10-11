@@ -269,7 +269,7 @@ pub(super) fn approve(
     #[cfg(test)]
     approval_hook::before_lock(runtime, task_id);
     let mut approval = None;
-    with_task_locks(runtime, &lock_ids, 0, &mut || {
+    with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
         let task = runtime.get_task(task_id)?;
         approval = Some(if task.status != TaskStatus::Proposed {
             Approval::NotProposed

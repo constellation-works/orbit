@@ -180,10 +180,15 @@ impl Execute for TaskUpdateArgs {
         } = self;
 
         if approve {
+            let warnings = runtime
+                .task_pilot_blocker_warnings(&id)?
+                .into_iter()
+                .map(|text| format!("Task-pilot blocker: {text}"))
+                .collect::<Vec<_>>();
             let (agent, model) = super::mutation_identity(model);
             let task = runtime.approve_task_with_identity(&id, note, comment, agent, model)?;
             return Ok(Payload::detail(
-                written_task_json(runtime, &task)?,
+                written_task_json(runtime, &task, warnings)?,
                 format!("Approved task '{}' -> {}", task.id, task.status),
             )
             .into());
@@ -310,7 +315,7 @@ impl Execute for TaskUpdateArgs {
         };
 
         Ok(Payload::detail(
-            written_task_json(runtime, &task)?,
+            written_task_json(runtime, &task, Vec::new())?,
             format!("Updated task '{}'", task.id),
         )
         .into())
@@ -319,13 +324,22 @@ impl Execute for TaskUpdateArgs {
 
 /// The written task, with the warning a write that leaves it in the backlog
 /// with no footprint carries [ORB-15191], also printed to stderr.
-fn written_task_json(runtime: &OrbitRuntime, task: &orbit_core::Task) -> Result<Value, OrbitError> {
+fn written_task_json(
+    runtime: &OrbitRuntime,
+    task: &orbit_core::Task,
+    mut warnings: Vec<String>,
+) -> Result<Value, OrbitError> {
     let mut document = task_to_json_for_runtime(runtime, task)?;
     if let Some(warning) = backlog_footprint_warning(task) {
+        warnings.push(warning);
+    }
+    for warning in &warnings {
         eprintln!("warning: {warning}");
-        if let Some(object) = document.as_object_mut() {
-            object.insert("warnings".to_string(), json!([warning]));
-        }
+    }
+    if !warnings.is_empty()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("warnings".to_string(), json!(warnings));
     }
     Ok(document)
 }

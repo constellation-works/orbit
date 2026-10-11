@@ -242,6 +242,14 @@ impl TaskStoreBackend for TaskV2Store {
         self.with_task_lock(id, op)
     }
 
+    fn with_task_read_lock(
+        &self,
+        id: &str,
+        op: &mut dyn FnMut() -> Result<(), OrbitError>,
+    ) -> Result<(), OrbitError> {
+        self.with_task_read_lock(id, op)
+    }
+
     fn apply_atomic_task_mutation(
         &self,
         id: &str,

@@ -136,6 +136,9 @@ pub struct AtomicTaskMutationParams {
     /// normalization and `os:` namespace check. Existing tags are never
     /// removed or replaced; empty adds none.
     pub add_tags: Vec<String>,
+    /// Validated dependency targets appended atomically with the assessment.
+    /// Existing relations are preserved and repeated targets add no edge.
+    pub add_dependencies: Vec<String>,
     pub status: TaskStatus,
     pub complexity: TaskComplexity,
     pub event_type: String,

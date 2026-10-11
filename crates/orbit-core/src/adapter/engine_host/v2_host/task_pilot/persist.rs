@@ -6,7 +6,10 @@ use orbit_common::security::release::sha256_hex;
 use orbit_common::{OrbitError, StorageLayer};
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskComplexity, TaskOsRequirement, TaskStatus, normalize_task_tags};
+use orbit_types::task::{
+    Task, TaskComplexity, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus,
+    normalize_task_tags,
+};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
@@ -60,10 +63,20 @@ pub(super) fn apply_task(
             "task-pilot does not rewrite in-progress, review, or terminal work".to_string(),
         ));
     }
+    let named_blockers = crate::application::task::pilot_blocker_task_ids(&task.assessment);
     let mut snapshot = snapshot.clone();
     for attempt in 0..=1 {
         let mut lock_ids = vec![task.task_id.clone()];
         lock_ids.extend(runtime.get_task(&task.task_id)?.dependencies());
+        // Lock local named targets before reading their status at publication.
+        // Missing and other-workspace IDs remain warning text.
+        let mut local_blockers = BTreeSet::new();
+        for id in &named_blockers {
+            if runtime.stores().tasks().get_task(id)?.is_some() {
+                lock_ids.push(id.clone());
+                local_blockers.insert(id.clone());
+            }
+        }
         lock_ids.sort();
         lock_ids.dedup();
         let mut outcome = None;
@@ -98,7 +111,7 @@ pub(super) fn apply_task(
                 )?));
                 return Ok(());
             }
-            let current = match runtime.get_task(&task.task_id) {
+            let mut current = match runtime.get_task(&task.task_id) {
                 Ok(current) => current,
                 Err(OrbitError::NotFound { .. }) => {
                     outcome = Some(ApplyTaskOutcome::Stale(
@@ -154,6 +167,13 @@ pub(super) fn apply_task(
                 return Ok(());
             }
 
+            let add_dependencies = runtime.pilot_blocker_dependencies(&current, &local_blockers)?;
+            current
+                .relations
+                .extend(add_dependencies.iter().map(|target| TaskRelation {
+                    relation_type: TaskRelationType::BlockedBy,
+                    target: target.clone(),
+                }));
             let target_status = if task.promote {
                 TaskStatus::Backlog
             } else {
@@ -242,6 +262,7 @@ pub(super) fn apply_task(
                 expected_context_creation: snapshot.context_creation_identity.clone(),
                 context_files: task.after.clone(),
                 add_tags,
+                add_dependencies,
                 status: target_status,
                 complexity: task.complexity,
                 event_type: "task_pilot_applied".to_string(),
@@ -301,7 +322,7 @@ pub(super) fn apply_task(
             }
             Ok(())
         };
-        if let Err(error) = with_task_locks(runtime, &lock_ids, 0, &mut operation) {
+        if let Err(error) = with_task_locks(runtime, &task.task_id, &lock_ids, 0, &mut operation) {
             // Claim admission fences ordinary writers before the closure can
             // run. Re-read durable ownership instead of matching error prose.
             if let Some(outcome) = superseded_task(
@@ -537,6 +558,7 @@ pub(super) fn record_applied_assessment(
 
 pub(super) fn with_task_locks(
     runtime: &OrbitRuntime,
+    write_task_id: &str,
     task_ids: &[String],
     index: usize,
     operation: &mut dyn FnMut() -> Result<(), OrbitError>,
@@ -544,11 +566,18 @@ pub(super) fn with_task_locks(
     let Some(task_id) = task_ids.get(index) else {
         return operation();
     };
-    let mut nested = || with_task_locks(runtime, task_ids, index + 1, operation);
-    runtime
-        .stores()
-        .tasks()
-        .with_task_write_lock(task_id, &mut nested)
+    let mut nested = || with_task_locks(runtime, write_task_id, task_ids, index + 1, operation);
+    if task_id == write_task_id {
+        runtime
+            .stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut nested)
+    } else {
+        runtime
+            .stores()
+            .tasks()
+            .with_task_read_lock(task_id, &mut nested)
+    }
 }
 
 fn task_snapshot_drift(

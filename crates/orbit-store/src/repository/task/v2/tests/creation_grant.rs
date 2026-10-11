@@ -86,6 +86,7 @@ fn pilot_write(
                 expected_context_creation: expected,
                 context_files: scope(context_files),
                 add_tags: Vec::new(),
+                add_dependencies: Vec::new(),
                 status: bundle.envelope.status,
                 complexity: TaskComplexity::Low,
                 event_type: "task_pilot_applied".to_string(),
