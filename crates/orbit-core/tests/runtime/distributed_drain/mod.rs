@@ -810,6 +810,36 @@ impl Pair {
             .expect("owner claims")
     }
 
+    fn owner_claim(&self, claim_id: &str) -> Value {
+        self.owner_claims()
+            .into_iter()
+            .find(|entry| entry["claim"]["claim_id"] == claim_id)
+            .unwrap_or_else(|| panic!("owner claim {claim_id}"))
+    }
+
+    fn owner_claim_for_leaf(&self, leaf: &str) -> Value {
+        let claim_id = self
+            .admission(leaf)
+            .receipt
+            .and_then(|receipt| receipt.claim)
+            .expect("claim")
+            .claim_id;
+        self.owner_claim(&claim_id)
+    }
+
+    fn owner_has_claim_for_task(&self, task_id: &str) -> bool {
+        self.owner_claims()
+            .iter()
+            .any(|entry| entry["claim"]["task_id"] == task_id)
+    }
+
+    fn only_owner_claim(&self) -> Value {
+        let mut claims = self.owner_claims().into_iter();
+        let claim = claims.next().expect("one owner claim");
+        assert!(claims.next().is_none(), "expected one owner claim");
+        claim
+    }
+
     fn owner_task(&self, id: &str) -> Value {
         self.wire
             .owner

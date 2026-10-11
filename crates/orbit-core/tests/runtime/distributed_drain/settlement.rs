@@ -115,7 +115,10 @@ fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host()
         settles[0]["settlement"]["Release"]["failure"]["class"],
         "environment"
     );
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "revoked");
+    assert_eq!(
+        pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
+        "revoked"
+    );
     assert!(
         pair.tasks
             .iter()

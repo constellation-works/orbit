@@ -713,7 +713,10 @@ fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
     leaf.pair.leaf_fails_with(&leaf.leaf, &refused);
     leaf.pair.pass(&leaf.drain);
     assert_eq!(leaf.pair.owner_status(&leaf.task), "blocked");
-    assert_eq!(leaf.pair.owner_claims()[0]["claim"]["phase"], "failed");
+    assert_eq!(
+        leaf.pair.owner_claim_for_leaf(&leaf.leaf)["claim"]["phase"],
+        "failed"
+    );
 }
 
 /// A claimed reviewer that cannot run the Linux CodeQL check holds the review

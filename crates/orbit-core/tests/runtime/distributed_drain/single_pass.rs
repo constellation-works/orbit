@@ -267,13 +267,10 @@ fn an_explicit_zero_duration_pull_drain_admits_one_bounded_pass() {
         .input
         .unwrap();
     assert_eq!(input["for_seconds"], 0);
-    assert_eq!(pair.owner_claims().len(), 1);
+    let claim = pair.only_owner_claim();
     assert_eq!(pull_request_ids(&pair).len(), 1);
     assert!(single_pass_taken(&pair, &drain));
-    let claimed = pair.owner_claims()[0]["claim"]["task_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let claimed = claim["claim"]["task_id"].as_str().unwrap().to_string();
     for task in &pair.tasks {
         assert_eq!(
             pair.owner_status(task),
