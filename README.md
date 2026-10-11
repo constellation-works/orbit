@@ -100,6 +100,7 @@ Crews name a provider, model, and effort level; complexity pools choose one for 
 - **[orbit-cli.com](https://orbit-cli.com):** guides, concepts, and the full CLI and config reference
 - **[docs/CONFIG.md](docs/CONFIG.md):** crews, pools, base branch, sandbox
 - **[docs/POSITIONING.md](docs/POSITIONING.md):** what Orbit is for, and what it deliberately isn't
+- **[docs/OPTIMISTIC_MERGING.md](docs/OPTIMISTIC_MERGING.md):** the preferred delivery mode: merge fast, review after landing, keep the queue draining
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** and **[design docs](docs/INDEX.md#designs)**
 - **[CHANGELOG.md](CHANGELOG.md):** Orbit is pre-1.0, and breaking changes ship in minor releases
 
