@@ -42,6 +42,15 @@
 //! is released, and only then is the record withdrawn. A holder of the lock
 //! with neither record never registered.
 //!
+//! A process joins each root once. Every store, registry or checkout it opens
+//! asks [`GenerationGuard::for_process`] again, and while an earlier join of
+//! the same root, identity, role and handover is live and its access covers
+//! the request (a writer's covers a reader's), that call shares it instead of
+//! taking admission and writing another record. The shared lock and record
+//! are released when the last guard drops. A pending switch for another
+//! identity still refuses the call, as it would a new join.
+//! [`GenerationGuard::join`] always joins anew.
+//!
 //! # Admission
 //!
 //! `.generation-admission.lock` orders joins against anything that changes

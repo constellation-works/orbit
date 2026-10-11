@@ -27,6 +27,7 @@ mod git_repo;
 mod workflow_gate;
 
 mod env_pass_warning;
+mod generation_participation;
 mod job_resume_detached;
 mod run_observation;
 mod server_readiness;
