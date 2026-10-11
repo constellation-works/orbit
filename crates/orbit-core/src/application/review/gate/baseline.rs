@@ -147,6 +147,7 @@ impl Judgement {
                         command: command.clone(),
                         run_id: context.run_id.clone(),
                         selection: check.selection.clone(),
+                        failures: check.base_failures(),
                     });
                     confirmed.push(record.clone());
                     ("confirmed", json!({ "failures": failures }))
@@ -440,10 +441,14 @@ pub(super) fn baseline_red_refusal(holds: &[BaselineRedHold], attempt_id: &str) 
         .join(", ");
     Some(hold.text(&format!(
         "review_gate_baseline_red: attempt {attempt_id} found required check(s) {commands} \
-         failing on base {} exactly as on the candidate, and nothing else open. The candidate \
+         failing on base {} exactly as on the candidate{}, and nothing else open. The candidate \
          did not introduce the failure, so it is kept and the task is held until the base \
          passes; a fresh review then judges it.",
-        hold.base_sha
+        hold.base_sha,
+        hold.failures
+            .describe()
+            .map(|described| format!(" ({described})"))
+            .unwrap_or_default()
     )))
 }
 

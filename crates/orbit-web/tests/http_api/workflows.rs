@@ -1003,6 +1003,7 @@ fn auto_readiness_explains_the_tasks_it_names() {
                 command: "make ci-test-affected".into(),
                 run_id: "jrun-red".into(),
                 selection: None,
+                failures: Default::default(),
             };
             hold_for_red_base(&fixture, &red.id, &hold);
             let proposed = readiness_task(

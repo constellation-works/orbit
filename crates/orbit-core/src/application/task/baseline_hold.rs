@@ -25,6 +25,10 @@
 //! `baseline_red_hold_verdict` history entry, which changes no status.
 //! Admission reads only the latest verdict after the hold. A hold with no
 //! verdict yet stays held until one is recorded.
+//!
+//! [ORB-15374] The tick also makes sure every standing hold's red base
+//! failure has one open repair task ([`super::baseline_repair`]), and the
+//! readiness detail and each verdict name the failures the hold recorded.
 
 use std::time::Instant;
 
@@ -39,6 +43,7 @@ use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRunStat
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::baseline_repair::{RepairIndex, RepairLink};
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
@@ -77,6 +82,11 @@ pub struct BaselineHoldRefresh {
     pub unchecked: Vec<String>,
     /// The refresh run the clock tick started for `unchecked`, if any.
     pub dispatched: Option<String>,
+    /// Repair tasks the clock tick filed for a red base failure no open
+    /// repair task tracked [ORB-15374].
+    pub repairs_filed: Vec<String>,
+    /// Held tasks the clock tick linked to an open repair task.
+    pub repairs_linked: Vec<String>,
     /// Why the check did nothing, when it stood down.
     pub skipped: Option<String>,
 }
@@ -97,15 +107,16 @@ impl OrbitRuntime {
             Some(verdict) if verdict.lifted => None,
             Some(verdict) => Some(verdict.reason),
             None => Some(format!(
-                "required validation `{}` fails on `{}` at {}; the hold stands until the owner's \
-                 clock checks a new base tip and the command passes there",
+                "required validation `{}` fails on `{}` at {}{}; the hold stands until the \
+                 owner's clock checks a new base tip and the command passes there",
                 standing.hold.command,
                 if standing.hold.base_ref.is_empty() {
                     "the base"
                 } else {
                     standing.hold.base_ref.as_str()
                 },
-                standing.hold.base_sha
+                standing.hold.base_sha,
+                standing.hold.failures_clause()
             )),
         })
     }
@@ -122,9 +133,11 @@ impl OrbitRuntime {
         deadline: Instant,
     ) -> Result<BaselineHoldRefresh, OrbitError> {
         let repo = &self.paths().repo_root;
-        let mut refresh = self.check_baseline_holds(Some(deadline), &|hold| {
-            recorded_baseline_hold_status(repo, hold)
-        })?;
+        let mut refresh = self.check_baseline_holds(
+            Some(deadline),
+            &|hold| recorded_baseline_hold_status(repo, hold),
+            Some(&mut RepairIndex::default()),
+        )?;
         if refresh.unchecked.is_empty() || self.baseline_hold_refresh_live()? {
             return Ok(refresh);
         }
@@ -158,17 +171,23 @@ impl OrbitRuntime {
         deadline: Option<Instant>,
     ) -> Result<BaselineHoldRefresh, OrbitError> {
         let repo = &self.paths().repo_root;
-        self.check_baseline_holds(deadline, &|hold| {
-            Some(baseline_hold_status(self, repo, hold))
-        })
+        self.check_baseline_holds(
+            deadline,
+            &|hold| Some(baseline_hold_status(self, repo, hold)),
+            None,
+        )
     }
 
     /// Judge every standing, unlifted hold with `status` and record each
     /// changed verdict. A hold `status` cannot judge is listed `unchecked`.
+    /// With `repairs`, which only the clock tick passes, each such hold is
+    /// first linked to its red base failure's repair task, filed when none
+    /// is open ([`super::baseline_repair`]).
     fn check_baseline_holds(
         &self,
         deadline: Option<Instant>,
         status: &dyn Fn(&BaselineRedHold) -> Option<BaselineHoldStatus>,
+        mut repairs: Option<&mut RepairIndex>,
     ) -> Result<BaselineHoldRefresh, OrbitError> {
         let mut refresh = BaselineHoldRefresh::default();
         if self.worker_invocation().is_some() {
@@ -198,6 +217,17 @@ impl OrbitRuntime {
                 .is_some_and(|verdict| verdict.lifted)
             {
                 continue;
+            }
+            if let Some(index) = repairs.as_deref_mut() {
+                match self.link_baseline_red_repair(&task, &standing.hold, index) {
+                    Ok(RepairLink::Filed(repair_id)) => refresh.repairs_filed.push(repair_id),
+                    Ok(RepairLink::Linked(_)) => refresh.repairs_linked.push(task.id.clone()),
+                    Ok(RepairLink::Unchanged) => {}
+                    Err(error) => tracing::warn!(
+                        task_id = %task.id,
+                        "could not file or link a red base repair task: {error}"
+                    ),
+                }
             }
             let verdict = match status(&standing.hold) {
                 None => {

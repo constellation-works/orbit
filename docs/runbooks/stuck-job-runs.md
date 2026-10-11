@@ -416,10 +416,15 @@ command also fails on the base, exactly as it fails on the candidate. Do not
 resume or replay that run, and do not unblock the task. No `[BLOCKED]` PR was
 opened. The task is in `backlog` under a `baseline_red_hold` history event, and
 its candidate is kept. `orbit run readiness --json` reports the task with
-`reason: "baseline_red_hold"`. Its `detail` names the red base commit.
+`reason: "baseline_red_hold"`. Its `detail` names the red base commit and
+the tests failing there (or, for a command that names no test, the end of its
+output).
 
 Fix the base instead: land a repair of the failing command on the integration
-branch. After the ref advances, the owner's clock tick dispatches one
+branch. The owner's clock tick has already filed one `baseline-red-repair`
+task for it, naming the failing tests, the first red base and every task the
+same failures hold; find it with `orbit task list --tag baseline-red-repair`
+and work that task rather than filing another. After the ref advances, the owner's clock tick dispatches one
 `baseline_hold_refresh_pipeline` run, which runs the held command on the new
 tip and records a `baseline_red_hold_verdict` history event; the hold lifts
 only when that check passes. The tick itself never runs the command, so a

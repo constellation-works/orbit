@@ -395,6 +395,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             command: run.command.clone(),
             run_id: context.run_id.clone(),
             selection: run.selection().cloned(),
+            failures: check.failures(workspace_path, run.selection()),
         };
         return baseline_red_failure(&hold, run, commit, &evidence);
     }

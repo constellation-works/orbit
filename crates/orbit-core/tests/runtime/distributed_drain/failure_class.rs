@@ -591,6 +591,7 @@ fn a_baseline_red_failure_releases_the_claim_without_excluding_the_crew() {
         command: "make ci-fast".into(),
         run_id: String::new(),
         selection: None,
+        failures: Default::default(),
     };
     let (pair, drain, _) = a_released_failure(
         &hold.text("`make ci-fast` fails on the base as well: rustfmt diff in listing.rs"),

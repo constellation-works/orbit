@@ -73,6 +73,10 @@ pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
 /// balloon the task bundle. See [`capture`].
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
 
+/// The line a failed run's captured output ends with, naming the `PATH` it
+/// ran under so a missing tool can be diagnosed.
+pub(super) const VALIDATION_PATH_LINE: &str = "Required validation PATH=";
+
 /// One required command's captured result on the candidate.
 pub(super) struct RequiredCommandRun {
     pub(super) command: String,
@@ -346,7 +350,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
     // Include failures below a build script too (e.g. make exits 2 when a
     // guardrail cannot resolve rg), rather than relying on shell exit 127.
     if !outcome.success {
-        output.push_str(&format!("\nRequired validation PATH={validation_path}"));
+        output.push_str(&format!("\n{VALIDATION_PATH_LINE}{validation_path}"));
     }
     Ok(RequiredCommandRun {
         command: command.to_string(),
