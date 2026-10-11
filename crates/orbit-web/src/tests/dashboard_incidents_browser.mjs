@@ -12,8 +12,10 @@
 // cause [ORB-15434]: cause headers over signatures that share one, a
 // single-signature cause as one row, the By signature toggle, and the
 // detail panel's same-cause list and grouping basis, and that a message the
-// feed cut to its list cap loads in full on demand [ORB-15527]. No Orbit
-// store is contacted.
+// feed cut to its list cap loads in full on demand [ORB-15527]. Independent
+// host stores reuse an audit row ID; held responses check message and Copy
+// isolation across host switches and workspace visits. No Orbit store is
+// contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -32,6 +34,9 @@ const HOSTS = {
   host_edit: { authorized: true, reason: null },
   hosts: [{
     name: 'alpha', machine_id: 'hm_alpha', ssh: null, task_prefix: 'ALP', local: true, legacy: false,
+    reachable: true, error: null, binary_version: '0.28.2', protocol_fingerprint: 'fp', skew: false, skew_fields: [], workspaces: [],
+  }, {
+    name: 'beta', machine_id: 'hm_beta', ssh: 'fixture@beta', task_prefix: 'BET', local: false, legacy: false,
     reachable: true, error: null, binary_version: '0.28.2', protocol_fingerprint: 'fp', skew: false, skew_fields: [], workspaces: [],
   }],
 };
@@ -55,6 +60,9 @@ const LIST_MESSAGE_MAX_BYTES = 2048;
 const REFUSAL_MESSAGE = ['transition refused: task is not in review',
   ...Array.from({ length: 60 }, (_, index) => `  blocker ${index}: required evidence is missing for criterion ${index}`)].join('\n');
 const REFUSAL_EVENT_ID = 3001;
+const BETA_REFUSAL_MESSAGE = REFUSAL_MESSAGE.replace('transition refused:', 'beta transition refused:');
+
+const refusalMessage = (host) => host === 'beta' ? BETA_REFUSAL_MESSAGE : REFUSAL_MESSAGE;
 
 // One incident per (run, signature), as the store keys them.
 function incident(id, fields) {
@@ -77,7 +85,7 @@ function incident(id, fields) {
   };
 }
 
-function allIncidents(now) {
+function allIncidents(now, host) {
   const rows = [];
   // A: the same failure in six runs, two hours apart; last seen 20 min ago.
   for (let index = 0; index < 6; index += 1) {
@@ -99,7 +107,7 @@ function allIncidents(now) {
   rows.push(incident(26, { role: 'human', surface: 'job worker', message: VALIDATE_MESSAGE, runId: 'run-val-2', firstAgo: 10 * HOUR, cause: VALIDATE_CAUSE, now }));
   // G: a structured code only one signature carries.
   rows.push(incident(27, { role: 'admin', surface: 'fixture.wait', message: SANDBOX_MESSAGE, runId: 'run-sandbox', firstAgo: 12 * HOUR, cause: SANDBOX_CAUSE, now }));
-  const refusal = incident(30, { cls: 'expected', surface: 'orbit.task.transition', message: REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES), firstAgo: 2 * HOUR, now });
+  const refusal = incident(30, { cls: 'expected', surface: 'orbit.task.transition', message: refusalMessage(host).slice(0, LIST_MESSAGE_MAX_BYTES), firstAgo: 2 * HOUR, now });
   refusal.truncated = true;
   refusal.message_event_id = REFUSAL_EVENT_ID;
   for (const event of refusal.events) event.truncated = true;
@@ -113,14 +121,21 @@ function allIncidents(now) {
 
 const incidentRequests = [];
 const messageRequests = [];
-function incidentsApi(url) {
+const routeLog = [];
+let nextMessageHold = null;
+function holdNextMessage(host, workspace) {
+  if (nextMessageHold) throw new Error('a message hold is already armed');
+  nextMessageHold = { host, workspace, release: null };
+  return nextMessageHold;
+}
+function incidentsApi(url, host) {
   const now = Date.now();
   const window = url.searchParams.get('since') || '24h';
   const cls = url.searchParams.get('class');
   const limit = Number(url.searchParams.get('limit')) || 50;
   const span = { '1h': HOUR, '6h': 6 * HOUR, '24h': DAY, '7d': 7 * DAY }[window];
   const since = span ? now - span : null;
-  const inWindow = allIncidents(now).filter((row) => since == null || Date.parse(row.last_ts) >= since);
+  const inWindow = allIncidents(now, host).filter((row) => since == null || Date.parse(row.last_ts) >= since);
   const classes = ['unexpected', 'expected', 'denied', 'diagnostic', 'deferred'];
   const stats = (rows) => ({
     incidents: rows.length,
@@ -139,21 +154,33 @@ function incidentsApi(url) {
   };
 }
 
-function api(rest, url, res) {
+function api(host, rest, url, res) {
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   if (rest === 'audit/incidents') {
-    incidentRequests.push(Object.fromEntries(url.searchParams));
-    return json(incidentsApi(url));
+    incidentRequests.push({ host, ...Object.fromEntries(url.searchParams) });
+    return json(incidentsApi(url, host));
   }
   if (rest === `audit/events/${REFUSAL_EVENT_ID}/message`) {
-    messageRequests.push(rest);
-    return json({ id: REFUSAL_EVENT_ID, message: REFUSAL_MESSAGE });
+    const workspace = url.searchParams.get('workspace') || '';
+    messageRequests.push({ host, workspace, path: url.pathname });
+    const body = { id: REFUSAL_EVENT_ID, message: refusalMessage(host) };
+    if (nextMessageHold?.host === host && nextMessageHold.workspace === workspace) {
+      const held = nextMessageHold;
+      nextMessageHold = null;
+      held.release = (refused = false) => refused ? json({ error: 'held message unavailable' }, 503) : json(body);
+      return;
+    }
+    return json(body);
   }
   if (rest === 'hosts') return json(HOSTS);
-  if (rest === 'hosts/alpha/connection') {
-    return json({ host: 'alpha', machine_id: 'hm_alpha', local: true, origin: 'local', binary_version: '0.28.2', protocol_fingerprint: 'fp', skew: false, skew_fields: [], error: null, forward_writes: { authorized: true, reason: null }, reachable: true });
+  if (rest === 'hosts/alpha/connection' || rest === 'hosts/beta/connection') {
+    const name = rest.split('/')[1];
+    return json({ host: name, machine_id: `hm_${name}`, local: name === 'alpha', origin: name === 'alpha' ? 'local' : 'remote', binary_version: '0.28.2', protocol_fingerprint: 'fp', skew: false, skew_fields: [], error: null, forward_writes: { authorized: true, reason: null }, reachable: true });
   }
-  if (rest === 'workspaces') return json([{ id: 'ws_orbit', name: 'orbit', status: 'active', is_default: true }]);
+  if (rest === 'workspaces') return json([
+    { id: 'ws_orbit', name: 'orbit', status: 'active', is_default: true },
+    { id: 'ws_other', name: 'other', status: 'active', is_default: false },
+  ]);
   if (rest === 'tasks') return json({ items: [], total: 0, limit: 50, truncated: false });
   if (rest === 'tasks/all') return json({ items: [], total: 0 });
   if (rest === 'tasks/locks') return json({ total_locked: 0, total_tasks: 0, by_task: [] });
@@ -166,7 +193,7 @@ function api(rest, url, res) {
     return;
   }
   if (rest === 'workflows/auto/readiness') return json({ controls_authorized: true, tasks: [], capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4 } });
-  if (rest === 'routines') return json({ machine_name: 'alpha', capabilities: {}, clock: {}, routines: [] });
+  if (rest === 'routines') return json({ machine_name: host, capabilities: {}, clock: {}, routines: [] });
   if (rest.startsWith('runs') || rest === 'audit') return json([]);
   if (rest === 'audit/summary') return json({ window: '24h', events: 0, failed_runs: 0 });
   if (rest.startsWith('config/')) return json({ entries: [], rows: [], config_set: { authorized: true, reason: null } });
@@ -176,14 +203,23 @@ function api(rest, url, res) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (!url.pathname.startsWith('/api/')) {
+    // The dashboard currently gates Incidents behind a concrete workspace.
+    // Exercise its aggregate cache directly with the shipped modules and
+    // common.js routing, without widening the dashboard's supported views.
+    if (url.pathname === '/message-scope') {
+      res.setHeader('content-type', 'text/html');
+      res.end('<!doctype html><link rel="stylesheet" href="/static/dashboard.css"><div id="diag-count"></div><div id="diag-body"></div>');
+      return;
+    }
     const served = dashboardFile(url.pathname);
     if (!served) { res.writeHead(404); res.end(); return; }
     res.setHeader('content-type', served.type);
     res.end(served.data);
     return;
   }
-  const forwarded = url.pathname.match(/^\/api\/on\/[^/]+\/(.+)$/);
-  return api(forwarded ? forwarded[1] : url.pathname.slice('/api/'.length), url, res);
+  routeLog.push(url.pathname + url.search);
+  const forwarded = url.pathname.match(/^\/api\/on\/([^/]+)\/(.+)$/);
+  return api(forwarded ? forwarded[1] : 'alpha', forwarded ? forwarded[2] : url.pathname.slice('/api/'.length), url, res);
 });
 const sockets = new Set();
 server.on('connection', (socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
@@ -269,6 +305,27 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: 'America/Los_Angeles' });
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  // Routing disables Chromium's HTTP cache, allowing two held requests to
+  // the same URL to reach the server independently and settle out of order.
+  await context.route('**/api/**', (route) => route.continue());
+  // A settlement marker runs in the next task after the app consumes the
+  // response body, so releasing a held response never relies on a sleep.
+  await context.addInitScript(() => {
+    window.messageSettlements = 0;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const response = await nativeFetch(...args);
+      if (/\/audit\/events\/\d+\/message(?:\?|$)/.test(String(args[0]))) {
+        for (const method of ['json', 'text']) {
+          const consume = response[method].bind(response);
+          response[method] = (...bodyArgs) => consume(...bodyArgs).finally(() => {
+            setTimeout(() => { window.messageSettlements += 1; }, 0);
+          });
+        }
+      }
+      return response;
+    };
+  });
   page = await context.newPage();
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
@@ -527,6 +584,119 @@ try {
     }
   }
 
+  // 11. A completed message cache follows the selected host in both All
+  // workspaces and a concrete workspace shared by the two stores.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const messageButton = () => page.locator('#diag-body .incident-message-note button');
+  const copyMessage = async () => {
+    await page.locator('#diag-body .incident-copy').click();
+    return page.evaluate(() => navigator.clipboard.readText());
+  };
+  const aggregateScope = () => new URL(page.url()).pathname === '/message-scope';
+  const renderAggregate = () => page.evaluate(async () => {
+    const { common, incidents } = window.incidentScope;
+    incidents.renderIncidents(await common.fetchJson(`/api/audit/incidents?since=24h&class=${incidents.getIncidentClass()}&limit=50`));
+  });
+  const openRefusal = async (workspace) => {
+    if (!workspace) {
+      await page.goto(`${origin}/message-scope?workspace=all`);
+      await page.evaluate(async (hosts) => {
+        const common = await import('/static/js/common.js');
+        const incidents = await import('/static/js/incidents.js');
+        common.setRegisteredHosts(hosts);
+        common.setMultiWorkspace(true);
+        window.incidentScope = { common, incidents };
+      }, HOSTS.hosts);
+      await renderAggregate();
+    } else {
+      await page.goto(`${origin}/?host=alpha&workspace=${workspace}#diagnostics/incidents?window=24h`);
+    }
+    await page.locator('#diag-body .incident-tile[data-class="expected"]').click();
+    if (aggregateScope()) await renderAggregate();
+    await until('alpha refusal excerpt', async () => (await detail()).message === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES));
+  };
+  const switchHost = async (host) => {
+    if (aggregateScope()) {
+      await page.evaluate((host) => window.incidentScope.common.setHost(host), host);
+      await renderAggregate();
+    } else {
+      await page.locator('#host-select').selectOption(host);
+    }
+    const message = refusalMessage(host).slice(0, LIST_MESSAGE_MAX_BYTES);
+    await until(`${host || 'alpha'} refusal excerpt`, async () => (await detail()).message === message && (await detail()).note !== null);
+  };
+  const loadMessage = async (message) => {
+    await messageButton().click();
+    await until('loaded message', async () => (await detail()).message === message);
+    assert((await detail()).note === null && await copyMessage() === message, 'the panel and Copy use the loaded message');
+  };
+  for (const workspace of ['', 'ws_orbit']) {
+    await openRefusal(workspace);
+    await loadMessage(REFUSAL_MESSAGE);
+    await switchHost('beta');
+    const selectedWorkspace = aggregateScope() ? await page.evaluate(() => window.incidentScope.common.getWorkspace() || '') : await page.locator('#workspace-select').inputValue();
+    assert(selectedWorkspace === workspace, 'the workspace selection survives the host switch');
+    await loadMessage(BETA_REFUSAL_MESSAGE);
+    assert(JSON.stringify(messageRequests.at(-1)) === JSON.stringify({ host: 'beta', workspace, path: `/api/on/beta/audit/events/${REFUSAL_EVENT_ID}/message` }), 'the second store reads its own audit row, including in All workspaces');
+    const loaded = messageRequests.length;
+    const requests = incidentRequests.length;
+    if (aggregateScope()) await renderAggregate();
+    else await page.locator('#refresh-btn').click();
+    await until('a same-scope refresh', () => incidentRequests.length > requests && lastRequest().host === 'beta');
+    await rowNamed(BETA_REFUSAL_MESSAGE.split('\n')[0]).click();
+    assert((await detail()).message === BETA_REFUSAL_MESSAGE && messageRequests.length === loaded, 'a loaded message stays cached within its scope');
+  }
+
+  // 12. Hold alpha's response until beta has loaded the same audit row ID.
+  // Its late completion must leave both beta's panel and Copy untouched.
+  await openRefusal('');
+  const oldHostMessage = holdNextMessage('alpha', '');
+  await messageButton().click();
+  await until('held alpha message', () => oldHostMessage.release);
+  await switchHost('beta');
+  await loadMessage(BETA_REFUSAL_MESSAGE);
+  let settlements = await page.evaluate(() => window.messageSettlements);
+  oldHostMessage.release();
+  await until('late alpha message settled', () => page.evaluate((count) => window.messageSettlements > count, settlements));
+  assert((await detail()).message === BETA_REFUSAL_MESSAGE && await copyMessage() === BETA_REFUSAL_MESSAGE, 'a late alpha response cannot replace beta display or Copy');
+
+  // 13. Returning to the same host/workspace is a new visit. Even though
+  // the key matches, an old success or error cannot settle a newer load.
+  const visitCases = [];
+  evidenceLog.messageScope = { messageRequests, routeLog, visitCases };
+  for (const boundary of ['host', 'workspace']) {
+    for (const refused of [false, true]) {
+      evidenceLog.currentVisit = { boundary, refused };
+      await openRefusal('ws_orbit');
+      const oldMessage = holdNextMessage('alpha', 'ws_orbit');
+      await messageButton().click();
+      await until('held old-visit message', () => oldMessage.release);
+      if (boundary === 'host') {
+        await switchHost('beta');
+        await switchHost('');
+      } else {
+        const requests = incidentRequests.length;
+        await page.locator('#workspace-select').selectOption('ws_other');
+        await until('other workspace feed', () => incidentRequests.slice(requests).some((request) => request.workspace === 'ws_other'));
+        await page.locator('#diag-body .incident-row').first().waitFor({ state: 'visible' });
+        await page.locator('#workspace-select').selectOption('ws_orbit');
+        await until('returned workspace excerpt', async () => (await detail()).message === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES));
+      }
+      const newerMessage = holdNextMessage('alpha', 'ws_orbit');
+      await messageButton().click();
+      await until('held new-visit message', () => newerMessage.release);
+      settlements = await page.evaluate(() => window.messageSettlements);
+      oldMessage.release(refused);
+      await until('old visit settled', () => page.evaluate((count) => window.messageSettlements > count, settlements));
+      assert(await messageButton().isDisabled(), `${boundary} round trip: the newer message request still owns Loading after old ${refused ? 'error' : 'success'}`);
+      assert((await detail()).message === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES) && await copyMessage() === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES), `${boundary} round trip: the late response cannot replace the excerpt or Copy`);
+      newerMessage.release();
+      await until('new visit full message', async () => (await detail()).message === REFUSAL_MESSAGE);
+      assert(await copyMessage() === REFUSAL_MESSAGE, 'the current visit completes normally');
+      visitCases.push({ boundary, refused });
+    }
+  }
+
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -548,13 +718,17 @@ try {
       'browser-incidents-by-signature-toggle',
       'browser-incidents-same-cause-signatures-and-basis',
       'browser-incidents-capped-message-loads-full-text',
+      'browser-incidents-full-message-cache-follows-host',
+      'browser-incidents-late-message-keeps-selected-host',
+      'browser-incidents-message-host-round-trip',
+      'browser-incidents-message-workspace-round-trip',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
   console.log('Dashboard incidents browser checks passed at 1440px, 768px and 375px: tiles, lifespan bars, detail panel, truncation note, filters, cause grouping and its toggle, 6h window and sticky panel.');
 } catch (error) {
-  fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, messageRequests, routeLog, currentDetail: page ? await detail().catch(() => null) : null, ...evidenceLog }, null, 2));
   await page?.screenshot({ path: path.join(evidence, 'incidents-failure.png'), fullPage: true }).catch(() => {});
   throw error;
 } finally {
