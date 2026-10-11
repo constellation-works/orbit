@@ -2,13 +2,15 @@
 type: context
 summary: Open causes of Orbit task-run failures and blocks, one entry per distinct cause, each with the task that will close it; resolved causes are removed.
 incident_date: 2026-09-27
-last_validated: 2026-10-10
+last_validated: 2026-10-11
 tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: []
 related_artifacts:
   - ORB-14777
   - ORB-15156
-  - ORB-15162
+  - ORB-15385
+  - ORB-15397
+  - ORB-15400
 ---
 
 # Run failure log
@@ -33,22 +35,72 @@ before you close it out, or extend the entry that already names the cause.
 Delete an entry once its fix has landed. Git history keeps the resolved
 entries.
 
-## 2026-10-10: Final recovery cannot start for a task whose required tools it disallows
+## 2026-10-11: A full-workspace affected-test gate is killed at the capture limit and held as baseline red
 
-- **Where:** owner, `final_recovery` admission after a failed step.
-- **Symptom:** ``final recovery activity `final_recovery` did not return a
-  decision: task `ORB-15156` required tool `orbit.task.add` failed admission:
-  tool 'orbit.task.add' is in the activity disallow list (final_recovery)``.
-- **Cause:** Admission checks a task's `required_tools` for deny-mode
-  activities too, and refuses the task when the activity's disallow list covers
-  one. Every `delivery-code-review` batch task requires `orbit.task.add` and
-  `orbit.task.artifact.put`, so none of them can get final recovery, and the
-  run parks with no decision.
-- **Fix:** ORB-15162 (open). Activities in the named non-implementer set drop a
-  covered requirement from `requested_tools` and record a note; the tool stays
-  out of the callable set. `agent_implement` still fails closed.
-- **Tasks:** ORB-15156 (closed by hand).
-- **Final recovery:** none; it failed admission (`jrun-20261010-0544-c3`).
+- **Where:** owner, `validate` (`candidate_validate`) and its base replay; the
+  hold refresh after it.
+- **Symptom:** `baseline_red_hold` on `make ci-test-affected`. Both
+  `validation/<run>/1.json` and `1.baseline.json` show `exit_code: -1`, no
+  failing test, and "process output capture limit exceeded on stderr".
+- **Cause:** `ci-test-affected.py` runs nextest with `--success-output
+  immediate`, so every passing test's output is streamed. A full-workspace
+  selection (2,754 tests) passes `orbit-exec`'s 1 MiB per-stream capture
+  limit near the end, and the supervisor stops the command. The base replay
+  dies the same way, so the hold never lifts.
+- **Fix:** ORB-15400 (open). Interim since 2026-10-11 02:45Z: box drains are
+  started with `ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES=16777216`, and the
+  systemd user manager carries the same value for clock-started hold refreshes
+  (`systemctl --user unset-environment ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES`
+  to restore).
+- **Tasks:** ORB-15374.
+- **Final recovery:** none; the run released the candidate as a hold
+  (`jrun-20261011-0131-c8`).
+
+## 2026-10-11: An implementer blocks on a ci-fast subcheck the sandbox can only skip
+
+- **Where:** owner, `implement_bundle`. The implementer runs the required gates
+  inside its Bubblewrap sandbox.
+- **Symptom:** `task_blocked_by_agent kind=sandbox.userns_restricted`, with no
+  PR, after an otherwise complete implementation.
+- **Cause:** `make ci-fast` runs `scripts/test-compiler-cache-namespaces.sh`,
+  which cannot create a mount namespace inside the sandbox. It prints
+  `skip:` and exits 0. The deferral handoff (`deferred_sandbox.rs`) accepts
+  only `DEFERRED:` notices backed by a failing namespace probe, so the
+  implementer cannot hand the check to the host replay. It blocks instead.
+  On the host, outside any agent sandbox, the check runs.
+- **Fix:** ORB-15397 (open). Inside an agent sandbox the script prints a
+  `DEFERRED:` notice the handoff accepts, and the validate step replays
+  `make ci-fast` on the host.
+- **Tasks:** ORB-15380. Rescued by hand: every other gate had passed, and the
+  change does not touch the compiler-cache scripts. PR #4234.
+- **Final recovery:** none; an agent-declared blocker stops the run before it
+  (`jrun-20261011-0214-c10`).
+
+## 2026-10-11: Mac claimed leaves go red on timing-bound tests under oversubscription
+
+- **Where:** Mac follower, the implementer's and reviewer's `make
+  ci-test-affected` runs in `task_claimed_pr_pipeline`.
+- **Symptom:** About 20 tests fail on the candidate *and* on the unchanged
+  base, none related to the change:
+  - `delivery_remote_source::*` with `automation_deferred: source_budget`;
+  - `build_budget` deadline tests ("bounded deadline plus process cleanup:
+    2000ms");
+  - `antigravity_fake_agent` 1 s print timeout.
+
+  Implementers spend their wall clock proving the failures are base failures,
+  and reviewers settle `incomplete`.
+- **Cause:** `scripts/build-budget.py` bounds compile jobs per slot
+  (`CARGO_BUILD_JOBS`) but not nextest test threads. Three concurrent gates on
+  the 14-core Mac each run 14 test processes, so load reaches about 33.
+- **Fix:** ORB-15385 (open), a per-slot test-thread setting. Interim since
+  2026-10-11: the Mac's ws_orbit `execution.env.pass` lists
+  `NEXTEST_TEST_THREADS` and `RUST_TEST_THREADS`, and Mac pull drains are
+  started with both set to 4.
+- **Tasks:** ORB-15332 (passed after proving base failures, about 30 min),
+  ORB-15206 (two 2.5–3 h Mac failures on 2026-10-10, then steered to the box
+  with `os:linux`).
+- **Final recovery:** see each task. Most Mac claims settled `incomplete`
+  before final recovery.
 
 ## Operational causes (no code defect)
 
