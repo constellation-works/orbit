@@ -45,7 +45,7 @@ use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
 use crate::registry::{CONFIG_KEY_REGISTRY, ConfigSnapshot, GLOBAL_ONLY_KEY_PREFIX};
-use crate::resolved::{ResolvedConfig, default_crews, warn_compatibility_keys};
+use crate::resolved::{ResolvedConfig, crews_from_raw, default_crews, warn_compatibility_keys};
 use crate::store::read_config_file;
 
 /// Security-sensitive settings that a workspace file must restate to keep.
@@ -142,7 +142,8 @@ pub struct ShadowedConfigValue {
 }
 
 /// The layer and value a key resolves to once the layer that supplies it
-/// stops setting it.
+/// stops setting it, when that prediction is available. For a configured
+/// crew, built-in values are the entry's defaults, not the shipped crew's fields.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigFallback {
     /// Layer that would supply the value.
@@ -203,7 +204,10 @@ pub struct EffectiveConfigValue {
     /// What the key resolves to if the layer in `source` stopped setting it.
     /// A replace-only security key the workspace sets falls to the built-in
     /// value, never the global one, because the workspace file still exists.
-    /// `None` for a built-in value, which no layer can remove.
+    /// `None` for a built-in value, which no layer can remove, or when the
+    /// removal cannot be admitted in the current context. In a surviving
+    /// configured crew table, optional fields use entry defaults; a required
+    /// model/provider without a valid lower file value has no fallback.
     pub fallback: Option<ConfigFallback>,
 }
 
@@ -679,7 +683,7 @@ fn effective_values(
             let built_in = below.shipped_crew_field(name, field);
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_crew_field(name, field, &source, global),
-                fallback: fallback_for_crew_field(name, field, &source, global, &built_in),
+                fallback: fallback_for_crew_field(name, field, &source, global, workspace),
                 global_value: global
                     .and_then(|document| crew_entry(&document.value, name))
                     .and_then(|entry| entry.get(field))
@@ -849,29 +853,51 @@ fn fallback_for_key(
 }
 
 /// Where a crew field resolves once the layer in `source` stops setting it:
-/// the global crew table's field under a workspace one, else the built-in
-/// crew's field.
+/// merge the surviving file fields and admit the crew again. Shipped crews
+/// are a registry default, not a lower field layer in a configured table.
 fn fallback_for_crew_field(
     crew: &str,
     field: &str,
     source: &ConfigValueSource,
     global: Option<&ConfigDocument>,
-    built_in: &serde_json::Value,
+    workspace: Option<&ConfigDocument>,
 ) -> Option<ConfigFallback> {
-    let global_value = global
+    let path = source.path()?;
+    let mut global_entry = global
         .and_then(|document| crew_entry(&document.value, crew))
-        .and_then(|entry| entry.get(field));
-    match (source.kind(), global_value) {
-        (ConfigValueSourceKind::BuiltIn, _) => None,
-        (ConfigValueSourceKind::Workspace, Some(value)) => Some(ConfigFallback {
-            layer: ConfigValueSourceKind::Global,
-            value: json_from_toml(value),
-        }),
-        _ => Some(ConfigFallback {
-            layer: ConfigValueSourceKind::BuiltIn,
-            value: built_in.clone(),
-        }),
-    }
+        .cloned()
+        .unwrap_or_default();
+    let mut workspace_entry = workspace
+        .and_then(|document| crew_entry(&document.value, crew))
+        .cloned()
+        .unwrap_or_default();
+    let layer = match source.kind() {
+        ConfigValueSourceKind::Workspace => {
+            workspace_entry.remove(field);
+            if global_entry.contains_key(field) {
+                ConfigValueSourceKind::Global
+            } else {
+                ConfigValueSourceKind::BuiltIn
+            }
+        }
+        ConfigValueSourceKind::Global => {
+            global_entry.remove(field);
+            ConfigValueSourceKind::BuiltIn
+        }
+        _ => return None,
+    };
+    let mut entry = toml::Value::Table(global_entry);
+    merge_tables(&mut entry, &toml::Value::Table(workspace_entry));
+    let raw = BTreeMap::from([(crew.to_string(), entry.try_into().ok()?)]);
+    // Reuse admission for required fields, optional defaults, normalization,
+    // and provider/model-dependent effort. A failed admission is unknown,
+    // not a promise that removing the field will reveal a shipped value.
+    let (crews, _) = crews_from_raw(Some(&raw), path, &|_, _| path.to_path_buf()).ok()?;
+    let value = crew_field_values(crews.get(crew)?)
+        .into_iter()
+        .find(|(name, _)| *name == field)
+        .map_or(serde_json::Value::Null, |(_, value)| value);
+    Some(ConfigFallback { layer, value })
 }
 
 fn environment_default_provider() -> Option<String> {
