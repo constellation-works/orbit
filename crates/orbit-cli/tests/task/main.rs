@@ -40,6 +40,7 @@ mod task_eligible;
 mod task_list;
 mod task_publication;
 mod task_recheck_blocked_cli;
+mod task_registry_recovery;
 mod task_tags;
 mod task_trimmed_surface;
 

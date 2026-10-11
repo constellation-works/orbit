@@ -12,8 +12,8 @@ use orbit_store::compose::{
     workspace_job_run_store, workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
-    BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
-    task_registry_path, write_workspace_config,
+    BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, WorkspaceConfig,
+    read_workspace_config_optional, task_registry_path, write_workspace_config,
 };
 
 use orbit_common::OrbitError;
@@ -531,6 +531,20 @@ fn ensure_explicit_root_task_binding(
         .find_workspace_binding(&binding.logical_workspace_id)?
         .is_some()
     {
+        return Ok(());
+    }
+    // Like `workspace init`, a follow-on workspace sharing this root restores
+    // only its logical partition: the root's one orbit-dir row already belongs
+    // to the first checkout restored after the registry was lost.
+    if registry
+        .find_checkout_by_orbit_dir(&paths.orbit_dir)?
+        .is_some()
+    {
+        registry.register_workspace(RegisterWorkspaceParams {
+            partition_id: binding.logical_workspace_id.clone(),
+            slug: workspace_slug(&binding.repo_root),
+            repo_fingerprint: None,
+        })?;
         return Ok(());
     }
 

@@ -399,7 +399,11 @@ scheduler state.
 
 Task bundles can also be moved deliberately — `orbit task export` and
 `orbit task import` handle portable archives, and `orbit task reindex` rebuilds
-the registry index from on-disk bundles after a restore.
+the registry index from on-disk bundles after a restore. Never delete
+`tasks/index.sqlite` to fix drift: it holds the allocator's issued-id high-water
+mark for every workspace. When it is lost, stop Orbit processes, reindex every
+workspace, and set the mark with `orbit workspace init --force --task-id-start <N>`
+above every id ever issued; Orbit refuses new task ids until then.
 
 For archive migration, `orbit task export --output <archive.tar.zst> --ids <id>,<id>`
 selects tasks (omitting IDs exports all). `orbit task import <archive.tar.zst>`
