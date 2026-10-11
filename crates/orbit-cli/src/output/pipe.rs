@@ -11,7 +11,11 @@
 //! panic. [`is_broken_pipe`] covers the handful of call sites that hold a
 //! locked writer and get an `io::Error` back instead.
 
-use std::io;
+use std::{any::Any, cell::Cell, io};
+
+thread_local! {
+    static CATCH_CLOSED_STDOUT: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Exit `0` instead of panicking when a `println!` fails on a closed stdout.
 ///
@@ -26,10 +30,30 @@ pub fn install_handler() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if panicked_on_a_closed_stdout(info) {
+            if CATCH_CLOSED_STDOUT.get() {
+                return;
+            }
             orbit_common::observability::logging::exit(0);
         }
         previous(info);
     }));
+}
+
+/// Let rendering finish normally on a closed pipe so its caller can finalize
+/// the command audit before exiting. Other panics retain their usual behavior.
+pub(crate) fn catch_closed_stdout(
+    render: impl FnOnce() -> Result<(), orbit_core::OrbitError>,
+) -> Result<(), orbit_core::OrbitError> {
+    let previous = CATCH_CLOSED_STDOUT.replace(true);
+    // Only a stdout EPIPE panic becomes a result; all other panics resume
+    // unwinding, and the consumed rendering state is never reused.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(render));
+    CATCH_CLOSED_STDOUT.set(previous);
+    match result {
+        Ok(result) => result,
+        Err(payload) if closed_stdout_payload(payload.as_ref()) => Ok(()),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// Whether an `io::Error` is the read end of stdout having gone away.
@@ -38,7 +62,10 @@ pub fn is_broken_pipe(error: &io::Error) -> bool {
 }
 
 fn panicked_on_a_closed_stdout(info: &std::panic::PanicHookInfo<'_>) -> bool {
-    let payload = info.payload();
+    closed_stdout_payload(info.payload())
+}
+
+fn closed_stdout_payload(payload: &(dyn Any + Send)) -> bool {
     let message = payload
         .downcast_ref::<String>()
         .map(String::as_str)

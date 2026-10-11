@@ -572,7 +572,7 @@ fn run() {
         Ok(command::host_route::Preflight::Local) => {}
         Ok(command::host_route::Preflight::Remote(result)) => {
             let json_error_preference = cli.command.operation().json_error_preference;
-            finish_command(result, &sink, false, json_error_preference);
+            finish_command(result, &sink, false, json_error_preference, None);
             return;
         }
         Err(error) => {
@@ -725,7 +725,7 @@ fn run() {
                         workspace_selector.as_deref(),
                     ),
                 );
-                finish_command(result, &sink, suppress_errors, json_error_preference);
+                finish_command(result, &sink, suppress_errors, json_error_preference, None);
                 return;
             }
             RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
@@ -798,17 +798,12 @@ fn run() {
     let skip_audit = _generation
         .as_ref()
         .is_some_and(orbit_common::fs::generation::GenerationGuard::joined_foreign_generation);
-    let result = match audit_meta {
-        Some(meta) if !skip_audit => {
-            let mut guard = audit_middleware::AuditGuard::new(&runtime, meta);
-            let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
-            guard.mark_result(&result);
-            result
-        }
-        _ => authorize(&runtime).and_then(|()| dispatch(cli.command, context)),
-    };
+    let guard = audit_meta
+        .filter(|_| !skip_audit)
+        .map(|meta| audit_middleware::AuditGuard::new(&runtime, meta));
+    let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
 
-    finish_command(result, &sink, suppress_errors, json_error_preference);
+    finish_command(result, &sink, suppress_errors, json_error_preference, guard);
 }
 
 /// Refuse this invocation if a plugin backend is the caller [ORB-12876].
@@ -847,12 +842,26 @@ fn finish_command(
     sink: &OutputSink,
     suppress_errors: bool,
     json_error_preference: Option<bool>,
+    mut guard: Option<audit_middleware::AuditGuard<'_>>,
 ) {
     let exit_code = result
         .as_ref()
         .map(command::CommandOutput::exit_code)
         .unwrap_or(0);
-    let rendered = result.and_then(|output| output::render::emit(output, sink));
+    let audit_message = result
+        .as_ref()
+        .ok()
+        .and_then(command::CommandOutput::audit_message)
+        .map(str::to_owned);
+    let rendered = result.and_then(|output| {
+        output::pipe::catch_closed_stdout(|| output::render::emit(output, sink))
+    });
+    if let Some(guard) = guard.as_mut() {
+        guard.mark_result(&rendered, exit_code, audit_message.as_deref());
+    }
+    // logging::exit uses process::exit, which does not run destructors. Persist
+    // the complete render/stream outcome and duration before any exit below.
+    drop(guard);
     if let Err(err) = rendered {
         if suppress_errors {
             return;
