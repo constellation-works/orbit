@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use orbit_config::ResourceThrottleSettings;
 use orbit_types::workflow::ResourcePressure;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -43,9 +43,29 @@ pub struct HostResourceSample {
     pub disks: Vec<DiskSample>,
 }
 
+/// Opaque native CPU measurement window shared across processes on one host.
+/// Keep both ends: XNU may return the latest counters again from its cache.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HostCpuTickHistory {
+    #[serde(default)]
+    previous: Option<platform::CpuTickSample>,
+    #[serde(default)]
+    latest: Option<platform::CpuTickSample>,
+}
+
 /// Injectable observation boundary; implementations must use bounded, cheap reads.
 pub trait HostResourceProbe: Send + Sync {
     fn sample(&self, disk_paths: &[PathBuf]) -> HostResourceSample;
+
+    /// Sample with the host's persisted CPU window. Injected and non-Mach probes
+    /// need no tick history and retain their ordinary sampling behavior.
+    fn sample_with_cpu_history(
+        &self,
+        disk_paths: &[PathBuf],
+        _history: &mut HostCpuTickHistory,
+    ) -> HostResourceSample {
+        self.sample(disk_paths)
+    }
 }
 
 /// Resource severity. Unknown is separate from healthy observations.

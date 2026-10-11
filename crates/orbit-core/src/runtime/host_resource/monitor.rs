@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use super::{
-    HostResourceProbe, HostResourceStatus, RESOURCE_TICK_INTERVAL, ResourceAdmission,
-    ResourcePressureEvaluator,
+    HostCpuTickHistory, HostResourceProbe, HostResourceStatus, RESOURCE_TICK_INTERVAL,
+    ResourceAdmission, ResourcePressureEvaluator,
 };
 
 /// Background sampling stops once admission has not been consulted this long.
@@ -167,18 +167,26 @@ impl HostResourceMonitor {
                     ..FileLockOptions::default()
                 },
                 || -> io::Result<HostResourceStatus> {
+                    let mut cpu_ticks = HostCpuTickHistory::default();
                     match read_history(path) {
-                        Ok(history) => *evaluator = history,
+                        Ok(history) => {
+                            *evaluator = history.evaluator;
+                            cpu_ticks = history.cpu_ticks;
+                        }
                         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                         Err(error) => {
                             tracing::debug!(%error, "shared resource history unavailable");
                         }
                     }
-                    let status =
-                        evaluator.evaluate(self.probe.sample(paths), &self.settings, Utc::now());
+                    let status = evaluator.evaluate(
+                        self.probe.sample_with_cpu_history(paths, &mut cpu_ticks),
+                        &self.settings,
+                        Utc::now(),
+                    );
                     let history = PressureHistory {
                         schema_version: 1,
                         evaluator: &evaluator,
+                        cpu_ticks,
                     };
                     let encoded = serde_json::to_string(&history).map_err(io::Error::other)?;
                     if let Err(error) = atomic_write_text_volatile(path, &encoded) {
@@ -202,14 +210,18 @@ impl HostResourceMonitor {
 struct PressureHistory<'a> {
     schema_version: u8,
     evaluator: &'a ResourcePressureEvaluator,
+    cpu_ticks: HostCpuTickHistory,
 }
 
-fn read_history(path: &std::path::Path) -> io::Result<ResourcePressureEvaluator> {
-    #[derive(Deserialize)]
-    struct History {
-        schema_version: u8,
-        evaluator: ResourcePressureEvaluator,
-    }
+#[derive(Deserialize)]
+struct StoredPressureHistory {
+    schema_version: u8,
+    evaluator: ResourcePressureEvaluator,
+    #[serde(default)]
+    cpu_ticks: HostCpuTickHistory,
+}
+
+fn read_history(path: &std::path::Path) -> io::Result<StoredPressureHistory> {
     let file = open_read_only_no_follow(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::other("resource history is not a regular file"));
@@ -219,9 +231,10 @@ fn read_history(path: &std::path::Path) -> io::Result<ResourcePressureEvaluator>
     if encoded.len() > 64 * 1024 {
         return Err(io::Error::other("resource history exceeds size limit"));
     }
-    let history: History = serde_json::from_str(&encoded).map_err(io::Error::other)?;
+    let history: StoredPressureHistory =
+        serde_json::from_str(&encoded).map_err(io::Error::other)?;
     if history.schema_version != 1 {
         return Err(io::Error::other("unsupported resource history version"));
     }
-    Ok(history.evaluator)
+    Ok(history)
 }
