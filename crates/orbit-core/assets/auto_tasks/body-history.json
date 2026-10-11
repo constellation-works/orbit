@@ -1077,6 +1077,37 @@
       }
     }
   ],
+  "qa-full-sweep": [
+    {
+      "comments": [
+        "# The portable system lane is seeded per machine and compatibility-aliased",
+        "# for configs written before that crew existed.",
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "e56bb79aeb84570b13ad6959dee8f7855feb2d309084828a5a4f457d07f37911",
+      "revision": "a9a7c5ed883b3de38edc0ef141c681df0fe0940e",
+      "settings": {
+        "complexity": "medium",
+        "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "qa-sweep": [
     {
       "comments": [
