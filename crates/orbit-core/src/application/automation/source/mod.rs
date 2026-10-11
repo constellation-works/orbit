@@ -1,5 +1,6 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
+mod clock;
 mod command;
 mod inspection;
 mod observe;
@@ -8,6 +9,9 @@ mod revision;
 #[cfg(feature = "test-support")]
 pub(crate) mod test_support;
 
+pub(super) use clock::BudgetClock;
+#[cfg(feature = "test-support")]
+pub use clock::SOURCE_ELAPSED_ENV;
 pub(super) use command::{LISTING_LIMIT, OUTPUT_LIMIT};
 #[cfg(test)]
 pub(super) use command::{arm_canonical_signature_deadline, clear_canonical_signature_deadline};
@@ -37,7 +41,7 @@ struct ObservationLimits {
 
 pub(crate) struct Source<'a> {
     root: &'a Path,
-    started: Instant,
+    started: BudgetClock,
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,
     fetch_origin: bool,
@@ -54,6 +58,6 @@ fn budget_now() -> Instant {
 
 impl Source<'_> {
     fn elapsed(&self) -> Duration {
-        budget_now().saturating_duration_since(self.started)
+        self.started.elapsed()
     }
 }

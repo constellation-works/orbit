@@ -42,14 +42,17 @@ fn in_isolated_child(test: &str) -> bool {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    let output = command
+    command
         .args(["--exact", test, "--nocapture"])
         .env(CHILD, test)
+        // Admission and fetch-sharing are functional checks, not assertions
+        // that this shared host finishes every command within two seconds.
+        // Freeze source time; commands still wait for exit and enforce size caps.
+        .env(orbit_core::test_support::SOURCE_ELAPSED_ENV, "0")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .unwrap();
+        .current_dir(home.path());
+    let output = orbit_common::test_env::run_child_test(&mut command, test, home.path());
     orbit_common::test_env::assert_child_test_passed(
         test,
         output.status,
