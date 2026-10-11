@@ -281,14 +281,26 @@ pub(super) fn attempt_final_recovery(
         resume_index = Some(index);
     }
 
-    let resume_context = match &decision {
-        FinalRecoveryDecision::Resume { step_id, rationale } => Some(FinalRecoveryResume {
-            step_id: step_id.clone(),
-            failed_step_id: step.id.clone(),
-            rationale: rationale.clone(),
-            refusal: error_message.to_string(),
-            refused_output: refused_step_output(ctx, step),
-        }),
+    // The context names the admitted step, not the decision's text, which
+    // admission matched after trimming. The resumed agent gets the same bounded
+    // copies final recovery read: an unbounded diagnostic would make the
+    // provider refuse the resumed turn before it starts [ORB-12467]. The full
+    // error stays in the step record.
+    let resume_context = match (&decision, resume_index) {
+        (FinalRecoveryDecision::Resume { rationale, .. }, Some(index)) => {
+            Some(FinalRecoveryResume {
+                step_id: job.steps[index].id.clone(),
+                failed_step_id: step.id.clone(),
+                rationale: rationale.clone(),
+                refusal: bounded_recovery_text(
+                    "refusal",
+                    &ctx.run_id,
+                    error_message,
+                    MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                ),
+                refused_output: bounded_recovery_input(&ctx.run_id, refused_step_output(ctx, step)),
+            })
+        }
         _ => None,
     };
     let application = FinalRecoveryApplication {

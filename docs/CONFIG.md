@@ -639,12 +639,15 @@ final_recovery_crews = ["sol:100", "opus:20"]
 - **`[]`** disables final recovery.
 
 A final-recovery `resume` records its rationale and the failed step's refusal
-and output before discarding stale checkpoints. The resumed top-level phase
-and its nested activities receive this typed `final_recovery_resume` input,
-including in claimed pipelines and after a process restart. `agent_implement`
-addresses that repair mandate first. The saved context is passed unchanged,
-including any literal template tokens in its text. Later phases do not inherit it. Run-show
-recovery attempts include the resume rationale in their detail.
+and output before discarding stale checkpoints. The refusal and output are
+bounded the way final recovery's own input is (64 KiB, keeping head and tail),
+so the resumed agent's turn stays within provider limits. The resumed top-level
+phase and its nested activities receive this typed `final_recovery_resume`
+input, including in claimed pipelines and after a process restart.
+`agent_implement` addresses that repair mandate first. The saved context is
+passed unchanged, including any literal template tokens in its text. Later
+phases do not inherit it. Run-show recovery attempts include the resume
+rationale in their detail.
 
 ### Setting `task.crew`
 

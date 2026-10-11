@@ -84,9 +84,12 @@ pub struct FinalRecoveryResume {
     pub failed_step_id: String,
     /// Recovery's explanation of what the resumed step must address.
     pub rationale: String,
-    /// Original boundary refusal, before the rerun replaces it.
+    /// Original boundary refusal, before the rerun replaces it. Bounded like
+    /// final recovery's own `error_message`: an oversized one keeps its head
+    /// and tail around a truncation marker.
     pub refusal: String,
-    /// Original failed step output; null when the step produced none.
+    /// Original failed step output; null when the step produced none. Bounded
+    /// like final recovery's `step_outputs`.
     pub refused_output: serde_json::Value,
 }
 
