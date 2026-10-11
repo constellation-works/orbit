@@ -79,7 +79,7 @@ macro_rules! define_config_settings {
                 Self::admit_with_env(document, config_path, crews, env_default.as_deref(), false)
             }
 
-            pub(super) fn admit_with_env(
+            pub(crate) fn admit_with_env(
                 document: &toml::Value,
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
