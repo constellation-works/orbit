@@ -2,16 +2,17 @@
 
 use std::collections::BTreeSet;
 
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_string_list_alias;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::AuditEventInsertParams;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::JobRunState;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::runtime::audit::system::{
+    AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
+};
 use crate::runtime::task::locks::parse_task_ids;
 
 use super::action_failed;
@@ -368,43 +369,24 @@ fn record_gate_admission_stop(
     });
     let arguments_json = serde_json::to_string(&payload)
         .map_err(|err| action_failed(action, format!("serialize gate.{outcome} payload: {err}")))?;
-    let execution_id = audit_execution_id("audit-gate-admission-stop");
-    let working_directory = runtime.paths().repo_root.to_string_lossy().into_owned();
-
-    runtime
-        .record_audit_event(&AuditEventInsertParams {
-            execution_id,
-            command: format!("gate.{outcome}"),
+    let command = format!("gate.{outcome}");
+    let task_id = task_ids.first().map(String::as_str);
+    record_system_audit_event(
+        runtime,
+        SystemAuditEvent {
+            execution_id_prefix: "audit-gate-admission-stop",
+            command: &command,
             subcommand: None,
             tool_name: None,
-            target_type: Some("task_bundle".to_string()),
-            target_id: task_ids.first().cloned(),
-            role: "admin".to_string(),
+            target_type: "task_bundle",
+            target_id: task_id,
+            role: "admin",
             status: AuditEventStatus::Success,
-            exit_code: 0,
-            duration_ms: 0,
-            working_directory,
-            arguments_json: Some(arguments_json),
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: None,
-            host: std::env::var("HOSTNAME").ok(),
-            pid: std::process::id(),
-            session_id: None,
+            arguments_json,
             workspace_id: None,
-            caller_machine_id: None,
-            caller_machine_name: None,
-            process_machine_id: None,
-            process_machine_name: None,
-            transport: None,
-            effective_capabilities: Default::default(),
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
-            task_id: task_ids.first().cloned(),
-            job_run_id: parent_run_id,
-            activity_id: None,
-            step_index: None,
-        })
-        .map_err(|err| action_failed(action, format!("record gate.{outcome} audit: {err}")))
+            task_id,
+            attribution: AuditRunAttribution::Run(parent_run_id),
+        },
+    )
+    .map_err(|err| action_failed(action, format!("record gate.{outcome} audit: {err}")))
 }
