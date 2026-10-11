@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
+use super::super::v2_audit_store::{clear_tail_snapshot_rendezvous, set_tail_snapshot_rendezvous};
 use crate::Store;
 use crate::contracts::{
     V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventTailPage, V2AuditStoreBackend,
@@ -204,18 +205,18 @@ struct RendezvousGuard;
 
 impl RendezvousGuard {
     fn idle() -> Self {
-        super::clear_tail_snapshot_rendezvous();
+        clear_tail_snapshot_rendezvous();
         Self
     }
 
     fn arm(hook: impl FnOnce() + 'static) -> Self {
-        super::set_tail_snapshot_rendezvous(hook);
+        set_tail_snapshot_rendezvous(hook);
         Self
     }
 }
 
 impl Drop for RendezvousGuard {
     fn drop(&mut self) {
-        super::clear_tail_snapshot_rendezvous();
+        clear_tail_snapshot_rendezvous();
     }
 }
