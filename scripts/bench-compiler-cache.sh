@@ -3,10 +3,13 @@
 #
 # Records source revision, toolchain, workload, wall/CPU time, and sccache
 # hits/misses/non-cacheable reasons for: no-cache baseline, cache cold fill,
-# a different worktree warm build, Clippy, incremental, and concurrent
+# same-path cold/warm builds, a different-worktree miss control, Clippy,
+# incremental, and concurrent
 # different-source Linux mount namespaces when Bubblewrap can create them.
 #
-# Uses private CARGO_TARGET_DIR values per tree. The disk cache and UDS live
+# Uses private CARGO_TARGET_DIR values per tree. The same-path pair empties
+# and reuses one private target sequentially to keep cache keys identical.
+# The disk cache and UDS live
 # only under the bench workdir; the harness refuses a caller SCCACHE_DIR outside
 # that tree so it cannot reset an operator cache. Does not enable a global host
 # cache.
@@ -46,6 +49,7 @@ stop_owned_daemon() {
 cleanup() {
   stop_owned_daemon
   rm -rf "$WORKDIR/a" "$WORKDIR/b" "$WORKDIR/a-target" "$WORKDIR/b-target" \
+    "$WORKDIR/warm-target" \
     "$WORKDIR/probe-c" "$WORKDIR/probe-d" "$WORKDIR/probe-c-target" "$WORKDIR/probe-d-target"
 }
 trap cleanup EXIT
@@ -164,6 +168,7 @@ sccache_stats() {
   [[ -n "$bin" && -x "$bin" ]] || return 0
   log "--- sccache --show-stats (uds=$BENCH_UDS) ---"
   SCCACHE_DIR="$CACHE_DIR" SCCACHE_SERVER_UDS="$BENCH_UDS" \
+    SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-5G}" \
     "$bin" --show-stats 2>&1 | tee -a "$RESULT" || true
 }
 
@@ -245,21 +250,38 @@ rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 sccache_stats
 run_build "unnormalized-a-cold" "$WORKDIR/a" "$WORKDIR/a-target" "${CACHE_ENV[@]}"
-cache_a="$(cat "$WORKDIR/last-elapsed")"
+unnormalized_a="$(cat "$WORKDIR/last-elapsed")"
 sccache_stats
-run_build "unnormalized-b-warm" "$WORKDIR/b" "$WORKDIR/b-target" "${CACHE_ENV[@]}"
-cache_b="$(cat "$WORKDIR/last-elapsed")"
+run_build "unnormalized-b-second" "$WORKDIR/b" "$WORKDIR/b-target" "${CACHE_ENV[@]}"
+unnormalized_b="$(cat "$WORKDIR/last-elapsed")"
 sccache_stats
 log "unnormalized_note=these copies are not bind-mounted at /tmp/orbit-workspace; treat as a miss-path control, not cross-worktree reuse."
 
+log ""
+log "### same-path cache cold fill and warm rebuild (identical cwd, argv and CARGO_* environment)"
+log "Fresh build output on both arms; the private target path is reused sequentially, never shared between workers. This measures dependency reuse, not cross-worktree normalization."
+stop_owned_daemon
+rm -rf "$CACHE_DIR"
+mkdir -p "$CACHE_DIR"
+sccache_stats
+run_build "same-path-cold" "$WORKDIR/a" "$WORKDIR/warm-target" "${CACHE_ENV[@]}"
+cache_a="$(cat "$WORKDIR/last-elapsed")"
+sccache_stats
+SCCACHE_DIR="$CACHE_DIR" SCCACHE_SERVER_UDS="$BENCH_UDS" \
+  "$SCCACHE_BIN" --zero-stats >/dev/null
+run_build "same-path-warm" "$WORKDIR/a" "$WORKDIR/warm-target" "${CACHE_ENV[@]}"
+cache_b="$(cat "$WORKDIR/last-elapsed")"
+sccache_stats
+log "same_path_note=stats were zeroed before the warm rebuild; warm hits come from the preceding cold fill, not retained Cargo artifacts."
+
 real_custom_cold=""
-real_custom_warm=""
+real_custom_second=""
 if [[ -e /tmp/orbit-workspace/Cargo.toml && -e "$ROOT/Cargo.toml" ]] \
   && [[ "$(stat -L -c '%d:%i' /tmp/orbit-workspace/Cargo.toml 2>/dev/null || stat -L -f '%d:%i' /tmp/orbit-workspace/Cargo.toml)" \
     == "$(stat -L -c '%d:%i' "$ROOT/Cargo.toml" 2>/dev/null || stat -L -f '%d:%i' "$ROOT/Cargo.toml")" ]]; then
   log ""
   log "### real Linux stable source mount + custom CARGO_TARGET_DIR (same checkout, two private targets)"
-  log "Demonstrates cwd normalization and unaliased custom targets. Not a second worktree; cross-worktree reuse is the namespace arm."
+  log "Demonstrates cwd normalization and unaliased custom targets. Different CARGO_TARGET_DIR values can still miss; this is not the same-path warm pair or a cross-worktree reuse measurement."
   stop_owned_daemon
   rm -rf "$CACHE_DIR"
   mkdir -p "$CACHE_DIR" "$WORKDIR/real-custom-a" "$WORKDIR/real-custom-b"
@@ -267,8 +289,8 @@ if [[ -e /tmp/orbit-workspace/Cargo.toml && -e "$ROOT/Cargo.toml" ]] \
   run_build "real-mount-custom-cold" "$ROOT" "$WORKDIR/real-custom-a" "${CACHE_ENV[@]}"
   real_custom_cold="$(cat "$WORKDIR/last-elapsed")"
   sccache_stats
-  run_build "real-mount-custom-warm" "$ROOT" "$WORKDIR/real-custom-b" "${CACHE_ENV[@]}"
-  real_custom_warm="$(cat "$WORKDIR/last-elapsed")"
+  run_build "real-mount-custom-second" "$ROOT" "$WORKDIR/real-custom-b" "${CACHE_ENV[@]}"
+  real_custom_second="$(cat "$WORKDIR/last-elapsed")"
   sccache_stats
 else
   log ""
@@ -283,6 +305,9 @@ cat >"$WORKDIR/probe/Cargo.toml" <<'EOF'
 name = "orbit_cache_probe"
 version = "0.1.0"
 edition = "2021"
+
+# Keep the fixture standalone even when WORKDIR is inside a checkout.
+[workspace]
 EOF
 printf 'pub fn value() -> i32 { 1 }\n' >"$WORKDIR/probe/src/lib.rs"
 cp "$ROOT/scripts/rustc-compiler-cache.sh" "$WORKDIR/probe/scripts/rustc-compiler-cache.sh"
@@ -363,10 +388,12 @@ log ""
 log "### summary"
 log "baseline_a_cold_s=$base_a"
 log "baseline_b_cold_s=$base_b"
+log "unnormalized_a_cold_s=$unnormalized_a"
+log "unnormalized_b_second_s=$unnormalized_b"
 log "cache_a_cold_s=$cache_a"
 log "cache_b_warm_s=$cache_b"
 log "real_mount_custom_cold_s=${real_custom_cold:-skipped}"
-log "real_mount_custom_warm_s=${real_custom_warm:-skipped}"
+log "real_mount_custom_second_s=${real_custom_second:-skipped}"
 log "clippy_s=$clippy_s"
 log "incremental_s=$incr_s"
 log "cache_concurrent=$conc_wall"

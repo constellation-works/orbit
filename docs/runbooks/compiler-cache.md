@@ -5,7 +5,7 @@ tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-10
+last_validated: 2026-10-11
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -104,14 +104,22 @@ Treat the cache as effective only when `effective: enabled` and a subsequent
 `cargo` build reports sccache hits:
 
 ```bash
-# after any cargo check/build/clippy in a worktree
-sccache --show-stats
-# or, if using the setup-installed binary:
-$HOME/.orbit/cache/bin/sccache --show-stats
+# after any cargo check/build/clippy, in the same worker namespace
+scripts/compiler-cache.sh status
 ```
 
-A warm second worktree against unchanged source should show compile-request
-hits **and** a wall-clock drop versus the first worktree's cold fill. Hits with
+Status resolves the wrapper's cache directory, size and daemon endpoint,
+including its default `SCCACHE_CACHE_SIZE=5G` and private UDS. A bare
+`sccache --show-stats` can query the default TCP daemon instead. The configured
+wrapper limit is printed separately from the daemon's `Max cache size`: a
+running daemon retains the size set when it started. After a size change,
+restart only that daemon when its builds are idle, or start a fresh worker
+namespace. Status does not restart it.
+
+A warm rebuild against unchanged source and identical key-relevant paths
+should show compile-request hits **and** a wall-clock drop versus an uncached
+cold build. The bench measures this with a same-path pair; cross-worktree
+reuse also requires the stable mounts. Hits with
 no wall-clock improvement are not evidence of a win. Cache cold fill is often
 *slower* than an uncached baseline because of wrapper/daemon overhead; do not
 advertise a blanket speedup.
@@ -156,15 +164,62 @@ and namespaces unavailable, the script still prints `skip:`, or fails under
 Only after that regression passes should the orchestrator leave the host cache
 directory writable for workers.
 
-Optional host overrides (passed through `[execution.env].pass` only if you set
-them on the Orbit process):
+## Worker opt-out and size overrides
+
+For a host opt-out that needs no environment pass-through, make the default
+cache directory unwritable before starting new builds:
+
+```bash
+chmod a-w "$HOME/.orbit/cache/compiler"
+# Re-enable:
+chmod u+w "$HOME/.orbit/cache/compiler"
+```
+
+The wrapper then uses ordinary rustc, even while the sccache binary remains
+installed. Apply this to `SCCACHE_DIR` instead if workers use a custom cache
+directory. This permission opt-out assumes workers run as the directory's
+unprivileged owner; root can bypass directory permissions.
+
+`ORBIT_COMPILER_CACHE=0` also opts out for commands that receive it. Workers
+start with a cleared environment: exporting it in your shell alone does not
+disable their cache. To control workers by environment, add both it and
+`SCCACHE_CACHE_SIZE` to the workspace's `.orbit/config.toml` allowlist:
+
+```toml
+[execution.env]
+pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "ORBIT_COMPILER_CACHE", "SCCACHE_CACHE_SIZE"]
+```
+
+The `pass` list **replaces** the defaults. Preserve all names in your existing
+list; the example repeats the Linux defaults. On macOS also retain
+`__CF_USER_TEXT_ENCODING`. This is a workspace security setting; see
+[execution.env](../CONFIG.md#executionenv--the-agent-subprocess-environment).
+
+Set the values in the process that launches Orbit workers (or its service
+environment), then launch new runs from that environment:
+
+```bash
+# Worker opt-out:
+export ORBIT_COMPILER_CACHE=0
+# Or enable caching with a larger per-daemon LRU limit:
+unset ORBIT_COMPILER_CACHE
+export SCCACHE_CACHE_SIZE=12G
+```
+
+Listing a name does not set its value. Inside the worker, run
+`scripts/compiler-cache.sh status` to confirm the opt-out or configured size
+arrived. A fresh private worker daemon uses the new size; an existing daemon
+needs an idle restart as described under [Inspect](#inspect).
+
+Other optional host overrides also need their names in `[execution.env].pass`
+and values on the launching Orbit process:
 
 | Variable | Default |
 | --- | --- |
 | `SCCACHE_DIR` | `$HOME/.orbit/cache/compiler` |
 | `SCCACHE_CACHE_SIZE` | `5G` (sccache LRU) |
 | `ORBIT_COMPILER_CACHE_BIN` | `$HOME/.orbit/cache/bin/sccache`, else `sccache` on `PATH` |
-| `ORBIT_COMPILER_CACHE=0` | Force ordinary rustc (practical opt-out) |
+| `ORBIT_COMPILER_CACHE=0` | Force ordinary rustc when admitted to the worker environment |
 | `SCCACHE_CLIENT_SIDE` | Wrapper default `1`: compile in the rustc client; daemon is cache storage only |
 | `SCCACHE_SERVER_UDS` | Wrapper default `/tmp/orbit-sccache.sock` (private per Linux sandbox `/tmp`) |
 | `SCCACHE_SERVER_PORT` | Unset. Setting it disables the default UDS and uses TCP on the shared net |
@@ -202,12 +257,16 @@ missed.
 
 The wrapper now rewrites source paths and rustc cwd whenever
 `/tmp/orbit-workspace/Cargo.toml` aliases the checkout, even if the custom
-target is not aliased. `--out-dir` is excluded from sccache's rustc key, so
-reuse still works; outputs stay in each private target. Relative compiler
-inputs are left relative.
+target is not aliased. Outputs stay in each private target and relative
+compiler inputs are left relative. This removes source/cwd differences but
+does not guarantee hits: `--out-dir` is excluded from sccache's rustc key,
+while target paths in `CARGO_*` environment values can still differ. The
+bench's two unaliased custom targets recorded zero hits with sccache 0.17.0,
+even with source/cwd normalization.
 
-If you need `--out-dir` itself to use the stable build mount (debuginfo paths),
-bind that custom target at `/tmp/orbit-build` inside the sandbox. The
+For consistent target paths in argv and environment (including debuginfo
+paths), bind each worker's private custom target at `/tmp/orbit-build` inside
+its sandbox. The
 namespace test and bench do this for their private targets. The Linux
 Bubblewrap planner still binds `<cwd>/target` by default and does **not**
 remap the provider agent cwd.
@@ -227,7 +286,8 @@ daemon's CPU. With the wrapper default `SCCACHE_CLIENT_SIDE=1`, compiler CPU
 stays in the client tree. Do not advertise command-tree CPU as total compiler
 CPU when using server-side mode.
 
-Practical opt-out, no uninstall: `ORBIT_COMPILER_CACHE=0`.
+For a local command, opt out with `ORBIT_COMPILER_CACHE=0`. For workers, use
+the permissions or allowlist configuration in [Worker opt-out and size overrides](#worker-opt-out-and-size-overrides).
 
 ## Cross-revision before/after validation
 
@@ -314,18 +374,26 @@ command (`cargo check -p orbit-types --offline --locked` by default):
 
 ```bash
 # Isolated bench (downloads pinned sccache into the bench workdir if needed;
-# does not write ~/.orbit/cache unless SCCACHE_DIR points there):
+# refuses SCCACHE_DIR outside that workdir):
 scripts/bench-compiler-cache.sh
 
 # On a host that can create user namespaces, also require the concurrent test:
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/bench-compiler-cache.sh
 ```
 
-The harness records sequential no-cache cold builds, a cache cold fill, a cache
-warm second worktree, Clippy and incremental probes, a real-mount custom-target
+The harness records sequential no-cache cold builds, an unnormalized
+different-worktree miss control, a same-path cache cold fill and warm rebuild,
+Clippy and incremental probes, a real-mount custom-target
 pair when `/tmp/orbit-workspace` aliases the checkout, and concurrent
-different-source namespaces when Bubblewrap can create them. It never reuses
-one `CARGO_TARGET_DIR`. Nested implementer sandboxes cannot create a second
+different-source namespaces when Bubblewrap can create them. The same-path
+pair runs sequentially in one checkout with identical `CARGO_TARGET_DIR`,
+cwd, argv and `CARGO_*` environment, emptying build output before each arm.
+It zeroes stats before the warm rebuild so the following hits belong to that
+arm. This measures a warm disk cache with cold Cargo output, rather than a
+second worktree. The unnormalized pair retains distinct source and target
+paths as a miss control; only the stable-mount namespace checks demonstrate
+cross-worktree normalization. No workers share a mutable target directory.
+Nested implementer sandboxes cannot create a second
 user namespace; that skip is not a pass. Re-run the namespace script on the
 host.
 
@@ -350,9 +418,13 @@ changed; only identical rustc invocations hit.
 scripts/compiler-cache.sh remove --yes
 ```
 
-Deletes `$HOME/.orbit/cache/compiler` only. The wrapper remains in the
-repository and keeps falling back to `rustc`. To ignore a still-present cache
-without deleting it: `ORBIT_COMPILER_CACHE=0`.
+Deletes `$HOME/.orbit/cache/compiler` only, leaving the binary in
+`$HOME/.orbit/cache/bin` and any `sccache` on `PATH`. If either binary remains,
+the wrapper can recreate a writable cache directory on its next invocation.
+Use the [permission opt-out](#worker-opt-out-and-size-overrides) to keep caching
+disabled, or remove the installed binary, any `ORBIT_COMPILER_CACHE_BIN`
+override, and every `sccache` reachable on workers' `PATH`. Removing only the
+cache data is a reset, not a durable opt-out.
 
 ## Sandbox
 

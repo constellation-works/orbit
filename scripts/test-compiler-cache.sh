@@ -41,6 +41,7 @@ cat > "$TMP/sccache" <<'EOF'
 printf '%s\n' "$@" > "${FAKE_SCCACHE_LOG}"
 {
   printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-}"
+  printf 'SCCACHE_CACHE_SIZE=%s\n' "${SCCACHE_CACHE_SIZE-}"
   printf 'SCCACHE_BASEDIRS=%s\n' "${SCCACHE_BASEDIRS-}"
   printf 'SCCACHE_CLIENT_SIDE=%s\n' "${SCCACHE_CLIENT_SIDE-}"
   printf 'SCCACHE_SERVER_UDS=%s\n' "${SCCACHE_SERVER_UDS-}"
@@ -54,13 +55,17 @@ printf '%s' "${CACHE_ENV_MULTILINE-}" > "${FAKE_SCCACHE_MULTILINE:-/dev/null}"
 printf '%s' "${CACHE_ENV_EMPTY-}" > "${FAKE_SCCACHE_EMPTY:-/dev/null}"
 printf '%s' "${CACHE_ENV_BOUNDARY-}" > "${FAKE_SCCACHE_BOUNDARY:-/dev/null}"
 printf '%s' "${CACHE_ENV_SOURCE_BOUNDARY-}" > "${FAKE_SCCACHE_SOURCE_BOUNDARY:-/dev/null}"
+case "${1:-}" in
+  --version) printf 'sccache fixture\n'; exit 0 ;;
+  --show-stats) printf 'Max cache size %s\n' "$SCCACHE_CACHE_SIZE"; exit 0 ;;
+esac
 exec "$@"
 EOF
 chmod +x "$TMP/sccache"
 
 export HOME="$TMP/home"
 mkdir -p "$HOME"
-unset SCCACHE_DIR ORBIT_COMPILER_CACHE_BIN RUSTC_WRAPPER ORBIT_COMPILER_CACHE
+unset SCCACHE_DIR SCCACHE_CACHE_SIZE ORBIT_COMPILER_CACHE_BIN RUSTC_WRAPPER ORBIT_COMPILER_CACHE
 unset SCCACHE_CLIENT_SIDE SCCACHE_SERVER_UDS SCCACHE_SERVER_PORT
 unset ORBIT_COMPILER_CACHE_STABLE_SRC ORBIT_COMPILER_CACHE_STABLE_TGT
 unset ORBIT_COMPILER_CACHE_SERVER_UDS
@@ -123,7 +128,43 @@ grep -E -q '^SCCACHE_SERVER_PORT=$' "$FAKE_SCCACHE_ENV" || fail "wrapper must no
 
 # 5. Operator surfaces exist and do not require a host sccache.
 "$ROOT/scripts/compiler-cache.sh" --help >/dev/null
-HOME="$HOME" "$ROOT/scripts/compiler-cache.sh" status >/dev/null
+# Query the same configuration the wrapper sends to sccache. Inspect the
+# executed stub's environment, not script source or prose.
+wrapper_env="$TMP/wrapper-default.env"
+assert_status_env() {
+  local setting
+  for setting in SCCACHE_DIR SCCACHE_CACHE_SIZE SCCACHE_CLIENT_SIDE SCCACHE_SERVER_UDS SCCACHE_SERVER_PORT; do
+    assert_eq "$(grep "^$setting=" "$FAKE_SCCACHE_ENV")" \
+      "$(grep "^$setting=" "$wrapper_env")" "status and wrapper must agree on $setting"
+  done
+}
+cp "$FAKE_SCCACHE_ENV" "$wrapper_env"
+"$ROOT/scripts/compiler-cache.sh" status >"$TMP/status-default.log"
+assert_eq "$(cat "$FAKE_SCCACHE_LOG")" '--show-stats' "status must query sccache stats"
+assert_status_env
+default_size="$(sed -n 's/^SCCACHE_CACHE_SIZE=//p' "$wrapper_env")"
+[[ -n "$default_size" ]] || fail "wrapper must export a bounded cache size"
+grep -Fq "Max cache size $default_size" "$TMP/status-default.log" || fail "status stats must use the wrapper size default"
+(
+  export SCCACHE_DIR="$TMP/custom-cache" SCCACHE_CACHE_SIZE=12G
+  export SCCACHE_CLIENT_SIDE=0 ORBIT_COMPILER_CACHE_SERVER_UDS="$TMP/custom.sock"
+  mkdir -p "$SCCACHE_DIR"
+  "$WRAPPER" "$TMP/bin/rustc" --crate-name custom
+  cp "$FAKE_SCCACHE_ENV" "$wrapper_env"
+  "$ROOT/scripts/compiler-cache.sh" status >"$TMP/status-custom.log"
+  assert_status_env
+  grep -Fq 'Max cache size 12G' "$TMP/status-custom.log" || fail "status stats must honor the size override"
+  export SCCACHE_SERVER_PORT=4333
+  "$WRAPPER" "$TMP/bin/rustc" --crate-name tcp
+  cp "$FAKE_SCCACHE_ENV" "$wrapper_env"
+  "$ROOT/scripts/compiler-cache.sh" status >/dev/null
+  assert_status_env
+  export SCCACHE_SERVER_UDS=/fixture/status-explicit.sock
+  "$WRAPPER" "$TMP/bin/rustc" --crate-name explicit
+  cp "$FAKE_SCCACHE_ENV" "$wrapper_env"
+  "$ROOT/scripts/compiler-cache.sh" status >/dev/null
+  assert_status_env
+)
 
 # Installer failures must reject a local archive before extraction, preserve an
 # existing binary, and remove temporary downloads. No network or host install.
