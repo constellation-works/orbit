@@ -77,12 +77,12 @@ file locks.
 | Agent | "Drain the backlog for four hours, eight at a time." |
 | CLI | `orbit run auto --for 4h --concurrency 8` |
 
-![The Drain card: running and free slots, eligible and blocked tasks, window length, parallel tasks, Stop at review or Mark done, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Drain dock: running and free slots, eligible and waiting tasks, window length, parallel tasks, Stop at review or Mark done, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The window bounds only when new work starts; a task already running when it
-closes still finishes. The drain card's **Eligible now** and **Blocked by
-running** counts show what a window would start, and `orbit run readiness`
-gives the same answer with reasons.
+closes still finishes. The **Start a window** card's eligible and waiting
+counts show what a window would start, and `orbit run readiness` gives the
+same answer with reasons.
 [Run a Delivery Window](../../how-to/continuous-delivery/) covers preparing
 work, retuning, and stopping a window.
 

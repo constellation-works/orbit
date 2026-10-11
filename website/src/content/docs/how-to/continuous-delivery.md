@@ -105,10 +105,12 @@ Readiness is a read-only snapshot of what a window would start now and why the
 rest would wait. It reserves and submits nothing, so an eligible task is not
 guaranteed to start.
 
-- **Dashboard:** the **Drain** card in the Tasks dock shows **Eligible now**,
-  **Blocked by running**, the tasks waiting on a running task, and what a
-  window started now would admit. **Locked files** below it shows held locks
-  (`orbit task locks list`).
+- **Dashboard:** the Tasks dock's **Drain** mode shows what a window started
+  now would admit and how many tasks are eligible or waiting. The task list's
+  **Backlog** card sorts the backlog into **Eligible now**, **Waiting on
+  locks**, **Waiting on capacity**, and **Waiting, other**, and each row's
+  tooltip names what it waits on. **Locked files** in the dock shows held
+  locks (`orbit task locks list`).
 - **CLI**, for the reason behind each task:
 
   ```bash
