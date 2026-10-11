@@ -98,7 +98,13 @@
 .rail .tab.active .rail-ico { color: var(--accent); }
 
 .rail-ico { width: 17px; height: 17px; flex: 0 0 auto; color: var(--fg-dim); }
-.rail-label { flex: 1 1 auto; min-width: 0; }
+.rail-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* A rail count is one of two kinds. A volume count (tasks listed, audited
    events) is quiet reference: small muted numerals that never brighten. An
@@ -121,9 +127,31 @@
   font-size: 11.5px;
   font-weight: 600;
 }
-/* A second count on one entry (Audit's denials beside its events) sits next
-   to the first instead of splitting the free space with it. */
+/* A second count does not split the free space with the first. The desktop
+   two-line layout below resets this margin. */
 .rail-count + .rail-count { margin-left: 6px; }
+
+/* Two counts cannot share the fixed desktop rail width with a readable
+   label. Keep the volume beside the label and the attention pill below it.
+   The horizontal mobile rail has intrinsic-width buttons and needs no wrap. */
+@media (min-width: 761px) {
+  .rail .tab:has(> .rail-count + .rail-count:not([hidden])) {
+    display: grid;
+    grid-template-columns: 17px minmax(0, 1fr) max-content;
+    height: auto;
+    min-height: 38px;
+    padding-block: 6px;
+    row-gap: 4px;
+  }
+  .rail .tab > .rail-count + .rail-count {
+    grid-column: 2 / -1;
+    justify-self: end;
+    margin-left: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
 
 /* A section's views show only while that section is open, so the rail
    stays one screen tall and the workspace picker never scrolls away. */
