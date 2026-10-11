@@ -334,6 +334,26 @@ candidate/PR evidence. The boundary then requires the target as an ancestor
 and a remaining candidate commit. Ordinary providers still cannot move HEAD;
 primary-checkout drift checks apply to recovery too.
 
+After [F2026-10-237], a conflict file repaired before the recovery invocation
+counts as repaired. Final recovery repairs a stopped rebase's conflict files
+without Git writes and resumes; the retried `sync_base` reports the same stop,
+and the next `pr_conflict_recovery` may have nothing left to change. Its
+earlier repairs are adopted when they no longer hold what Git left at the stop:
+no `<<<<<<<`/`>>>>>>>` hunk remains, and, where Git could not merge text (a
+side is missing, as in modify/delete, or a side is binary or `merge`-unset), the
+content is not just the side Git left. A path Git would have written but that is
+now absent is a deletion resolution. A symlink or directory in the way is not
+adopted. Unstaged tracked repairs present when the invocation starts join the
+continued commit as companions. Untracked files that predate the invocation and
+host-owned `.orbit/` state stay out of it. Admission also requires HEAD to keep
+a stopped rebase's shape (detached, descending from `onto`), so an earlier
+actor that re-attached or moved HEAD is refused before the provider launches.
+Every other check is unchanged: the metadata, ownership, index and unmerged-set
+checks, and `git diff --check` over the whole conflict set. One limit remains.
+Where Git left one side of a non-textual conflict, an earlier resolution that
+keeps exactly that side looks the same as an untouched conflict. It is refused
+as unrepaired, as it was before adoption.
+
 After [DANI-10439], the base ref itself is not part of that identity. A linked
 worktree shares remote-tracking refs with every sibling checkout, so on a busy
 integration branch `origin/<base>` has usually advanced past the pin before

@@ -188,7 +188,10 @@ spec:
        merely to make the index clean. When the resolution needs a companion
        edit outside the conflict set (a re-export for a moved module, a caller
        of a renamed item, a test that pins the merged behavior), make it: you
-       may change any path the resolution requires.
+       may change any path the resolution requires. A conflict file an
+       earlier final recovery already repaired needs no further edit: when it
+       is correct, leave it as it is, and the host adopts it together with
+       that recovery's unstaged edits to tracked files.
     3. Do not stage, commit, continue, abort, or restart the rebase, and do not
        write any Git metadata. The managed sandbox intentionally keeps the
        linked-worktree Git directory read-only. After your successful terminal
