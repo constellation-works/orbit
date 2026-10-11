@@ -68,22 +68,21 @@ let pagedEvents = null;
 // even though it is short: a capped scan that stopped before the window ended.
 let cappedHead = null;
 const auditRequests = [];
+// Paged requests `holdAudit` matches wait in `heldAudit` until the test answers
+// or fails them, so it decides the order responses settle in.
+let holdAudit = null;
+const heldAudit = [];
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (url.pathname === '/api/audit' && pagedEvents) {
     auditRequests.push(url.searchParams);
-    const limit = Number(url.searchParams.get('limit'));
-    const before = url.searchParams.get('before');
-    const rows = pagedEvents
-      .filter(event => before === null || event.id < Number(before))
-      .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status'))
-      .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
-      .slice(0, limit);
-    const capped = before === null && cappedHead;
-    const cursor = capped ? cappedHead.cursor : rows.length >= limit ? String(rows.at(-1).id) : null;
-    res.setHeader('content-type', 'application/json');
-    if (cursor) res.setHeader('x-audit-next-before', cursor);
-    res.end(JSON.stringify(capped ? cappedHead.rows : rows));
+    if (holdAudit && holdAudit(url.searchParams)) {
+      const answer = () => answerAudit(url, res);
+      const fail = () => { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'fixture failure' })); };
+      heldAudit.push({ params: url.searchParams, answer, fail });
+      return;
+    }
+    answerAudit(url, res);
     return;
   }
   if (url.pathname.startsWith('/api/')) {
@@ -103,6 +102,29 @@ const server = http.createServer((req, res) => {
   res.setHeader('content-type', served.type);
   res.end(data);
 });
+function answerAudit(url, res) {
+  const limit = Number(url.searchParams.get('limit'));
+  const before = url.searchParams.get('before');
+  const rows = pagedEvents
+    .filter(event => before === null || event.id < Number(before))
+    .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status'))
+    .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
+    .slice(0, limit);
+  const capped = before === null && cappedHead;
+  const cursor = capped ? cappedHead.cursor : rows.length >= limit ? String(rows.at(-1).id) : null;
+  res.setHeader('content-type', 'application/json');
+  if (cursor) res.setHeader('x-audit-next-before', cursor);
+  res.end(JSON.stringify(capped ? cappedHead.rows : rows));
+}
+// The held request `match` accepts, once the browser has sent it.
+async function takeHeld(match) {
+  for (let waited = 0; waited < 10000; waited += 10) {
+    const index = heldAudit.findIndex(held => match(held.params));
+    if (index >= 0) return heldAudit.splice(index, 1)[0];
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('the expected audit request never arrived');
+}
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 let page;
@@ -286,6 +308,95 @@ try {
   await page.waitForFunction(() => document.querySelector('.audit-row[title="event 9000"]') !== null);
   assert.equal(auditRequests.at(-1).get('before'), '10001', 'Load older resumes from the head cursor');
   assert.equal((await rowTitles())[2], 'event 9000', 'the gap match follows the new head');
+  // Response order across a scope change: an older page held for the
+  // unfiltered listing settles while, or after, a denied head replaces it, and
+  // must paint neither its rows nor its paging feedback into the reset body.
+  pagedEvents = Array.from({ length: 120 }, (_, index) => ({
+    ...events[1], id: 120 - index, execution_id: `order-${120 - index}`,
+    status: (120 - index) % 10 === 0 ? 'denied' : 'success', role: 'codex',
+  }));
+  await page.evaluate(() => {
+    // Record every response body read so the test can wait until a released
+    // page has reached the renderer before asserting it changed nothing.
+    const fetchPage = globalThis.fetch;
+    globalThis.auditReads = [];
+    globalThis.fetch = async (...args) => {
+      const res = await fetchPage(...args);
+      for (const read of ['json', 'text']) {
+        const body = res[read].bind(res);
+        res[read] = () => {
+          const pending = body();
+          auditReads.push({ url: String(args[0]), done: pending.catch(() => {}) });
+          return pending;
+        };
+      }
+      return res;
+    };
+    globalThis.settleAudit = async (fragment) => {
+      for (let waited = 0; ; waited += 10) {
+        const index = auditReads.findIndex(read => read.url.includes(fragment));
+        if (index >= 0) { await auditReads.splice(index, 1)[0].done; break; }
+        if (waited > 10000) throw new Error(`no response body read for ${fragment}`);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      // The renderer continues in microtasks, which all run before this task.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    };
+  });
+  const isOlder = params => params.has('before');
+  const isDeniedHead = params => !params.has('before') && params.get('status') === 'denied';
+  const showUnfiltered = () => page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams(''));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  const holdOlderThenFilter = async () => {
+    holdAudit = null;
+    await showUnfiltered();
+    assert.equal(await page.locator('.audit-row').count(), 50);
+    holdAudit = params => isOlder(params) || isDeniedHead(params);
+    await page.getByRole('button', { name: 'Load older events' }).click();
+    const older = await takeHeld(isOlder);
+    await page.evaluate(() => {
+      auditFixture.applyAuditHashQuery(new URLSearchParams('status=denied'));
+      globalThis.deniedHead = auditFixture.fetchAndRenderAudit(auditContext).then(() => 'loaded', () => 'failed');
+    });
+    return { older, head: await takeHeld(isDeniedHead) };
+  };
+  const assertNothingFromOldScope = async (when) => {
+    assert.equal(await page.locator('#audit-body .audit-row').count(), 0, `no old-scope rows ${when}`);
+    assert.equal(await page.locator('#audit-body .audit-more').count(), 0, `no old-scope paging feedback ${when}`);
+  };
+  let held = await holdOlderThenFilter();
+  held.older.answer();
+  await page.evaluate(() => settleAudit('before='));
+  await assertNothingFromOldScope('after a retired older page succeeds under a pending head');
+  held.head.answer();
+  assert.equal(await page.evaluate(() => deniedHead), 'loaded');
+  assert.deepEqual(await rowTitles(), Array.from({ length: 12 }, (_, index) => `event ${120 - index * 10}`),
+    'the denied head shows only its own rows');
+  assert.match(await page.locator('.audit-more-end').textContent(), /No older events/);
+  for (const outcome of ['fail', 'answer']) {
+    held = await holdOlderThenFilter();
+    held.head.fail();
+    assert.equal(await page.evaluate(() => deniedHead), 'failed');
+    held.older[outcome]();
+    await page.evaluate(() => settleAudit('before='));
+    await assertNothingFromOldScope(`when a retired older page settles (${outcome}) after the replacement head failed`);
+  }
+  // A same-scope refresh that lands while an older page is held keeps the
+  // paging: the page still continues the rows on screen, so it appends.
+  holdAudit = null;
+  await showUnfiltered();
+  holdAudit = isOlder;
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  held = { older: await takeHeld(isOlder) };
+  holdAudit = null;
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  held.older.answer();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'the held older page continues the refreshed head');
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  assert.equal(await page.locator('.audit-row').count(), 100, 'a later same-scope refresh keeps the loaded tail');
   pagedEvents = null;
   await page.evaluate(async () => {
     const codebase = await import('/js/codebase.js');
@@ -428,7 +539,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth, eventsWidth }, errors }, null, 2));
-  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, keyboard expansion, and the full-width codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
+  console.log('Audit browser: visible statuses at 1440/1024/1920/375, duplicate targets, summary columns, duration buckets, keyboard expansion, paging order across a filter change, and the full-width codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;
