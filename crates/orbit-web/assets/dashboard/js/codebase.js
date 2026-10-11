@@ -205,7 +205,7 @@ function lockSection(data) {
   const content = rows.length === 0 ? [emptySection(section, data)] : [table([
     { label: "path" },
     { label: "rate", num: true },
-    { label: "contending / requesting", num: true, title: "Distinct tasks denied a lock ÷ distinct tasks that reserved or were denied the path; a retry loop counts once" },
+    { label: "contending / requesting", num: true, title: "Distinct requesters denied a lock ÷ distinct requesters that reserved or were denied the path; task or run retries count once" },
     { label: "reservations", num: true },
     { label: "denials", num: true },
     ...(waitRecorded ? [{ label: "wait", num: true }] : []),
@@ -222,7 +222,7 @@ function lockSection(data) {
   return sectionNode(
     "lock_contention",
     "Lock contention",
-    "Distinct contending tasks ÷ distinct tasks that requested the path. Reservations and denial attempts are counted separately.",
+    "Distinct contending requesters ÷ distinct requesters that requested the path. Requests count by task, or by run when no tasks are named. Reservations and denial attempts are counted separately.",
     section,
     content,
   );

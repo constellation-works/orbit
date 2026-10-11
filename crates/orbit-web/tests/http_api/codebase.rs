@@ -138,13 +138,25 @@ fn widen(fixture: &Fixture, task_id: &str, file: &str) {
 }
 
 fn reserve(fixture: &Fixture, id: &str, task: &str, files: &[&str], at: DateTime<Utc>) {
+    reserve_request(fixture, id, &[task], None, files, at);
+}
+
+fn reserve_request(
+    fixture: &Fixture,
+    id: &str,
+    tasks: &[&str],
+    run: Option<&str>,
+    files: &[&str],
+    at: DateTime<Utc>,
+) {
     let files: Vec<String> = files.iter().map(|file| format!("file:{file}")).collect();
     let row = [
         id.to_string(),
         fixture.runtime.paths().orbit_dir.display().to_string(),
-        json!([task]).to_string(),
+        json!(tasks).to_string(),
         json!(files).to_string(),
         at.to_rfc3339(),
+        run.unwrap_or_default().to_string(),
     ];
     fixture
         .runtime
@@ -155,8 +167,8 @@ fn reserve(fixture: &Fixture, id: &str, task: &str, files: &[&str], at: DateTime
                 .execute(
                     "INSERT INTO task_reservations(reservation_id, workspace_orbit_dir,
                        workspace_id, task_ids_json, files_json, actor, created_at,
-                       expires_at, released_at, scope)
-                     VALUES (?1, ?2, 'ws_http_fixture', ?3, ?4, 'fixture', ?5, ?5, ?5, 'files')",
+                       expires_at, released_at, scope, owner_run_id)
+                     VALUES (?1, ?2, 'ws_http_fixture', ?3, ?4, 'fixture', ?5, ?5, ?5, 'files', NULLIF(?6, ''))",
                     row,
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
@@ -165,10 +177,10 @@ fn reserve(fixture: &Fixture, id: &str, task: &str, files: &[&str], at: DateTime
         .unwrap();
 }
 
-fn lock_denial(fixture: &Fixture, index: usize, task: &str, run: &str, file: &str) {
+fn lock_denial(fixture: &Fixture, index: usize, task: Option<&str>, run: Option<&str>, file: &str) {
     let arguments = json!({
         "actor": "codex",
-        "task_ids": [task],
+        "task_ids": task.into_iter().collect::<Vec<_>>(),
         "files": [format!("file:{file}")],
         "conflicts": [{"file": format!("file:{file}"), "held_by": "task", "held_by_id": "HF-999"}],
         "owner_run_id": run,
@@ -181,7 +193,7 @@ fn lock_denial(fixture: &Fixture, index: usize, task: &str, run: &str, file: &st
             subcommand: None,
             tool_name: Some("orbit.task.locks.reserve".into()),
             target_type: Some("task_reservation".into()),
-            target_id: Some(task.into()),
+            target_id: task.map(str::to_string),
             role: "codex".into(),
             status: AuditEventStatus::Denied,
             exit_code: 1,
@@ -204,8 +216,8 @@ fn lock_denial(fixture: &Fixture, index: usize, task: &str, run: &str, file: &st
             origin_session_id: None,
             mcp_call_id: None,
             lease_id: None,
-            task_id: Some(task.into()),
-            job_run_id: Some(run.into()),
+            task_id: task.map(str::to_string),
+            job_run_id: run.map(str::to_string),
             activity_id: None,
             step_index: None,
         })
@@ -323,7 +335,13 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
 
             // Lock contention: one run retrying twenty times on one path.
             for index in 0..20 {
-                lock_denial(&fixture, index, "HF-777", "jrun-retry", "src/lock.rs");
+                lock_denial(
+                    &fixture,
+                    index,
+                    Some("HF-777"),
+                    Some("jrun-retry"),
+                    "src/lock.rs",
+                );
             }
             reserve(&fixture, "res-lock", "HF-778", &["src/lock.rs"], now);
 
@@ -443,6 +461,108 @@ fn codebase_sections_count_distinct_tasks_and_split_causes() {
                     .is_empty(),
                 "pairs reserved together fewer than min_support times are omitted"
             );
+        },
+    );
+}
+
+#[test]
+fn codebase_contention_counts_file_only_runs_and_deduplicates_retries() {
+    isolated(
+        "codebase::codebase_contention_counts_file_only_runs_and_deduplicates_retries",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            reserve_request(
+                &fixture,
+                "res-file",
+                &[],
+                Some("jrun-holder"),
+                &["src/run-lock.rs"],
+                now,
+            );
+            lock_denial(&fixture, 0, None, Some("jrun-waiter"), "src/run-lock.rs");
+
+            for index in 0..3 {
+                for run in ["jrun-holder", "jrun-waiter"] {
+                    reserve_request(
+                        &fixture,
+                        &format!("res-retry-{run}-{index}"),
+                        &[],
+                        Some(run),
+                        &["src/retry-lock.rs"],
+                        now,
+                    );
+                }
+                lock_denial(
+                    &fixture,
+                    index + 1,
+                    None,
+                    Some("jrun-waiter"),
+                    "src/retry-lock.rs",
+                );
+                // Task retries across different runs still count by task,
+                // even when separate tasks also share a run.
+                let run = format!("jrun-task-{index}");
+                reserve_request(
+                    &fixture,
+                    &format!("res-task-{index}"),
+                    &["HF-901"],
+                    Some(&run),
+                    &["src/task-lock.rs"],
+                    now,
+                );
+                lock_denial(
+                    &fixture,
+                    index + 4,
+                    Some("HF-902"),
+                    Some(&run),
+                    "src/task-lock.rs",
+                );
+            }
+
+            // Without tasks or a run, each recorded request counts separately.
+            for index in 0..2 {
+                reserve_request(
+                    &fixture,
+                    &format!("res-unowned-{index}"),
+                    &[],
+                    None,
+                    &["src/unowned-lock.rs"],
+                    now,
+                );
+                lock_denial(&fixture, index + 7, None, None, "src/unowned-lock.rs");
+            }
+
+            let server = fixture.server(false);
+            for support in [1, 2] {
+                let body = json_ok(server.get(&format!(
+                    "/api/codebase/analytics?{WS}&window=all&min_support={support}"
+                )));
+                for (path, reservations, denials, contenders, requesters) in [
+                    ("src/run-lock.rs", 1, 1, 1, 2),
+                    ("src/retry-lock.rs", 6, 3, 1, 2),
+                    ("src/task-lock.rs", 3, 3, 1, 2),
+                    ("src/unowned-lock.rs", 2, 2, 2, 4),
+                ] {
+                    let lock = row(&body["lock_contention"], path)
+                        .unwrap_or_else(|| panic!("{path} missing at support {support}: {body}"));
+                    assert_eq!(lock["numerator"], contenders, "{lock}");
+                    assert_eq!(lock["denominator"], requesters, "{lock}");
+                    assert_eq!(lock["rate"], 0.5, "{lock}");
+                    assert_eq!(lock["contending_tasks"], contenders, "{lock}");
+                    assert_eq!(lock["reservations"], reservations, "{lock}");
+                    assert_eq!(lock["denials"], denials, "{lock}");
+                }
+            }
+            let strict = json_ok(server.get(&format!(
+                "/api/codebase/analytics?{WS}&window=all&min_support=3"
+            )));
+            assert_eq!(strict["lock_contention"]["below_support"], 3);
+            assert_eq!(
+                strict["lock_contention"]["rows"].as_array().unwrap().len(),
+                1
+            );
+            assert!(row(&strict["lock_contention"], "src/unowned-lock.rs").is_some());
         },
     );
 }
