@@ -336,7 +336,7 @@ const PROTECTED_PATH_WIDENING: &str =
 
 impl Pair {
     /// Let `leaf`'s settlement backoff elapse, as the clock passing it would.
-    fn elapse_settlement_backoff(&self, leaf: &str) -> SettlementRefusal {
+    pub(super) fn elapse_settlement_backoff(&self, leaf: &str) -> SettlementRefusal {
         let refused = self
             .admission(leaf)
             .settlement_refusal

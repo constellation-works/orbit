@@ -31,11 +31,12 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_engine::KnownRedUnconfirmed;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
-    ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
-    ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
+    ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
+    ExecutionClaim, ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
     KnownRedObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
@@ -82,6 +83,18 @@ fn handoff_mutation_id(claim_id: &str) -> String {
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
+}
+
+/// The code leading the reason a claim ends with when the owner's own base
+/// run contradicts its leaf's known-red report [ORB-15566].
+const KNOWN_RED_CONTRADICTED: &str = "known_red_contradicted";
+
+/// The owner's judgement of a handoff's known-red logs: one observation per
+/// log for the claim journal, and the verdicts its own base runs contradict.
+#[derive(Default)]
+struct OwnerKnownRed {
+    observations: Vec<KnownRedObservation>,
+    contradicted: Vec<String>,
 }
 
 impl crate::OrbitRuntime {
@@ -237,7 +250,15 @@ impl crate::OrbitRuntime {
             ClaimMutation::AcceptHandoff(handoff) => {
                 let deadline = std::time::Instant::now() + self.claim_known_red_budget;
                 let mut observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
-                observation.known_red = self.observe_known_red(&handoff, &observation, deadline)?;
+                let known_red = self.observe_known_red(&handoff, &observation, deadline)?;
+                if !known_red.contradicted.is_empty() {
+                    return Err(self.release_contradicted_known_red(
+                        &claim,
+                        &context,
+                        &known_red.contradicted,
+                    ));
+                }
+                observation.known_red = known_red.observations;
                 self.accept_task_handoff(
                     &context,
                     &handoff_mutation_id(&claim.claim_id),
@@ -250,6 +271,63 @@ impl crate::OrbitRuntime {
                  revocation and recovery are owner-operator actions",
             )),
         }
+    }
+
+    /// [ORB-15566] End a claim whose known-red report the owner's own base run
+    /// contradicts, and answer the settlement with the refusal.
+    ///
+    /// The handoff can never be accepted: retrying reads the same base result.
+    /// Refusing it while holding the claim would leave the follower's
+    /// immutable settlement pending until an operator revoked the claim. The
+    /// owner releases the claim itself instead, as a `transient` failure
+    /// counted against the task's release budget, so pull admission offers
+    /// the task again and a third contradiction in the window blocks it. The
+    /// follower reconciles the refusal against the ended claim and closes its
+    /// settlement obsolete. Only the owner's own verdict ends the claim; the
+    /// leaf's log is never accepted.
+    fn release_contradicted_known_red(
+        &self,
+        claim: &ExecutionClaim,
+        context: &ClaimInvocation,
+        contradicted: &[String],
+    ) -> OrbitError {
+        let verdict = format!(
+            "{KNOWN_RED_CONTRADICTED}: the owner's own base run contradicts the leaf's known-red \
+             report: {}",
+            contradicted.join("; ")
+        );
+        let evidence = ClaimEvidence {
+            summary: Some(format!("released by owner: {verdict}")),
+            comment: Some(format!(
+                "This owner released the claim because {verdict}. The handoff could never be \
+                 accepted, so the task is back in the backlog and can be pulled again."
+            )),
+            failure: Some(ClaimFailure {
+                class: ClaimFailureClass::Transient,
+                reason: verdict.clone(),
+                crew: None,
+                candidate: None,
+                provider_limit: false,
+                provider_refusal: false,
+            }),
+            ..ClaimEvidence::default()
+        };
+        if let Err(error) = self.mutate_execution_claim(
+            Some(context),
+            &release_mutation_id(&claim.claim_id),
+            &ClaimMutation::Release(evidence),
+        ) {
+            tracing::warn!(
+                task_id = %claim.task_id,
+                claim_id = %claim.claim_id,
+                %verdict,
+                "could not release a claim whose known-red report the owner contradicts: {error}"
+            );
+            return error;
+        }
+        refused(format!(
+            "{verdict}; this owner released the claim, so the settlement is obsolete"
+        ))
     }
 
     /// [ORB-15573] The hold a release whose leaf its provider refused places
@@ -408,12 +486,14 @@ impl crate::OrbitRuntime {
     /// one ([`orbit_engine::verify_claimed_known_red`]). Only commands this
     /// owner requires are run; the log names one, never supplies it. A log
     /// that cannot be read is left to the claim journal, which refuses it.
+    /// A verdict the owner's base run contradicts is also returned on its own
+    /// [ORB-15566], since it ends the claim rather than refusing it.
     fn observe_known_red(
         &self,
         handoff: &TaskHandoff,
         observation: &HandoffObservation,
         deadline: std::time::Instant,
-    ) -> Result<Vec<KnownRedObservation>, OrbitError> {
+    ) -> Result<OwnerKnownRed, OrbitError> {
         let base_sha = &observation.candidate.base.commit;
         let reported = handoff
             .validation
@@ -430,42 +510,51 @@ impl crate::OrbitRuntime {
             })
             .collect::<Vec<_>>();
         if reported.is_empty() {
-            return Ok(Vec::new());
+            return Ok(OwnerKnownRed::default());
         }
         // The owner's own base, as admission captured it: never the branch a
         // handoff or its pull request names.
         let ship = self.claim_receipt(&handoff.claim_id)?.request.ship;
         let base_sync = if ship.mode == "pr" { "remote" } else { "local" };
-        Ok(reported
-            .into_iter()
-            .map(|(command, exit_code, report)| {
-                let verdict = if !observation.required_commands.contains(&command) {
-                    Err("it is not a command this owner requires, so the owner runs none".into())
-                } else if report.base_sha != *base_sha {
-                    Err(format!("the report names base {}", report.base_sha))
-                } else {
-                    orbit_engine::verify_claimed_known_red(
-                        self,
-                        &self.paths().repo_root,
-                        &orbit_engine::ClaimedKnownRed {
-                            base_branch: &ship.base_branch,
-                            base_sync,
-                            base_sha,
-                            command: &command,
-                            selection: report.selection.as_ref(),
-                            exit_code,
-                            failures: &report.failures,
-                        },
-                        deadline,
-                    )
-                };
-                KnownRedObservation {
-                    command,
-                    base_sha: base_sha.clone(),
-                    verdict,
-                }
-            })
-            .collect())
+        let mut known_red = OwnerKnownRed::default();
+        for (command, exit_code, report) in reported {
+            let verdict = if !observation.required_commands.contains(&command) {
+                Err(KnownRedUnconfirmed::Inconclusive(
+                    "it is not a command this owner requires, so the owner runs none".into(),
+                ))
+            } else if report.base_sha != *base_sha {
+                Err(KnownRedUnconfirmed::Inconclusive(format!(
+                    "the report names base {}",
+                    report.base_sha
+                )))
+            } else {
+                orbit_engine::verify_claimed_known_red(
+                    self,
+                    &self.paths().repo_root,
+                    &orbit_engine::ClaimedKnownRed {
+                        base_branch: &ship.base_branch,
+                        base_sync,
+                        base_sha,
+                        command: &command,
+                        selection: report.selection.as_ref(),
+                        exit_code,
+                        failures: &report.failures,
+                    },
+                    deadline,
+                )
+            };
+            if let Err(KnownRedUnconfirmed::Contradicted(reason)) = &verdict {
+                known_red
+                    .contradicted
+                    .push(format!("required validation `{command}`: {reason}"));
+            }
+            known_red.observations.push(KnownRedObservation {
+                command,
+                base_sha: base_sha.clone(),
+                verdict: verdict.map_err(|unconfirmed| unconfirmed.reason().to_string()),
+            });
+        }
+        Ok(known_red)
     }
 
     /// The owner's reading of the facts a before-PR certificate stands on
