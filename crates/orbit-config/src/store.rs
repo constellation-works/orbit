@@ -78,6 +78,10 @@ pub enum WorkspaceInitMode {
 pub struct ConfigStore {
     scope: ConfigScope,
     path: PathBuf,
+    /// The global config path used when this workspace store was opened for
+    /// a write, so global-only key refusals can point at the file `--global`
+    /// will edit.
+    global_config_path: Option<PathBuf>,
     doc: DocumentMut,
     /// The file's content when this store read it (empty when absent): the
     /// version [`Self::save`] requires to still be on disk before replacing it.
@@ -147,7 +151,9 @@ impl ConfigStore {
         // yet, so the first real setting written into it gets the same
         // fail-closed choice as a missing file; the toggles are carried over.
         if workspace_config_sets_policy(&path) {
-            return Self::open(ConfigScope::Workspace, path);
+            let mut store = Self::open(ConfigScope::Workspace, path)?;
+            store.global_config_path = Some(global_config_path.to_path_buf());
+            return Ok(store);
         }
         let mut existing = Self::open(ConfigScope::Workspace, path.clone())?;
         let toggles = existing.doc.remove(PLUGIN_ENABLEMENT_TABLE);
@@ -171,6 +177,7 @@ impl ConfigStore {
         };
         let mut store =
             Self::from_content(ConfigScope::Workspace, path, &content, existing.opened)?;
+        store.global_config_path = Some(global_config_path.to_path_buf());
         if mode == WorkspaceInitMode::SeedFromGlobal {
             // `[machine]` belongs to this host and is rejected in workspace
             // configs. Remove it from the parsed document so all other
@@ -198,6 +205,7 @@ impl ConfigStore {
         Ok(Self {
             scope,
             path,
+            global_config_path: None,
             doc,
             opened,
         })
@@ -342,10 +350,14 @@ impl ConfigStore {
         if self.scope != ConfigScope::Workspace || !registry::is_global_only_key(key) {
             return Ok(());
         }
+        let global_path = self
+            .global_config_path
+            .as_ref()
+            .map(|path| format!(" in '{}'", redact_home_dir(&path.display().to_string())))
+            .unwrap_or_default();
         Err(OrbitError::InvalidInput(format!(
             "config key '{key}' belongs to the global config only; rerun with --global to edit \
-             this machine's settings in '{}'",
-            redact_home_dir(&self.path.display().to_string())
+             this machine's settings{global_path}"
         )))
     }
 

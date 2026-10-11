@@ -9,8 +9,8 @@ use std::sync::mpsc;
 
 use orbit_common::OrbitError;
 use orbit_config::{
-    ConfigRoots, ConfigScope, ConfigStore, ResolvedConfig, load_workspace_plugin_enablement,
-    plugin_enablement_key,
+    ConfigRoots, ConfigScope, ConfigStore, ResolvedConfig, WorkspaceInitMode,
+    load_workspace_plugin_enablement, plugin_enablement_key,
 };
 
 struct Roots {
@@ -63,6 +63,40 @@ fn set_toggle(store: &mut ConfigStore, global_root: &Path, plugin: &str, enabled
     store
         .validate_workspace_with_global(global_root)
         .expect("validate toggle");
+}
+
+#[test]
+fn global_only_workspace_key_refusal_points_to_global_config_and_leaves_workspace_unchanged() {
+    let roots = Roots::new();
+    let workspace_path = roots.workspace_config();
+    let global_path = roots.global.path().join("config.toml");
+    let before = std::fs::read(&workspace_path).expect("read initial workspace config");
+    let mut store = ConfigStore::open_for_workspace_set(
+        &workspace_path,
+        &global_path,
+        WorkspaceInitMode::RequireExisting,
+    )
+    .expect("open existing workspace config");
+
+    let refusal = store
+        .set_value("machine.worker_cpu_quota", "16")
+        .expect_err("a global-only key must be refused in the workspace config")
+        .to_string();
+    let global_path_text = global_path.to_string_lossy();
+    let workspace_path_text = workspace_path.to_string_lossy();
+    assert!(
+        refusal.contains(global_path_text.as_ref()),
+        "the refusal must identify the config file selected by --global: {refusal}"
+    );
+    assert!(
+        !refusal.contains(workspace_path_text.as_ref()),
+        "the refusal must not identify the workspace file as the machine config: {refusal}"
+    );
+    assert_eq!(
+        std::fs::read(&workspace_path).expect("read workspace config after refusal"),
+        before,
+        "refusing a global-only key leaves workspace config bytes unchanged"
+    );
 }
 
 #[test]
