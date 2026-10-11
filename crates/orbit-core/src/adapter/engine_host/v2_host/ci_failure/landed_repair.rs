@@ -9,13 +9,15 @@
 
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::LandingObservationStatus;
 use serde_json::{Value, json};
 
 use super::cluster::FailureCluster;
 use super::filing::{CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_TAG};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::DuplicateTaskLookup;
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::{
+    full_revision, landed_task_commit,
+};
 use crate::application::automation::source::Source;
 
 /// Why a cluster was deferred rather than filed.
@@ -67,7 +69,7 @@ impl<'a> LandedRepairs<'a> {
                 return Ok(None);
             }
             self.remaining -= 1;
-            let Some(landed) = self.landed_commit(task) else {
+            let Some(landed) = landed_task_commit(self.runtime, &task.id) else {
                 continue;
             };
             if landed == cluster.tested_commit || !self.descends(&cluster.tested_commit, &landed) {
@@ -76,14 +78,6 @@ impl<'a> LandedRepairs<'a> {
             return Ok(Some(pending_entry(cluster, task, &landed)));
         }
         Ok(None)
-    }
-
-    fn landed_commit(&self, task: &Task) -> Option<String> {
-        let observation = self.runtime.observe_task_delivery(&task.id, None).ok()?;
-        (observation.landing.status == LandingObservationStatus::Merged)
-            .then_some(observation.landing.landed_commit)
-            .flatten()
-            .filter(|commit| full_revision(commit))
     }
 
     fn descends(&self, ancestor: &str, descendant: &str) -> bool {
@@ -123,8 +117,4 @@ fn pending_entry(cluster: &FailureCluster, task: &Task, landed: &str) -> Value {
             cluster.tested_commit
         ),
     })
-}
-
-fn full_revision(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

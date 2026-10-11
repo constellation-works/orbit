@@ -4,13 +4,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_all;
 use orbit_engine::ci_run_event::is_branch_event;
 use orbit_tools::github_cli::strip_ansi_sequences;
 use serde_json::{Value, json};
 
 use super::fields::{run_order, value_string};
 use super::log_signature::error_signature;
+use crate::adapter::engine_host::v2_host::admission::sweep_filing::bounded_error;
 
 /// The run a snapshot entry — a retryable error or a current failure — is
 /// about, as a comparable key. Collection emits a numeric `run_id`; the
@@ -477,10 +477,6 @@ pub(super) fn retryable_pipeline_error(
             "errors": errors,
         })
     ))
-}
-
-pub(super) fn bounded_error(message: &str) -> String {
-    redact_all(message).chars().take(500).collect()
 }
 
 pub(super) fn normalize_retryable_error(error: Value) -> Value {
