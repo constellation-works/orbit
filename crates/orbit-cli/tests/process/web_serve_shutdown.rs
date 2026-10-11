@@ -503,15 +503,16 @@ fn spawn_dashboard(home: &std::path::Path) -> BoundServer {
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    command
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .args(["web", "serve", "--port", "0", "--no-open"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map(|child| BoundServer::new(child, Announcement::Dashboard))
-        .expect("spawn orbit web serve")
+    BoundServer::spawn(
+        command
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .args(["web", "serve", "--port", "0", "--no-open"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        Announcement::Dashboard,
+    )
+    .expect("spawn orbit web serve")
 }
 
 fn send_sigterm(child: &Child) {

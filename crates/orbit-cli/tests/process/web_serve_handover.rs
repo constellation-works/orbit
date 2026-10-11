@@ -146,7 +146,6 @@ fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> BoundServer {
         .stderr(Stdio::piped());
     // The copy was just written. Retry only ExecutableFileBusy; every other
     // spawn error still fails on the first attempt.
-    generation_fixture::launch(|| command.spawn())
-        .map(|child| BoundServer::new(child, Announcement::Dashboard))
+    generation_fixture::launch(|| BoundServer::spawn(&mut command, Announcement::Dashboard))
         .expect("spawn orbit web serve")
 }

@@ -377,21 +377,18 @@ fn orbit_command(work: &Path, home: &Path) -> Command {
     command
 }
 
-fn spawn_mcp_listen(fixture: &Fixture) -> BoundServer<ChildGuard> {
-    BoundServer::with_guard(
-        ChildGuard(
-            orbit_command(&fixture.work, &fixture.home)
-                .args(["mcp", "listen", "127.0.0.1:0"])
-                .env("RUST_LOG", "warn,orbit::command::mcp::server=info")
-                .env("NO_COLOR", "1")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("spawn orbit mcp listen"),
-        ),
+fn spawn_mcp_listen(fixture: &Fixture) -> BoundServer {
+    BoundServer::spawn(
+        orbit_command(&fixture.work, &fixture.home)
+            .args(["mcp", "listen", "127.0.0.1:0"])
+            .env("RUST_LOG", "warn,orbit::command::mcp::server=info")
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
         Announcement::Mcp,
     )
+    .expect("spawn orbit mcp listen")
 }
 
 fn proc_spawn_input(marker: &Path) -> Value {

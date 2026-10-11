@@ -160,15 +160,14 @@ fn web_serve_approved_hosts_announce_reachable_api_and_health_urls() {
     );
 
     for host in ["127.0.0.1", "::1"] {
-        let mut server = BoundServer::new(
+        let mut server = BoundServer::spawn(
             base_command(temp.path(), &home)
                 .args(["web", "serve", "--host", host, "--port", "0", "--no-open"])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .expect("spawn orbit web serve"),
+                .stderr(Stdio::inherit()),
             Announcement::Dashboard,
-        );
+        )
+        .expect("spawn orbit web serve");
         let addr = server
             .wait_for_address(STARTUP_DEADLINE)
             .expect("dashboard bound");
@@ -283,13 +282,14 @@ fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>) -> BoundServer {
     if let Some(root) = root {
         command.args(["--root", root]);
     }
-    command
-        .args(["web", "serve", "--port", "0", "--no-open"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map(|child| BoundServer::new(child, Announcement::Dashboard))
-        .expect("spawn orbit web serve")
+    BoundServer::spawn(
+        command
+            .args(["web", "serve", "--port", "0", "--no-open"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        Announcement::Dashboard,
+    )
+    .expect("spawn orbit web serve")
 }
 
 /// Registered workspace names as the dashboard itself reports them, sorted.
