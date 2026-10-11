@@ -37,7 +37,7 @@ use crate::state::Ws;
 /// of audit rows would.
 const INCIDENTS_DEFAULT_LIMIT: usize = 50;
 
-/// `?since=<24h|7d|RFC3339>&class=<denied|diagnostic|expected|unexpected>&limit=`.
+/// `?since=<24h|7d|RFC3339>&class=<deferred|denied|diagnostic|expected|unexpected>&limit=`.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct IncidentsQuery {
     #[serde(default)]
@@ -81,7 +81,7 @@ pub(super) async fn list_failure_incidents(
             Some(class) => Some(class),
             None => {
                 return bad_request(format!(
-                    "unknown failure class: {value} (expected denied, diagnostic, expected, or unexpected)"
+                    "unknown failure class: {value} (expected deferred, denied, diagnostic, expected, or unexpected)"
                 ));
             }
         },
@@ -128,13 +128,9 @@ pub(super) async fn list_failure_incidents(
 }
 
 fn parse_class(raw: &str) -> Option<FailureClass> {
-    match raw {
-        "denied" => Some(FailureClass::Denied),
-        "diagnostic" => Some(FailureClass::Diagnostic),
-        "expected" => Some(FailureClass::Expected),
-        "unexpected" => Some(FailureClass::Unexpected),
-        _ => None,
-    }
+    FailureClass::ALL
+        .into_iter()
+        .find(|class| class.as_str() == raw)
 }
 
 /// Projects a report into the dashboard payload.
@@ -200,28 +196,21 @@ pub(super) fn incidents_payload(
         "incidents_by_class": report.incidents_by_class,
         "affected_runs_by_class": report.affected_runs_by_class,
         "failure_categories": failure_category_summaries(report),
-        "class_labels": {
-            FailureClass::Denied.as_str(): FailureClass::Denied.label(),
-            FailureClass::Diagnostic.as_str(): FailureClass::Diagnostic.label(),
-            FailureClass::Expected.as_str(): FailureClass::Expected.label(),
-            FailureClass::Unexpected.as_str(): FailureClass::Unexpected.label(),
-        },
+        "class_labels": FailureClass::ALL
+            .into_iter()
+            .map(|class| (class.as_str().to_string(), json!(class.label())))
+            .collect::<serde_json::Map<_, _>>(),
         "truncated": report.truncated,
         "incidents": shown,
     })
 }
 
-/// One canonical projection for the four mutually exclusive failure classes.
+/// One canonical projection for the mutually exclusive failure classes.
 /// Both summary endpoints use it so their labels and denominators cannot
 /// drift apart.
 pub(super) fn failure_category_summaries(report: &FailureIncidentReport) -> Value {
     let mut categories = serde_json::Map::new();
-    for class in [
-        FailureClass::Unexpected,
-        FailureClass::Expected,
-        FailureClass::Denied,
-        FailureClass::Diagnostic,
-    ] {
+    for class in FailureClass::ALL {
         let key = class.as_str();
         categories.insert(
             key.to_string(),

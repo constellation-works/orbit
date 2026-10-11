@@ -129,6 +129,7 @@ td .rel-rate { font-size: 12px; }
 .incident-tile.expected, .incident-insight.silent { --dot: var(--status-proposed); }
 .incident-tile.denied { --dot: var(--state-held); }
 .incident-tile.diagnostic { --dot: var(--fg-mute); }
+.incident-tile.deferred { --dot: var(--state-held); }
 .incident-denominator { margin: 0; color: var(--fg-mute); font: 12.5px/1.5 var(--font-sans); overflow-wrap: anywhere; }
 .incident-scan-note { margin: 0; color: var(--state-pending); font: 12px/1.5 var(--font-sans); }
 
@@ -238,6 +239,7 @@ td .rel-rate { font-size: 12px; }
 .incident-pill.unexpected, .incident-pill.live { background: rgba(255, 122, 107, 0.14); color: #ffb3aa; }
 .incident-pill.expected { background: rgba(242, 178, 76, 0.14); color: #f6c97f; }
 .incident-pill.denied { background: rgba(196, 167, 255, 0.14); color: #d9c8ff; }
+.incident-pill.deferred { background: rgba(196, 167, 255, 0.14); color: #d9c8ff; }
 .incident-detail-head { display: flex; flex-direction: column; gap: 6px; }
 .incident-detail-title { margin: 0; color: var(--fg); font: 600 17px/1.35 var(--font-sans); overflow-wrap: anywhere; }
 .incident-sentence { margin: 0; color: #c9ced6; font: 13px/1.5 var(--font-sans); }

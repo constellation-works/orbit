@@ -245,7 +245,8 @@ impl Workspace {
             .run_deterministic(
                 "file_ci_failure_tasks",
                 &json!({}),
-                &json!({"ci_evidence": evidence}),
+                // The activity dispatcher adds the run identity in production.
+                &json!({"ci_evidence": evidence, "job_run_id": job_run.run_id}),
                 ToolContext::default(),
             )
             .map_err(|error| error.to_string());
@@ -302,7 +303,8 @@ fn open_sweep_tasks(runtime: &OrbitRuntime) -> Vec<orbit_types::task::Task> {
 
 /// B4/W4: agent-main stays red on a new push every sweep and no diagnostic
 /// can be bound. Gaps keyed by run never repeat, so before escalation every
-/// sweep failed retryable and nothing was ever filed.
+/// sweep failed retryable and nothing was ever filed. Below the escalation
+/// threshold a sweep now succeeds as `deferred` [ORB-15517] instead of failing.
 #[test]
 fn ci_agent_main_red_for_three_sweeps_always_has_an_open_task() {
     if !isolated_with_fake_gh("sweep::ci_agent_main_red_for_three_sweeps_always_has_an_open_task") {
@@ -313,10 +315,27 @@ fn ci_agent_main_red_for_three_sweeps_always_has_an_open_task() {
         workspace.push_red_run(8_000 + sweep, 9_100 + sweep, &unbindable_log());
         let (evidence, filed) = workspace.sweep();
         assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
-        let error = filed.expect_err("an unfileable finding still retries this sweep");
-        assert!(error.contains("job_log_truncated"), "{error}");
+        let output = filed.expect("a run-scoped evidence gap defers instead of failing");
+        assert_eq!(output["outcome"], json!("deferred"), "{output:#}");
+        assert_eq!(output["deferred_count"], json!(1), "{output:#}");
+        assert_eq!(
+            output["deferred"][0]["run_id"],
+            json!(8_000 + sweep),
+            "{output:#}"
+        );
         assert!(open_sweep_tasks(&workspace.runtime).is_empty());
     }
+    let incidents = workspace
+        .runtime
+        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .unwrap();
+    assert_eq!(
+        incidents.affected_runs_by_class.get("deferred"),
+        Some(&2),
+        "both deferring sweeps list under Incidents as deferred: {:?}",
+        incidents.incidents
+    );
+    assert_eq!(incidents.affected_runs_by_class.get("unexpected"), None);
 
     workspace.push_red_run(8_003, 9_103, &unbindable_log());
     let (evidence, filed) = workspace.sweep();

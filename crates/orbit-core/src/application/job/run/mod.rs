@@ -7,6 +7,7 @@
 //! - `owner` — process signalling, owner identity classification, liveness probes (Unix + shims).
 //! - `delivery` — the bounded public commit/landing observation for one task.
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
+//! - `deferral` — recording a run that deferred its work instead of failing, for Incidents.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
 //! - `window_extension` — lengthening a live drain's window.
@@ -20,6 +21,7 @@ mod actions;
 mod admissions_stop;
 mod build_budget;
 mod conflict;
+mod deferral;
 mod delivery;
 mod drain_cancel;
 mod interrupted_review;

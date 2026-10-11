@@ -692,7 +692,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   (an `anthropic` crew is the same provider as `claude`); a capacity failure
   stops only the crew the leaf ran. A usage limit stops no crew by itself:
   the reading the leaf recorded on this host excludes the provider's crews as
-  `provider_limit` until it lapses.
+  `provider_limit` until it lapses. The leaf itself ends `held`, not
+  `failed`, with a `provider_limit` step naming the provider and the reset,
+  so it stays out of `orbit run history --state failed` and Incidents lists
+  it as `deferred`.
   After `environment` or `owner_route` — failures of the host itself — it requests
   no more work at all for its window (`host_suppressed:` refusal,
   `crews.host_suppressed`); fix the host and start a new drain. In either

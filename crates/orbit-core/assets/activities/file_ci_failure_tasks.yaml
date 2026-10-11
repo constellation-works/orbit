@@ -81,13 +81,17 @@ spec:
     or a root cause already owned by a manual task, therefore does not file
     the same work twice. Filing never mutates the covering task's tags or
     prose; completed coverage adds idempotent observation artifacts. Skips name
-    the covering task and bounded match evidence. The three
+    the covering task and bounded match evidence. The four
     endings stay distinct
     and none of them is a CI pass: a snapshot with `collected: false` reports
     `capability_unavailable` and files nothing, a snapshot with no current
-    failure reports `no_current_failure` and files nothing, and anything else
+    failure reports `no_current_failure` and files nothing, a snapshot whose
+    every current failure is deferred for a run-scoped collection gap
+    reports `deferred` and files nothing, and anything else
     reports `current_failures` with what it filed, skipped as already open,
     left unfiled at the `max_tasks` cap, or deferred for incomplete evidence.
+    Every successful output carries `deferred_count`, the number of entries
+    in `deferred`.
     Schema version 2 requires one job per failure row, matching diagnostic
     and checkout job identities, one known failed step, and complete
     diagnostic evidence. A complete bounded diagnostic_unit with matching job
@@ -105,8 +109,12 @@ spec:
     that names no run — a repository, run-listing, or pull-request-listing
     read, a registration, dedupe-lookup, or task-creation failure — leaves the
     whole snapshot in doubt and fails the activity with a bounded
-    `retryable_error` payload, as does a snapshot in which nothing was complete
-    enough to file. Errors collection already reported as persistent
+    `retryable_error` payload. A snapshot in which nothing was complete enough
+    to file fails the same way, unless every gap is a run-scoped collection
+    error, which collection's sweep history degrades or escalates after three
+    consecutive sweeps. That snapshot succeeds as `deferred` instead and
+    records one `pipeline.run.deferred` audit row that Incidents lists as
+    `deferred`, never as a failure. Errors collection already reported as persistent
     (`persistent_retryable_errors`) never block filing; the audit carries
     their count and details. Retry escalates: each branch and workflow in the
     snapshot's `landing_evidence_incomplete` is filed as one proposed
@@ -146,7 +154,12 @@ spec:
     properties:
       outcome:
         type: string
-        enum: [capability_unavailable, no_current_failure, current_failures]
+        enum: [capability_unavailable, no_current_failure, deferred, current_failures]
+      deferred_count:
+        type: number
+        description: >
+          How many current failures this pass deferred to a later sweep; the
+          length of `deferred`.
       capability:
         oneOf:
           - type: object

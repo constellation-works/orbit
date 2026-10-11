@@ -1,10 +1,12 @@
-//! Pass 1: classify a failed row as denied, expected, diagnostic or
-//! unexpected, and derive the surface it failed on.
+//! Pass 1: classify a failed row as denied, expected, diagnostic, deferred
+//! or unexpected, and derive the surface it failed on.
 
 use super::types::{
     DOCTOR_FINDINGS_MESSAGE_PREFIX, FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass,
+    RUN_DEFERRED_SURFACE,
 };
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
+use orbit_types::workflow::PROVIDER_LIMIT_MARKER;
 
 /// Message fragments that mark a documented negative path. Each mirrors an
 /// `OrbitError` variant's `Display` rendering in `orbit-common`, which every
@@ -32,7 +34,8 @@ const DOCTOR_SURFACE: &str = "doctor";
 /// classifies as a denial so the two populations do not blur.
 const DENIAL_MARKERS: &[&str] = &["policy denied", "capability denied", "permission denied"];
 
-/// Classifies one failed audit row. Denial status wins outright; otherwise the
+/// Classifies one failed audit row. A deferral wins outright, then a
+/// failure-only diagnostic surface, then denial status; otherwise the
 /// `OrbitError`-derived markers decide whether this was a documented negative
 /// path. Anything unmatched is treated as unexpected — the conservative
 /// direction, since under-reporting a real failure is the costlier mistake.
@@ -51,6 +54,9 @@ pub(crate) fn classify_failure(
     status: AuditEventStatus,
     error_message: Option<&str>,
 ) -> FailureClass {
+    if is_deferral(surface, error_message) {
+        return FailureClass::Deferred;
+    }
     if is_failure_only_diagnostic_surface(surface) {
         return FailureClass::Diagnostic;
     }
@@ -78,6 +84,14 @@ pub(crate) fn classify_failure(
         return FailureClass::Expected;
     }
     FailureClass::Unexpected
+}
+
+/// [ORB-15517] A deferral, not a failure: the row a run records when it
+/// stopped because its work was deferred, or any row carrying a provider's
+/// typed usage-limit failure, whose provider named when to try again.
+fn is_deferral(surface: &str, error_message: Option<&str>) -> bool {
+    surface.trim() == RUN_DEFERRED_SURFACE
+        || error_message.is_some_and(|message| message.contains(PROVIDER_LIMIT_MARKER))
 }
 
 /// True for a failure-only diagnostic surface. Callers use the same predicate

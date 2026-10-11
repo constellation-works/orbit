@@ -186,6 +186,14 @@ A run that completed its checks records `doctor reported findings: <n> failure(s
 classes it as expected rather than unexpected; a doctor that errors before
 finishing records the error itself and stays unexpected.
 
+Incidents lists deferrals in their own `deferred` class, never as failures:
+any row carrying a provider's `[provider_limit]` usage-limit failure, and the
+`pipeline.run.deferred` row a run records when it stopped because its work
+was deferred. A claimed leaf held on a provider usage limit records one
+(`reason: provider_limit`), as does a CI sweep that succeeded as `deferred`
+(`reason: deferred`, with the deferred CI run ids under `detail`). The
+surface is failure-only, so it never counts toward a tool's failure rate.
+
 ```sh
 orbit audit export --output /tmp/audit.json
 jq -r '.[] | select(.status=="failure")

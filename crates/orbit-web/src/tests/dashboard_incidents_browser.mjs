@@ -91,7 +91,7 @@ function incidentsApi(url) {
   const span = { '1h': HOUR, '6h': 6 * HOUR, '24h': DAY, '7d': 7 * DAY }[window];
   const since = span ? now - span : null;
   const inWindow = allIncidents(now).filter((row) => since == null || Date.parse(row.last_ts) >= since);
-  const classes = ['unexpected', 'expected', 'denied', 'diagnostic'];
+  const classes = ['unexpected', 'expected', 'denied', 'diagnostic', 'deferred'];
   const stats = (rows) => ({
     incidents: rows.length,
     raw_events: rows.reduce((sum, row) => sum + row.event_count, 0),
@@ -225,7 +225,7 @@ try {
   assert(lastRequest().class === 'unexpected' && lastRequest().since === '24h', `the request names the class and window: ${JSON.stringify(lastRequest())}`);
   const tileState = await tiles();
   evidenceLog.tiles = tileState;
-  assert(tileState.map((tile) => tile.cls).join() === 'unexpected,expected,denied,diagnostic', `four class tiles: ${JSON.stringify(tileState)}`);
+  assert(tileState.map((tile) => tile.cls).join() === 'unexpected,expected,denied,diagnostic,deferred', `five class tiles: ${JSON.stringify(tileState)}`);
   assert(JSON.stringify(tileState[0]) === JSON.stringify({ cls: 'unexpected', pressed: 'true', number: '10', sub: '14 events · 10 runs' }), `the Unexpected tile counts incidents, events and runs: ${JSON.stringify(tileState[0])}`);
   assert(tileState.slice(1).every((tile) => tile.pressed === 'false'), 'only the selected tile is pressed');
   assert(tileState[3].number === '0', 'an empty class still has its tile');

@@ -687,7 +687,7 @@ function renderAuditSummary(data, ctx) {
     ), [namedRates, namedFailures, windowLabel, incidentScanCapped, incidentScanLimit]);
   }
 
-  const categoryOrder = ["unexpected", "expected", "denied", "diagnostic"];
+  const categoryOrder = ["unexpected", "expected", "denied", "diagnostic", "deferred"];
   const categories = data.failure_categories || {};
   const categoryRows = categoryOrder.map((key) => ({
     key,

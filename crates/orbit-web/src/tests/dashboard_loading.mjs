@@ -620,7 +620,7 @@ const checkIncidentSelection = selectedClass => {
   const group = node('diag-body').querySelector('.incident-tiles');
   check(group.getAttribute('role') === 'group' && group.getAttribute('aria-label'), 'incident class tiles have a named accessible group');
   const tiles = [...group.querySelectorAll('button')];
-  check(tiles.map(tile => tile.dataset.class).join() === 'unexpected,expected,denied,diagnostic', 'every incident class has a tile');
+  check(tiles.map(tile => tile.dataset.class).join() === 'unexpected,expected,denied,diagnostic,deferred', 'every incident class has a tile');
   for (const tile of tiles) {
     check(tile.getAttribute('type') === 'button', 'class tiles have an explicit button type');
     check(tile.getAttribute('aria-pressed') === String(tile.dataset.class === selectedClass), 'only the active class tile is pressed');

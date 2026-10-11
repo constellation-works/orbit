@@ -296,11 +296,16 @@ impl OrbitRuntime {
             None => failed_run_error_context(&run),
         };
         // [ORB-15202] A run held on a red base or an awaited decision couples
-        // out exactly as the failure it records; any other hold names its own
-        // resumption and leaves its tasks alone.
+        // out exactly as the failure it records, as does a claimed leaf held
+        // on its provider's usage limit [ORB-15517]; any other hold names its
+        // own resumption and leaves its tasks alone.
         let state = match state {
             JobRunState::Held
-                if HeldFailure::of(error_code.as_deref(), error_message.as_deref()).is_some() =>
+                if HeldFailure::of_claimed_leaf(
+                    error_code.as_deref(),
+                    error_message.as_deref(),
+                )
+                .is_some() =>
             {
                 JobRunState::Failed
             }
