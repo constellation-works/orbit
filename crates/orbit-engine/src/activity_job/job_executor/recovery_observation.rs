@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use orbit_types::identity::lower_hex;
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -139,8 +140,5 @@ fn changed(before: &Option<String>, after: &Option<String>) -> bool {
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    lower_hex(Sha256::digest(bytes))
 }

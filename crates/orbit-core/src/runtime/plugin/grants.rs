@@ -73,6 +73,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::physical_with_missing_tail;
+use orbit_types::identity::lower_hex;
 use orbit_types::plugin::{InstalledPlugin, is_valid_namespace};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -163,7 +164,7 @@ pub fn plugin_grants_digest(name: &str, enabled: bool, grants: &[String]) -> Str
         hasher.update(b"\n");
         hasher.update(grant.as_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    lower_hex(hasher.finalize())
 }
 
 /// Record the grant set an operator just authorized.

@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_types::identity::lower_hex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -215,7 +216,7 @@ fn fallback_run_id_for_tasks(task_ids: &[String]) -> String {
     let mut sorted_ids = task_ids.to_vec();
     sorted_ids.sort();
     let digest = Sha256::digest(sorted_ids.join(","));
-    format!("bundle-{}", &format!("{digest:x}")[..8])
+    format!("bundle-{}", &lower_hex(digest)[..8])
 }
 
 /// Extract the `run_id` from an activity input value, returning a trimmed

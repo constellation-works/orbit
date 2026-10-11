@@ -4,6 +4,7 @@ mod actor;
 mod agent_family;
 mod agent_pair;
 mod artifact_ids;
+mod digest;
 mod error;
 mod id;
 mod machine;
@@ -20,6 +21,7 @@ pub use agent_pair::{
     require_canonical_agent_family, resolve_crew, validate_antigravity_model,
 };
 pub use artifact_ids::{is_valid_adr_id, is_valid_friction_id, validate_friction_id};
+pub use digest::lower_hex;
 pub use id::OrbitId;
 pub use machine::{
     LEGACY_TASK_PREFIX, MACHINE_ID_PREFIX, REGISTRY_IDENTIFIER_MAX_BYTES, validate_machine_id,

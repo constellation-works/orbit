@@ -471,6 +471,7 @@ fn assert_golden(file_name: &str, actual: &str) {
 #[cfg(unix)]
 #[test]
 fn plugin_build_doctor_matches_golden() {
+    use orbit_types::identity::lower_hex;
     use orbit_types::plugin::{
         PLUGIN_BUILD_CONSENT_FLAG, PLUGIN_BUILD_PROFILE_LINUX, PluginBuildConsent,
         PluginBuildOutputRecord, PluginBuildRecord,
@@ -532,7 +533,7 @@ spec:
     let outputs = vec![PluginBuildOutputRecord {
         to: "bin/backend".to_string(),
         mode: 0o755,
-        sha256: format!("{:x}", Sha256::digest(backend)),
+        sha256: lower_hex(Sha256::digest(backend)),
     }];
     let record = PluginBuildRecord {
         source: format!("git+https://example.test/demo.git#{}", "a".repeat(40)),

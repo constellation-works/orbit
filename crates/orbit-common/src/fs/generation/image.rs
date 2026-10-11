@@ -10,6 +10,12 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
+use orbit_types::identity::lower_hex;
+// Every command whose generation root lacks a cached digest hashes its whole
+// executable, and a debug build is about 200 MB. sha2 0.11 detects the SHA-2
+// instructions at run time on both x86 and aarch64; 0.10 hashed in software on
+// aarch64 (its ARMv8 backend needed the C `asm` feature), which cost about
+// 370 ms per digest of a debug binary on Apple silicon instead of about 90 ms.
 use sha2::{Digest, Sha256};
 
 use super::image_digest;
@@ -32,7 +38,7 @@ fn hash_executable(mut file: File) -> Result<String, OrbitError> {
         }
         hash.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(lower_hex(hash.finalize()))
 }
 
 /// Digest the running inode, even after its installed path has been replaced.

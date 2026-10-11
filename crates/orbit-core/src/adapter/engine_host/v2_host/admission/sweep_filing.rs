@@ -2,6 +2,7 @@
 //! (`file_ci_failure_tasks`, `file_dependabot_alert_tasks`).
 
 use orbit_common::OrbitError;
+use orbit_types::identity::lower_hex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -17,10 +18,7 @@ pub(in crate::adapter::engine_host::v2_host) fn digest(parts: &[&str]) -> String
         hasher.update(part.as_bytes());
         hasher.update([0u8]);
     }
-    format!("{:x}", hasher.finalize())
-        .chars()
-        .take(KEY_LEN)
-        .collect()
+    lower_hex(hasher.finalize()).chars().take(KEY_LEN).collect()
 }
 
 /// Read optional positive integer `input.<key>` (number or numeric string),

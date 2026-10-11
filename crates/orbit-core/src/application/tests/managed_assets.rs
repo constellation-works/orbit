@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
+use orbit_types::identity::lower_hex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -126,7 +127,7 @@ fn init_global(root: &Path) -> InitResult {
 }
 
 fn sha256(content: &str) -> String {
-    format!("{:x}", Sha256::digest(content.as_bytes()))
+    lower_hex(Sha256::digest(content.as_bytes()))
 }
 
 fn add_managed_manifest_entry(dir: &Path, name: &str, content: &str) {

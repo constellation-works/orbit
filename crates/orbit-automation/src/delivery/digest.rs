@@ -1,11 +1,12 @@
 //! Content digests that identify frozen batches and definitions.
 
 use crate::AutomationError;
+use orbit_types::identity::lower_hex;
 use orbit_types::workflow::automation::CoverageBatch;
 use sha2::{Digest, Sha256};
 
 pub fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    lower_hex(Sha256::digest(bytes))
 }
 
 pub fn input_digest(batch: &CoverageBatch) -> Result<String, AutomationError> {

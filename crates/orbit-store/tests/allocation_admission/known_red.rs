@@ -42,7 +42,7 @@ impl Delivery {
         };
         let reference = HandoffArtifactRef {
             path: artifact.path.clone(),
-            sha256: format!("{:x}", Sha256::digest(&artifact.content)),
+            sha256: lower_hex(Sha256::digest(&artifact.content)),
         };
         self.owner
             .backends
