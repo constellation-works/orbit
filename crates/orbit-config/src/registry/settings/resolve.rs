@@ -17,7 +17,13 @@ use super::super::{
 use crate::memory_limit::MemoryLimit;
 
 pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
-    let patterns = raw.unwrap_or_else(|| vec!["target".to_string()]);
+    // Cargo output, and the build directories and base checkouts agents leave
+    // under run scratch [ORB-15613].
+    let patterns = raw.unwrap_or_else(|| {
+        ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+            .map(String::from)
+            .to_vec()
+    });
     for pattern in &patterns {
         orbit_common::fs::path_glob::RelativePathGlob::new(pattern)
             .map_err(|error| OrbitError::InvalidInput(format!("worktree.reclaim: {error}")))?;

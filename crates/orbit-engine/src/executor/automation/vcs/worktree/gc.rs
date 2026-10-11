@@ -15,6 +15,7 @@ use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
 use super::super::git::{git_command_success, git_output, git_success};
 use super::cleanup::{remove_unregistered_directory, remove_worktree};
+use super::rescue;
 use super::{
     WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
 };
@@ -46,6 +47,10 @@ pub struct WorktreeGcOptions {
     pub reclaim_patterns: Option<Vec<String>>,
     /// Reclaim paths in worktrees retained by the full sweep.
     pub reclaim_kept: bool,
+    /// Remove a settled run's dirty worktree once its uncommitted candidate is
+    /// recoverable elsewhere (a carry ref or published branch holding exactly
+    /// it, or a verified rescue patch). Without it a dirty worktree is kept.
+    pub rescue_dirty: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -66,6 +71,13 @@ pub struct WorktreeGcReport {
     /// Per-pattern output retained, measured or reclaimed inside this worktree.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reclaim: Vec<super::reclaim::WorktreeReclaimReport>,
+    /// Where a removed dirty worktree's uncommitted candidate can be recovered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<super::rescue::WorktreeGcRecovery>,
+    /// What a kept worktree still occupies after this sweep, measured when the
+    /// sweep deletes or estimates; absent for a live run's worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_bytes: Option<u64>,
 }
 
 /// What an operator can do about a directory Git does not list as a
@@ -155,6 +167,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 bytes_reclaimed: 0,
                 detail: None,
                 reclaim: Vec::new(),
+                recovery: None,
+                retained_bytes: None,
             }));
             continue;
         }
@@ -218,6 +232,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 bytes_reclaimed: 0,
                 detail: None,
                 reclaim: Vec::new(),
+                recovery: None,
+                retained_bytes: None,
             }
         });
         let mut report = report;
@@ -244,6 +260,13 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                 }
             }
         }
+        // A kept worktree's size makes a leak visible in the sweep's own
+        // report. A live run's checkout is never walked.
+        if report.action.starts_with("skipped:")
+            && matching_runs.iter().all(|run| run.state.is_terminal())
+        {
+            report.retained_bytes = retained_bytes(path, options);
+        }
         reports.push(report);
     }
 
@@ -262,6 +285,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
                     bytes_reclaimed: 0,
                     detail: None,
                     reclaim: Vec::new(),
+                    recovery: None,
+                    retained_bytes: None,
                 });
             }
         }
@@ -378,6 +403,8 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         bytes_reclaimed: 0,
         detail: None,
         reclaim: Vec::new(),
+        recovery: None,
+        retained_bytes: None,
     };
 
     // Secondary gate: never disturb a worktree that may still back a live
@@ -485,12 +512,13 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         return reclaim_failed_removal_leftover(path, run, options, report);
     }
 
-    // Reported safety net, not a deletion gate: a task can be settled with
-    // uncommitted content still sitting in the worktree.
-    if !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?
+    // The safety net: a task can be settled with uncommitted content still
+    // sitting in the worktree. Only a sweep that rescues dirty candidates
+    // removes one, and only once that content is recoverable elsewhere.
+    let dirty = !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?
         .trim()
-        .is_empty()
-    {
+        .is_empty();
+    if dirty && !options.rescue_dirty {
         report.action = "skipped:dirty_rescue_candidate".to_string();
         return Ok(report);
     }
@@ -502,6 +530,9 @@ fn classify_known<H: RuntimeHost + ?Sized>(
             return Ok(report);
         }
     };
+    if dirty {
+        return rescue_dirty_worktree(repo_root, path, run, &branch, options, report);
+    }
 
     let estimated_bytes = if options.delete || options.estimate_bytes {
         directory_bytes(path)?
@@ -520,18 +551,101 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     // Git fail closed. Never replace this with raw recursive deletion.
     remove_worktree(repo_root, path, None, false)?;
     report.bytes_reclaimed = estimated_bytes;
-    // The directory is gone and its bytes are reclaimed either way; a branch
-    // that cannot be deleted right now (ref lock, checked out elsewhere) is
-    // reported rather than turning the whole pass into an error that hides
-    // this removal and stops the paths after it.
-    report.action = if branch_exists(repo_root, &branch)
-        && git_success(repo_root, &["branch", "-D", &branch]).is_err()
+    report.action = delete_run_branch(repo_root, &branch);
+    Ok(report)
+}
+
+/// Remove a settled run's dirty worktree once its candidate is recoverable:
+/// a ref on `origin` holding exactly the candidate, or a verified rescue
+/// patch. Whatever GC cannot capture, or a tree that changes under it, keeps
+/// the worktree as a rescue candidate with the reason in `detail`.
+fn rescue_dirty_worktree(
+    repo_root: &Path,
+    path: &Path,
+    run: &JobRun,
+    branch: &str,
+    options: &WorktreeGcOptions,
+    mut report: WorktreeGcReport,
+) -> Result<WorktreeGcReport, OrbitError> {
+    let retain = |mut report: WorktreeGcReport, reason: String| {
+        report.action = "skipped:dirty_rescue_candidate".to_string();
+        report.detail = Some(reason);
+        Ok(report)
+    };
+    // Forced removal must never race a worker still writing the candidate.
+    if worker_may_be_alive(run) {
+        report.action = "skipped:worker_alive".to_string();
+        return Ok(report);
+    }
+    let snapshot = match rescue::candidate_snapshot(path) {
+        Ok(snapshot) => snapshot,
+        Err(reason) => return retain(report, reason),
+    };
+    let task_ids = attributed_task_ids(run);
+    let recovery = match rescue::published_recovery(path, branch, &task_ids, &run.run_id, &snapshot)
+    {
+        Some(recovery) => recovery,
+        None => match rescue::write_rescue_patch(
+            repo_root,
+            path,
+            &run.run_id,
+            branch,
+            &snapshot,
+            options.delete,
+        ) {
+            Ok(recovery) => recovery,
+            Err(reason) => return retain(report, reason),
+        },
+    };
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
+    report.bytes_reclaimed = estimated_bytes;
+    report.recovery = Some(recovery);
+    if !options.delete {
+        report.action = "would_remove".to_string();
+        return Ok(report);
+    }
+    // Declared build output goes first, without a Git deadline, so the forced
+    // removal below has only source left to delete.
+    if let Err(error) = super::reclaim::collect(path, reclaim_patterns(options), true) {
+        tracing::warn!(path = %path.display(), %error,
+            "worktree GC could not reclaim declared output before removing a rescued worktree");
+    }
+    // The recovery covers the tree it was checked against. Content written
+    // since then is not in it, so the worktree stays.
+    match rescue::candidate_snapshot(path) {
+        Ok(current) if current == snapshot => {}
+        _ => {
+            report.bytes_reclaimed = 0;
+            return retain(
+                report,
+                "the worktree changed while its candidate was being preserved".to_string(),
+            );
+        }
+    }
+    // `--force` is licensed only here: the candidate was just verified
+    // recoverable and unchanged, and Git's dirty-tree refusal would otherwise
+    // keep the checkout forever.
+    remove_worktree(repo_root, path, None, true)?;
+    report.action = delete_run_branch(repo_root, branch);
+    Ok(report)
+}
+
+/// Delete a removed worktree's branch. The directory is gone and its bytes
+/// are reclaimed either way; a branch that cannot be deleted right now (ref
+/// lock, checked out elsewhere) is reported rather than turning the whole
+/// pass into an error that hides this removal and stops the paths after it.
+fn delete_run_branch(repo_root: &Path, branch: &str) -> String {
+    if branch_exists(repo_root, branch)
+        && git_success(repo_root, &["branch", "-D", branch]).is_err()
     {
         "removed:branch_retained".to_string()
     } else {
         "removed".to_string()
-    };
-    Ok(report)
+    }
 }
 
 /// Whether a directory is what a failed `git worktree remove` leaves: Git
@@ -633,8 +747,11 @@ fn collect_build_output(
 
 fn reclaim_patterns(options: &WorktreeGcOptions) -> &[String] {
     // The same default as config admission for hosts without configuration.
-    static DEFAULT: std::sync::LazyLock<Vec<String>> =
-        std::sync::LazyLock::new(|| vec!["target".into()]);
+    static DEFAULT: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+            .map(String::from)
+            .to_vec()
+    });
     options.reclaim_patterns.as_deref().unwrap_or(&DEFAULT)
 }
 
@@ -668,6 +785,8 @@ fn unresolvable_run_report(run: &JobRun, error: &OrbitError) -> WorktreeGcReport
         bytes_reclaimed: 0,
         detail: None,
         reclaim: Vec::new(),
+        recovery: None,
+        retained_bytes: None,
     }
 }
 
@@ -757,6 +876,18 @@ fn branch_exists(repo_root: &Path, branch: &str) -> bool {
         ],
     )
     .unwrap_or(false)
+}
+
+/// The size of a kept directory, when the sweep deletes or estimates. A walk
+/// that fails (the directory vanished or is unreadable) reports no size.
+fn retained_bytes(path: &Path, options: &WorktreeGcOptions) -> Option<u64> {
+    if !(options.delete || options.estimate_bytes) {
+        return None;
+    }
+    fs::symlink_metadata(path)
+        .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .then(|| directory_bytes(path).ok())
+        .flatten()
 }
 
 fn directory_bytes(path: &Path) -> Result<u64, OrbitError> {

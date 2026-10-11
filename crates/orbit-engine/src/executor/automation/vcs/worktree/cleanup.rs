@@ -14,8 +14,9 @@ use super::super::git::{git_failure_error, git_output_raw, git_run, git_success}
 const TRASH_DELETE_TIMEOUT_MS: u64 = 600_000;
 
 /// Shared sanctioned worktree removal sequence. Pipeline cleanup may force
-/// removal because it owns the just-created checkout; out-of-band GC must
-/// always pass `force = false`.
+/// removal because it owns the just-created checkout; out-of-band GC passes
+/// `force = false`, except for a dirty worktree whose candidate it has just
+/// verified recoverable and unchanged.
 pub(super) fn remove_worktree(
     repo_root: &Path,
     workspace_path: &Path,

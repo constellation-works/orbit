@@ -1449,7 +1449,14 @@ worktree only when its claim was accepted and settled or every task is settled
 in its authoritative store. A worktree
 whose owner is unreachable or unrouted stays, reported as
 `skipped:owner_unreachable` or `skipped:no_owner_route` in the run's `reap`
-output.
+output. A failed leaf keeps its uncommitted candidate in its worktree. Once its
+task is settled, GC removes that worktree after it confirms the candidate is
+recoverable: from the carry ref, from the published branch, or from a rescue
+patch that GC writes and verifies first
+([worktree-reclaim.md](worktree-reclaim.md#dirty-worktrees-of-settled-tasks)).
+Each kept worktree's declared build output is reclaimed on every sweep, and
+`orbit run show <gc-run>` lists every kept worktree with its reason and
+`retained_bytes`.
 
 ## Scheduled host shutdown or reboot
 

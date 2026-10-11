@@ -383,6 +383,32 @@ pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String
     Ok(outcome.stdout)
 }
 
+/// Run Git with `env` added to its secured environment; its trimmed stdout.
+pub(crate) fn git_output_with_env(
+    current_dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<String, OrbitError> {
+    let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
+    let mut request = git_request(current_dir, args, timeout_ms);
+    if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
+        environment.extend(
+            env.iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+        );
+    }
+    let result = run_process(&request, &NoSandbox)?;
+    if !result.success {
+        return Err(git_failure_error(
+            current_dir,
+            args,
+            result.exit_code,
+            &result.stderr,
+        ));
+    }
+    Ok(result.stdout.trim().to_string())
+}
+
 pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), OrbitError> {
     git_output_raw(current_dir, args).map(|_| ())
 }

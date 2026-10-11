@@ -243,6 +243,26 @@ fn exercise_routine_settlement(assertion_failure: bool) {
         "{retained}"
     );
     assert!(replica_worktree.exists(), "retained worktree was removed");
+    // [ORB-15613] The sweep's own run view names each kept worktree with its
+    // reason and the bytes it still occupies, so a leak shows without code.
+    let retained_bytes = retained["retained_bytes"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("a kept terminal worktree reports its size: {retained}"));
+    assert!(retained_bytes > 0, "{retained}");
+    let started = Instant::now();
+    let shown = command(&replica_repo, &home)
+        .args(["run", "show", &gc_run_id])
+        .output()
+        .expect("run fixture CLI");
+    test_env::assert_step_finished("run show", started.elapsed(), &shown.status);
+    let shown = String::from_utf8_lossy(&shown.assert().success().get_output().stdout).into_owned();
+    let kept_path = retained["path"].as_str().expect("kept worktree path");
+    assert!(
+        shown.lines().any(|line| line.contains(kept_path)
+            && line.contains("skipped:task_prefix_unroutable")
+            && line.contains(&format!("retained_bytes={retained_bytes}"))),
+        "orbit run show must list the kept worktree with its reason and size:\n{shown}"
+    );
 
     #[cfg(unix)]
     {

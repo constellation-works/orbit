@@ -22,6 +22,7 @@ pub(crate) mod support;
 pub mod sweep;
 pub mod task_pilot;
 mod trace;
+mod worktree_gc;
 
 pub use command::{RunCommand, RunSubcommand};
 pub use job::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
