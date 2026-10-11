@@ -10,12 +10,13 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 //
-// The Effective and Workspace file sub-views are their own modules
-// (config-effective.js, config-workspace-file.js); this one owns the tab, the
-// Global file view, Crews, Keys and System.
+// The Effective, Workspace file and Global file sub-views are their own
+// modules (config-effective.js, config-workspace-file.js,
+// config-global-file.js); this one owns the tab, Crews, Keys and System.
 
 import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 import { renderEffective, resetEffective } from './config-effective.js';
+import { globalFileCount, renderGlobalFile, resetGlobalFile } from './config-global-file.js';
 import { renderWorkspaceFile, resetWorkspaceFile, workspaceFileCount } from './config-workspace-file.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
@@ -48,11 +49,8 @@ const THROTTLE_RESOURCES = ["cpu", "memory", "disk"];
 let activeSubtab = "effective";
 let lastPayload = null;
 let filterText = "";
-let showAllKeys = false;
-// Sections an operator expanded past their collapsed "all unset" summary, and
-// the row (or crew) currently being edited with its draft values. Both are
-// operator state, so a background refresh must not discard them.
-const expandedSections = new Set();
+// The row (or crew) currently being edited with its draft values. It is
+// operator state, so a background refresh must not discard it.
 let editing = null;
 let unsubscribeWorkspace = null;
 
@@ -61,9 +59,9 @@ export function initConfig() {
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastPayload = null;
     editing = null;
-    expandedSections.clear();
     resetEffective();
     resetWorkspaceFile();
+    resetGlobalFile();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
   // editor's focus, so it waits until nothing is being edited.
@@ -106,7 +104,9 @@ export async function fetchAndRenderConfig() {
     `${activeSubtab}:${getWorkspace() || ""}`,
     async () => {
       try {
-        return await (activeSubtab === "system" ? fetchSystem(source) : fetchJson(source.path));
+        if (activeSubtab === "system") return await fetchSystem(source);
+        if (activeSubtab === "global-file") return await fetchGlobalFile(source);
+        return await fetchJson(source.path);
       } catch (error) {
         if (error.status === 400 && source.path.startsWith("/api/config/file")) {
           error.remedy = "Correct the configuration in the named file, then reload this view.";
@@ -141,7 +141,7 @@ function render(payload) {
 function renderPanels(payload, body) {
   body.replaceChildren();
   updateConfigChrome();
-  renderControls(payload);
+  renderControls();
   if (activeSubtab === "keys") {
     renderKeyReference(body, payload);
     return;
@@ -152,7 +152,7 @@ function renderPanels(payload, body) {
     return;
   }
   if (activeSubtab === "crews") {
-    body.appendChild(crewsPanel(payload, { standalone: true }));
+    body.appendChild(crewsPanel(payload));
     $("config-count").textContent = `${(payload.crews || []).length} crews`;
     return;
   }
@@ -166,12 +166,8 @@ function renderPanels(payload, body) {
     $("config-count").textContent = workspaceFileCount(payload);
     return;
   }
-  body.appendChild(layersStrip(payload));
-  for (const section of payload.sections || []) {
-    body.appendChild(section.kind === "crews" ? crewsPanel(payload, {}) : sectionPanel(section, payload));
-  }
-  body.appendChild(pathsPanel(payload));
-  $("config-count").textContent = countSummary(payload);
+  renderGlobalFile(body, payload, viewContext(payload));
+  $("config-count").textContent = globalFileCount(payload);
 }
 
 /// What a sub-view module needs from the tab: whether this session may write
@@ -200,7 +196,7 @@ function countSummary(payload) {
 
 // ---------------------------------------------------------------- controls
 
-function renderControls(payload) {
+function renderControls() {
   const controls = $("config-controls");
   if (!controls) return;
   controls.replaceChildren();
@@ -231,35 +227,12 @@ function renderControls(payload) {
     $("config-controls").querySelector(".config-filter")?.focus();
   });
   controls.appendChild(filter);
-
-  if (activeSubtab !== "keys") {
-    const chips = el("div", { class: "config-chips", title: "Show only keys a file sets, or every key" });
-    chips.appendChild(toggleChip("Set only", !showAllKeys, () => setShowAll(false)));
-    chips.appendChild(toggleChip("All keys", showAllKeys, () => setShowAll(true)));
-    controls.appendChild(chips);
-  }
-
   controls.appendChild(reloadButton());
-
-  const workspaceFile = payload?.layers?.workspace?.path;
-  if (workspaceFile) {
-    const reveal = el("button", {
-      class: "config-action ghost",
-      text: "Open .orbit/config.toml",
-      title: "Reveal the workspace config path",
-    });
-    reveal.type = "button";
-    reveal.addEventListener("click", () => {
-      reveal.textContent = workspaceFile;
-      reveal.classList.add("revealed");
-    });
-    controls.appendChild(reveal);
-  }
 }
 
-/// Crews has no controls; the Workspace file view carries its own actions.
+/// Crews has no controls; the file views carry their own actions.
 function ownsControls(subtab) {
-  return subtab === "crews" || subtab === "workspace-file";
+  return subtab === "crews" || subtab === "workspace-file" || subtab === "global-file";
 }
 
 function reloadButton() {
@@ -272,188 +245,11 @@ function reloadButton() {
   return reload;
 }
 
-function setShowAll(next) {
-  showAllKeys = next;
-  if (lastPayload) render(lastPayload);
-}
-
-function toggleChip(label, on, onClick) {
-  const chip = el("button", { class: `config-chip${on ? " on" : ""}`, text: label });
-  chip.type = "button";
-  chip.setAttribute("aria-pressed", String(on));
-  chip.addEventListener("click", onClick);
-  return chip;
-}
-
-// ------------------------------------------------------------------ strips
-
-function layersStrip(payload) {
-  const layers = payload.layers || {};
-  const strip = el("div", { class: "config-strip" });
-  const chain = el("div", { class: "config-layer-chain" }, [
-    layerChip("built-in", null, true),
-    el("span", { class: "config-arrow", text: "→" }),
-    layerChip("global", layers.global),
-    el("span", { class: "config-arrow", text: "→" }),
-    layerChip("workspace", layers.workspace),
-  ]);
-  strip.appendChild(chain);
-  if (layers.execution_not_inherited) {
-    strip.appendChild(
-      el("div", {
-        class: "config-warning",
-        text: "execution.* keys do not inherit from global while a workspace file exists — this workspace uses its own values or the built-in defaults.",
-      }),
-    );
-  }
-  if (payload.workspace_file_exists === false) {
-    strip.appendChild(
-      el("div", {
-        class: "config-note",
-        text: "No workspace config.toml yet. The first write asks whether to copy the current global policy or start empty.",
-      }),
-    );
-  }
-  return strip;
-}
-
-function layerChip(label, layer, builtIn = false) {
-  const chip = el("span", { class: `config-layer ${label}` }, [
-    el("span", { class: "config-layer-name", text: label }),
-  ]);
-  if (builtIn) return chip;
-  const path = layer?.path || "";
-  chip.appendChild(
-    el("span", {
-      class: `config-layer-path mono${layer?.exists ? "" : " absent"}`,
-      text: layer?.exists ? path : `${path} (absent)`,
-      title: path,
-    }),
-  );
-  return chip;
-}
-
 function updateConfigChrome() {
   const explainer = $("config-explainer");
   if (explainer) explainer.hidden = activeSubtab !== "effective";
   const controls = $("config-controls");
   if (controls && ownsControls(activeSubtab)) controls.hidden = true;
-}
-
-// ---------------------------------------------------------------- sections
-
-function sectionPanel(section, payload) {
-  const rows = (section.keys || []).filter(matchesFilter);
-  const panel = el("section", { class: "panel config-section" });
-  if ((section.not_inherited || 0) > 0) panel.classList.add("not-inherited");
-  const header = el("header", {}, [
-    el("span", {}, [
-      el("span", { class: "config-section-title", text: section.title }),
-      el("span", { class: "config-section-blurb", text: section.blurb }),
-    ]),
-    el("span", { class: "config-header-right" }, [
-      (section.not_inherited || 0) > 0
-        ? el("span", {
-            class: "config-badge warn",
-            text: `${section.not_inherited} global value${section.not_inherited === 1 ? "" : "s"} not inherited`,
-          })
-        : null,
-      el("span", { class: "count", text: countChip(section.counts) }),
-    ]),
-  ]);
-  panel.appendChild(header);
-
-  const settable = section.keys || [];
-  const allUnset = settable.length > 0 && (section.counts?.unset || 0) === settable.length;
-  const collapsed = allUnset && !showAllKeys && !expandedSections.has(section.token) && !filterText;
-  const body = el("div", { class: "config-section-body" });
-  if (collapsed) {
-    const reveal = el("button", {
-      class: "config-action ghost",
-      text: `Show ${settable.length} unset keys`,
-    });
-    reveal.type = "button";
-    reveal.addEventListener("click", () => {
-      expandedSections.add(section.token);
-      if (lastPayload) render(lastPayload);
-    });
-    body.appendChild(el("div", { class: "config-collapsed" }, [
-      el("span", { class: "config-note", text: "No key in this section is set; the built-in policy applies." }),
-      reveal,
-    ]));
-    panel.appendChild(body);
-    return panel;
-  }
-
-  // `Set only` hides the keys nothing sets — except one a lower layer defines
-  // and lost: a global value that was overridden or not inherited is the
-  // reason this view exists, so it stays visible at every filter setting.
-  const visible = rows.filter(
-    (row) => showAllKeys || filterText || row.state === "set" || (row.shadowed_by || []).length > 0,
-  );
-  if (!visible.length) {
-    body.appendChild(
-      el("div", { class: "config-empty", text: filterText ? "No key in this section matches the filter." : "No key in this section is set. Switch to All keys to see them." }),
-    );
-  }
-  for (const row of visible) body.appendChild(keyRow(row, payload));
-  panel.appendChild(body);
-  return panel;
-}
-
-function countChip(counts = {}) {
-  return `${counts.set || 0} set · ${counts.default || 0} default · ${counts.unset || 0} unset`;
-}
-
-function matchesFilter(row) {
-  if (!filterText) return true;
-  return String(row.key || "").toLowerCase().includes(filterText);
-}
-
-function keyRow(row, payload) {
-  const node = el("div", { class: `config-row state-${row.state}` });
-  node.dataset.key = row.key;
-  if (keyEditable(row, payload) && editing && editing.kind === "key" && editing.key === row.key) {
-    node.classList.add("editing");
-    node.appendChild(keyEditor(row, payload, node));
-    return node;
-  }
-  node.appendChild(keyCells(row, payload, node));
-  return node;
-}
-
-function keyCells(row, payload, node) {
-  const prefix = row.key.slice(0, row.key.length - String(row.label || row.key).length);
-  const canEdit = keyEditable(row, payload);
-  const cells = el("div", { class: "config-row-main" }, [
-    el("span", { class: "config-key mono" }, [
-      prefix ? el("span", { class: "config-key-prefix", text: prefix }) : null,
-      el("span", { class: "config-key-name", text: row.label || row.key }),
-    ]),
-    el("span", { class: "config-value mono", text: displayValue(row.value), title: displayValue(row.value) }),
-    sourceChip(row),
-    el("span", { class: "config-description" }, [
-      row.description ? el("span", { text: row.description }) : null,
-      ...(row.shadowed_by || []).map((shadow) =>
-        el("span", { class: "config-shadow", text: shadow.note }),
-      ),
-    ]),
-    canEdit ? editButton(() => startEdit({ kind: "key", key: row.key }), "Edit this key") : null,
-  ]);
-  if (canEdit) {
-    cells.classList.add("clickable");
-    cells.addEventListener("click", (event) => {
-      if (event.target.closest("button")) return;
-      startEdit({ kind: "key", key: row.key });
-    });
-  }
-  const error = pendingError(node, row.key);
-  if (error) cells.appendChild(error);
-  return cells;
-}
-
-function keyEditable(row, payload) {
-  return editable(payload) && row.settable !== false;
 }
 
 function sourceChip(row) {
@@ -793,6 +589,18 @@ async function fetchSystem(source) {
   return { ...file, workspace_overrides: workspaceOverrides(effective), host };
 }
 
+/// The Global file view reads the global file, whose rows carry their reach
+/// into the bound workspace, and the workspace file, which names what that
+/// workspace sets for a key it does not inherit. The workspace read is best
+/// effort: without it a row still reports its reach.
+async function fetchGlobalFile(source) {
+  const [file, workspaceFile] = await Promise.all([
+    fetchJson(source.path),
+    fetchJson(SUBTAB_SOURCES["workspace-file"].path).catch(() => null),
+  ]);
+  return { ...file, workspace_file: workspaceFile };
+}
+
 async function fetchHostResources() {
   try {
     return await fetchHostResourcePayload();
@@ -946,7 +754,7 @@ function systemValueCell(row, payload) {
 
 const CREW_COLUMNS = ["Name", "Provider", "Model", "Limit", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
 
-function crewsPanel(payload, { standalone }) {
+function crewsPanel(payload) {
   const crews = payload.crews || [];
   const panel = el("section", { class: "panel config-section config-crews" });
   const section = (payload.sections || []).find((entry) => entry.kind === "crews");
@@ -972,7 +780,7 @@ function crewsPanel(payload, { standalone }) {
   }
   body.appendChild(head);
   if (!crews.length && !(editing && editing.kind === "crew" && editing.name === "")) {
-    body.appendChild(el("div", { class: "config-empty", text: noCrewText(payload, standalone) }));
+    body.appendChild(el("div", { class: "config-empty", text: "No crew is defined for this workspace." }));
   }
   if (editing && editing.kind === "crew" && editing.name === "") {
     body.appendChild(crewEditor({ name: "", tags: [] }, payload, true));
@@ -980,19 +788,6 @@ function crewsPanel(payload, { standalone }) {
   for (const crew of crews) body.appendChild(crewRow(crew, payload));
   panel.appendChild(body);
   return panel;
-}
-
-/// A file view cannot build crew rows (`crews_enumerated: false`), so an
-/// empty list there names the file's crew tables rather than claiming that
-/// no crew is defined.
-function noCrewText(payload, standalone) {
-  if (payload.crews_enumerated === false) {
-    const tables = Array.isArray(payload.crew_tables) ? payload.crew_tables : [];
-    return tables.length
-      ? `This file defines ${tables.length === 1 ? "one crew table" : `${tables.length} crew tables`}: ${tables.join(", ")}. Crews shows them with the other layers.`
-      : "This file defines no crew table. Crews shows every crew this workspace can use.";
-  }
-  return standalone ? "No crew is defined for this workspace." : "No crew is defined; the built-in crew registry applies.";
 }
 
 function addCrewButton() {
@@ -1196,28 +991,6 @@ async function submitCrewDelete(crew) {
       "DELETE",
     ),
   );
-}
-
-// ------------------------------------------------------------------- paths
-
-function pathsPanel(payload) {
-  const panel = el("section", { class: "panel config-section" });
-  panel.appendChild(
-    el("header", {}, [
-      el("span", {}, [
-        el("span", { class: "config-section-title", text: "Paths" }),
-        el("span", { class: "config-section-blurb", text: "where this workspace reads and writes" }),
-      ]),
-      el("span", { class: "count", text: `${(payload.paths || []).length} locations` }),
-    ]),
-  );
-  const grid = el("div", { class: "config-paths" });
-  for (const entry of payload.paths || []) {
-    grid.appendChild(el("span", { class: "config-path-label", text: entry.label }));
-    grid.appendChild(el("span", { class: "config-path-value mono", text: entry.value, title: entry.value }));
-  }
-  panel.appendChild(grid);
-  return panel;
 }
 
 // --------------------------------------------------------------- key table

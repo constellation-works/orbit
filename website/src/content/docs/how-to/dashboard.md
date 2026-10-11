@@ -403,7 +403,7 @@ layering and descriptions as `orbit config show`.
 |---|---|
 | **Effective** | The merged result: workspace values over global values over built-in defaults. |
 | **Workspace file** | The keys `.orbit/config.toml` sets, and what each would fall back to if removed. |
-| **Global file** | `~/.orbit/config.toml` alone. Edits here write the global file. |
+| **Global file** | The keys `~/.orbit/config.toml` sets, and whether each reaches the selected workspace. Edits here write the global file. |
 | **Crews** | The crew table. |
 | **Keys** | Every settable key with its type, section, description, and accepted values. |
 | **System** | Live resource readings, throttle marks, resume thresholds, and the host's current admission verdict. |
@@ -424,9 +424,6 @@ Rows also flag two things the value alone hides:
   `execution.codex.approval_policy`, and `execution.env.pass` to keep them.
   The Execution panel shows a badge, and the strip warns whenever a workspace
   file exists.
-
-**Set only** hides keys nothing sets, except rows that override or drop a
-lower layer. **All keys** shows the rest.
 
 A **registry strip** shows the registered `base_branch` and `ship_mode`.
 Delivery uses these, not `workflow.base_branch`, and the strip flags a
@@ -455,6 +452,25 @@ from the file in turn and lists each key's outcome. A key the server refuses
 to remove stays checked, with the reason on its row. **Edit**
 changes a value in place and previews the matching `orbit config set`
 command. **+ Add key** offers the registered keys the file does not set yet.
+
+### Check what the global file reaches
+
+**Global file** opens with **This machine**: the machine id and task prefix,
+which no edit changes, and the name, which **Rename** changes. Three cards
+count the keys the file sets, relative to the workspace selected in the
+sidebar:
+
+- **In effect**: the workspace runs the global value.
+- **Overridden by its workspace file**: the workspace file sets the key, and
+  the card says how many set the same value.
+- **Not inherited**: an execution key the workspace takes from its own file or
+  the built-in default, because it has a workspace file.
+
+Click a card to filter the table. Each row's **In** column says the same for
+one key, with the workspace file's value when it sets one. When you edit a
+key, the editor previews the matching `orbit config set --global` command and
+says whether the change reaches the selected workspace or only workspaces that
+do not set the key.
 
 ### Edit a value
 
