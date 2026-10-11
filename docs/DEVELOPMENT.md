@@ -268,6 +268,7 @@ Each runs as `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/<evidence-dir>` and 
 | `crates/orbit-web/src/tests/dashboard_refresh_browser.mjs` | `refresh-browser` | Failed and recovered refreshes: retained counts with `as of HH:MM`, the connection dot, failed run streams. |
 | `crates/orbit-web/src/tests/dashboard_host_switch_browser.mjs` | `host-switch` | Host switcher: requests routed through `/api/on/<host>/…`, host precedence, failure and recovery (`host-switch-assertions.json`). |
 | `crates/orbit-web/src/tests/dashboard_doctor_browser.mjs` | `doctor-browser` | Health › Doctor rows, remediation, cached report age, remote and too-old hosts (`doctor-assertions.json`). |
+| `crates/orbit-web/src/tests/dashboard_incidents_browser.mjs` | `incidents-browser` | Health › Incidents class tiles and filtering, lifespan bars for a recurring and a single-burst signature, the detail panel (full message, Copy, truncation note and its audit drill-down, related signatures, runs), last-hour and no-message filters, the local 6h window, the sticky panel and a 375px phone (`incidents-assertions.json`). |
 | `crates/orbit-web/src/tests/dashboard_provider_limits_browser.mjs` | `provider-limits-browser` | Crews Limit column, Drain provider-limit waits, contrast under both emulated colour schemes (`provider-limits-assertions.json`). |
 
 ### Website changelog validation

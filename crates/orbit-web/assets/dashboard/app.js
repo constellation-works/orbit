@@ -9,7 +9,8 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics, getIncidentClass } from './js/diagnostics.js';
+import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
@@ -78,6 +79,7 @@ const JOB_RUN_STEP = 25;
 let jobRunLimit = positiveIntParam("runs", DEFAULT_JOB_RUN_LIMIT);
 const DIAG_LIMIT = positiveIntParam("diag", 50);
 let errorDiagLimit = DIAG_LIMIT;
+let incidentDiagLimit = DIAG_LIMIT;
 const FRICTION_LIMIT = positiveIntParam("frictions", 100);
 
 const FRICTION_STATUSES = ["open", "triaged", "resolved"];
@@ -174,6 +176,10 @@ function diagnosticsContext() {
       const url = new URL(window.location.href);
       url.searchParams.set("diag", String(errorDiagLimit));
       history.replaceState(null, "", url);
+      refreshDashboard();
+    },
+    loadMoreIncidents: (limit) => {
+      incidentDiagLimit = Math.min(Number(limit) || incidentDiagLimit, 200);
       refreshDashboard();
     },
     fmtRelative,
@@ -1441,16 +1447,17 @@ function activeRefreshJobs() {
       add("Runs", fetchAndRenderRuns());
     } else {
       const subtab = activeDiagSubtab;
-      const selectedWindow = getWindow();
+      // Incidents may narrow the shared window to its own 6h segment.
+      const windowFor = () => (subtab === "incidents" ? getIncidentWindow() : getWindow());
+      const selectedWindow = windowFor();
       const incidentClass = getIncidentClass();
-      const classQuery = incidentClass === "all" ? "" : `&class=${encodeURIComponent(incidentClass)}`;
       const limit = subtab === "errors" ? errorDiagLimit : DIAG_LIMIT;
       const path = subtab === "incidents"
-        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}${classQuery}&limit=${DIAG_LIMIT}`
+        ? `/api/audit/incidents?since=${encodeURIComponent(selectedWindow)}&class=${encodeURIComponent(incidentClass)}&limit=${incidentDiagLimit}`
         : `/api/diagnostics/${subtab}?since=${encodeURIComponent(selectedWindow)}&limit=${limit}`;
       add(subpanel("diag-subtabs", subtab), requestPanel("diag-body", path, () => fetchJson(path), (payload) => {
         lastDiagnostics[subtab] = payload;
-        if (activeDiagSubtab === subtab && getWindow() === selectedWindow
+        if (activeDiagSubtab === subtab && windowFor() === selectedWindow
           && (subtab !== "incidents" || getIncidentClass() === incidentClass)) renderDiagnostics(diagnosticsContext());
       }, "diag-count"));
     }
