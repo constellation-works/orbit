@@ -117,7 +117,7 @@ fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
 }
 
 /// `pr_open` published PR #42 and `pr_promote` moved the task to review.
-fn published(fixture: &Fixture) {
+pub(super) fn published(fixture: &Fixture) {
     fixture
         .runtime
         .apply_task_automation_update(

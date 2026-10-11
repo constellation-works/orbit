@@ -246,7 +246,8 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
 
     // (b) Retry with an 8s budget: candidate fails immediately, base has enough
     // time to finish its 3s sleep and completes with the same failure.
-    // The failure is reproduced on the base.
+    // The failing test fails on the base too, so it is known red
+    // [ORB-15546].
     let long_budget = ReplayBudget::new(Duration::from_secs(8));
     let check_retry = verify_base_failure(
         &Host,
@@ -260,7 +261,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
     .unwrap();
     assert_eq!(
         check_retry.verdict,
-        BaseFailureVerdict::Reproduced {
+        BaseFailureVerdict::KnownRed {
             failures: vec!["test suite::broken".to_string()],
         },
         "with enough budget, the base failure is reproduced"
@@ -281,7 +282,7 @@ fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
     .unwrap();
     assert_eq!(
         check_cached.verdict,
-        BaseFailureVerdict::Reproduced {
+        BaseFailureVerdict::KnownRed {
             failures: vec!["test suite::broken".to_string()],
         },
         "the cached base failure is reused"

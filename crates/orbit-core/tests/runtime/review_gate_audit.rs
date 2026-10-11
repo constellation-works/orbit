@@ -47,7 +47,13 @@ impl Fixture {
     /// The fixture for a run that captured `review.before_landing` instead
     /// [ORB-14849].
     pub(super) fn before_landing() -> Self {
-        Self::build(&[], "", ReviewTiming::BeforeLanding, 10, false)
+        Self::before_landing_with_config("")
+    }
+
+    /// [`Self::before_landing`] with `review` appended to its `[review]`
+    /// table.
+    pub(super) fn before_landing_with_config(review: &str) -> Self {
+        Self::build(&[], review, ReviewTiming::BeforeLanding, 10, false)
     }
 
     /// The fixture whose task the `implementer` crew implemented, for a run

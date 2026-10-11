@@ -626,7 +626,19 @@ records are consistent once those checks count as passed, the certificate
 records the holds in `baseline_red`. The step then fails typed
 `[baseline_red]`, so the failure handoff keeps the candidate and holds the
 task under `baseline_red_hold` until the base passes. The certificate's
-verdict stays what the reviewer reported and is never coverage. A candidate
+verdict stays what the reviewer reported and is never coverage. A
+confirmed check whose candidate failures are known red is not held
+[ORB-15546]. By the rule required validation applies [ORB-15375], the
+candidate run names at least one failure, every one a failed test the base
+fails too, without timing out or deferring a sandbox-confined path. Under
+the same conditions as a hold, the review settles `accept`
+(`accept_with_fixes` over a repair). The record keeps its `failed` outcome;
+the certificate's `known_red` records the command, record id, base, final
+candidate, run and tests, and coverage (`validation_evidence`) counts a
+failed required record only through an entry bound to the certificate's
+own base and final candidate. Each task's history gets the
+`known_red_validation` note `pr_open` reads. One held check anywhere in the
+review still holds it. A candidate
 that adds failures keeps its verdict (`baseline_exceeded`). Once the host
 refutes the claim, its run on the final candidate decides the check
 [ORB-15122]. A pass there, with no open finding and no pending external
@@ -1239,5 +1251,6 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 - [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.
 - [ORB-15350] — a base replay stopped at its deadline is inconclusive and is not cached, preventing a shortened review deadline from poisoning the baseline result cache.
+- [ORB-15546] — settlement applies required validation's known-red rule to a confirmed red-base claim: a candidate failing only tests the base fails too settles accept, its record still failed, with the certificate's `known_red` as the evidence coverage reads.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

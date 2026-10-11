@@ -126,6 +126,7 @@ impl Judgement {
             escalation: certificate.escalation.clone(),
             host_evidence: certificate.host_evidence.clone(),
             host_overrides: certificate.host_overrides.clone(),
+            known_red: certificate.known_red.clone(),
             ..Self::empty(context)
         }
     }
@@ -156,6 +157,7 @@ impl Judgement {
             host_refused: false,
             host_evidence: Vec::new(),
             host_overrides: Vec::new(),
+            known_red: Vec::new(),
             initial_report_only: false,
         }
     }

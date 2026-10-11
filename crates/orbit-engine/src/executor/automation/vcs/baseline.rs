@@ -21,10 +21,11 @@
 //!   failure typed `[baseline_red]`: no recovery repairs it, and the
 //!   task is held until the base moves to a commit where the command passes
 //!   ([`baseline_hold_status`]);
-//! - unless every test the candidate fails also fails on the base
-//!   ([`BaselineCheck::known_red`]) [ORB-15375]: the candidate introduced
-//!   none of them, so it is not held, and the step records the known-red
-//!   tests and proceeds;
+//! - unless every failure the candidate names is a test that also fails on
+//!   the base ([`known_red`]) [ORB-15375]: the candidate introduced none of
+//!   them, so it is not held, and the step records the known-red tests and
+//!   proceeds. Review settlement applies the same rule to a reviewer's
+//!   red-base claim [ORB-15546];
 //! - a base that passes leaves the failure the candidate's, rejected as before.
 //!
 //! A base run that cannot be set up, or whose own result is a missing tool or
@@ -308,36 +309,32 @@ impl BaselineCheck {
 
     /// [ORB-15375] The candidate's failing tests when the base fails them
     /// all: the run fails exactly as the base does ([`Self::reproduces`]),
-    /// without a timeout that could have cut its failures short, and names
-    /// at least one failure, every one of which the base's complete output
-    /// names too. The candidate introduced none of them, so it is not held.
+    /// and its failures are known red against the base's ([`known_red`]).
+    /// The candidate introduced none of them, so it is not held.
     ///
-    /// `None` holds or fails the candidate as before: a run that names no
-    /// failure cannot be compared, and one that names a failure the base
-    /// does not is not the base's to answer for.
+    /// `None` holds or fails the candidate as before.
     pub(super) fn known_red<'run>(
         &self,
         run: &'run RequiredCommandRun,
     ) -> Option<&'run BTreeSet<String>> {
-        (run.infrastructure_failure.is_none()
-            && !run.timed_out
-            && self.fails_all(Some(run.exit_code), &run.failures))
-        .then_some(&run.failures)
+        let base = self.result.as_ref().ok()?;
+        (self.reproduces(run) && known_red(run, &base.failures)).then_some(&run.failures)
     }
 
-    /// The base half of [`Self::known_red`], shared with the owner's check of
-    /// a claimed leaf's known-red report [ORB-15427]: a comparable base run
-    /// that failed without timing out, with `exit_code` when one is given,
-    /// and names every one of `failures`, of which there is at least one.
-    /// `exit_code` is `None` for a base run handed only the failing tests,
-    /// which ran part of the selection.
+    /// The check a claimed leaf's known-red report gets from the owner
+    /// [ORB-15427]: a comparable base run that failed without timing out,
+    /// with `exit_code` when one is given, and names every one of `failures`,
+    /// which must be failed tests ([`names_only_failed_tests`]), the rule
+    /// [`known_red`] applies to the owner's own run. `exit_code` is `None` for
+    /// a base run handed only the failing tests, which ran part of the
+    /// selection.
     pub(super) fn fails_all(&self, exit_code: Option<i32>, failures: &BTreeSet<String>) -> bool {
         self.not_comparable.is_none()
+            && names_only_failed_tests(failures)
             && self.result.as_ref().is_ok_and(|base| {
                 !base.passed
                     && !base.timed_out
                     && exit_code.is_none_or(|code| code == base.exit_code)
-                    && !failures.is_empty()
                     && failures.is_subset(&base.failures)
             })
     }
@@ -406,6 +403,36 @@ impl BaselineCheck {
         }
     }
 }
+
+/// The known-red rule delivery validation and review settlement share
+/// [ORB-15375] [ORB-15546]: whether a failed candidate `run`'s failures are
+/// all the base's to answer for, given the failures the base's run of the
+/// same check names. The run must name at least one failure, every one a
+/// failed test (`test …`, as [`super::base_claim::failure_identities`] reads
+/// it) that `base_failures` names too, and must neither have timed out,
+/// which could have cut its failures short, nor deferred a sandbox-confined
+/// path, which then never ran. A run that names no failure cannot be
+/// compared; a compiler or lint error says nothing about which tests ran.
+pub(super) fn known_red(run: &RequiredCommandRun, base_failures: &BTreeSet<String>) -> bool {
+    !run.timed_out
+        && run.deferred_notice.is_none()
+        && names_only_failed_tests(&run.failures)
+        && run.failures.is_subset(base_failures)
+}
+
+/// Whether `failures` is a nonempty set of failed tests, every one a `test …`
+/// identity as `failure_identities` reads it [ORB-15546]: the only failures a
+/// base run can answer for. A compiler or lint error names no test, so says
+/// nothing about which tests ran.
+fn names_only_failed_tests(failures: &BTreeSet<String>) -> bool {
+    !failures.is_empty()
+        && failures
+            .iter()
+            .all(|failure| failure.starts_with(TEST_FAILURE_PREFIX))
+}
+
+/// The prefix `failure_identities` gives a failed test.
+const TEST_FAILURE_PREFIX: &str = "test ";
 
 /// What a hold records as failing [ORB-15374]: `identities`, as
 /// `failure_identities` parsed them from `output`, or the tail of `output`

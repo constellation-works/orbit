@@ -10,6 +10,11 @@
 //! [`ReplayBudget`] whose last quarter is reserved for the base: the
 //! candidate rerun is stopped before the reserve, and a stopped run is
 //! reported as cut, with the failures it printed still replayed on the base.
+//!
+//! A reproduced claim whose failures are all tests the base fails too is
+//! known red [ORB-15546], by the rule delivery validation applies to the
+//! owner's required commands ([`known_red`]): the candidate introduced none
+//! of them, so settlement lets it continue instead of holding it.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -25,7 +30,7 @@ use crate::context::RuntimeHost;
 
 use super::baseline::{
     FAILING_TESTS_KEY, cached_base_check, compare_with_base, compare_with_base_until,
-    hold_failures, run_validation_command_until,
+    hold_failures, known_red, run_validation_command_until,
 };
 use super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
 use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
@@ -42,6 +47,11 @@ pub enum BaseFailureVerdict {
     /// timeout outcome, and no failure the base does not also name. Carries
     /// the failures both name.
     Reproduced { failures: Vec<String> },
+    /// The base fails as the candidate does, and the candidate's failures
+    /// are known red [ORB-15546]: at least one, every one a test the base
+    /// fails too, with no timeout and no deferred sandbox path on the
+    /// candidate. The candidate introduced none of them. Carries them.
+    KnownRed { failures: Vec<String> },
     /// The base fails too, but the candidate names failures it does not:
     /// those still belong to the candidate.
     CandidateAdds { failures: Vec<String> },
@@ -147,12 +157,14 @@ pub struct BaseFailureCheck {
 }
 
 impl BaseFailureCheck {
-    /// What a hold for a reproduced claim records as failing on the base
-    /// [ORB-15374]: the failures both runs name, or the tail of the base
-    /// run's output when they name none.
+    /// What a hold for a reproduced claim, or the record of a known-red one
+    /// [ORB-15546], names as failing on the base [ORB-15374]: the failures
+    /// both runs name, or the tail of the base run's output when they name
+    /// none.
     pub fn base_failures(&self) -> BaselineRedFailures {
         let identities = match &self.verdict {
-            BaseFailureVerdict::Reproduced { failures } => failures.clone(),
+            BaseFailureVerdict::Reproduced { failures }
+            | BaseFailureVerdict::KnownRed { failures } => failures.clone(),
             _ => Vec::new(),
         };
         hold_failures(
@@ -185,7 +197,9 @@ impl BaseFailureCheck {
 /// part of the selection, so only its own timeout disqualifies it. Either
 /// way the failures each output names (`failure_identities`) must not grow
 /// on the candidate, and every failure the reviewer named must appear in the
-/// base's output.
+/// base's output. A reproduced claim is `KnownRed` when the candidate's
+/// failures also meet the known-red rule delivery validation applies
+/// (`known_red`) [ORB-15546], and `Reproduced` otherwise.
 ///
 /// `budget` bounds the runs. A candidate rerun stopped at its reserve is
 /// `Cut` when the base shares every failure it printed: the cut is named and
@@ -403,6 +417,9 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         (false, _) => BaseFailureVerdict::CandidateAdds { failures: added },
         (true, Some(reason)) => BaseFailureVerdict::Cut {
             reason: reason.clone(),
+            failures: on_candidate.into_iter().collect(),
+        },
+        (true, None) if known_red(&run, &base.failures) => BaseFailureVerdict::KnownRed {
             failures: on_candidate.into_iter().collect(),
         },
         (true, None) => BaseFailureVerdict::Reproduced {

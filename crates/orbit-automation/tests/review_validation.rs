@@ -19,9 +19,11 @@ use orbit_automation::review::{
 };
 use orbit_types::workflow::automation::{Delivery, SourceRevision};
 use orbit_types::workflow::{
-    NegativeControl, REVIEW_CONTRACT_VERSION, RecordGap, RetainedObligation, RetiredValidation,
-    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewInvalidation, ReviewValidation,
-    ReviewVerdict, ReviewerIdentity, ValidationOutcome, ValidationRole,
+    BaselineRedFailures, HostKnownRed, KnownRedValidation, NegativeControl,
+    REVIEW_BASELINE_ARTIFACT, REVIEW_CONTRACT_VERSION, RecordGap, RetainedObligation,
+    RetiredValidation, ReviewBaselineClaim, ReviewBudget, ReviewCertificate, ReviewConsumption,
+    ReviewInvalidation, ReviewValidation, ReviewVerdict, ReviewerIdentity, ValidationOutcome,
+    ValidationRole,
 };
 
 const ATTEMPT: &str = "cargo test --package orbit-core";
@@ -393,6 +395,7 @@ fn certificate_with(
         evidence_carried: None,
         baseline_red: Vec::new(),
         host_overrides: Vec::new(),
+        known_red: Vec::new(),
         host_evidence: Vec::new(),
         issued_at: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).unwrap(),
         owed_evidence: Vec::new(),
@@ -811,6 +814,7 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
         retired: &[],
         required_validation_commands: Some(&[]),
         baseline_commands: &[],
+        known_red: &[],
     };
     assert_eq!(validation_evidence(&records, &context), Ok(()));
 
@@ -892,6 +896,7 @@ fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() 
         retired: &[],
         required_validation_commands: Some(&[]),
         baseline_commands: &[],
+        known_red: &[],
     };
 
     let restored = mutation(&["crates/orbit-review/tests/fix.rs"], &[production]);
@@ -1174,6 +1179,7 @@ fn relabeling_or_dropping_a_required_check_never_completes_validation() {
             retired: &[],
             required_validation_commands: Some(&[]),
             baseline_commands: &[],
+            known_red: &[],
         };
         assert_eq!(
             validation_evidence(&records, &context),
@@ -1295,6 +1301,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
             retired: &[],
             required_validation_commands: Some(&[]),
             baseline_commands: &[],
+            known_red: &[],
         };
         assert_eq!(validation_evidence(&records, &context), Ok(()), "{name}");
         assert_eq!(
@@ -1364,6 +1371,7 @@ fn deliberate_controls_and_resolved_obligations_remain_coverage() {
             retired: &[],
             required_validation_commands: Some(&[]),
             baseline_commands: &[],
+            known_red: &[],
         };
         assert_eq!(
             validation_evidence(&records, &context),
@@ -1389,6 +1397,7 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
         retired: &[],
         required_validation_commands: Some(&host_required),
         baseline_commands: &[],
+        known_red: &[],
     };
     let cases = [
         (
@@ -1539,6 +1548,7 @@ fn a_failed_trusted_gate_filed_as_diagnostic_is_never_coverage() {
         retired: &[],
         required_validation_commands: Some(&[]),
         baseline_commands: &baseline,
+        known_red: &[],
     };
     let defect = validation_evidence(&incident_records(), &context)
         .expect_err("a listed gate's failure is not the reviewer's to excuse");
@@ -1596,6 +1606,7 @@ fn the_trusted_gate_rule_leaves_unlisted_diagnostics_and_required_records_alone(
         retired: &[],
         required_validation_commands: Some(&[]),
         baseline_commands: &baseline,
+        known_red: &[],
     };
 
     // An ad hoc observation the owner does not list keeps ORB-14192's
@@ -1700,6 +1711,7 @@ fn a_leading_env_assignment_satisfies_the_host_required_command() {
         retired: &[],
         required_validation_commands: Some(&host_required),
         baseline_commands: &[],
+        known_red: &[],
     };
     let satisfied = [
         r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
@@ -1769,6 +1781,7 @@ fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
         retired: &[],
         required_validation_commands: Some(&required_commands),
         baseline_commands: &[],
+        known_red: &[],
     };
     let mut records = vec![
         record(
@@ -1800,6 +1813,7 @@ fn missing_host_snapshot_is_not_an_empty_requirement_list() {
         retired: &[],
         required_validation_commands: None,
         baseline_commands: &[],
+        known_red: &[],
     };
     assert_eq!(
         validation_evidence(&scoped_passes(), &context),
@@ -2008,4 +2022,101 @@ fn a_not_run_diagnostic_is_correctable_with_the_remedy_of_its_class() {
             command: LINT.into()
         })
     );
+}
+
+/// [ORB-15546] A failed required check the host verified known red counts as
+/// coverage only through the certificate's own entry, and keeps its failed
+/// outcome. The entry must carry the record's id and host command, name a
+/// test, and have been verified on the certificate's base and final
+/// candidate; a record without a baseline claim or one that never ran is not
+/// what the host verified.
+#[test]
+fn a_known_red_required_check_counts_only_through_its_bound_host_entry() {
+    const GATE: &str = "make ci-test-affected";
+    let failed = || {
+        let mut record = with_id(required(GATE, None, false), "V1");
+        record.baseline = Some(ReviewBaselineClaim {
+            base_commit: "commit-base".into(),
+            outcome: ValidationOutcome::Failed,
+            failures: vec!["suite::broken".into()],
+        });
+        record
+    };
+    let known = || HostKnownRed {
+        record_id: Some("V1".into()),
+        validation: KnownRedValidation {
+            command: GATE.into(),
+            base_sha: "commit-base".into(),
+            tested_head: "commit-final".into(),
+            run_id: "jrun-settle".into(),
+            failures: BaselineRedFailures::new(["test suite::broken".to_string()], ""),
+        },
+        evidence_artifact: REVIEW_BASELINE_ARTIFACT.into(),
+    };
+    let issued = |record: ReviewValidation, known_red: Vec<HostKnownRed>| {
+        let mut certificate = certificate(vec![record]);
+        certificate.required_validation_commands = Some(vec![GATE.to_string()]);
+        certificate.known_red = known_red;
+        certificate
+    };
+
+    let accepted = issued(failed(), vec![known()]);
+    assert_eq!(certificate_acceptable(&accepted), Ok(()));
+    assert_eq!(accepted.validation[0].outcome, ValidationOutcome::Failed);
+
+    let mutated = |change: fn(&mut HostKnownRed)| {
+        let mut entry = known();
+        change(&mut entry);
+        issued(failed(), vec![entry])
+    };
+    let cases = [
+        ("no entry", issued(failed(), Vec::new())),
+        (
+            "another candidate",
+            mutated(|entry| entry.validation.tested_head = "commit-other".into()),
+        ),
+        (
+            "another base",
+            mutated(|entry| entry.validation.base_sha = "commit-other".into()),
+        ),
+        (
+            "another record",
+            mutated(|entry| entry.record_id = Some("V2".into())),
+        ),
+        (
+            "another command",
+            mutated(|entry| entry.validation.command = "make ci-fast".into()),
+        ),
+        (
+            "no test named",
+            mutated(|entry| entry.validation.failures = BaselineRedFailures::default()),
+        ),
+        (
+            "no baseline claim",
+            issued(
+                ReviewValidation {
+                    baseline: None,
+                    ..failed()
+                },
+                vec![known()],
+            ),
+        ),
+        (
+            "never ran",
+            issued(
+                ReviewValidation {
+                    outcome: ValidationOutcome::NotRun,
+                    ..failed()
+                },
+                vec![known()],
+            ),
+        ),
+    ];
+    for (name, certificate) in cases {
+        assert_eq!(
+            certificate_acceptable(&certificate),
+            Err(ReviewInvalidation::ValidationIncomplete),
+            "{name}"
+        );
+    }
 }

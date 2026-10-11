@@ -61,6 +61,7 @@ review certificate to another head.
 | `reject` or other substantive `incomplete` | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
 | Abandoned review: the reviewer exited cleanly but its only report is the initial placeholder (`incomplete`, no escalation, finding or validation record, never revised) | the implementation is pushed; nothing was reviewed | settlement releases the attempt and refuses with `review_abandoned:`, so the candidate's one review is not spent; the task is blocked with a comment saying so, and resuming the run or requeueing it admits a reviewer again within the remaining minutes; no PR opens |
 | Reviewer wall-clock timeout | the implementation and any partial reviewer repairs are pushed; the partial report is retained | the first timeout on a task's implementation tree requeues it to `backlog` with `review_timeout_incomplete`; another timeout on that tree blocks it with `review_timeout_requeue_exhausted`; no PR opens |
+| Known red: every failed required check carries a `baseline` claim settlement confirms, each failing only tests the pinned base fails too, and nothing else is open | the reviewed candidate | settles `accept` (`accept_with_fixes` over a repair) and delivery proceeds; the records stay `failed` and the certificate's `known_red` names the command, base, final candidate, run and tests |
 | Red base: every failed required check carries a `baseline` claim settlement confirms, and nothing else is open | the reviewed candidate is kept unpublished | the step fails typed `[baseline_red]` and the run ends `held`; the task goes to `backlog` under `baseline_red_hold` until the base passes, and the next run resumes the candidate for a fresh review |
 | Evidence-only `incomplete` (or legacy `changes_required`) | the reviewed candidate is kept unpublished; a claimed leaf also pushes it to `orbit-evidence/<branch>` on `origin` | the run ends `held`, with no retry, step recovery, final recovery, or failure handoff; the task stays `in-progress` with `review_awaiting_evidence` (for a claimed leaf, its settlement releases the claim with the hold) |
 
@@ -251,6 +252,24 @@ host runs get `review.minutes` of wall clock with the last quarter reserved
 for the base; a candidate rerun stopped at the reserve settles `incomplete`
 with a `baseline_cut` escalation naming the cut and the failures the base
 shares. Raise `review.minutes` when the host's affected run needs longer.
+
+A confirmed claim whose candidate failures are all failed tests the base
+fails too is known red, by the rule required validation applies
+([configuration](../CONFIG.md#a-red-base-is-held-not-blocked)): the candidate
+run did not time out, printed no sandbox deferral notice and names at least
+one failure. The candidate introduced none of them, so the task is not held.
+With every failed required check confirmed this way or overridden, no open
+finding and no pending external evidence, the review settles `accept`
+(`accept_with_fixes` over a repair) before the PR or before landing. The
+record keeps its `failed` outcome, with a note naming the host's run; the
+certificate's `known_red` names the command, record id, pinned base, final
+candidate, run and tests, and coverage counts the record only through that
+entry. `review-baseline.json` records the check's `decision` as `known_red`,
+and each task gets a `known_red_validation` history event, which `pr_open`
+lists under `## Known-red validation`. A build or lint error, a run that
+names no failure, a timeout, a deferred sandbox path, or a held check
+elsewhere in the review still holds it as below.
+
 The certificate's `baseline_red` names the holds. When the base ref moves to a commit where the
 command passes, admission lifts the hold. The next delivery resumes the
 preserved candidate (`resumed_validated`) without the implementer and admits

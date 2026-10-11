@@ -167,6 +167,12 @@ pub struct ReviewCertificate {
     /// open finding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_overrides: Vec<HostCandidateOverride>,
+    /// [ORB-15546] Failed required checks the host verified known red: on
+    /// the final candidate they failed only tests the pinned base fails too.
+    /// Each record keeps its failed outcome, and only an entry bound to this
+    /// certificate's base and final candidate stands in for a pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_red: Vec<HostKnownRed>,
     /// [ORB-14478] `host_sandbox_test` requirements the executing host ran,
     /// or refused, outside the agent sandbox. A passed record names the
     /// result and log a claimed leaf's handoff pins for the owner.
@@ -203,6 +209,25 @@ pub struct HostCandidateOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests_run: Option<u64>,
     /// The task artifact holding the host run's captured log.
+    pub evidence_artifact: String,
+}
+
+/// A reviewer's failed required check whose red-base claim the host
+/// verified as known red [ORB-15546]: the host's run on the final candidate
+/// failed only tests, none timed out or deferred a sandbox-confined path, and
+/// the pinned base fails every one of them. The candidate introduced none,
+/// so the record stays failed and this entry, not a relabelled outcome, is
+/// what lets it count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostKnownRed {
+    /// The record's id, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    /// The trusted command the host ran, the base and candidate it ran on,
+    /// the settling run and the known-red tests.
+    #[serde(flatten)]
+    pub validation: super::super::KnownRedValidation,
+    /// The task artifact holding the host runs' captured logs.
     pub evidence_artifact: String,
 }
 
