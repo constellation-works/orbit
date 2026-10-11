@@ -72,6 +72,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/config-workspace-file.js"),
     ),
     (
+        "/static/js/config-global-file.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/config-global-file.js"),
+    ),
+    (
         "/static/js/hosts.js",
         JS,
         include_bytes!("../assets/dashboard/js/hosts.js"),

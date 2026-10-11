@@ -1,6 +1,6 @@
 // Execute the shipped Settings modules against a small DOM and fixture API:
 // review health, read-only and global-only keys in Effective, crew table
-// rendering (and a file view's crew tables), sub-view chrome, plus the System
+// rendering (and the Global file view's crew tables), sub-view chrome, plus the System
 // view's provenance, override marker, edit round-trip, and refused write.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -365,30 +365,23 @@ await assert.rejects(host.fetchAndRenderHostResources(), 'a failed poll is repor
 assert.equal(textOf(body, 'config-verdict')[0], 'unknown');
 assert.match(textOf(body, 'config-sys-verdict-text')[0], /Verdict unknown/);
 
-// ---- a caller without the operator capability sees keys read-only ----
+// ---- the Global file view names its crew tables and is read-only without the operator capability ----
 setConfigSubtab('global-file');
 await fetchAndRenderConfig();
-let keyRows = named(body, 'config-row');
-assert.ok(keyRows.length > 0, 'the global file renders key rows');
-assert.equal(textOf(body, 'config-empty').find(text => /crew/.test(text)), 'This file defines one crew table: astra. Crews shows them with the other layers.',
-  'a file view names its crew tables instead of claiming no crew is defined');
-assert.ok(named(body, 'config-pencil').length > 0, 'an authorized payload renders key edit controls');
-named(body, 'config-pencil')[0].click();
-assert.equal(named(body, 'config-editor').length, 1, 'an authorized key row opens an editor');
+const buttonsNamed = text => named(body, 'cfx-btn').filter(node => node.textContent === text);
+assert.ok(named(body, 'cgf-row').length > 0, 'the global file renders key rows');
+assert.match(all(body).find(node => node.dataset.key === 'cgf-crews')?.textContent || '', /Defines 1 crew table: astra\./, 'the file view names its crew tables');
+assert.doesNotMatch(body.textContent, /No crew is defined/, 'a file with crew tables never claims no crew is defined');
+assert.ok(buttonsNamed('Edit').length > 0, 'an authorized payload renders key edit controls');
+buttonsNamed('Edit')[0].click();
+assert.equal(named(body, 'cgf-editor').length, 1, 'an authorized key row opens an editor');
 configSet.authorized = false;
 configSet.reason = 'config.set requires operator';
 await fetchAndRenderConfig();
-keyRows = named(body, 'config-row');
-assert.ok(keyRows.length > 0, 'an unauthorized payload still renders its key rows');
-assert.equal(named(body, 'config-pencil').length, 0, 'an unauthorized payload renders no key edit control');
-assert.equal(named(body, 'config-editor').length, 0, 'a refresh that withdraws authority closes the key editor');
-for (const row of keyRows) {
-  const main = named(row, 'config-row-main')[0];
-  assert.ok(main, 'a key row keeps its read-only cells');
-  assert.equal(classesOf(main).includes('clickable'), false, 'an unauthorized key row is not an edit affordance');
-  main.dispatch('click');
-}
-assert.equal(named(body, 'config-editor').length, 0, 'activating an unauthorized key row does not open an editor');
+assert.ok(named(body, 'cgf-row').length > 0, 'an unauthorized payload still renders its key rows');
+assert.equal(buttonsNamed('Edit').length + buttonsNamed('Rename').length + buttonsNamed('+ Add key').length, 0, 'an unauthorized payload renders no write control');
+assert.equal(named(body, 'cgf-editor').length, 0, 'a refresh that withdraws authority closes the key editor');
+assert.match(textOf(body, 'cfx-readonly')[0], /config\.set requires operator/, 'the view says why it is read-only');
 setConfigSubtab('system');
 await fetchAndRenderConfig();
 assert.equal(named(body, 'config-pencil').length, 0, 'system key cells stay read-only without operator authority');

@@ -1,10 +1,8 @@
 /* Settings tab. */
 
-/* ORB-12724: the Config tab. One column of section panels, each a list of
-   key rows: key, value, the layer the value came from, and what that layer
-   shadows. Provenance is carried by the source chip's colour, so the five
-   states (workspace / global / default / unset / registry) stay
-   distinguishable at a glance without reading the label. */
+/* ORB-12724: the Config tab's shared chrome, plus the System, Crews and Keys
+   panels. Provenance is carried by the source chip's colour, so each layer
+   stays distinguishable at a glance without reading the label. */
 .config-layout { grid-template-columns: minmax(0, 1fr); }
 .tab-pane[data-tab="config"] .panel { min-width: 0; }
 #config-panel > .body { padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 12px; }
@@ -18,17 +16,14 @@
   border: 1px solid var(--border); border-radius: 2px; padding: 5px 8px;
   font: 12px/1.4 var(--font-mono);
 }
-.config-chips { display: inline-flex; gap: 4px; }
-.config-chip, .config-action {
+.config-action {
   background: var(--bg-elev); color: var(--fg-dim); border: 1px solid var(--border);
   border-radius: 2px; padding: 4px 10px; font: 11px/1.4 var(--font-mono); cursor: pointer;
 }
-.config-chip.on { color: var(--accent); border-color: var(--accent); }
-.config-action:hover, .config-chip:hover { color: var(--fg); }
+.config-action:hover { color: var(--fg); }
 .config-action.primary { color: var(--accent); border-color: var(--accent); }
 .config-action.ghost { border-color: var(--hair); }
 .config-action[disabled] { opacity: 0.5; cursor: default; }
-.config-action.revealed { color: var(--fg); font-size: 10px; }
 
 .config-strip {
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
@@ -49,36 +44,19 @@
 .config-review-reason { color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .config-review-remedy { color: var(--fg); font-size: 12px; }
 .config-review-remedy code { color: inherit; font: 11px/1.4 var(--font-mono); }
-.config-layer-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.config-arrow { color: var(--fg-mute); }
-.config-layer { display: inline-flex; align-items: center; gap: 6px; }
-.config-layer-name {
-  color: var(--fg-dim); font: 11px/1.4 var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em;
-}
-.config-layer-path { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; }
-.config-layer-path.absent { color: var(--fg-mute); }
 .config-warning { color: var(--status-open); font-size: 11px; }
 .config-note { color: var(--fg-dim); font-size: 11px; }
 
-.config-section.not-inherited { border-color: var(--status-open); }
 .config-section-title { color: var(--fg); }
 .config-section-blurb { color: var(--fg-dim); margin-left: 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .config-header-right { display: inline-flex; gap: 8px; align-items: center; }
-.config-badge { padding: 2px 8px; border-radius: 2px; font: 11px/1.4 var(--font-mono); }
-.config-badge.warn { color: var(--status-open); border: 1px solid var(--status-open); }
 .config-section-body { background: var(--bg); }
-.config-collapsed { display: flex; gap: 10px; align-items: center; padding: 10px 14px; }
 .config-empty { padding: 10px 14px; color: var(--fg-dim); font-size: 12px; }
 
 .config-row { border-bottom: 1px solid var(--hair); }
 .config-row:last-child { border-bottom: none; }
-.config-row-main {
-  display: grid; grid-template-columns: minmax(140px, 1.1fr) minmax(90px, 0.8fr) 92px minmax(200px, 2fr) 28px;
-  gap: 10px; align-items: baseline; padding: 8px 14px;
-}
 
-/* The Keys reference rows carry no editor, so they lay out on their own grid
-   with the same gutters as the layered rows above. */
+/* The Keys reference rows carry no editor, so they lay out on their own grid. */
 .config-key-row {
   display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(90px, 0.6fr) 110px minmax(240px, 2fr);
   gap: 12px; align-items: baseline; padding: 10px 16px;
@@ -88,16 +66,10 @@
   .config-key-row { grid-template-columns: minmax(0, 1fr) auto; }
   .config-key-row .config-description { grid-column: 1 / -1; }
 }
-.config-row-main.clickable { cursor: pointer; }
-.config-row-main.clickable:hover { background: var(--bg-elev); }
 .config-key { font-size: 12px; overflow-wrap: anywhere; }
-.config-key-prefix { color: var(--fg-mute); }
-.config-key-name { color: var(--fg); }
 .config-value { color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
 .config-description { color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
-.config-shadow { color: var(--status-open); }
 .config-options { color: var(--fg-mute); }
-.config-row.state-unset .config-value { color: var(--fg-mute); }
 
 .config-source {
   justify-self: start; padding: 1px 7px; border-radius: 2px; border: 1px solid transparent;
@@ -172,20 +144,12 @@
 .config-provider { display: inline-flex; gap: 6px; align-items: center; color: var(--fg); font-size: 12px; }
 .config-provider-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
-.config-paths {
-  display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
-  gap: 4px 16px; padding: 10px 14px; background: var(--bg);
-}
-.config-path-label { color: var(--fg-dim); font-size: 11px; }
-.config-path-value { color: var(--fg); font-size: 11px; overflow-wrap: anywhere; }
-
 @media (max-width: 900px) {
-  .config-row-main, .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .config-crew-head { display: none; }
   .config-crew-cell { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; align-items: baseline; }
   .config-crew-label { display: block; color: var(--fg-dim); font-size: 11px; }
   .config-crew-cell > .config-source { justify-self: start; }
-  .config-paths { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* The System view: the resource throttle as one panel. A row per resource
@@ -696,6 +660,53 @@ textarea.cfx-input { min-height: 88px; padding: 10px 12px; resize: vertical; lin
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
+/* ORB-15432: Settings › Global file. A machine identity card, reach cards
+   for the bound workspace that filter the table, and keys grouped by TOML
+   table with an "In <workspace>" column and a reach warning in the editor.
+   It reuses the Workspace file layout (cwf-*) and the Effective controls. */
+.cgf-machine { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.cgf-ids { display: flex; flex-wrap: wrap; gap: 10px; }
+.cgf-id {
+  display: flex; flex-direction: column; gap: 6px; flex: 1 1 220px; min-width: 0;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-sunk);
+}
+.cgf-id-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-height: 44px; }
+.cgf-id-value { color: var(--fg-strong); font-size: 14px; overflow-wrap: anywhere; }
+.cgf-rename { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.cgf-rename .cfx-notice { flex: 1 1 100%; }
+.cgf-card.effect .cfx-dot { background: var(--state-success); }
+.cgf-card.overridden .cfx-dot { background: var(--status-open); }
+.cgf-card.noinh .cfx-dot { background: var(--status-in-progress); }
+.cgf-reach-sentence { margin: 0; color: var(--fg-soft); font-size: 13px; }
+.cgf-colhead, .cgf-row {
+  display: grid; gap: 4px 12px; align-items: center;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.4fr) auto;
+}
+.cgf-colhead {
+  padding: 8px 14px; background: var(--bg-sunk); color: var(--fg-mute);
+  font: 500 11px var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.cgf-row { min-height: 44px; padding: 4px 14px; border-top: 1px solid var(--hair); }
+.cgf-row.editing { background: var(--bg-selected); }
+.cgf-reach-cell { display: flex; align-items: flex-start; gap: 8px; min-width: 0; font-size: 12.5px; }
+.cgf-reach-cell .cfx-dot { margin-top: 5px; }
+.cgf-reach-label { font-weight: 500; }
+.cgf-reach-detail { color: var(--fg-dim); overflow-wrap: anywhere; }
+.cgf-reach-cell.effect .cgf-reach-label { color: var(--state-success); }
+.cgf-reach-cell.effect .cfx-dot { background: var(--state-success); }
+.cgf-reach-cell.same .cgf-reach-label { color: var(--warn-fg); }
+.cgf-reach-cell.same .cfx-dot { background: var(--status-open); }
+.cgf-reach-cell.diff .cgf-reach-label { color: var(--fg-soft); }
+.cgf-reach-cell.noinh .cgf-reach-label { color: var(--status-in-progress); }
+.cgf-reach-cell.noinh .cfx-dot { background: var(--status-in-progress); }
+.cgf-reach-cell.unreported .cgf-reach-label { color: var(--fg-mute); font-style: italic; }
+.cgf-note { grid-column: 1 / -1; padding-bottom: 6px; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
+.cgf-row .cgf-editor { grid-column: 1 / -1; }
+.cgf-reach-warn { flex: 1 1 100%; margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.cgf-reach-warn:empty { display: none; }
+.cgf-reach-warn.reaches { color: var(--state-success); }
+.cgf-reach-warn.elsewhere { color: var(--warn-fg); }
+
 @container config-card (max-width: 980px) {
   .cwf-main { grid-template-columns: minmax(0, 1fr); }
 }
@@ -707,4 +718,8 @@ textarea.cfx-input { min-height: 88px; padding: 10px 12px; resize: vertical; lin
   .cwf-bulk-actions { margin-left: 0; }
   .cwf-side { padding: 12px; }
   .cwf-head-actions .cfx-btn, .cwf-bulk-actions .cfx-btn { flex: 1 1 auto; }
+  .cgf-colhead { display: none; }
+  .cgf-row { grid-template-columns: minmax(0, 1fr) auto; padding-bottom: 8px; }
+  .cgf-row .cwf-value, .cgf-row .cgf-reach-cell { grid-column: 1 / -1; }
+  .cgf-row .cwf-actions { grid-column: 2; grid-row: 1; }
 }
