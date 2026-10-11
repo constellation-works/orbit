@@ -560,7 +560,7 @@ fn wait_cancellable(
         if !stderr.is_empty() {
             stderr.push(b'\n');
         }
-        stderr.extend_from_slice(format!("process terminated with {status}").as_bytes());
+        stderr.extend_from_slice(format!("{}{status}", super::TERMINATION_STATUS_NOTE).as_bytes());
     }
     // A capture-limit stop looks like a bare failure otherwise (exit code
     // `None`, often an empty stderr), and a tool such as `github.run.logs`
@@ -576,9 +576,8 @@ fn wait_cancellable(
         if !stderr.is_empty() {
             stderr.push(b'\n');
         }
-        stderr.extend_from_slice(
-            format!("process output capture limit exceeded on {stream}").as_bytes(),
-        );
+        stderr
+            .extend_from_slice(format!("{}{stream}", super::OUTPUT_CAPTURE_LIMIT_NOTE).as_bytes());
     }
     #[cfg(unix)]
     if !timed_out && let Some(signal) = interrupted_signal {

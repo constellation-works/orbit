@@ -2424,6 +2424,104 @@ fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task() {
 /// The command a red-base fixture requires; its base's `Makefile` fails it.
 const RED_LINT: &str = "make ci-lint";
 
+#[test]
+fn supervisor_stops_are_environment_failures_and_never_poison_the_base_cache() {
+    isolated(
+        "supervisor_stops_are_environment_failures_and_never_poison_the_base_cache",
+        |sandbox| {
+            // The supervisor restores and re-raises an incoming SIGTERM after
+            // cleanup. A harmless prior handler keeps this isolated fixture
+            // alive to inspect the returned classification; exec resets the
+            // caught disposition in the actual shell child.
+            extern "C" fn retain_fixture_process(_signal: libc::c_int) {}
+            let previous = unsafe {
+                libc::signal(
+                    libc::SIGTERM,
+                    retain_fixture_process as *const () as libc::sighandler_t,
+                )
+            };
+            assert_ne!(
+                previous,
+                libc::SIG_ERR,
+                "install the fixture SIGTERM handler"
+            );
+            // Pin the supervisor, not just the command's environment: the drain
+            // may have raised this ceiling as an operational mitigation.
+            unsafe { std::env::set_var("ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES", "1048576") };
+            for (index, (stop, cause)) in [
+                (
+                    "head -c 2097152 /dev/zero >&2",
+                    "process output capture limit exceeded on stderr",
+                ),
+                ("kill -KILL $$", "process terminated with"),
+                (
+                    "kill -TERM $PPID; sleep 60",
+                    "process interrupted by signal SIGTERM",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for base_only in [false, true] {
+                    let root = sandbox.join(format!("stop-{index}-{base_only}"));
+                    fs::create_dir_all(&root).unwrap();
+                    let runs = root.join("runs");
+                    let fx = Fixture::new(&root);
+                    fx.commit_on_base(
+                        "stop.sh",
+                        &format!("#!/bin/sh\necho ran >> '{}'\n{stop}\n", runs.display()),
+                    );
+                    git(&fx.repo, &["rebase", BASE]);
+                    git(&fx.repo, &["push", "--force", "origin", BRANCH]);
+                    let fx = Fixture {
+                        base_sha: git(&fx.repo, &["rev-parse", BASE]),
+                        candidate: fx.head(),
+                        ..fx
+                    };
+                    let candidate = if base_only {
+                        fx.commit(
+                            "stop.sh",
+                            &format!("#!/bin/sh\necho ran >> '{}'\nexit 137\n", runs.display()),
+                        )
+                    } else {
+                        fx.candidate.clone()
+                    };
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                    host.require_commands(&["exec sh stop.sh"]);
+                    for attempt in 1..=2 {
+                        let message = action(&host, "candidate_validate", &fx.validate_input())
+                            .expect_err("a supervisor stop is inconclusive")
+                            .to_string();
+                        assert!(
+                            message.contains("[validation_environment]") && message.contains(cause),
+                            "the infrastructure cause must be named: {message}"
+                        );
+                        assert!(!is_baseline_red_failure(None, Some(&message)), "{message}");
+                        let log =
+                            host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                        assert_eq!(log["failure_kind"], "environment", "{log}");
+                        if base_only {
+                            assert_eq!(log["baseline"]["decision"], "inconclusive", "{log}");
+                            assert_eq!(log["baseline"]["cached"], false, "{log}");
+                        } else {
+                            assert!(
+                                log["baseline"].is_null(),
+                                "a stopped candidate needs no base replay: {log}"
+                            );
+                        }
+                        assert_eq!(
+                            fs::read_to_string(&runs).unwrap().lines().count(),
+                            attempt * if base_only { 2 } else { 1 },
+                            "a stopped base must rerun instead of answering from a poisoned cache"
+                        );
+                    }
+                    assert_eq!(fx.head(), candidate, "validation preserves the candidate");
+                }
+            }
+        },
+    );
+}
+
 /// A required command that fails on the synchronized base exactly as on the
 /// candidate is the base's failure. The step fails typed `baseline_red` with
 /// the candidate's and the base's logs. Two candidates over that base share

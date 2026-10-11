@@ -18,6 +18,10 @@
 //! recovery, the failure handoff and claim settlement treat it as the host's
 //! problem rather than the code's.
 //!
+//! A supervisor stop at the output capture limit or by a signal also says
+//! nothing about the candidate. Its unbounded-stream note is classified before
+//! log truncation and carries the same validation-environment marker.
+//!
 //! Captured output keeps a head and a tail of each stream. A long stdout
 //! cannot drop the stderr failure before that classification, and the end of
 //! the recorded text still holds it.
@@ -45,8 +49,8 @@ use std::sync::OnceLock;
 use orbit_common::OrbitError;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_exec::{
-    EnvironmentMode, ExecRequest, NoSandbox, StdinMode, ValidationEnvironment, program_on_path,
-    run_process,
+    EnvironmentMode, ExecRequest, INTERRUPTED_SIGNAL_NOTE, NoSandbox, OUTPUT_CAPTURE_LIMIT_NOTE,
+    StdinMode, TERMINATION_STATUS_NOTE, ValidationEnvironment, program_on_path, run_process,
 };
 use orbit_types::workflow::{
     HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
@@ -93,6 +97,8 @@ pub(super) struct RequiredCommandRun {
     pub(super) environment: ValidationEnvironment,
     /// Set when the command failed because a tool was missing.
     pub(super) missing_tool: Option<MissingTool>,
+    /// The supervisor's reason for stopping before a conclusive test result.
+    pub(super) infrastructure_failure: Option<String>,
     /// Reruns after a network-inconclusive failure [ORB-14258].
     pub(super) network_retries: u32,
     /// The line showing the failure was the network's, when it still was
@@ -156,6 +162,13 @@ impl RequiredCommandRun {
     /// pass, carrying its captured output. A missing tool is reported as the
     /// validation environment's failure, with the marker, PATH and tool.
     pub(super) fn failure(&self, candidate: &str) -> OrbitError {
+        if let Some(cause) = &self.infrastructure_failure {
+            return OrbitError::Execution(format!(
+                "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' was stopped on candidate \
+                 {candidate}: {cause}. The candidate was not judged.\n{}",
+                self.command, self.output
+            ));
+        }
         let Some(missing) = &self.missing_tool else {
             return OrbitError::Execution(format!(
                 "required validation '{}' did not pass on candidate {candidate}: {}",
@@ -222,9 +235,12 @@ impl RequiredCommandRun {
         environment_record(&self.environment)
     }
 
-    /// `environment` when the command lacked a tool or deferred a path,
+    /// `environment` when the command stopped, lacked a tool or deferred a path,
     /// `candidate` when it otherwise failed, `null` when it passed.
     pub(super) fn failure_kind(&self) -> Value {
+        if self.infrastructure_failure.is_some() {
+            return json!("environment");
+        }
         match (&self.missing_tool, self.passed) {
             (_, true) if self.deferred_notice.is_some() => json!("environment"),
             (_, true) => Value::Null,
@@ -343,6 +359,25 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
                 .map(|line| line.trim().to_string())
         })
         .flatten();
+    // Read the supervisor notes before the recorded output is bounded.
+    let infrastructure_failure = (!passed)
+        .then(|| {
+            outcome
+                .stdout
+                .lines()
+                .chain(outcome.stderr.lines())
+                .find(|line| {
+                    [
+                        OUTPUT_CAPTURE_LIMIT_NOTE,
+                        INTERRUPTED_SIGNAL_NOTE,
+                        TERMINATION_STATUS_NOTE,
+                    ]
+                    .iter()
+                    .any(|prefix| line.starts_with(prefix))
+                })
+                .map(str::to_string)
+        })
+        .flatten();
     let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
@@ -364,6 +399,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         deferred_notice,
         environment,
         missing_tool,
+        infrastructure_failure,
         network_retries: 0,
         network_evidence: None,
         summary,

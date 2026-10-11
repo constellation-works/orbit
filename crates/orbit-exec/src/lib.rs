@@ -101,6 +101,9 @@ pub use runner::{
     spawn_supervised_cancellable, supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
+pub use supervision::{
+    INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, TERMINATION_STATUS_NOTE,
+};
 pub use validation_env::{
     LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,
     LoginShellEnv, LoginShellMode, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,

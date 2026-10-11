@@ -25,7 +25,9 @@
 //!
 //! A base run that cannot be set up, or whose own result is a missing tool or
 //! a network failure, is inconclusive and also leaves the failure the
-//! candidate's.
+//! candidate's. A base stopped by the output capture limit or by a signal is
+//! never cached and reports an infrastructure failure with the validation
+//! environment marker, rather than attributing a verdict to either revision.
 //!
 //! A command that selects what to test from the candidate's diff
 //! (`make ci-test-affected`) selects nothing on the base itself, where that
@@ -52,7 +54,7 @@ use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
 use orbit_common::fs::git::git_common_dir;
 use orbit_common::fs::io::atomic_write_bytes;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold};
+use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold, VALIDATION_ENVIRONMENT_MARKER};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -89,7 +91,9 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// result cannot show that it executed any test.
 /// Version 4 ignores deadline-shortened timeouts [ORB-15350]; a shortened
 /// timeout is treated as inconclusive and never cached.
-const CACHE_SCHEMA_VERSION: u32 = 4;
+/// Version 5 excludes capture-limit and signal stops: they are infrastructure
+/// failures, never conclusive base results.
+const CACHE_SCHEMA_VERSION: u32 = 5;
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
 const LEGACY_WORKTREES_DIR: &str = "worktrees";
@@ -145,7 +149,11 @@ pub(super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
         attempt_timeout_ms(deadline),
     )?;
     for backoff in NETWORK_RETRY_BACKOFF {
-        if run.passed || run.timed_out || run.missing_tool.is_some() {
+        if run.passed
+            || run.timed_out
+            || run.missing_tool.is_some()
+            || run.infrastructure_failure.is_some()
+        {
             break;
         }
         let Some(evidence) = network_inconclusive(&run.output) else {
@@ -171,7 +179,11 @@ pub(super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
         )?;
         run.network_retries = retries;
     }
-    if !run.passed && !run.timed_out && run.missing_tool.is_none() {
+    if !run.passed
+        && !run.timed_out
+        && run.missing_tool.is_none()
+        && run.infrastructure_failure.is_none()
+    {
         run.network_evidence = network_inconclusive(&run.output);
     }
     Ok(run)
@@ -271,10 +283,20 @@ impl BaselineCheck {
     /// is itself a missing tool or a network failure was never cached and
     /// never gets here.
     pub(super) fn reproduces(&self, run: &RequiredCommandRun) -> bool {
-        self.not_comparable.is_none()
+        run.infrastructure_failure.is_none()
+            && self.not_comparable.is_none()
             && self.result.as_ref().is_ok_and(|base| {
                 !base.passed && base.exit_code == run.exit_code && base.timed_out == run.timed_out
             })
+    }
+
+    /// A supervisor-stopped base is an environment failure, not a red base.
+    pub(super) fn infrastructure_failure(&self) -> Option<&str> {
+        self.result
+            .as_ref()
+            .err()
+            .filter(|reason| reason.starts_with(VALIDATION_ENVIRONMENT_MARKER))
+            .map(String::as_str)
     }
 
     /// `passed`, `failed`, `not_comparable` or `inconclusive`.
@@ -441,6 +463,12 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
         deadline,
     ) {
         Ok(run) => {
+            if let Some(cause) = &run.infrastructure_failure {
+                return inconclusive(format!(
+                    "{VALIDATION_ENVIRONMENT_MARKER} the base run of '{}' was stopped: {cause}",
+                    run.command
+                ));
+            }
             if run.missing_tool.is_some() {
                 return inconclusive(format!(
                     "the base run of '{}' lacked a tool in the validation environment",
@@ -668,6 +696,11 @@ pub(super) fn candidate_failure(
     check: Option<&BaselineCheck>,
     logs: &str,
 ) -> OrbitError {
+    if let Some(reason) = check.and_then(BaselineCheck::infrastructure_failure) {
+        return OrbitError::Execution(format!(
+            "{reason}. Candidate {candidate} could not be compared with its base. {logs}"
+        ));
+    }
     let OrbitError::Execution(message) = run.failure(candidate) else {
         return run.failure(candidate);
     };
