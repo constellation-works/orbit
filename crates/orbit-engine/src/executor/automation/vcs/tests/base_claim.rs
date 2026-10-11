@@ -18,6 +18,8 @@ use super::super::base_claim::failure_identities;
 #[cfg(unix)]
 use super::super::base_claim::{BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure};
 #[cfg(unix)]
+use super::super::baseline::cached_base_check;
+#[cfg(unix)]
 use crate::RuntimeHost;
 
 #[cfg(unix)]
@@ -167,4 +169,198 @@ fn a_candidate_rerun_stopped_at_the_reserve_still_attributes_its_failures_to_the
         "the base replayed only the failing test"
     );
     assert_eq!(check.candidate_log["timed_out"], true);
+}
+
+// Fault injection: a base replay cut by a shortened review deadline is
+// inconclusive and not cached, so it cannot suppress a later retry with
+// enough budget to complete. Completed comparable results remain reusable.
+// [ORB-15350]
+#[test]
+#[cfg(unix)]
+fn a_base_replay_cut_by_a_shortened_deadline_is_inconclusive_and_not_cached() {
+    let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+    let repo = root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git_ok(&repo, &["init", "-q", "-b", "main"]);
+    // Candidate fails immediately with `suite::broken`.
+    // Base sleeps 3s when candidate.txt is absent, then fails with `suite::broken`.
+    fs::write(
+        repo.join("check.sh"),
+        "#!/bin/sh\n\
+         selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+         [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
+         printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" \
+         > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         if [ ! -f candidate.txt ]; then sleep 3; fi\n\
+         echo 'test suite::broken ... FAILED'\n\
+         exit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    git_ok(&repo, &["add", "check.sh"]);
+    git_ok(&repo, &["commit", "-q", "-m", "base"]);
+    let base = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    fs::write(repo.join("candidate.txt"), "after\n").unwrap();
+    git_ok(&repo, &["add", "candidate.txt"]);
+    git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
+
+    // (a) First attempt with a 2s budget: candidate fails in ~0.02s,
+    // so base replay deadline is ~2s. Base sleeps 3s and times out.
+    // The cut base run is inconclusive and must not be cached.
+    let short_budget = ReplayBudget::new(Duration::from_secs(2));
+    let check = verify_base_failure(
+        &Host,
+        &repo,
+        base.trim(),
+        "./check.sh",
+        &["suite::broken".to_string()],
+        "jrun-fixture-1",
+        short_budget,
+    )
+    .unwrap();
+    assert!(
+        matches!(check.verdict, BaseFailureVerdict::Inconclusive(_)),
+        "the deadline-cut base replay was inconclusive: {:?}",
+        check.verdict
+    );
+    assert!(
+        check.base_log["inconclusive"]
+            .as_str()
+            .unwrap()
+            .contains("timed out before the review deadline"),
+        "the base log records the cut timeout: {:?}",
+        check.base_log
+    );
+    assert!(
+        cached_base_check(&repo, base.trim(), "./check.sh", None).is_none(),
+        "no conclusive base result was cached"
+    );
+
+    // (b) Retry with an 8s budget: candidate fails immediately, base has enough
+    // time to finish its 3s sleep and completes with the same failure.
+    // The failure is reproduced on the base.
+    let long_budget = ReplayBudget::new(Duration::from_secs(8));
+    let check_retry = verify_base_failure(
+        &Host,
+        &repo,
+        base.trim(),
+        "./check.sh",
+        &["suite::broken".to_string()],
+        "jrun-fixture-2",
+        long_budget,
+    )
+    .unwrap();
+    assert_eq!(
+        check_retry.verdict,
+        BaseFailureVerdict::Reproduced {
+            failures: vec!["test suite::broken".to_string()],
+        },
+        "with enough budget, the base failure is reproduced"
+    );
+    assert_eq!(check_retry.base_log["cached"], false);
+    assert_eq!(check_retry.base_log["timed_out"], false);
+
+    // (c) A subsequent call reuses the completed base result from the cache.
+    let check_cached = verify_base_failure(
+        &Host,
+        &repo,
+        base.trim(),
+        "./check.sh",
+        &["suite::broken".to_string()],
+        "jrun-fixture-3",
+        short_budget,
+    )
+    .unwrap();
+    assert_eq!(
+        check_cached.verdict,
+        BaseFailureVerdict::Reproduced {
+            failures: vec!["test suite::broken".to_string()],
+        },
+        "the cached base failure is reused"
+    );
+    assert_eq!(check_cached.base_log["cached"], true);
+}
+
+// Fault injection: candidate-only failures yield BasePasses, and completed base
+// results remain reusable from the cache. [ORB-15350]
+#[test]
+#[cfg(unix)]
+fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() {
+    let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
+    let repo = root.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git_ok(&repo, &["init", "-q", "-b", "main"]);
+    // Passes on base (candidate.txt absent); fails on candidate.
+    fs::write(
+        repo.join("check.sh"),
+        "#!/bin/sh\n\
+         selection=\"$ORBIT_VALIDATION_SELECTION\"\n\
+         [ -n \"$selection\" ] || selection='{\"packages\":[\"suite\"]}'\n\
+         printf '{\"schema_version\":1,\"selection\":%s,\"tests_run\":1}' \"$selection\" \
+         > \"$ORBIT_VALIDATION_SUMMARY\"\n\
+         if [ -f candidate.txt ]; then\n\
+             echo 'test suite::broken ... FAILED'\n\
+             exit 1\n\
+         fi\n\
+         exit 0\n",
+    )
+    .unwrap();
+    fs::set_permissions(repo.join("check.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    git_ok(&repo, &["add", "check.sh"]);
+    git_ok(&repo, &["commit", "-q", "-m", "base"]);
+    let base = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    fs::write(repo.join("candidate.txt"), "after\n").unwrap();
+    git_ok(&repo, &["add", "candidate.txt"]);
+    git_ok(&repo, &["commit", "-q", "-m", "candidate"]);
+
+    let budget = ReplayBudget::new(Duration::from_secs(4));
+    let check = verify_base_failure(
+        &Host,
+        &repo,
+        base.trim(),
+        "./check.sh",
+        &["suite::broken".to_string()],
+        "jrun-fixture-1",
+        budget,
+    )
+    .unwrap();
+    assert!(
+        matches!(check.verdict, BaseFailureVerdict::BasePasses(_)),
+        "candidate-only failure yields BasePasses: {:?}",
+        check.verdict
+    );
+    assert_eq!(check.base_log["cached"], false);
+
+    // Second call reuses the completed base result from cache
+    let check_cached = verify_base_failure(
+        &Host,
+        &repo,
+        base.trim(),
+        "./check.sh",
+        &["suite::broken".to_string()],
+        "jrun-fixture-2",
+        budget,
+    )
+    .unwrap();
+    assert!(
+        matches!(check_cached.verdict, BaseFailureVerdict::BasePasses(_)),
+        "cached result still yields BasePasses"
+    );
+    assert_eq!(check_cached.base_log["cached"], true);
 }
