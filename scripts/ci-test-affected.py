@@ -190,6 +190,7 @@ def write_summary(path, selection, tests_run, base=None, exit_code=None, notices
 HOST_NOTICE_PREFIXES = ("SKIP:", "DEFERRED:", "skipping:", "skipping ")
 HOST_NOTICE_MARKERS = ("sandbox_apply: Operation not permitted",
                        "sandbox-exec cannot apply a profile",
+                       "No permissions to create a new namespace",
                        "No permissions to create new namespace")
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 NEXTEST_STATUS = re.compile(r"^( *)([A-Z][A-Z0-9 +/]*?)\s+\[")

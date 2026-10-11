@@ -38,9 +38,9 @@ use serde_json::{Map, Value};
 
 use super::validation_gates::HostValidationGates;
 use crate::workflow::host_evidence::{
-    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, EvidenceHostOs,
+    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSALS, EvidenceHostOs,
     PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_REFUSAL, SEATBELT_APPLY_REFUSAL,
-    SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
+    SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX, is_bubblewrap_namespace_refusal,
 };
 
 /// The task artifact an owner run keeps an accepted record in.
@@ -225,7 +225,7 @@ impl DeferringSandbox {
                 // recorded as -1. Its error may contain the namespace
                 // refusal too, but only an executed probe can justify a
                 // deferral.
-                probe.exit_code > 0 && probe.output.contains(BUBBLEWRAP_NAMESPACE_REFUSAL)
+                probe.exit_code > 0 && is_bubblewrap_namespace_refusal(&probe.output)
             }
             Self::Seatbelt => {
                 probe.exit_code == SEATBELT_APPLY_REFUSAL_EXIT
@@ -247,7 +247,8 @@ impl DeferringSandbox {
         match self {
             Self::Bubblewrap => format!(
                 "has no failing namespace probe: in the implementer's lane it must exit \
-                 nonzero with `{BUBBLEWRAP_NAMESPACE_REFUSAL}`"
+                 nonzero with `{}`",
+                BUBBLEWRAP_NAMESPACE_REFUSALS.join("` or `")
             ),
             Self::Seatbelt => format!(
                 "has no refused Seatbelt apply probe: in the implementer's lane it must exit \

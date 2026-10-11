@@ -181,6 +181,40 @@ fn bubblewraps_own_refusal_text_justifies_a_deferral() {
     assert_eq!(record.notices, notices.to_vec());
 }
 
+/// Bubblewrap 0.11.1's refusal on dk-server-2, as captured by the
+/// after-landing review of #4412 (ORB-15688). 0.11 spells it with "a", 0.9
+/// without, and both must justify a deferral.
+const BWRAP_0_11_REFUSAL: &str = "bwrap: No permissions to create a new namespace, likely because \
+     the kernel does not allow non-privileged user namespaces.";
+
+#[test]
+fn every_released_bubblewrap_refusal_spelling_justifies_a_deferral() {
+    for refusal in [BWRAP_0_11_REFUSAL, BWRAP_0_9_REFUSAL] {
+        let notices = [format!(
+            "{BUBBLEWRAP_DEFERRAL_PREFIX} spawn_under_linux_bwrap: bwrap exited exit status: 1: \
+             {refusal}"
+        )];
+        let record = derive(
+            summary_handoff(),
+            &summary(&notices),
+            bwrap_probe(1, refusal),
+        )
+        .unwrap_or_else(|error| panic!("{refusal:?} must be deferrable: {error}"));
+        assert_eq!(record.probe.output, refusal);
+    }
+}
+
+#[test]
+fn an_unrelated_bwrap_failure_is_not_a_namespace_refusal() {
+    let error = derive(
+        summary_handoff(),
+        &summary(&[bwrap_notice()]),
+        bwrap_probe(1, "bwrap: execvp /bin/true: No such file or directory"),
+    )
+    .expect_err("a probe that failed for another reason justifies nothing");
+    assert!(error.contains("has no failing namespace probe"), "{error}");
+}
+
 #[test]
 fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
     let probe_of = |notice: String| {

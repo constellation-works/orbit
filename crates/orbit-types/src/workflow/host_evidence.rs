@@ -254,7 +254,8 @@ fn plain_char(c: char) -> bool {
 const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
     SEATBELT_APPLY_REFUSAL,
     "sandbox-exec cannot apply a profile",
-    BUBBLEWRAP_NAMESPACE_REFUSAL,
+    BUBBLEWRAP_NAMESPACE_REFUSALS[0],
+    BUBBLEWRAP_NAMESPACE_REFUSALS[1],
 ];
 
 /// What `sandbox-exec` prints when an enclosing Seatbelt sandbox refuses to
@@ -266,11 +267,26 @@ pub const SEATBELT_APPLY_REFUSAL: &str = "sandbox_apply: Operation not permitted
 pub const SEATBELT_APPLY_REFUSAL_EXIT: i32 = 71;
 
 /// What Bubblewrap prints when an enclosing sandbox refuses the nested user
-/// namespace it needs, as inside an agent lane on Linux. Bubblewrap 0.9.0
-/// prints `bwrap: No permissions to create new namespace, likely because the
-/// kernel does not allow non-privileged user namespaces. ...`; there is no
-/// "a" before "new", so a constant that adds one never matches a real probe.
-pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create new namespace";
+/// namespace it needs, as inside an agent lane on Linux. The wording differs
+/// by release: 0.11.1 prints `No permissions to create a new namespace`, and
+/// 0.9.0 prints `No permissions to create new namespace`. Match a probe or a
+/// notice with [`is_bubblewrap_namespace_refusal`], never with this constant
+/// alone.
+pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create a new namespace";
+
+/// Every known spelling of [`BUBBLEWRAP_NAMESPACE_REFUSAL`].
+pub const BUBBLEWRAP_NAMESPACE_REFUSALS: &[&str] = &[
+    BUBBLEWRAP_NAMESPACE_REFUSAL,
+    "No permissions to create new namespace",
+];
+
+/// Whether `output` carries Bubblewrap's nested-namespace refusal in any
+/// known spelling.
+pub fn is_bubblewrap_namespace_refusal(output: &str) -> bool {
+    BUBBLEWRAP_NAMESPACE_REFUSALS
+        .iter()
+        .any(|refusal| output.contains(refusal))
+}
 
 /// The line prefix a test prints when it returns without exercising its
 /// sandbox-confined path because this host cannot apply the sandbox
