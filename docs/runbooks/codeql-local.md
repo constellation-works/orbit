@@ -106,8 +106,27 @@ in those sandboxes.
 
 Extraction and analysis saturate the disk long before the CPUs, so they run
 under a host-wide counted lock: one of `ORBIT_CODEQL_SLOTS` slots, else the
-number in `$ORBIT_CODEQL_CACHE_DIR/slots`, else 2. The locks are
-`slots/slot-NNN.lock` in the cache. Every run reports
+number in the regular file `$ORBIT_CODEQL_CACHE_DIR/slot-count`, else 2.
+Set that file to an integer from 1 through 128; `ORBIT_CODEQL_SLOTS` takes
+precedence. The locks stay in the distinct directory
+`$ORBIT_CODEQL_CACHE_DIR/slots/`, as `slot-NNN.lock` files. The count file
+works before the first run and with an already populated cache. For example:
+
+```bash
+codeql_cache="${ORBIT_CODEQL_CACHE_DIR:-$HOME/.orbit/cache/codeql-rust-local}"
+mkdir -p "$codeql_cache"
+printf '1\n' > "$codeql_cache/slot-count"
+```
+
+Older instructions used a regular `slots` file for the count, colliding with
+the lock directory. The script migrates that regular file to `slot-count`
+under an exclusive lock before admission. It preserves the count and leaves
+an existing `slots/` directory and its lock files untouched, so runs using
+the older lock paths still exclude new runs. If migration fails, or both
+count files exist, the script stops before extraction; reconcile the files
+or make the cache writable before retrying.
+
+Every run reports
 `acquired CodeQL slot N of M after queueing X.Ys`; a run that has to wait
 first prints `waiting for a CodeQL slot` and repeats a progress line every
 45 seconds. Toolchain verification and installation are outside the slot. If
