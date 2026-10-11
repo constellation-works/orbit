@@ -14,7 +14,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::runtime::audit::run::{RunExecutionProgress, RunProviderProcess};
+use crate::runtime::audit::run::RunProviderProcess;
 
 const MAX_PAGE: usize = 50;
 const MAX_RUN_PREFIX: usize = 10_000;
@@ -234,9 +234,14 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     })).collect::<Vec<_>>());
     value["steps_total"] = json!(run.steps.len());
     value["steps_truncated"] = json!(run.steps.len() > MAX_PAGE);
-    let progress = runtime
-        .collect_run_execution_progress(&id)
-        .unwrap_or_else(|_| RunExecutionProgress::unavailable());
+    // Progress and the log page come from one bounded audit read; its total
+    // is a store count, so a long history pages honestly.
+    let page_limit = offset
+        .saturating_add(limit)
+        .min(MAX_LOG_PREFIX)
+        .saturating_sub(offset);
+    let detail = runtime.collect_bounded_run_detail(&id, offset, page_limit, LOG_BYTES)?;
+    let progress = &detail.progress;
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,
         state.as_ref(),
@@ -246,21 +251,11 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
         "serialize agent invocation result",
     ))?;
     let execution_progress = json!({"state": progress.state,
-        "active_step": progress.active_step.map(|s| json!({"step_id": s.step_id,"step_index":s.step_index,"started_at":s.started_at})),
+        "active_step": progress.active_step.as_ref().map(|s| json!({"step_id": s.step_id,"step_index":s.step_index,"started_at":s.started_at})),
         "provider_processes": {"limit":progress.limit,"truncated":progress.truncated,
             "items":progress.provider_processes.iter().map(RunProviderProcess::to_json).collect::<Vec<_>>()}});
-    let audit_events = runtime.collect_run_audit_events(&id)?;
-    let log_state = if audit_events.is_empty() {
-        "unavailable"
-    } else {
-        "observed"
-    };
-    let total = audit_events
-        .iter()
-        .filter(|event| event.body_kind.as_deref() == Some("cli_invocation_finished"))
-        .count();
-    let logs = runtime.collect_run_cli_invocations_bounded(&id, Some(offset.saturating_add(limit).min(MAX_LOG_PREFIX)), Some(LOG_BYTES))?
-        .into_iter().skip(offset).map(|r| {
+    let total = detail.logs_total;
+    let logs = detail.logs.iter().map(|r| {
             let (stdout, stdout_truncated) = excerpt(&r.stdout);
             let (stderr, stderr_truncated) = excerpt(&r.stderr);
             json!({
@@ -271,8 +266,9 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
         })}).collect::<Vec<_>>();
     Ok(
         json!({"run": value, "usage":{"state":"unavailable"}, "execution_progress":execution_progress,
-        "logs":{"state":log_state,"pagination":pagination(offset,limit,logs.len(),total,MAX_LOG_PREFIX),
-            "items":logs,"total":total,"available_through":MAX_LOG_PREFIX.min(total),"excerpt_max_bytes":LOG_BYTES}}),
+        "logs":{"state":detail.state,"pagination":pagination(offset,limit,logs.len(),total,MAX_LOG_PREFIX),
+            "items":logs,"total":total,"available_through":MAX_LOG_PREFIX.min(total),"excerpt_max_bytes":LOG_BYTES},
+        "audit_metadata":{"complete":detail.complete,"rows_read":detail.rows_read,"row_budget":detail.row_budget}}),
     )
 }
 

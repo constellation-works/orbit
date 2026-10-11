@@ -27,6 +27,14 @@ pub struct V2AuditEventFilter {
     pub offset: Option<usize>,
     /// Page from the oldest event instead of the newest.
     pub oldest_first: bool,
+    /// Payload `body_kind` values to match; empty applies no kind filter.
+    /// A non-empty list also requires a valid JSON payload carrying a string
+    /// `event_id`, the envelope rows the run projections can reconstruct, so
+    /// a count with this filter equals what those projections would see.
+    pub body_kinds: Vec<String>,
+    /// Event ids to match; empty applies no id filter. Each id is one bound
+    /// parameter, so callers chunk long lists under SQLite's parameter cap.
+    pub event_ids: Vec<String>,
 }
 
 /// Filtered total and one chronological tail page from a single read snapshot.

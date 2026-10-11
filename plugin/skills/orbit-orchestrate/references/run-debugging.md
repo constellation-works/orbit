@@ -94,6 +94,16 @@ A `running` run whose open step has no `alive` child is the signature of an
 abandoned wrapper. `orbit run show <run_id> --json` reports the same
 `provider_processes` for the owning host.
 
+With `view: "bounded"`, progress and the log page come from a fixed audit
+budget rather than a replay of the whole trail: a prefix of step lifecycle
+rows, the newest provider spawn and completion rows, the newest samples since
+them, the parents that place them in a step, and the requested log page.
+`audit_metadata` gives `rows_read` and its `row_budget`. `logs.total` is still
+a full store count, so pagination stays exact. When `audit_metadata.complete`
+is `false`, the history outgrew a budget: children spawned before the window,
+their samples, step positions, or the active step may be missing, and
+`provider_processes.truncated` is `true`. Omit `view` for the full replay.
+
 ### Verify model routing before reading logs
 
 `orbit run show <run_id> --json` separates three identities: `requested_crew`

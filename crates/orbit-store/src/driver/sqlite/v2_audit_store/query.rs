@@ -70,6 +70,32 @@ pub(super) fn v2_filter_sql(
         conditions.push(format!("source = ?{}", params.len() + 1));
         params.push(Box::new(source.clone()));
     }
+    if !filter.event_ids.is_empty() {
+        let placeholders = (0..filter.event_ids.len())
+            .map(|index| format!("?{}", params.len() + 1 + index))
+            .collect::<Vec<_>>()
+            .join(", ");
+        conditions.push(format!("event_id IN ({placeholders})"));
+        for event_id in &filter.event_ids {
+            params.push(Box::new(event_id.clone()));
+        }
+    }
+    if !filter.body_kinds.is_empty() {
+        // `json_extract` errors on malformed payloads; skip them the same way
+        // the run reconstruction skips unparseable envelope rows.
+        conditions.push("json_valid(payload_json)".to_string());
+        conditions.push("json_type(payload_json, '$.event_id') = 'text'".to_string());
+        let placeholders = (0..filter.body_kinds.len())
+            .map(|index| format!("?{}", params.len() + 1 + index))
+            .collect::<Vec<_>>()
+            .join(", ");
+        conditions.push(format!(
+            "json_extract(payload_json, '$.body_kind') IN ({placeholders})"
+        ));
+        for body_kind in &filter.body_kinds {
+            params.push(Box::new(body_kind.clone()));
+        }
+    }
     (format!("WHERE {}", conditions.join(" AND ")), params)
 }
 
