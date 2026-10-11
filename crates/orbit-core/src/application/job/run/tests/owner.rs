@@ -1,11 +1,65 @@
-//! Owner identity classification across PID namespaces [ORB-10594].
+//! Owner and provider signalling safety with injected identity probes.
 
 #[cfg(unix)]
-use super::super::owner::{OwnerIdentity, classify_run_owner_with_probes};
+use super::super::owner::{
+    OwnerIdentity, ProviderStop, classify_run_owner_with_probes, stop_provider_process,
+    stop_provider_process_with_probe,
+};
 #[cfg(unix)]
 use orbit_common::process::identity::STABLE_TOKEN_PREFIX;
 #[cfg(unix)]
-use orbit_common::process::identity::{PidNamespaceScope, ProbeOutcome};
+use orbit_common::process::identity::{
+    PidNamespaceScope, ProbeOutcome, ProcessLiveness, probe_process_start_identity,
+    process_is_alive,
+};
+
+/// Fault injection: conservative Alive cannot authorize signalling when the
+/// live start identity is unreadable, absent, or different [ORB-15618]. The
+/// public cancellation boundary cannot force these kernel probe outcomes.
+#[cfg(unix)]
+#[test]
+fn provider_signalling_requires_a_verified_live_identity() {
+    let persisted = format!("{STABLE_TOKEN_PREFIX}pidns=-:Sun Aug  2 20:13:45 2026");
+    for (probe, expected) in [
+        (ProbeOutcome::Unavailable, ProviderStop::Unverified),
+        (ProbeOutcome::NoProcess, ProviderStop::Unverified),
+        (
+            ProbeOutcome::Token(format!(
+                "{STABLE_TOKEN_PREFIX}pidns=-:Sun Aug  2 20:13:46 2026"
+            )),
+            ProviderStop::NotRunning,
+        ),
+    ] {
+        let provider = orbit_common::test_env::spawn_unrelated_process();
+        let outcome = stop_provider_process_with_probe(
+            provider.pid(),
+            Some(&persisted),
+            |_, _| ProcessLiveness::Alive,
+            |_| probe.clone(),
+        )
+        .unwrap();
+        assert_eq!(outcome, expected, "identity probe {probe:?}");
+        assert!(
+            process_is_alive(provider.pid()),
+            "an unverified provider must receive no signal [ORB-15618]: {probe:?}"
+        );
+    }
+
+    // Positive control: real probes and process-group teardown still stop an
+    // owned child once its recorded start identity is positively verified.
+    let provider = orbit_common::test_env::spawn_unrelated_process();
+    let ProbeOutcome::Token(token) = probe_process_start_identity(provider.pid()) else {
+        panic!("an owned provider child's start identity must be readable");
+    };
+    assert_eq!(
+        stop_provider_process(provider.pid(), Some(&token)).unwrap(),
+        ProviderStop::Stopped
+    );
+    assert!(
+        !process_is_alive(provider.pid()),
+        "verified provider teardown must leave the child stopped"
+    );
+}
 
 // ---- Cross-PID-namespace regression coverage (ORB-10594) ----
 //

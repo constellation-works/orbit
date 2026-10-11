@@ -78,6 +78,8 @@ Admitted unit tests:
 
 - `crates/orbit-core/src/application/plugin/tests/lifecycle/remove.rs`: `a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it` (criterion 2, fault injection). A `#[cfg(test)]` seam fails the next delete of the namespace install tree or of its build log, as an unlink error partway through `remove_dir_all` would. The test asserts that the row, grant witness and build witness survive the failure, and that a retried `orbit plugin remove` deletes both trees and then the row. Permission bits would not force this failure under root-run tests, and the crate-root integration tests compile without `cfg(test)`, so they cannot reach the seam.
 
+- `crates/orbit-core/src/application/job/run/tests/owner.rs`: `provider_signalling_requires_a_verified_live_identity` (criteria 2 and 3). Injected unavailable, no-process and mismatched start-identity probes with conservative live observations must leave an owned child alive; a real matching probe is the positive teardown control. The public cancellation boundary cannot force unreadable kernel identity or the contradictory no-process-but-live outcome without changing host permissions or relying on PID reuse [ORB-15618].
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.
