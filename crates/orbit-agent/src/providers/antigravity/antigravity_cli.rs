@@ -69,8 +69,9 @@ impl AntigravityCliTransport {
     }
 }
 
-/// Derive documented `agy --print-timeout` from the remaining Orbit spawn
-/// deadline. A 30s shutdown margin keeps outer supervision authoritative.
+/// Derive documented `agy --print-timeout` from the Orbit spawn deadline in
+/// force at launch. A 30s shutdown margin makes the provider stop itself before
+/// outer supervision kills it.
 /// Budgets that do not fit the margin still get an explicit value so the
 /// documented 5m default cannot apply.
 pub(crate) fn derived_antigravity_print_timeout(remaining_deadline: Duration) -> Duration {
@@ -89,6 +90,19 @@ pub(crate) fn format_antigravity_print_timeout(duration: Duration) -> String {
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
     let seconds = total_secs % 60;
+    // Keep the returned budget equal to the value in argv, including shorter
+    // custom fractional values used at the completion classifier's boundary.
+    if duration.subsec_nanos() > 0 {
+        let fraction = format!("{seconds}.{:09}", duration.subsec_nanos());
+        let seconds = fraction.trim_end_matches('0');
+        return if hours > 0 {
+            format!("{hours}h{minutes}m{seconds}s")
+        } else if minutes > 0 {
+            format!("{minutes}m{seconds}s")
+        } else {
+            format!("{seconds}s")
+        };
+    }
     if hours > 0 {
         format!("{hours}h{minutes}m{seconds}s")
     } else if minutes > 0 {
@@ -134,7 +148,7 @@ pub fn apply_antigravity_print_timeout(
 /// bounded final message separately. [ORB-14683]
 pub fn antigravity_print_timeout_diagnostic(budget: Duration, elapsed: Duration) -> String {
     format!(
-        "agent step did not complete: antigravity reached its --print-timeout of {} \
+        "agent step timed out: antigravity reached its --print-timeout of {} \
          (ran {} ms) and exited 0 without a terminating Orbit response envelope. The \
          provider's time budget was spent before the work finished, so any `SUCCESS` \
          wrapper or exit code 0 is not completion; only what the run persisted before \

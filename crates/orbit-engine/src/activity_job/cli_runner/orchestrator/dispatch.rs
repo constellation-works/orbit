@@ -281,13 +281,22 @@ pub(crate) fn run_cli_backend_for_step(
         })?);
     }
     // Combined executor + transport argv is the only place that can honor a
-    // custom `--print-timeout` without duplicating it, and the remaining
-    // spawn deadline is known here. [ORB-11337]
-    let print_timeout = apply_provider_runtime_arg_fixups(
-        &provider,
-        &mut subprocess_args,
-        wall_clock_timeout.saturating_mul(2),
-    );
+    // custom `--print-timeout` without duplicating it, and the spawn deadline
+    // is known here. The provider's argv is fixed at launch, when no
+    // build-admission credit has been earned yet, so the budget derives from
+    // the runtime alone: the provider stops itself before Orbit's wall clock
+    // kills it. [ORB-11337] [ORB-15206]
+    let print_timeout =
+        apply_provider_runtime_arg_fixups(&provider, &mut subprocess_args, wall_clock_timeout);
+    if let Some(budget) = print_timeout {
+        tracing::info!(
+            provider = %provider,
+            run_id,
+            print_timeout_ms = budget.as_millis() as u64,
+            effective_deadline_ms = wall_clock_timeout.as_millis() as u64,
+            "injected provider print timeout"
+        );
+    }
     if let Some(tools) = inspection_tools {
         subprocess_args.extend(tools.args);
     }
@@ -375,6 +384,8 @@ pub(crate) fn run_cli_backend_for_step(
         model: model_redacted,
         cwd: subprocess_cwd_string.clone(),
         wall_clock_timeout_ms: wall_clock_timeout.as_millis() as u64,
+        print_timeout_ms: print_timeout.map(|budget| budget.as_millis() as u64),
+        effective_deadline_ms: Some(wall_clock_timeout.as_millis() as u64),
         sandbox_backend: prepared_sandbox.metadata.backend.clone(),
         sandbox_trusted_wrapper: prepared_sandbox.metadata.trusted_wrapper.clone(),
         sandbox_probe_outcome: prepared_sandbox.metadata.probe_outcome.clone(),

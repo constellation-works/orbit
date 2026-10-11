@@ -13,7 +13,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
-use orbit_types::workflow::{ExecutorDef, is_provider_unavailable};
+use orbit_types::workflow::{ClaimFailureClass, ExecutorDef, is_provider_unavailable};
 
 const PROMPT_SECRET: &str = "agy-tenant-42-authorization-bearer-zzz";
 const SUCCESS_ENVELOPE: &str =
@@ -79,21 +79,6 @@ impl Harness {
             .collect()
     }
 
-    fn with_print_timeout(self, value: &str) -> Self {
-        let mut executor = self
-            .runtime
-            .get_executor_def("antigravity")
-            .expect("read executor")
-            .expect("configured executor");
-        executor
-            .args
-            .extend(["--print-timeout".to_string(), value.to_string()]);
-        self.runtime
-            .upsert_executor_def(&executor)
-            .expect("set custom provider budget");
-        self
-    }
-
     fn stdin(&self) -> String {
         std::fs::read_to_string(&self.stdin_path).expect("fake agent recorded stdin")
     }
@@ -144,10 +129,18 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
 }
 
 fn try_dispatch(harness: &Harness, spec: AgentLoopSpec) -> Result<DispatchOutcome, String> {
+    try_dispatch_with_audit(harness, spec).map(|(outcome, _)| outcome)
+}
+
+fn try_dispatch_with_audit(
+    harness: &Harness,
+    spec: AgentLoopSpec,
+) -> Result<(DispatchOutcome, Arc<orbit_store::Store>), String> {
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
+    let store = Arc::new(orbit_store::Store::open_in_memory().expect("audit store"));
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        store.clone(),
         "ws_test",
         "agy-fake",
         "antigravity:gemini-3.8-flash-high".to_string(),
@@ -166,6 +159,7 @@ fn try_dispatch(harness: &Harness, spec: AgentLoopSpec) -> Result<DispatchOutcom
         run_id: "agy-fake",
         host: Some(&harness.runtime),
     })
+    .map(|outcome| (outcome, store))
     .map_err(|error| error.to_string())
 }
 
@@ -184,8 +178,26 @@ exit 0"#
 #[test]
 fn command_construction_matches_the_shipped_headless_contract() {
     let harness = Harness::new(&success_body());
-    let outcome = dispatch(&harness, spec(60));
+    let (outcome, store) = try_dispatch_with_audit(&harness, spec(60)).expect("dispatch");
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
+
+    let events = store
+        .list_v2_audit_events(&orbit_store::V2AuditEventFilter {
+            workspace_id: "ws_test".to_string(),
+            run_id: Some("agy-fake".to_string()),
+            source: Some("v2_envelope".to_string()),
+            ..Default::default()
+        })
+        .expect("read durable invocation events");
+    let started = events
+        .iter()
+        .map(|event| serde_json::from_str::<serde_json::Value>(&event.payload_json).expect("event"))
+        .find(|event| event["event_type"] == "cli.invocation.started")
+        .expect("durable invocation-start record");
+    assert_eq!(started["print_timeout_ms"], 30_000);
+    assert_eq!(started["effective_deadline_ms"], 60_000);
+    assert_eq!(outcome.output["print_timeout_ms"], 30_000);
+    assert_eq!(outcome.output["effective_deadline_ms"], 60_000);
 
     let argv = harness.argv();
     assert!(
@@ -210,8 +222,8 @@ fn command_construction_matches_the_shipped_headless_contract() {
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--print"));
     assert!(
         argv.windows(2)
-            .any(|args| args == ["--print-timeout", "1m30s"]),
-        "60s runtime plus capped 60s admission credit minus 30s margin: {argv:?}"
+            .any(|args| args == ["--print-timeout", "30s"]),
+        "60s runtime minus 30s margin: {argv:?}"
     );
     assert_eq!(
         argv.iter()
@@ -307,8 +319,8 @@ esac
     let argv = harness.argv();
     assert!(
         argv.windows(2)
-            .any(|args| args == ["--print-timeout", "5h59m30s"]),
-        "3h runtime plus capped admission credit must raise --print-timeout above 5m: {argv:?}"
+            .any(|args| args == ["--print-timeout", "2h59m30s"]),
+        "a 3h runtime must raise --print-timeout above 5m: {argv:?}"
     );
 }
 
@@ -372,8 +384,8 @@ printf '%s\n' '{"event":"progress","message":"Background command still running"}
 printf '%s\n' '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Background command still running; waiting for it to finish.","usage":{"total_tokens":17}}}'"#
 }
 
-/// These fixtures explicitly request a 1 s print-timeout, below the activity's
-/// runtime plus queue allowance, so provider exhaustion is independently reachable.
+/// The injected print-timeout is the runtime minus the 30 s margin, so a 31 s
+/// activity gives `agy` a 1 s budget and provider exhaustion is reachable.
 const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
 
 /// [ORB-14683] `agy` at its print-timeout exits 0 with a `SUCCESS` wrapper of
@@ -381,7 +393,7 @@ const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
 #[test]
 fn success_wrapper_without_envelope_at_print_timeout_is_reported_as_spent_budget() {
     let body = format!("sleep 2\n{}\nexit 0", progress_only_success_body());
-    let harness = Harness::new(&body).with_print_timeout("1s");
+    let harness = Harness::new(&body);
     let outcome = dispatch(&harness, spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
 
     assert!(!outcome.success, "a spent budget must not succeed");
@@ -403,7 +415,21 @@ fn success_wrapper_without_envelope_at_print_timeout_is_reported_as_spent_budget
         "diagnostic must name the elapsed time: {message}"
     );
     assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
-    assert_eq!(outcome.output["timed_out"], serde_json::Value::Bool(false));
+    assert_eq!(
+        ClaimFailureClass::of_step_failure(None, Some(&message)),
+        Some(ClaimFailureClass::Transient),
+        "a spent provider budget must be releasable for retry: {message}",
+    );
+    assert_eq!(
+        outcome.output["timed_out"],
+        serde_json::Value::Bool(true),
+        "a spent print budget is a timeout, not a missing envelope"
+    );
+    assert_eq!(outcome.output["print_timeout_ms"], serde_json::json!(1000));
+    assert_eq!(
+        outcome.output["effective_deadline_ms"],
+        serde_json::json!(SHORT_PRINT_TIMEOUT_SPEC_SECONDS * 1000)
+    );
     assert_eq!(
         outcome.output["completion_envelope_satisfied"],
         serde_json::Value::Bool(false)
@@ -426,7 +452,7 @@ fn print_timeout_without_envelope_fails_even_when_envelopes_are_not_required() {
     let mut lenient = spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS);
     lenient.require_response_envelope = false;
     lenient.require_completion_envelope = false;
-    let outcome = dispatch(&Harness::new(&body).with_print_timeout("1s"), lenient);
+    let outcome = dispatch(&Harness::new(&body), lenient);
     assert!(!outcome.success);
     assert!(
         outcome
@@ -439,14 +465,22 @@ fn print_timeout_without_envelope_fails_even_when_envelopes_are_not_required() {
 #[test]
 fn success_wrapper_without_envelope_before_print_timeout_keeps_the_envelope_message() {
     let body = format!("{}\nexit 0", progress_only_success_body());
-    let mut completion_only = spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS);
+    // Exact below/equal/above boundaries are covered by the deterministic
+    // classifier table. Give this real process ample room on a loaded host.
+    let mut completion_only = spec(3600);
     completion_only.require_response_envelope = false;
-    let outcome = dispatch(
-        &Harness::new(&body).with_print_timeout("1s"),
-        completion_only,
-    );
+    let outcome = dispatch(&Harness::new(&body), completion_only);
     assert!(!outcome.success);
+    assert_eq!(
+        outcome.output["timed_out"],
+        serde_json::Value::Bool(false),
+        "below the print budget a missing envelope stays a failure, not a timeout"
+    );
     let message = outcome.message.unwrap_or_default();
+    assert_eq!(
+        ClaimFailureClass::of_step_failure(None, Some(&message)),
+        None
+    );
     assert!(
         message.contains("agent step did not complete: the provider exited 0")
             && !message.contains("print-timeout"),
@@ -457,10 +491,7 @@ fn success_wrapper_without_envelope_before_print_timeout_keeps_the_envelope_mess
 #[test]
 fn valid_envelope_at_print_timeout_still_succeeds() {
     let body = format!("sleep 2\n{}", success_body());
-    let outcome = dispatch(
-        &Harness::new(&body).with_print_timeout("1s"),
-        spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS),
-    );
+    let outcome = dispatch(&Harness::new(&body), spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
     assert!(outcome.output["duration_ms"].as_u64().expect("duration_ms") >= 1000);
 }
@@ -470,10 +501,7 @@ fn error_terminal_after_print_timeout_keeps_the_terminal_error_message() {
     let body = r#"sleep 2
 printf '%s\n' '{"event":"result","result":{"status":"ERROR","response":"","error":"timeout waiting for response"}}'
 exit 1"#;
-    let outcome = dispatch(
-        &Harness::new(body).with_print_timeout("1s"),
-        spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS),
-    );
+    let outcome = dispatch(&Harness::new(body), spec(SHORT_PRINT_TIMEOUT_SPEC_SECONDS));
     assert!(!outcome.success);
     let message = outcome.message.unwrap_or_default();
     assert!(

@@ -13,7 +13,9 @@ use orbit_agent::{
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
 use orbit_types::workflow::activity_job::AgentLoopSpec;
-use orbit_types::workflow::{ProviderFailureClass, ProviderLimitFailure, provider_failure_text};
+use orbit_types::workflow::{
+    ProviderFailureClass, ProviderLimitFailure, TRANSIENT_FAILURE_MARKER, provider_failure_text,
+};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -69,6 +71,16 @@ pub(super) struct ProviderExit<'a> {
     /// holds the usage windows. [ORB-14696]
     pub(super) codex_home: Option<PathBuf>,
     pub(super) build_budget_waits: BuildBudgetWaits,
+}
+
+/// Inclusive provider-budget boundary, independent of envelope policy flags.
+pub(super) fn print_budget_exhausted(
+    exit_success: bool,
+    envelope_missing: bool,
+    budget: Option<Duration>,
+    elapsed: Duration,
+) -> bool {
+    exit_success && envelope_missing && budget.is_some_and(|budget| elapsed >= budget)
 }
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
@@ -183,11 +195,16 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     // [ORB-14683] An exit 0 with no envelope that ran for the whole provider
     // print-timeout is a spent budget, not a yielded agent. The elapsed time is
     // the only evidence: `agy` ends at its budget with a `SUCCESS` wrapper of
-    // progress text. Orbit's spawn clock starts no later than the provider's, so
-    // an earlier exit cannot match. It fails whatever the activity's envelope
-    // flags say, because the run was cut off rather than finished.
-    let print_timeout_reached = completion_envelope_error.is_some()
-        && print_timeout.is_some_and(|budget| duration >= budget);
+    // progress text. It fails whatever the activity's envelope
+    // flags say, because the run was cut off rather than finished, and it is
+    // reported as a timeout like the wall-clock kill it stands in for.
+    // [ORB-15206]
+    let print_timeout_reached = print_budget_exhausted(
+        exit_success,
+        completion_envelope_error.is_some(),
+        print_timeout,
+        duration,
+    );
     // [ORB-10733] Protocol termination and control-plane outcome are distinct:
     // all recognized status tokens finish the frame, but a required completion
     // contract cannot checkpoint an explicit failed/timeout outcome. Only the
@@ -446,7 +463,10 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         }
     } else if let Some(budget) = print_timeout.filter(|_| print_timeout_reached) {
         Some(with_sandbox_write_attribution(
-            antigravity_print_timeout_diagnostic(budget, duration),
+            format!(
+                "{TRANSIENT_FAILURE_MARKER} {}",
+                antigravity_print_timeout_diagnostic(budget, duration),
+            ),
             sandbox_write_diagnostic.as_deref(),
         ))
     } else if let Some(diagnostic) = background_task_diagnostic {
@@ -525,6 +545,26 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         "build_budget_waits".to_string(),
         serde_json::json!(build_budget_waits),
     );
+    // These are supervisor observations, so an agent result cannot override
+    // them or make a spent provider budget appear complete.
+    output.insert(
+        "timed_out".into(),
+        Value::Bool(timed_out || print_timeout_reached),
+    );
+    output.insert(
+        "print_timeout_ms".into(),
+        print_timeout.map_or(Value::Null, |budget| {
+            serde_json::json!(budget.as_millis() as u64)
+        }),
+    );
+    output.insert(
+        "effective_deadline_ms".into(),
+        serde_json::json!(
+            timeout_seconds
+                .saturating_mul(1000)
+                .saturating_add(build_budget_waits.deadline_extension_ms)
+        ),
+    );
     let (final_message_text, final_message_truncated, final_message_bytes) = match final_message {
         Some(BoundedMessage {
             text,
@@ -555,7 +595,6 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             "duration_ms",
             serde_json::json!(duration.as_millis() as u64),
         ),
-        ("timed_out", Value::Bool(timed_out)),
         (
             "response_envelope_required",
             Value::Bool(spec.require_response_envelope),
