@@ -1357,7 +1357,8 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
     isolated(
         "resumed_known_red_candidates_must_complete_host_and_replay_coverage",
         || {
-            let notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace";
+            let notice =
+                "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace";
             for (case, output_notice, replay, tests_run, validated) in [
                 ("executed", "", false, 3, true),
                 ("deferred", notice, false, 3, false),
@@ -1388,7 +1389,7 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
                                 "probe": {
                                     "command": "bwrap --unshare-user --ro-bind / / -- /bin/true",
                                     "exit_code": 1,
-                                    "output": "bwrap: No permissions to create a new namespace",
+                                    "output": "bwrap: No permissions to create new namespace",
                                 },
                             },
                         }).to_string().into_bytes(),

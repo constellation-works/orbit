@@ -476,7 +476,7 @@ mkdir -p "$ns_bwrap_dir" "$(dirname "$ns_sccache")"
 cat > "$ns_bwrap_dir/bwrap" <<'EOF'
 #!/usr/bin/env bash
 printf 'probe\n' >> "$FAKE_BWRAP_LOG"
-printf 'bwrap: No permissions to create a new namespace\n' >&2
+printf 'bwrap: No permissions to create new namespace\n' >&2
 exit 1
 EOF
 chmod +x "$ns_bwrap_dir/bwrap"
@@ -544,7 +544,7 @@ fi
 assert_ns_skip() {
   local label="$1"
   [[ "$NS_STATUS" -eq 0 ]] || fail "$label: expected exit 0, got $NS_STATUS"
-  grep -Fq 'skip: cannot create a mount namespace (bwrap: No permissions to create a new namespace)' "$ns_out" \
+  grep -Fq 'skip: cannot create a mount namespace (bwrap: No permissions to create new namespace)' "$ns_out" \
     || fail "$label: expected the skip line, got: $(tr '\n' ' ' <"$ns_out")"
   if grep -Fq 'agent sandbox' "$ns_out"; then
     fail "$label: outside an agent lane the skip must not claim the agent-sandbox exemption"
@@ -556,7 +556,7 @@ assert_ns_agent_lane() {
   local label="$1"
   [[ "$NS_STATUS" -eq 0 ]] || fail "$label: expected exit 0, got $NS_STATUS"
   [[ "$(grep -c '' "$ns_out")" -eq 1 ]] || fail "$label: expected exactly one stdout line"
-  grep -Fq 'test-compiler-cache-namespaces: not applicable inside the Orbit agent sandbox, which refuses nested namespaces (bwrap: No permissions to create a new namespace); covered outside the sandbox by the owner'"'"'s candidate_validate or the claim host'"'"'s claim_validate run of the required commands' "$ns_out" \
+  grep -Fq 'test-compiler-cache-namespaces: not applicable inside the Orbit agent sandbox, which refuses nested namespaces (bwrap: No permissions to create new namespace); covered outside the sandbox by the owner'"'"'s candidate_validate or the claim host'"'"'s claim_validate run of the required commands' "$ns_out" \
     || fail "$label: expected the agent-sandbox line, got: $(tr '\n' ' ' <"$ns_out")"
   if grep -Fq 'skip:' "$ns_out"; then
     fail "$label: the agent-sandbox line must not use skip wording"

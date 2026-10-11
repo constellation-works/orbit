@@ -266,8 +266,11 @@ pub const SEATBELT_APPLY_REFUSAL: &str = "sandbox_apply: Operation not permitted
 pub const SEATBELT_APPLY_REFUSAL_EXIT: i32 = 71;
 
 /// What Bubblewrap prints when an enclosing sandbox refuses the nested user
-/// namespace it needs, as inside an agent lane on Linux.
-pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create a new namespace";
+/// namespace it needs, as inside an agent lane on Linux. Bubblewrap 0.9.0
+/// prints `bwrap: No permissions to create new namespace, likely because the
+/// kernel does not allow non-privileged user namespaces. ...`; there is no
+/// "a" before "new", so a constant that adds one never matches a real probe.
+pub const BUBBLEWRAP_NAMESPACE_REFUSAL: &str = "No permissions to create new namespace";
 
 /// The line prefix a test prints when it returns without exercising its
 /// sandbox-confined path because this host cannot apply the sandbox

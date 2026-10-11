@@ -156,6 +156,31 @@ fn a_bubblewrap_deferral_is_derived_from_the_summary_and_orbits_probe() {
     );
 }
 
+/// Bubblewrap 0.9.0's refusal, verbatim from a claimed leaf on an Ubuntu
+/// follower whose lane refuses nested user namespaces. Written out rather
+/// than built from the constant, so the constant is held to the real text.
+const BWRAP_0_9_REFUSAL: &str = "bwrap: No permissions to create new namespace, likely because \
+     the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> \
+     or <file:///usr/share/doc/bubblewrap/README.Debian.gz>.";
+
+#[test]
+fn bubblewraps_own_refusal_text_justifies_a_deferral() {
+    let notices = [format!(
+        "{BUBBLEWRAP_DEFERRAL_PREFIX} readonly_state_mount_keeps_cli_and_mcp_reads_observational: \
+         bwrap exited exit status: 1: {BWRAP_0_9_REFUSAL}"
+    )];
+
+    let record = derive(
+        summary_handoff(),
+        &summary(&notices),
+        bwrap_probe(1, BWRAP_0_9_REFUSAL),
+    )
+    .expect("a lane probe printing Bubblewrap's real refusal is deferrable");
+
+    assert_eq!(record.probe.output, BWRAP_0_9_REFUSAL);
+    assert_eq!(record.notices, notices.to_vec());
+}
+
 #[test]
 fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
     let probe_of = |notice: String| {

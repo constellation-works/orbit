@@ -303,7 +303,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         # from the summary: the gate's command, its base, its final exit
         # status (doctests included) and every notice its tests printed.
         self.touch_core()
-        notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace"
+        notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
         result, summary = self.summarized(ORBIT_VALIDATION_GATE="make ci-test-affected",
                                           GUARD_TEST_NOTICE=notice)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -413,7 +413,7 @@ class NextestOutputTransportTests(unittest.TestCase):
     running its sandboxed path (`DEFERRED: ...`) must still reach that output.
     """
 
-    NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create a new namespace"
+    NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
 
     def run_gate(self, test_body, returncode=0, selection=None):
         temporary = tempfile.TemporaryDirectory()
@@ -469,7 +469,7 @@ class NextestOutputTransportTests(unittest.TestCase):
         notices = [self.NOTICE, "SKIP: fixture", "skipping: fixture", "skipping fixture",
                    "fixture: sandbox_apply: Operation not permitted",
                    "fixture: sandbox-exec cannot apply a profile",
-                   "fixture: No permissions to create a new namespace"]
+                   "fixture: No permissions to create new namespace"]
         body = ('#[test]\nfn noisy() { println!("FAIL [fixture sample]\\nSummary [fixture sample]");'
                 'println!("{}", "ordinary-noise\\n".repeat(100_000));')
         for stream in ("println", "eprintln"):
