@@ -25,7 +25,12 @@ fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
     std::fs::create_dir_all(&workspace).unwrap();
     let roots = orbit_config::ConfigRoots::new(&global, &workspace);
     let load = || orbit_config::ResolvedConfig::load(&roots);
-    assert_eq!(load().unwrap().snapshot.worktree_reclaim, ["target"]);
+    // [ORB-15613] The default also covers the scratch build directories and
+    // base checkouts that leaked 33 GB of kept worktrees on one host.
+    assert_eq!(
+        load().unwrap().snapshot.worktree_reclaim,
+        ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+    );
     std::fs::write(
         global.join("config.toml"),
         "[worktree]\nreclaim = ['target', 'node_modules']\nreclaim_below_free_mib = 100\n",

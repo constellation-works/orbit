@@ -247,6 +247,14 @@ extensions:
           "path-injection",
           "manual",
         ]
+      # Worktree GC's rescue store: an absolute checkout path with no parent
+      # components, whose existing store components are real directories.
+      - [
+          "orbit_engine::executor::automation::vcs::worktree::rescue::validated_rescue_store",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
   - addsTo:
       pack: codeql/rust-all
       extensible: barrierGuardModel

@@ -260,6 +260,10 @@ pub(crate) fn run_show_payload(
         &run,
         state.as_ref(),
     ));
+    for line in super::worktree_gc::worktree_gc_lines(state.as_ref()) {
+        header.push('\n');
+        header.push_str(&line);
+    }
     let exclusion_lines = format_backlog_exclusion_lines(state.as_ref());
     if !exclusion_lines.is_empty() {
         header.push('\n');

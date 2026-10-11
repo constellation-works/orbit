@@ -315,7 +315,7 @@ define_config_settings! {
     },
     worktree_reclaim: Vec<String> => Vec<String> {
         key: "worktree.reclaim", value_type: "array<string>",
-        description: "Rebuildable paths to reclaim in terminal, registered run worktrees: relative globs with '*' within a component and '**' across components. Replaces earlier lists; defaults to ['target']. Symlinks, tracked content and live or undecidable workers are protected. Collection never runs a command.",
+        description: "Rebuildable paths to reclaim in terminal, registered run worktrees: relative globs with '*' within a component and '**' across components. Replaces earlier lists; defaults to ['target', '.orbit/tmp/*-target', '.orbit/tmp/base-wt']. Symlinks, tracked content and live or undecidable workers are protected. Collection never runs a command.",
         section: ConfigSection::Housekeeping, order: 120,
         resolve: resolve_reclaim,
     },

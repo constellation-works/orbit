@@ -22,9 +22,17 @@ orbit gc worktrees --target-only --confirm  # delete target/ and keep the checko
 
 Collection is conservative: it reaps only worktrees whose associated task has
 settled to `done`, `rejected`, or `archived`. A worktree belonging to live work
-is never a candidate. Run the report a few times before automating it, then
-enable the `worktree-gc` routine for hourly reclamation —
-[automation.md](automation.md).
+is never a candidate. A worktree with uncommitted changes is kept
+(`skipped:dirty_rescue_candidate`), except by the scheduled
+`worktree_gc_pipeline`. That pipeline removes a settled run's dirty worktree
+once the candidate is recoverable: a carry ref or published branch on `origin`
+holding exactly it, or a patch it writes to
+`.orbit/state/rescue/worktree-gc/` and verifies first. `recovery` in the
+report names which one. Kept terminal worktrees report `retained_bytes`, and
+`orbit run show <gc-run>` lists them with their reasons. Details:
+`docs/runbooks/worktree-reclaim.md` in the Orbit repository. Run the report a
+few times before automating it, then enable the `worktree-gc` routine for
+hourly reclamation — [automation.md](automation.md).
 
 ### Workspace scratch
 
@@ -95,13 +103,15 @@ with the reason in `detail`. For any other such directory, `detail` gives the
 remedy: `git worktree repair <path>` if it was moved, otherwise inspect it and
 delete it by hand once nothing in it is needed.
 
-`--target-only` reclaims per-worktree Cargo `target/` directories, which hold
-most of a worktree's size. It deletes only `<worktree>/target` and keeps the
-checkout, including uncommitted changes, so a failed or blocked run can still
-be rescued. It needs a terminal run with no live recorded worker, not a settled
-task. A running run is never touched, and a `target/` holding anything Git
-tracks or does not ignore is kept (`skipped:target_not_ignored`).
-`bytes_reclaimed` reports the size of the `target/` directory.
+`--target-only` (alias of `--reclaim`) reclaims the declared `worktree.reclaim`
+paths, by default `target`, `.orbit/tmp/*-target` and `.orbit/tmp/base-wt`.
+These hold most of a worktree's size. It deletes only those paths and keeps
+the checkout, including uncommitted changes, so a failed or blocked run can
+still be rescued. It needs a terminal run with no live recorded worker, not a
+settled task. A running run is never touched, and a path holding anything Git
+tracks is kept (`skipped:tracked_content`). The scheduled pipeline does the
+same for every kept terminal worktree. `bytes_reclaimed` reports the size of
+the removed paths.
 
 ## Diagnose and repair
 

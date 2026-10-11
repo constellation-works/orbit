@@ -542,7 +542,9 @@ pub trait RuntimeHost: Send + Sync {
     }
     /// Admitted rebuildable paths, independent of checkout-authored commands.
     fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        vec!["target".to_string()]
+        ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+            .map(String::from)
+            .to_vec()
     }
     /// A task's settlement state for worktree GC, read from the store that
     /// owns the workspace's tasks. `run_id` is the run whose worktree is

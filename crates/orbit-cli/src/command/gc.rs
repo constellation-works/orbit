@@ -272,6 +272,15 @@ impl Execute for WorktreeGcArgs {
                 report.action,
                 report.bytes_reclaimed
             );
+            if let Some(bytes) = report.retained_bytes {
+                line.push_str(&format!(" retained_bytes={bytes}"));
+            }
+            if let Some(recovery) = &report.recovery {
+                line.push_str(&format!(
+                    " recovery={} location={}",
+                    recovery.source, recovery.location
+                ));
+            }
             if let Some(detail) = &report.detail {
                 line.push_str(&format!(" detail={detail}"));
             }

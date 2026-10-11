@@ -3,6 +3,7 @@ mod dependency_delivery;
 mod gc;
 mod merge;
 mod reclaim;
+mod rescue;
 
 pub(in crate::executor::automation::vcs) use merge::{
     checkout_holding_branch, ensure_clean_checkout,
@@ -75,6 +76,7 @@ pub use gc::{
 };
 pub(in crate::executor::automation) use merge::merge_batch_worktree_into_base;
 pub use reclaim::WorktreeReclaimReport;
+pub use rescue::WorktreeGcRecovery;
 pub(in crate::executor::automation) use setup::setup_worktree;
 
 const SHARED_WORKTREE_NAME_PREFIX: &str = "parallel-batch";

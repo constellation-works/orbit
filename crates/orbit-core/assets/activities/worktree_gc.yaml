@@ -6,10 +6,14 @@ spec:
   type: deterministic
   description: >
     Reap worktrees whose associated task has settled to rejected, archived,
-    or done. A run that is not yet terminal, has no resolvable associated
-    task, or still has a dirty tree is always retained and reported. When
-    a terminal worktree is retained, reclaim its declared worktree.reclaim
-    paths after registration, worker, symlink and Git content checks.
+    or done. A run that is not yet terminal or has no resolvable associated
+    task is always retained and reported. A settled run's dirty tree is
+    removed only once its uncommitted candidate is recoverable: a carry ref
+    or published branch on origin holding exactly it, or a rescue patch this
+    sweep writes and verifies first; `recovery` names which. Otherwise it is
+    retained with the reason in `detail`. When a terminal worktree is
+    retained, reclaim its declared worktree.reclaim paths after registration,
+    worker, symlink and Git content checks, and report `retained_bytes`.
     Collection never runs a checkout-authored command. When
     `scratch_older_than_hours` is set, also prune the checkout's `.orbit/tmp`
     scratch directory of top-level entries untouched for that long, skipping
@@ -48,6 +52,18 @@ spec:
           required:
             [path, run_id, run_state, task_id, task_status, action, bytes_reclaimed]
           properties:
+            retained_bytes:
+              type: integer
+            recovery:
+              type: object
+              required: [source, location, commit]
+              properties:
+                source:
+                  type: string
+                location:
+                  type: string
+                commit:
+                  type: string
             reclaim:
               type: array
               items:

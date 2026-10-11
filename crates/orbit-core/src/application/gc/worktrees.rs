@@ -131,6 +131,7 @@ impl OrbitRuntime {
                 target_only: false,
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
+                rescue_dirty: false,
             },
         )
         .map(Some)
@@ -299,6 +300,7 @@ impl OrbitRuntime {
                 target_only: true,
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
+                rescue_dirty: false,
             },
         )
     }
@@ -337,6 +339,7 @@ impl OrbitRuntime {
                 target_only,
                 reclaim_patterns: Some(self.worktree_reclaim_patterns()),
                 reclaim_kept: false,
+                rescue_dirty: false,
             },
         )
     }

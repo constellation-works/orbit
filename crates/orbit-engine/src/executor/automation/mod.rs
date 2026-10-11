@@ -145,6 +145,9 @@ pub(crate) fn execute_engine_action<
                     target_only: false,
                     reclaim_patterns: Some(host.worktree_reclaim_patterns()),
                     reclaim_kept: true,
+                    // [ORB-15613] A settled run's dirty worktree goes once its
+                    // candidate is recoverable; it no longer leaks for good.
+                    rescue_dirty: true,
                 },
             )?;
             let mut output = serde_json::to_value(result).map_err(|error| {

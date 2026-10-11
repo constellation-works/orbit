@@ -60,6 +60,8 @@ mod absorbed_candidate;
 mod conflict_adoption;
 #[cfg(unix)]
 mod declared_reclaim;
+#[cfg(unix)]
+mod dirty_rescue;
 
 // ---------------------------------------------------------------------------
 // worktree_gc
@@ -4152,9 +4154,12 @@ impl RuntimeHost for LifecycleHost {
     }
 
     fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        self.reclaim_patterns
-            .clone()
-            .unwrap_or_else(|| vec!["target".into()])
+        // Unset means the shipped default, as on a host without configuration.
+        self.reclaim_patterns.clone().unwrap_or_else(|| {
+            ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+                .map(String::from)
+                .to_vec()
+        })
     }
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {

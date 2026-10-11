@@ -4,11 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, NoSandbox, run_process};
 
-use super::super::git::{
-    GitTimeoutBudget, git_failure_error, git_output, git_output_paths, git_request,
-};
+use super::super::git::{git_output, git_output_paths, git_output_with_env};
 use super::author::{GitAuthor, reviewer_author};
 use super::scope::{
     NewPathPolicy, irregular_candidate_paths, task_candidate_paths, validate_claim_new_paths,
@@ -94,15 +91,15 @@ fn commit_detached(
     let index_env = index.to_string_lossy().into_owned();
     let staged = (|| {
         let scratch = [("GIT_INDEX_FILE", index_env.as_str())];
-        git_with_env(workspace_path, &["read-tree", "HEAD"], &scratch)?;
+        git_output_with_env(workspace_path, &["read-tree", "HEAD"], &scratch)?;
         if let Some(paths) = paths {
             let mut args = vec!["--literal-pathspecs", "add", "--all", "--"];
             args.extend(paths.iter().map(String::as_str));
-            git_with_env(workspace_path, &args, &scratch)?;
+            git_output_with_env(workspace_path, &args, &scratch)?;
         } else {
-            git_with_env(workspace_path, &["add", "--all", "--", "."], &scratch)?;
+            git_output_with_env(workspace_path, &["add", "--all", "--", "."], &scratch)?;
         }
-        git_with_env(workspace_path, &["write-tree"], &scratch)
+        git_output_with_env(workspace_path, &["write-tree"], &scratch)
     })();
     if let Err(error) = std::fs::remove_file(&index)
         && error.kind() != std::io::ErrorKind::NotFound
@@ -119,7 +116,7 @@ fn commit_detached(
         validate_claim_new_paths(workspace_path, &[], &head, &tree)?;
     }
     let committer = GitAuthor::orbit();
-    let commit = git_with_env(
+    let commit = git_output_with_env(
         workspace_path,
         &["commit-tree", &tree, "-p", &head, "-m", message],
         &[
@@ -144,30 +141,4 @@ fn scratch_index(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
     } else {
         workspace_path.join(path)
     })
-}
-
-/// Run Git with `env` added to its secured environment; its trimmed stdout.
-fn git_with_env(
-    workspace_path: &Path,
-    args: &[&str],
-    env: &[(&str, &str)],
-) -> Result<String, OrbitError> {
-    let timeout_ms = GitTimeoutBudget::current().timeout_for(args);
-    let mut request = git_request(workspace_path, args, timeout_ms);
-    if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
-        environment.extend(
-            env.iter()
-                .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
-        );
-    }
-    let result = run_process(&request, &NoSandbox)?;
-    if !result.success {
-        return Err(git_failure_error(
-            workspace_path,
-            args,
-            result.exit_code,
-            &result.stderr,
-        ));
-    }
-    Ok(result.stdout.trim().to_string())
 }
