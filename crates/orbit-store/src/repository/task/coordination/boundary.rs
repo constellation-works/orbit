@@ -9,8 +9,8 @@ use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
-    FileLockOptions, atomic_write_text, create_private_dir_all, with_exclusive_file_lock_options,
-    with_shared_file_lock_options,
+    FileLockOptions, atomic_write_text, create_private_dir_all, hold_step,
+    with_exclusive_file_lock_options, with_shared_file_lock_options,
 };
 use std::panic::Location;
 use std::path::{Path, PathBuf};
@@ -19,8 +19,16 @@ use std::time::Duration;
 /// A boundary section held this long logs its label and duration on release:
 /// long enough to stay quiet for a healthy section, short enough to name one
 /// that keeps waiters queued toward the 3 s contention warning and the 30 s
-/// acquisition deadline.
+/// acquisition deadline. The report also names the section's slowest step —
+/// the pending-recovery check, a lock wait, or a step its operation timed
+/// with [`hold_step`] — so a long hold says where it went.
 const SECTION_HOLD_WARN_AFTER: Duration = Duration::from_secs(2);
+
+/// The step a section's operation is timed as, less whatever steps it timed
+/// inside itself.
+const OPERATION_STEP: &str = "operation";
+/// The step that settles an interrupted commit before a section runs.
+const PENDING_RECOVERY_STEP: &str = "pending recovery";
 
 /// Lock policy for the host and partition locks. Shared holders record
 /// themselves, so a waiter blocked by ordinary sections can name them, and a
@@ -277,7 +285,7 @@ impl TaskCommitBoundary {
     ) -> Result<T, OrbitError> {
         let mut op = Some(op);
         loop {
-            self.recover_pending_in(section)?;
+            hold_step(PENDING_RECOVERY_STEP, || self.recover_pending_in(section))?;
             let result = self.shared(&self.lock_target(), section, || {
                 // A commit may have crashed while we waited for this lock.
                 // Drop the shared acquisition before taking recovery exclusive.
@@ -290,7 +298,7 @@ impl TaskCommitBoundary {
                 let operation = op.take().ok_or_else(|| {
                     OrbitError::Store("ordinary boundary operation was already consumed".into())
                 })?;
-                operation().map(Some)
+                hold_step(OPERATION_STEP, operation).map(Some)
             })?;
             if let Some(result) = result {
                 return Ok(result);
@@ -356,9 +364,9 @@ impl TaskCommitBoundary {
         self.exclusive(&self.lock_target(), section, || {
             #[cfg(test)]
             let _probe = section_probe::SectionProbe::enter(section.kind);
-            self.recover_pending_in(section)?;
+            hold_step(PENDING_RECOVERY_STEP, || self.recover_pending_in(section))?;
             let _depth = BoundaryDepth::enter(&self.partition_dir);
-            op()
+            hold_step(OPERATION_STEP, op)
         })
     }
 

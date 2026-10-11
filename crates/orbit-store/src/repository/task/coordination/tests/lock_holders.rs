@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::FileLockOptions;
+use orbit_common::fs::io::{FileLockOptions, hold_step, with_exclusive_file_lock_options};
 use tempfile::TempDir;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
@@ -234,9 +234,38 @@ fn a_partition_wait_names_its_exclusive_holder() {
     );
 }
 
+/// The held-past-threshold report on `lock_file`, as fields.
+fn hold_report<'a>(
+    events: &'a [BTreeMap<String, String>],
+    lock_file: &str,
+) -> &'a BTreeMap<String, String> {
+    events
+        .iter()
+        .find(|event| {
+            event.get("message").map(String::as_str) == Some(HELD_PAST_THRESHOLD)
+                && event
+                    .get("lock_path")
+                    .is_some_and(|path| path.ends_with(&format!("/{lock_file}")))
+        })
+        .unwrap_or_else(|| panic!("a {lock_file} hold report in {events:#?}"))
+}
+
+fn report_millis(report: &BTreeMap<String, String>, field: &str) -> u64 {
+    report
+        .get(field)
+        .and_then(|millis| millis.parse().ok())
+        .unwrap_or_else(|| panic!("{field} in {report:?}"))
+}
+
+/// ORB-15534: ordinary sections still held the boundary for seconds under
+/// drain load, and the report named only the section. It must also name
+/// where the hold went: the slowest step by its own time, so a step nested
+/// inside the operation is named rather than the operation that ran it, and
+/// a wait for the partition is named as one.
 #[test]
 fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
     let (_root, overdue) = boundary(FileLockOptions {
+        timeout: Duration::from_secs(10),
         warn_held_after: Some(Duration::from_millis(30)),
         ..contending()
     });
@@ -244,20 +273,13 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
 
     let (_, events) = lock_events(|| {
         overdue.enter_ordinary(|| {
-            std::thread::sleep(held_for);
+            hold_step("slow step", || std::thread::sleep(held_for));
+            hold_step("quick step", || ());
             Ok(())
         })
     });
 
-    let report = events
-        .iter()
-        .find(|event| {
-            event.get("message").map(String::as_str) == Some(HELD_PAST_THRESHOLD)
-                && event
-                    .get("lock_path")
-                    .is_some_and(|path| path.ends_with("/.task-commit.lock"))
-        })
-        .unwrap_or_else(|| panic!("a partition hold report in {events:#?}"));
+    let report = hold_report(&events, ".task-commit.lock");
     assert!(
         report
             .get("label")
@@ -265,13 +287,53 @@ fn a_section_held_past_its_threshold_reports_its_label_and_duration() {
         "the report names the section: {report:?}"
     );
     assert_eq!(report.get("mode").map(String::as_str), Some("shared"));
-    let held_ms: u64 = report
-        .get("held_ms")
-        .and_then(|held| held.parse().ok())
-        .expect("held_ms");
     assert!(
-        held_ms >= held_for.as_millis() as u64,
+        report_millis(report, "held_ms") >= held_for.as_millis() as u64,
         "the report carries the held duration: {report:?}"
+    );
+    for lock_file in [".task-commit.lock", ".host-task-commit.lock"] {
+        let report = hold_report(&events, lock_file);
+        assert_eq!(
+            report.get("slowest_step").map(String::as_str),
+            Some("slow step"),
+            "{report:?}"
+        );
+        assert!(
+            report_millis(report, "slowest_step_ms") >= held_for.as_millis() as u64,
+            "the report carries the slowest step's own time: {report:?}"
+        );
+    }
+
+    // A section that waited for its partition behind an exclusive holder
+    // held the host lock for that wait. The holder takes the partition
+    // without a hold report of its own.
+    let partition = overdue.lock_target();
+    let (release, holder) = hold(move |held, release| {
+        with_exclusive_file_lock_options(
+            &partition,
+            "exclusive holder",
+            FileLockOptions::default(),
+            || {
+                held.send(()).expect("signal held");
+                release.recv().expect("release");
+                Ok::<_, OrbitError>(())
+            },
+        )
+        .expect("exclusive holder");
+    });
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(held_for);
+        release.send(()).expect("release holder");
+    });
+    let (result, events) = lock_events(|| overdue.enter_ordinary(|| Ok(())));
+    releaser.join().expect("releaser thread");
+    holder.join().expect("holder thread");
+    result.expect("the ordinary section runs once the holder releases");
+    let report = hold_report(&events, ".host-task-commit.lock");
+    assert_eq!(
+        report.get("slowest_step").map(String::as_str),
+        Some(".task-commit.lock wait"),
+        "{report:?}"
     );
 
     // A section inside its threshold says nothing. The margin is wide so a

@@ -171,3 +171,70 @@ fn completed_write_during_freshness_probe_keeps_selection_indexed() {
     );
     assert!(reads.iter().all(|event| event["level"] != "WARN"));
 }
+
+/// Envelope stamps the registry holds for `PARTITION_ID`; none before the
+/// first is recorded, when the table does not exist yet.
+fn recorded_stamps(sql: &rusqlite::Connection) -> i64 {
+    let exists: bool = sql
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'task_envelope_stamps')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if !exists {
+        return 0;
+    }
+    sql.query_row(
+        "SELECT COUNT(*) FROM task_envelope_stamps WHERE workspace_id = ?1",
+        [PARTITION_ID],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// ORB-15534: a listing's freshness scan recorded its envelope stamps from
+/// inside the task boundary, waiting out the registry's busy timeout behind
+/// drain writers while every admission queued behind the read. The stamps
+/// are a cache: a held write lock skips them, and the next scan records them.
+#[test]
+fn a_listing_skips_envelope_stamps_while_another_writer_holds_the_registry() {
+    if !isolated(
+        "task_index::a_listing_skips_envelope_stamps_while_another_writer_holds_the_registry",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let created = owner.create_task("Stamped while contended");
+    let mut sql = rusqlite::Connection::open(task_registry_path(root.path())).unwrap();
+
+    let writer = sql
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let started = Instant::now();
+    let tasks = owner.backends.task.task.list_tasks().unwrap();
+    let elapsed = started.elapsed();
+    writer.rollback().unwrap();
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id, created.id);
+    let busy_timeout =
+        Duration::from_millis(orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS.into());
+    assert!(
+        elapsed < busy_timeout / 2,
+        "the listing must not wait for the registry write lock: took {elapsed:?}"
+    );
+    assert_eq!(
+        recorded_stamps(&sql),
+        0,
+        "a held write lock skips the stamps"
+    );
+
+    assert_eq!(owner.backends.task.task.list_tasks().unwrap().len(), 1);
+    assert_eq!(
+        recorded_stamps(&sql),
+        1,
+        "the next scan records the stamp the contended one skipped"
+    );
+}
