@@ -1,0 +1,139 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: verify_finding
+spec:
+  type: agent_loop
+  require_response_envelope: true
+  # Read-only: the verifier inspects a pinned checkout and writes nothing.
+  fsProfile: reviewer
+  description: >
+    Read-only verification of review-filed defect findings for one bounded
+    partition. The verifier inspects the workspace at the prepared source
+    revision and returns, per task, a CONFIRMED or REJECTED verdict with
+    confidence, reasoning and `path:line` evidence at that revision. It has
+    no repository-write, task-update, lifecycle or dispatch grant; the
+    deterministic apply step validates and records the verdict.
+  input_schema_json:
+    type: object
+    # `crew` names the crew prepare drew for this partition; a direct
+    # invocation may omit it and inherit the run's resolved crew.
+    required: [task_ids, workspace_path, base_branch, inspection_revision, partition_index]
+    properties:
+      task_ids:
+        type: array
+        minItems: 1
+        maxItems: 5
+        items:
+          type: string
+      workspace_path:
+        type: string
+      base_branch:
+        type: string
+      source_revision:
+        type: [string, "null"]
+      inspection_revision:
+        type: [string, "null"]
+      partition_index:
+        type: number
+      crew:
+        type: string
+      escalation:
+        type: boolean
+  # Agent-returned data is advisory until apply_finding_verification
+  # validates it, so no field is required at this boundary; apply rejects an
+  # incomplete verdict per task.
+  output_schema_json:
+    type: object
+    properties:
+      partition_index:
+        type: number
+      tasks:
+        type: array
+        items:
+          type: object
+          properties:
+            task_id:
+              type: string
+            verdict:
+              type: string
+              enum: [CONFIRMED, REJECTED]
+            confidence:
+              type: string
+              enum: [high, medium, low]
+            severity:
+              type: string
+              enum: [critical, high, medium, low]
+            evidence:
+              type: array
+              items:
+                type: object
+                properties:
+                  location:
+                    type: string
+                  note:
+                    type: string
+            reasoning:
+              type: string
+            reproduction:
+              type: string
+            rejection:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  enum: [premise_wrong, already_fixed, unreachable, duplicate]
+                fixed_at:
+                  type: string
+                duplicate_of:
+                  type: string
+                detail:
+                  type: string
+      summary:
+        type: string
+  instruction: |
+    You are Orbit's finding verifier for one explicit, bounded partition.
+
+    Each task in `task_ids` (one to five) is a defect a review reported. Your
+    job is to decide, from the code, whether the defect is real at
+    `source_revision` — not to fix it, and not to judge whether it is worth
+    fixing. Treat the workspace as read-only. The CLI host materializes
+    `inspection_revision` (equal to `source_revision`) in an invocation-owned
+    checkout and binds `workspace_path` and filesystem reads to it.
+    `escalation: true` means another verifier's verdict was REJECTED from the
+    lowest tier or had low confidence; judge the finding afresh.
+
+    For every task:
+
+    1. Call `orbit.task.show` and read the title, description, acceptance
+       criteria, tags and `context_files`: these state the claimed defect and
+       where the review saw it.
+    2. Inspect the code at `source_revision` with read-only `git`/`rg`
+       commands and file reads through the native inspection surface. Confirm
+       HEAD equals `source_revision`. Follow the claimed defect to its cause:
+       read the code path, its callers and its tests.
+    3. Return `CONFIRMED` only when the code at `source_revision` exhibits the
+       defect. Cite each location as `path:line` (a repository-relative path
+       and a 1-based line of that file at `source_revision`) with a `note`
+       saying what that line shows, rate `severity`, and give `reproduction`
+       steps or the failing input when you can state them.
+    4. Return `REJECTED` when it does not, with `rejection.reason`:
+       `premise_wrong` (the code does not behave as claimed), `already_fixed`
+       (it did, and `fixed_at` names the commit that fixed it), `unreachable`
+       (no caller can reach the defective path), or `duplicate`
+       (`duplicate_of` names the task already tracking it); explain in
+       `rejection.detail`. Cite the `path:line` locations that show it.
+    5. Set `confidence` honestly: `high` when the code settles it, `medium`
+       when a reasonable reading could differ, `low` when you could not trace
+       the path far enough. A low-confidence verdict is verified again by a
+       stronger crew, so do not inflate it.
+    6. Always give `reasoning`: the chain from the claim to your verdict.
+
+    Every location you cite is checked against `source_revision`; a path that
+    does not exist there, or a line past its end, invalidates the verdict.
+
+    Hard bounds:
+    - Never update a task, transition lifecycle state, promote, dispatch,
+      invoke a pipeline, edit or delete files, commit, push, or open a PR.
+    - Never inspect or report on task IDs outside the input partition except
+      to name a duplicate.

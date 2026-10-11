@@ -18,6 +18,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/apply_blocked_task_recovery.yaml"),
     ),
     (
+        "apply_finding_verification",
+        include_str!("../../assets/activities/apply_finding_verification.yaml"),
+    ),
+    (
         "apply_task_pilot_results",
         include_str!("../../assets/activities/apply_task_pilot_results.yaml"),
     ),
@@ -206,6 +210,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
     (
+        "prepare_finding_verification",
+        include_str!("../../assets/activities/prepare_finding_verification.yaml"),
+    ),
+    (
         "prepare_task_pilot",
         include_str!("../../assets/activities/prepare_task_pilot.yaml"),
     ),
@@ -245,6 +253,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "validate_bundles",
         include_str!("../../assets/activities/validate_bundles.yaml"),
+    ),
+    (
+        "verify_finding",
+        include_str!("../../assets/activities/verify_finding.yaml"),
     ),
     (
         "worktree_setup",
@@ -288,6 +300,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "dependabot_alert_sweep_pipeline",
         include_str!("../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
+    ),
+    (
+        "finding_verification_pipeline",
+        include_str!("../../assets/jobs/finding_verification_pipeline.yaml"),
     ),
     (
         "review_evidence_fulfilment_pipeline",

@@ -675,9 +675,19 @@ excluded landings with their certificate and assurance label.
 ## State preparation [ORB-11331]
 
 > Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
-> trigger kind still parses but has no shipped target and fires nothing. Only `preparation_eligible` schedules work.
+> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible` and
+> `finding_unverified` schedule work.
 
-The same routine sweep now accepts `trigger.state` with one of two kinds. Core
+The same routine sweep now accepts `trigger.state` with one of three kinds.
+`finding_unverified` [ORB-15662] targets `job:finding_verification_pipeline`.
+It observes review-filed bug findings (type `bug` tagged `code-review`,
+`delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
+`someday` or `backlog` that carry no CONFIRMED verdict. Its fingerprint is the
+finding as filed: title, description, criteria, tags, type and selectors. It
+takes no `eligibility` or `freshness` block. The seeded
+`finding_verification.yaml` ships `enabled: false`, with the same
+seed-time `owner_machine` and `branch` as `task_pilot.yaml`. See
+[finding-verification](../finding-verification/2_design.md#7-state-trigger). Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing

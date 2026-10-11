@@ -138,6 +138,10 @@ impl OrbitRuntime {
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
 
+            if task.status == TaskStatus::Proposed {
+                self.ensure_finding_verified(&task)?;
+            }
+
             result = Some(match task.status {
                 TaskStatus::Proposed => self.with_mutation(|| {
                     let task = self.stores().task_records().update(
@@ -338,6 +342,10 @@ impl OrbitRuntime {
                     )));
                 }
             }
+            // Starting a proposed or someday task promotes it.
+            if matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday) {
+                self.ensure_finding_verified(&task)?;
+            }
             let validated = self.validate_and_normalize_task_field_edits(
                 id,
                 &task,
@@ -513,6 +521,9 @@ impl OrbitRuntime {
                     if task.status == TaskStatus::Backlog {
                         self.record_operator_validation_hold(id, &hold)?;
                     }
+                    return Err(OrbitError::InvalidInput(hold.detail()));
+                }
+                Some(super::PilotAdmissionHold::UnverifiedFinding(hold)) => {
                     return Err(OrbitError::InvalidInput(hold.detail()));
                 }
                 // Only a backlog task is judged against this host: a claimed

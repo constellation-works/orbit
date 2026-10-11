@@ -190,6 +190,10 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- `unverified_review_finding` means a review-filed bug has no CONFIRMED
+  verdict yet. Run `finding_verification_pipeline` on it, or change its type
+  or remove its review tag to accept it without verification; `detail` gives
+  the command.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
   no `context_files` in a run with more than one slot. It waits for the task
   pilot, then for a slot with nothing else in flight; `detail` names the

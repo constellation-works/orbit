@@ -14,8 +14,9 @@
 //!   otherwise seed the same names on one host [ORB-12107].
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
-//!   the seeded `task_pilot` definition renders this host's registered
-//!   machine id and the workspace's registered base branch [ORB-12745].
+//!   the seeded `task_pilot` and `finding_verification` definitions render
+//!   this host's registered machine id and the workspace's registered base
+//!   branch [ORB-12745].
 //!
 //! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
 //! same workspace name write byte-identical cron definitions, and differ only
@@ -58,6 +59,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "task_pilot",
         include_str!("../../../assets/routines/task_pilot.yaml"),
+    ),
+    (
+        "finding_verification",
+        include_str!("../../../assets/routines/finding_verification.yaml"),
     ),
     (
         "ship_sweep",

@@ -86,6 +86,10 @@ pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     /// assessment without the finding clears it. A host of that OS may
     /// still start the task.
     NativeOsRequired,
+    /// The task is a review-filed bug without a CONFIRMED verdict from the
+    /// finding verification job. `detail` names the job to run; a CONFIRMED
+    /// verdict, or a retag or retype by an operator, clears it.
+    UnverifiedReviewFinding,
     /// Effective `review.before_pr` is on and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.

@@ -135,6 +135,10 @@ pub(super) fn pilot_finding_exclusion(
                 BacklogTaskExclusionReason::PilotDuplicate,
                 pilot_decision_detail("duplicate_of"),
             ),
+            PilotAdmissionHold::UnverifiedFinding(hold) => (
+                BacklogTaskExclusionReason::UnverifiedReviewFinding,
+                hold.detail(),
+            ),
             PilotAdmissionHold::AlreadyLanded => (
                 BacklogTaskExclusionReason::PilotAlreadyLanded,
                 pilot_decision_detail("already_landed"),

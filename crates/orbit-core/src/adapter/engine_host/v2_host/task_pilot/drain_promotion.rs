@@ -26,7 +26,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
+use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
 
 use super::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::input::action_failed;
@@ -277,6 +277,11 @@ pub(super) fn approve(
             Approval::Held {
                 classification: NO_AUTO_APPROVE_TAG,
                 evidence: Value::Null,
+            }
+        } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {
+            Approval::Held {
+                classification: UNVERIFIED_REVIEW_FINDING,
+                evidence: json!(hold.detail()),
             }
         } else if let Some((reason, detail)) =
             assessed_material_drift(runtime, &task, snapshot, validated, policy)

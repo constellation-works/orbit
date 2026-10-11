@@ -10,7 +10,7 @@ use orbit_automation::{
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::TaskListFilter;
 use orbit_types::{
-    task::TaskStatus,
+    task::{TaskStatus, TaskType},
     workflow::{
         ActivityV2Spec, JobRun, JobRunState, JobRunTrigger, JobV2, JobV2StepBody, PipelineState,
         TargetStep,
@@ -21,15 +21,16 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Host, SUPERSEDED_BY_SOURCE, stale_tasks};
+use crate::application::task::{VERIFIABLE_STATUSES, finding_fingerprint, needs_verification};
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
         if let Some(head) = self.head.borrow().as_ref() {
             return Ok(head.clone());
         }
-        // Only pilot preparation best-effort fetches; incident consumers
-        // retain their local-only source contract.
-        let head = if self.trigger.kind == StateTriggerKind::PreparationEligible {
+        // Pilot preparation and finding verification best-effort fetch;
+        // incident consumers retain their local-only source contract.
+        let head = if self.trigger.kind != StateTriggerKind::ExecutionFailed {
             self.source().preparation_head(branch)?
         } else {
             self.source().local_head(branch)?
@@ -51,10 +52,9 @@ impl MemberHost for Host<'_> {
         let tasks = self.runtime.task_candidates(
             &TaskListFilter {
                 scan_before,
-                statuses: Some(match self.trigger.kind {
-                    StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
-                    StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
-                }),
+                statuses: Some(self.observed_statuses()),
+                task_type: (self.trigger.kind == StateTriggerKind::FindingUnverified)
+                    .then_some(TaskType::Bug),
                 ..Default::default()
             },
             50,
@@ -80,6 +80,9 @@ impl MemberHost for Host<'_> {
         let active_preparations = match self.trigger.kind {
             StateTriggerKind::PreparationEligible => {
                 preparation::active_task_pilot_preparations(self.runtime)?
+            }
+            StateTriggerKind::FindingUnverified => {
+                preparation::active_finding_verifications(self.runtime)?
             }
             StateTriggerKind::ExecutionFailed => BTreeMap::new(),
         };
@@ -109,6 +112,28 @@ impl MemberHost for Host<'_> {
                         key: task.id.clone(),
                         task_ids: vec![task.id.clone()],
                         fingerprint,
+                        source: source.clone(),
+                        evidence: json!({"task_id":task.id}),
+                        first_seen: now,
+                        changed_at: now,
+                        crew: bundle_crew(task.crew.as_deref()),
+                    });
+                }
+                StateTriggerKind::FindingUnverified => {
+                    // Only a finding still owed a verdict is a member; a
+                    // confirmed one, or another bug, is not withheld either.
+                    let history = self.runtime.get_task_history(&task.id)?;
+                    if !needs_verification(&task, &history) {
+                        continue;
+                    }
+                    if let Some(run_ids) = active_preparations.get(&task.id) {
+                        withheld.insert(task.id, already_verifying(run_ids));
+                        continue;
+                    }
+                    candidates.push(StateMember {
+                        key: task.id.clone(),
+                        task_ids: vec![task.id.clone()],
+                        fingerprint: finding_fingerprint(&task),
                         source: source.clone(),
                         evidence: json!({"task_id":task.id}),
                         first_seen: now,
@@ -229,6 +254,25 @@ impl MemberHost for Host<'_> {
             return Ok(MemberAdmission::Admit);
         }
 
+        if self.trigger.kind == StateTriggerKind::FindingUnverified {
+            let active = preparation::active_finding_verifications(self.runtime)?;
+            for id in &member.task_ids {
+                let task = self.runtime.get_task(id)?;
+                if !needs_verification(&task, &self.runtime.get_task_history(id)?) {
+                    return Ok(MemberAdmission::Retire(
+                        "finding_verified_or_ineligible".into(),
+                    ));
+                }
+                if let Some(run_ids) = active.get(id) {
+                    return Ok(MemberAdmission::Withhold(already_verifying(run_ids)));
+                }
+                if finding_fingerprint(&task) != member.fingerprint {
+                    return Ok(MemberAdmission::Retire("material_changed".into()));
+                }
+            }
+            return Ok(MemberAdmission::Admit);
+        }
+
         for id in &member.task_ids {
             let task = self.runtime.get_task(id)?;
             let current = match super::super::incidents::observe(self.runtime, &task) {
@@ -254,16 +298,13 @@ impl MemberHost for Host<'_> {
 
         // Task-keyed entries stay while their task holds a status `observe`
         // queries; an incident key stays while the current inventory has it.
-        let statuses = match self.trigger.kind {
-            StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
-            StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
-        };
+        let statuses = self.observed_statuses();
         let indexed = self.runtime.task_status_index_for(keys)?;
         let incidents = match self.trigger.kind {
             StateTriggerKind::ExecutionFailed => {
                 Some(self.incidents.borrow_mut().inventory(self.runtime)?)
             }
-            StateTriggerKind::PreparationEligible => None,
+            StateTriggerKind::PreparationEligible | StateTriggerKind::FindingUnverified => None,
         };
 
         Ok(keys
@@ -308,10 +349,10 @@ impl MemberHost for Host<'_> {
         // Pin the source the attempt froze so the run can still reach it later.
         pins::pin(&self.source(), &self.owner()?, attempt)?;
 
-        let origin = if self.trigger.kind == StateTriggerKind::ExecutionFailed {
-            "execution_failure"
-        } else {
-            "preparation"
+        let origin = match self.trigger.kind {
+            StateTriggerKind::PreparationEligible => "preparation",
+            StateTriggerKind::ExecutionFailed => "execution_failure",
+            StateTriggerKind::FindingUnverified => "finding_verification",
         };
 
         // Every batch member travels as an explicit task id; evaluate already
@@ -429,7 +470,7 @@ impl MemberHost for Host<'_> {
 
         // Only the exact canonical deterministic apply steps can provide this
         // record. Agent prose and unrelated output keys are never searched.
-        let steps = PilotSteps::of(self.runtime, &run)?;
+        let steps = PilotSteps::of(self.runtime, &run, self.trigger.kind)?;
         let state = self.runtime.read_run_state(id)?;
         let checkpoint = |step: Option<PilotStep>| checkpoint(state.as_ref(), step);
         let Some(initial) = checkpoint(steps.apply).filter(|output| is_apply_output(output)) else {
@@ -490,7 +531,7 @@ impl MemberHost for Host<'_> {
         // A member whose partition needed repair settles with the repair apply,
         // or as failed once the run stopped without reaching it [ORB-12746].
         let repairs_requested = initial
-            .get("repair_count")
+            .get(steps.follow_up_count)
             .and_then(Value::as_u64)
             .unwrap_or(0)
             != 0;
@@ -575,6 +616,25 @@ impl MemberHost for Host<'_> {
     }
 }
 
+impl Host<'_> {
+    /// The task statuses this consumer's members are observed in.
+    fn observed_statuses(&self) -> Vec<TaskStatus> {
+        match self.trigger.kind {
+            StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
+            StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
+            StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
+        }
+    }
+}
+
+/// A temporary hold diagnostic names every durable run the operator can inspect.
+fn already_verifying(run_ids: &BTreeSet<String>) -> String {
+    format!(
+        "already_verifying: {}",
+        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
+    )
+}
+
 /// A temporary hold diagnostic names every durable run the operator can inspect.
 fn already_preparing(run_ids: &BTreeSet<String>) -> String {
     format!(
@@ -612,19 +672,40 @@ struct PilotStep {
     index: u32,
 }
 
-/// The deterministic steps of `task_pilot_pipeline` a member settles from:
-/// the preparation, the partition apply and the targeted repair apply. Each
-/// is found by step id and action in the definition the run executed, never
-/// by position, so a step inserted before them cannot hand another step's
-/// output to settlement [ORB-15197].
+/// The deterministic steps of a member job a member settles from: the
+/// preparation, the partition apply and the follow-up apply — the pilot's
+/// targeted repair, or finding verification's escalation. Each is found by
+/// step id and action in the definition the run executed, never by position,
+/// so a step inserted before them cannot hand another step's output to
+/// settlement [ORB-15197].
 struct PilotSteps {
     prepare: Option<PilotStep>,
     apply: Option<PilotStep>,
     repair_apply: Option<PilotStep>,
+    /// The initial apply's count of tasks the follow-up apply settles.
+    follow_up_count: &'static str,
 }
 
 impl PilotSteps {
-    fn of(runtime: &OrbitRuntime, run: &JobRun) -> Result<Self, AutomationError> {
+    fn of(
+        runtime: &OrbitRuntime,
+        run: &JobRun,
+        kind: StateTriggerKind,
+    ) -> Result<Self, AutomationError> {
+        let (prepare, apply, follow_up, follow_up_count) = match kind {
+            StateTriggerKind::FindingUnverified => (
+                "prepare_finding_verification",
+                "apply_finding_verification",
+                "apply_escalations",
+                "escalation_count",
+            ),
+            StateTriggerKind::PreparationEligible | StateTriggerKind::ExecutionFailed => (
+                "prepare_task_pilot",
+                "apply_task_pilot_results",
+                "apply_repairs",
+                "repair_count",
+            ),
+        };
         // The run's pinned snapshot when it has one, otherwise the catalog
         // asset. A job no catalog ships any more (the retired triage job)
         // offers no step, so its runs settle as stopped without evidence.
@@ -638,6 +719,7 @@ impl PilotSteps {
                     prepare: None,
                     apply: None,
                     repair_apply: None,
+                    follow_up_count,
                 });
             }
             Err(error) => return Err(error.into()),
@@ -650,9 +732,10 @@ impl PilotSteps {
         orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog)
             .map_err(|e| AutomationError::Evidence(format!("run definition: {e}")))?;
         Ok(Self {
-            prepare: deterministic_step(&job, "prepare", "prepare_task_pilot"),
-            apply: deterministic_step(&job, "apply", "apply_task_pilot_results"),
-            repair_apply: deterministic_step(&job, "apply_repairs", "apply_task_pilot_results"),
+            prepare: deterministic_step(&job, "prepare", prepare),
+            apply: deterministic_step(&job, "apply", apply),
+            repair_apply: deterministic_step(&job, follow_up, apply),
+            follow_up_count,
         })
     }
 }
@@ -690,7 +773,7 @@ fn checkpoint(state: Option<&PipelineState>, step: Option<PilotStep>) -> Option<
 }
 
 /// Whether `output` is an apply record: every apply output counts its
-/// repairs and carries the member evidence slot. Anything else (a skipped
+/// follow-ups and carries the member evidence slot. Anything else (a skipped
 /// step's null, another step's output) settles no member [ORB-15197].
 fn is_apply_output(output: &Value) -> bool {
     output.get("repair_count").is_some_and(Value::is_u64) || output.get("member_evidence").is_some()

@@ -137,6 +137,21 @@ pub(crate) fn ensure_status_change_allowed(
         )?;
     }
 
+    // Promotion is refused while the task is an unverified review finding,
+    // judged on the tags and type this update leaves it with.
+    if matches!(from, TaskStatus::Proposed | TaskStatus::Someday)
+        && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
+    {
+        let mut promoted = task.clone();
+        if let Some(tags) = &params.tags {
+            promoted.tags = tags.clone();
+        }
+        if let Some(task_type) = params.task_type {
+            promoted.task_type = task_type;
+        }
+        runtime.ensure_finding_verified(&promoted)?;
+    }
+
     match target {
         TaskStatus::InProgress if in_progress_transition_requires_plan(from) => {
             let plan = params.plan.as_deref().unwrap_or(task.plan.as_str());

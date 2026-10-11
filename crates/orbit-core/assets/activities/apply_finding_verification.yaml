@@ -1,0 +1,89 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: apply_finding_verification
+spec:
+  type: deterministic
+  description: >
+    Validate each verifier verdict against the prepared revision and record
+    the deciding one. Results are matched to prepared partitions by
+    position; a partition whose verifier failed leaves its tasks unverified.
+    A verdict must parse, give reasoning, and cite evidence as `path:line`
+    naming a line of a file that exists at the pinned revision; CONFIRMED
+    also rates severity and cites at least one location, and REJECTED names
+    its reason (premise_wrong, already_fixed with fixed_at, unreachable, or
+    duplicate with duplicate_of). In the initial round a REJECTED verdict
+    from the low tier, or any low-confidence verdict, is not recorded: the
+    task is re-verified by a crew drawn from the next tier's complexity pool
+    (`escalation_prepared`, `escalation_count`), preferring one that has not
+    judged it. Without a next-tier pool the verdict stands; the escalation
+    round's verdict always decides. A recorded verdict names every crew that
+    judged the task and the verified sha, and is written as one task update by
+    `finding-verification`: a `finding_verified` history entry, a comment
+    whose first line is `finding-verification: confirmed` or `rejected`, and
+    for REJECTED the move to `rejected`. A task that left its prepared status,
+    stopped being a review finding, or was verified by another run meanwhile
+    settles superseded without a write. Any task left unverified fails the
+    run with `status: failed`.
+  input_schema_json:
+    type: object
+    required: [prepared, results, workspace_path]
+    properties:
+      prepared:
+        type: object
+      results:
+        type: array
+        items: {}
+      workspace_path:
+        type: string
+      carried_task_outcomes:
+        type: array
+        items:
+          type: object
+  output_schema_json:
+    type: object
+    required:
+      [status, error, mode, round, workspace_path, source, partition_count,
+       received_partition_count, task_outcomes, recorded_count,
+       unverified_count, escalation_count, escalation_prepared,
+       member_evidence]
+    properties:
+      status:
+        type: string
+        enum: [succeeded, failed]
+      error:
+        oneOf:
+          - type: string
+          - type: "null"
+      mode:
+        type: string
+        enum: [automatic, explicit]
+      round:
+        type: string
+        enum: [initial, escalation]
+      workspace_path:
+        type: string
+      source:
+        type: object
+      partition_count:
+        type: number
+      received_partition_count:
+        type: number
+      task_outcomes:
+        type: array
+        items:
+          type: object
+      recorded_count:
+        type: number
+      unverified_count:
+        type: number
+      escalation_count:
+        type: number
+      escalation_prepared:
+        type: object
+      member_evidence:
+        oneOf:
+          - type: array
+          - type: "null"
+  action: apply_finding_verification
+  config: {}

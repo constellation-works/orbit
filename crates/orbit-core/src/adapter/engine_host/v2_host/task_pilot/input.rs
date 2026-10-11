@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 
-pub(super) fn requested_workspace_root(
+pub(in super::super) fn requested_workspace_root(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
@@ -49,7 +49,7 @@ pub(super) fn requested_workspace_root(
     Ok(runtime_root)
 }
 
-pub(super) fn bounded_usize(
+pub(in super::super) fn bounded_usize(
     action: &str,
     input: &Value,
     field: &str,
@@ -69,7 +69,7 @@ pub(super) fn bounded_usize(
     Ok(value as usize)
 }
 
-pub(super) fn string_array(
+pub(in super::super) fn string_array(
     input: &Value,
     field: &str,
     action: &str,
@@ -80,7 +80,7 @@ pub(super) fn string_array(
     }
 }
 
-pub(super) fn string_array_value(
+pub(in super::super) fn string_array_value(
     value: &Value,
     field: &str,
     action: &str,
@@ -100,7 +100,7 @@ pub(super) fn string_array_value(
         })
 }
 
-pub(super) fn required_string_array(
+pub(in super::super) fn required_string_array(
     input: &Value,
     field: &str,
     action: &str,
@@ -121,7 +121,7 @@ pub(super) fn required_string_array(
         })
 }
 
-pub(super) fn required_string<'a>(
+pub(in super::super) fn required_string<'a>(
     input: &'a Value,
     field: &str,
     action: &str,
@@ -134,7 +134,7 @@ pub(super) fn required_string<'a>(
         .ok_or_else(|| action_failed(action, format!("`{field}` must be a non-empty string")))
 }
 
-pub(super) fn action_failed(action: &str, message: impl Into<String>) -> DispatchError {
+pub(in super::super) fn action_failed(action: &str, message: impl Into<String>) -> DispatchError {
     DispatchError::DeterministicActionFailed {
         action: action.to_string(),
         message: message.into(),

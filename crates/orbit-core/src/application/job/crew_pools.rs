@@ -364,6 +364,19 @@ impl OrbitRuntime {
         Ok(Some((crews, pool.source.clone())))
     }
 
+    /// The enabled members of `workflow.<tier>_complexity_crews` as the
+    /// current configuration declares them, or `None` when that pool is
+    /// unset, empty or wholly disabled.
+    pub(crate) fn configured_complexity_pool(
+        &self,
+        tier: TaskComplexity,
+    ) -> Result<Option<Vec<CrewCandidate>>, OrbitError> {
+        let pools = self.capture_auto_crew_pools(&Value::Null)?;
+        Ok(self
+            .complexity_pool_candidates(Some(tier), &pools)?
+            .map(|(candidates, _)| candidates))
+    }
+
     /// Decide the crew a task is created with [ORB-12717].
     ///
     /// Creation and complexity re-rates draw from the complexity pools;

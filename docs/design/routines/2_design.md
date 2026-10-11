@@ -191,13 +191,14 @@ as absent; it never degrades into "fire with defaults".
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `store_gc.yaml`
+`task_pilot.yaml`, `finding_verification.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `store_gc.yaml`
 with a workspace-unique name and `enabled: false`. The cron defaults resolve nothing else at
 seed time, so two hosts initializing the same workspace name write byte-identical cron
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
 [ORB-12745]; a state trigger names the one machine that evaluates it, so its
 `owner_machine` renders this host's registered machine id and its `branch` the workspace's
-registered base branch — the only host-dependent bytes a seed writes. Which edits re-pilot an
+registered base branch — the only host-dependent bytes a seed writes. `finding_verification.yaml`
+is a `finding_unverified` state routine rendered the same way [ORB-15662]. Which edits re-pilot an
 assessed task is `[workflow.task_pilot_freshness]` in `config.toml` (default: title,
 description, criteria, plan and selectors; head moves ignored), overridable by the routine's
 optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions

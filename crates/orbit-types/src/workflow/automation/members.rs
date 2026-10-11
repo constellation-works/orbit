@@ -19,6 +19,8 @@ pub enum StateTriggerKind {
     /// deserialize; its target job is retired, so no new work dispatches
     /// through it.
     ExecutionFailed,
+    /// A review-filed bug finding that carries no verification verdict yet.
+    FindingUnverified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,6 +356,7 @@ impl StateTrigger {
         match self.kind {
             StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
             StateTriggerKind::ExecutionFailed => "task_triage_pipeline",
+            StateTriggerKind::FindingUnverified => "finding_verification_pipeline",
         }
     }
 }

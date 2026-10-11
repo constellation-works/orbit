@@ -1,0 +1,638 @@
+//! Review-filed bug findings are verified before promotion: the verification
+//! job's deterministic steps record a CONFIRMED or REJECTED verdict from stub
+//! verifier results, a doubtful verdict is judged again by the next tier's
+//! complexity pool, promotion and backlog admission refuse an unverified
+//! finding, and the state trigger picks such findings up. Pool names are
+//! fixture policy. Fixtures run in isolated children with real stores and a
+//! real repository.
+
+use std::path::{Path, PathBuf};
+
+use chrono::{Duration, Utc};
+use orbit_core::application::automation::evaluate_routine;
+use orbit_core::application::task::{
+    FindingVerdict, FindingVerification, TaskAddParams, TaskUpdateParams,
+};
+use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus, TaskType};
+use orbit_engine::RuntimeHost;
+use orbit_tools::ToolContext;
+use orbit_types::workflow::RoutineDefinition;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+use crate::dispatch_admission::isolated;
+
+const JOB: &str = "finding_verification_pipeline";
+
+struct Fixture {
+    _root: TempDir,
+    runtime: OrbitRuntime,
+    repo: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let root = TempDir::new().unwrap();
+        let global = root.path().join("home/.orbit");
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+        std::fs::write(
+            repo.join(".orbit/config.toml"),
+            r#"
+[workflow]
+default_crew = "medium_codex"
+system_crew = "medium_codex"
+low_complexity_crews = ["low_lane"]
+medium_complexity_crews = ["medium_codex", "medium_claude"]
+hard_complexity_crews = ["hard_lane"]
+[crews.low_lane]
+provider = "codex"
+model = "fixture-low"
+[crews.medium_codex]
+provider = "codex"
+model = "fixture-medium-codex"
+[crews.medium_claude]
+provider = "claude"
+model = "fixture-medium-claude"
+[crews.hard_lane]
+provider = "claude"
+model = "fixture-hard"
+"#,
+        )
+        .unwrap();
+        for args in [
+            &["init", "-b", "main"][..],
+            &["config", "user.name", "Orbit Test"],
+            &["config", "user.email", "orbit-test@example.com"],
+            &["config", "commit.gpgsign", "false"],
+        ] {
+            git(&repo, args);
+        }
+        std::fs::write(repo.join(".gitignore"), ".orbit/\n").unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(
+            repo.join("src/lib.rs"),
+            (1..=10)
+                .map(|line| format!("// line {line}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "seed"]);
+        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+            .unwrap()
+            .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
+            .with_automation_machine_identity(Some("fixture-machine".into()));
+        Self {
+            _root: root,
+            runtime,
+            repo,
+        }
+    }
+
+    fn head(&self) -> String {
+        git(&self.repo, &["rev-parse", "HEAD"]).trim().to_string()
+    }
+
+    /// A task a review would file: a proposed `bug` tagged `code-review`.
+    fn finding(&self, title: &str, complexity: TaskComplexity) -> Task {
+        self.task(title, complexity, TaskType::Bug, &["code-review"], None)
+    }
+
+    fn task(
+        &self,
+        title: &str,
+        complexity: TaskComplexity,
+        task_type: TaskType,
+        tags: &[&str],
+        status: Option<TaskStatus>,
+    ) -> Task {
+        self.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("{title} at src/lib.rs."),
+                acceptance_criteria: vec!["The reported defect no longer occurs.".into()],
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                complexity,
+                task_type: Some(task_type),
+                status: Some(status.unwrap_or(TaskStatus::Proposed)),
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn action(&self, action: &str, input: Value) -> Value {
+        self.runtime
+            .run_deterministic(action, &json!({}), &input, ToolContext::default())
+            .unwrap_or_else(|error| panic!("{action}: {error}"))
+    }
+
+    fn prepare(&self, task_ids: &[&str]) -> Value {
+        self.action(
+            "prepare_finding_verification",
+            json!({
+                "task_ids": task_ids, "workspace_path": self.repo, "base_branch": "main",
+                "run_id": "fixture-run",
+            }),
+        )
+    }
+
+    /// Apply `verdicts` as the stub verifier of each prepared partition
+    /// returned them: a partition's result holds the verdicts of its tasks.
+    fn apply(&self, prepared: &Value, verdicts: &[Value], carried: Option<&Value>) -> Value {
+        let results = prepared["partitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|partition| {
+                let tasks = verdicts
+                    .iter()
+                    .filter(|verdict| {
+                        partition["task_ids"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&verdict["task_id"])
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                json!({"partition_index": partition["partition_index"], "tasks": tasks})
+            })
+            .collect::<Vec<_>>();
+        let mut input = json!({
+            "prepared": prepared, "results": results, "workspace_path": self.repo,
+            "run_id": "fixture-run",
+        });
+        if let Some(carried) = carried {
+            input["carried_task_outcomes"] = carried.clone();
+        }
+        self.action("apply_finding_verification", input)
+    }
+
+    /// One task's prepared verifier crew.
+    fn prepared_crew(prepared: &Value, task: &Task) -> String {
+        prepared["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == task.id.as_str())
+            .unwrap()["crew"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn verification(&self, task: &Task) -> Option<FindingVerification> {
+        self.runtime.finding_verification(&task.id).unwrap()
+    }
+
+    fn status(&self, task: &Task) -> TaskStatus {
+        self.runtime.get_task(&task.id).unwrap().status
+    }
+
+    /// Record a CONFIRMED verdict for `task` through prepare and apply.
+    fn confirm(&self, task: &Task) {
+        let prepared = self.prepare(&[&task.id]);
+        let applied = self.apply(&prepared, &[confirmed(task, "high")], None);
+        assert_eq!(applied["recorded_count"], 1, "{applied}");
+    }
+}
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command.args(args).current_dir(repo).output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn confirmed(task: &Task, confidence: &str) -> Value {
+    json!({
+        "task_id": task.id, "verdict": "CONFIRMED", "confidence": confidence,
+        "severity": "high",
+        "evidence": [{"location": "src/lib.rs:3", "note": "the defective branch"}],
+        "reasoning": "The branch at line 3 is reached with the reported input.",
+        "reproduction": "Call it with an empty input.",
+    })
+}
+
+fn rejected(task: &Task, confidence: &str) -> Value {
+    json!({
+        "task_id": task.id, "verdict": "REJECTED", "confidence": confidence,
+        "evidence": [{"location": "src/lib.rs:7", "note": "the guard the review missed"}],
+        "reasoning": "Line 7 guards the path the review traced.",
+        "rejection": {"reason": "premise_wrong", "detail": "The input is checked first."},
+    })
+}
+
+fn outcome<'a>(applied: &'a Value, task: &Task) -> &'a Value {
+    applied["task_outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|outcome| outcome["task_id"] == task.id.as_str())
+        .unwrap_or_else(|| panic!("no outcome for {}: {applied}", task.id))
+}
+
+/// The verdict comment `orbit task show` displays for `task`: its first line
+/// names the verdict and the rest is the recorded verdict document.
+fn shown_verdict(fixture: &Fixture, task: &Task) -> (String, Value) {
+    let shown = fixture
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .unwrap();
+    let comment = shown["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|comment| comment["by"] == "finding-verification")
+        .and_then(|comment| comment["message"].as_str())
+        .unwrap_or_else(|| panic!("task show carries no verdict comment: {shown}"));
+    let (header, document) = comment.split_once('\n').unwrap();
+    (header.to_string(), serde_json::from_str(document).unwrap())
+}
+
+#[test]
+fn verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task() {
+    if !isolated(
+        "finding_verification::verdicts_are_recorded_with_sha_and_evidence_and_rejection_closes_the_task",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let real = fixture.finding("Real defect", TaskComplexity::Medium);
+    let wrong = fixture.finding("Wrong premise", TaskComplexity::Medium);
+    let prepared = fixture.prepare(&[&real.id, &wrong.id]);
+    assert_eq!(prepared["task_count"], 2, "{prepared}");
+    assert_eq!(prepared["source"]["source_revision"], fixture.head());
+
+    let applied = fixture.apply(
+        &prepared,
+        &[confirmed(&real, "high"), rejected(&wrong, "high")],
+        None,
+    );
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["recorded_count"], 2, "{applied}");
+    assert_eq!(applied["escalation_count"], 0, "{applied}");
+
+    let record = fixture.verification(&real).unwrap();
+    assert_eq!(record.verdict, FindingVerdict::Confirmed);
+    assert_eq!(record.verified_sha, fixture.head());
+    assert_eq!(record.evidence[0].location, "src/lib.rs:3");
+    assert_eq!(record.crews.len(), 1);
+    assert_eq!(
+        record.crews[0].crew,
+        Fixture::prepared_crew(&prepared, &real)
+    );
+    assert!(!record.escalated);
+    assert_eq!(fixture.status(&real), TaskStatus::Proposed);
+    let (header, document) = shown_verdict(&fixture, &real);
+    assert_eq!(header, "finding-verification: confirmed");
+    assert_eq!(document["verdict"], "CONFIRMED");
+    assert_eq!(document["verified_sha"], fixture.head());
+
+    assert_eq!(fixture.status(&wrong), TaskStatus::Rejected);
+    let (header, document) = shown_verdict(&fixture, &wrong);
+    assert_eq!(header, "finding-verification: rejected");
+    assert_eq!(document["rejection"]["reason"], "premise_wrong");
+    assert_eq!(document["evidence"][0]["location"], "src/lib.rs:7");
+
+    // A confirmed finding is promoted as any other task.
+    fixture
+        .runtime
+        .approve_task(&real.id, None, None)
+        .expect("a confirmed finding is approved");
+    assert_eq!(fixture.status(&real), TaskStatus::Backlog);
+}
+
+#[test]
+fn a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded() {
+    if !isolated(
+        "finding_verification::a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let past_end = fixture.finding("Past the end", TaskComplexity::Medium);
+    let missing = fixture.finding("Missing file", TaskComplexity::Medium);
+    let silent = fixture.finding("No verdict", TaskComplexity::Medium);
+    let prepared = fixture.prepare(&[&past_end.id, &missing.id, &silent.id]);
+    let mut beyond = confirmed(&past_end, "high");
+    beyond["evidence"][0]["location"] = json!("src/lib.rs:11");
+    let mut absent = confirmed(&missing, "high");
+    absent["evidence"][0]["location"] = json!("src/missing.rs:1");
+
+    let applied = fixture.apply(&prepared, &[beyond, absent], None);
+    assert_eq!(applied["status"], "failed", "{applied}");
+    assert_eq!(applied["recorded_count"], 0, "{applied}");
+    assert_eq!(outcome(&applied, &past_end)["reason"], "invalid_evidence");
+    assert_eq!(outcome(&applied, &missing)["reason"], "invalid_evidence");
+    assert_eq!(outcome(&applied, &silent)["reason"], "missing_verdict");
+    for task in [&past_end, &missing, &silent] {
+        assert!(fixture.verification(task).is_none());
+        assert_eq!(fixture.status(task), TaskStatus::Proposed);
+    }
+}
+
+#[test]
+fn a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew() {
+    if !isolated(
+        "finding_verification::a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // A low-tier REJECTED verdict and a medium-tier low-confidence one both
+    // go to the next tier before anything is recorded.
+    let low = fixture.finding("Low tier rejection", TaskComplexity::Low);
+    let unsure = fixture.finding("Unsure medium verdict", TaskComplexity::Medium);
+    let settled = fixture.finding("Settled medium verdict", TaskComplexity::Medium);
+    let prepared = fixture.prepare(&[&low.id, &unsure.id, &settled.id]);
+    assert_eq!(Fixture::prepared_crew(&prepared, &low), "low_lane");
+    let unsure_first = Fixture::prepared_crew(&prepared, &unsure);
+
+    let first = fixture.apply(
+        &prepared,
+        &[
+            rejected(&low, "high"),
+            confirmed(&unsure, "low"),
+            confirmed(&settled, "high"),
+        ],
+        None,
+    );
+    assert_eq!(first["status"], "succeeded", "{first}");
+    assert_eq!(first["recorded_count"], 1, "{first}");
+    assert_eq!(fixture.status(&low), TaskStatus::Proposed);
+    assert!(fixture.verification(&low).is_none());
+    assert!(fixture.verification(&unsure).is_none());
+    let escalation = &first["escalation_prepared"];
+    assert_eq!(escalation["round"], "escalation");
+    let low_second = Fixture::prepared_crew(escalation, &low);
+    assert!(
+        ["medium_codex", "medium_claude"].contains(&low_second.as_str()),
+        "a low-tier task escalates to the medium pool: {escalation}"
+    );
+    assert_eq!(Fixture::prepared_crew(escalation, &unsure), "hard_lane");
+
+    let second = fixture.apply(
+        escalation,
+        &[confirmed(&low, "high"), rejected(&unsure, "medium")],
+        Some(&first["task_outcomes"]),
+    );
+    assert_eq!(second["status"], "succeeded", "{second}");
+    assert_eq!(second["escalation_count"], 0, "one escalation round");
+    assert_eq!(outcome(&second, &settled)["outcome"], "verified");
+
+    let record = fixture.verification(&low).unwrap();
+    assert_eq!(record.verdict, FindingVerdict::Confirmed);
+    assert!(record.escalated);
+    let crews = record
+        .crews
+        .iter()
+        .map(|verdict| (verdict.crew.as_str(), verdict.tier, verdict.verdict))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        crews,
+        [
+            ("low_lane", TaskComplexity::Low, FindingVerdict::Rejected),
+            (
+                low_second.as_str(),
+                TaskComplexity::Medium,
+                FindingVerdict::Confirmed
+            ),
+        ]
+    );
+    assert_eq!(fixture.status(&low), TaskStatus::Proposed);
+
+    let record = fixture.verification(&unsure).unwrap();
+    assert_eq!(record.verdict, FindingVerdict::Rejected);
+    assert_eq!(
+        record
+            .crews
+            .iter()
+            .map(|verdict| verdict.crew.as_str())
+            .collect::<Vec<_>>(),
+        [unsure_first.as_str(), "hard_lane"]
+    );
+    assert_eq!(fixture.status(&unsure), TaskStatus::Rejected);
+}
+
+#[test]
+fn the_verifier_is_not_the_filers_crew_when_the_pool_offers_another() {
+    if !isolated(
+        "finding_verification::the_verifier_is_not_the_filers_crew_when_the_pool_offers_another",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let params = |title: &str, complexity| TaskAddParams {
+        title: title.into(),
+        description: format!("{title} at src/lib.rs."),
+        acceptance_criteria: vec!["The reported defect no longer occurs.".into()],
+        tags: vec!["security-review".into()],
+        complexity,
+        task_type: Some(TaskType::Bug),
+        status: Some(TaskStatus::Proposed),
+        ..Default::default()
+    };
+    // Each draw is seeded by task: across these findings the pool draws both
+    // of its crews for a filer that is neither, and never the filer's.
+    let drawn = (0..6)
+        .map(|index| {
+            let task = fixture
+                .runtime
+                .add_task(params(
+                    &format!("Operator-filed {index}"),
+                    TaskComplexity::Medium,
+                ))
+                .unwrap();
+            Fixture::prepared_crew(&fixture.prepare(&[&task.id]), &task)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(drawn.len(), 2, "{drawn:?}");
+    for index in 0..6 {
+        let task = fixture
+            .runtime
+            .add_task_with_identity(
+                params(&format!("Claude-filed {index}"), TaskComplexity::Medium),
+                Some("claude".into()),
+                None,
+            )
+            .unwrap();
+        let prepared = fixture.prepare(&[&task.id]);
+        assert_eq!(
+            Fixture::prepared_crew(&prepared, &task),
+            "medium_codex",
+            "filed by {:?}: {prepared}",
+            task.created_by
+        );
+    }
+    // A pool of one keeps its only crew, even the filer's.
+    let task = fixture
+        .runtime
+        .add_task_with_identity(
+            params("Codex-filed low", TaskComplexity::Low),
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        Fixture::prepared_crew(&fixture.prepare(&[&task.id]), &task),
+        "low_lane"
+    );
+}
+
+#[test]
+fn promotion_and_backlog_admission_refuse_an_unverified_review_finding() {
+    if !isolated(
+        "finding_verification::promotion_and_backlog_admission_refuse_an_unverified_review_finding",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let finding = fixture.finding("Unverified", TaskComplexity::Medium);
+    let refusal = fixture
+        .runtime
+        .approve_task(&finding.id, None, None)
+        .expect_err("an unverified review finding is not approved")
+        .to_string();
+    assert!(
+        refusal.contains(JOB),
+        "the refusal names the verification job: {refusal}"
+    );
+    let refusal = fixture
+        .runtime
+        .update_task_with_identity(
+            &finding.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("an unverified review finding is not promoted")
+        .to_string();
+    assert!(refusal.contains(JOB), "{refusal}");
+    assert_eq!(fixture.status(&finding), TaskStatus::Proposed);
+
+    // Neither an untagged bug nor a tagged non-bug is a review finding.
+    let untagged = fixture.task(
+        "Operator bug",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &[],
+        None,
+    );
+    let feature = fixture.task(
+        "Review suggestion",
+        TaskComplexity::Medium,
+        TaskType::Feature,
+        &["code-review"],
+        None,
+    );
+    for task in [&untagged, &feature] {
+        fixture.runtime.approve_task(&task.id, None, None).unwrap();
+    }
+
+    // A finding filed straight into backlog is kept off the drain.
+    let filed = fixture.task(
+        "Filed to backlog",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &["qa-sweep"],
+        Some(TaskStatus::Backlog),
+    );
+    let backlog = fixture.action("list_backlog_tasks", json!({}));
+    let held = backlog["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == filed.id.as_str())
+        .unwrap_or_else(|| panic!("the finding is withheld: {backlog}"));
+    assert_eq!(held["reason"], "unverified_review_finding", "{backlog}");
+    assert!(held["detail"].as_str().unwrap().contains(JOB), "{held}");
+    assert!(
+        !backlog["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(filed.id))
+    );
+
+    fixture.confirm(&filed);
+    fixture.confirm(&finding);
+    // The fixture's selector-less tasks contend for the same context lock,
+    // which is the only thing that may still keep it off.
+    let backlog = fixture.action("list_backlog_tasks", json!({}));
+    let reason = backlog["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == filed.id.as_str())
+        .map(|entry| entry["reason"].clone());
+    assert!(
+        reason.is_none_or(|reason| reason == "context_lock_conflict"),
+        "a confirmed finding is admitted: {backlog}"
+    );
+    fixture
+        .runtime
+        .approve_task(&finding.id, None, None)
+        .expect("a confirmed finding is approved");
+}
+
+fn verification_routine() -> RoutineDefinition {
+    serde_json::from_value(json!({
+        "schemaVersion": 1, "name": "fixture-verification", "enabled": true,
+        "target": format!("job:{JOB}"),
+        "trigger": {"state": {
+            "kind": "finding_unverified", "owner_machine": "fixture-machine", "branch": "main",
+            "debounce_minutes": 2, "max_wait_minutes": 10, "max_items": 50, "batch_size": 5,
+            "retries": 1, "deadline_minutes": 90,
+        }},
+    }))
+    .unwrap()
+}
+
+#[test]
+fn the_state_trigger_picks_up_only_unverified_review_findings() {
+    if !isolated("finding_verification::the_state_trigger_picks_up_only_unverified_review_findings")
+    {
+        return;
+    }
+    let fixture = Fixture::new();
+    let owed = fixture.finding("Owed a verdict", TaskComplexity::Medium);
+    let confirmed = fixture.finding("Already confirmed", TaskComplexity::Medium);
+    fixture.confirm(&confirmed);
+    let untagged = fixture.task(
+        "Operator bug",
+        TaskComplexity::Medium,
+        TaskType::Bug,
+        &[],
+        None,
+    );
+    let feature = fixture.task(
+        "Review suggestion",
+        TaskComplexity::Medium,
+        TaskType::Feature,
+        &["delivery-code-review"],
+        None,
+    );
+
+    let routine = verification_routine();
+    let now = Utc::now();
+    let pending = evaluate_routine(&fixture.runtime, &routine, false, now).unwrap();
+    assert_eq!(pending.reason, "debouncing", "{pending:?}");
+    let members = pending.state.unwrap().members.unwrap();
+    assert!(members.pending.contains_key(&owed.id));
+    for task in [&confirmed, &untagged, &feature] {
+        assert!(!members.pending.contains_key(&task.id), "{}", task.title);
+    }
+
+    let due =
+        evaluate_routine(&fixture.runtime, &routine, true, now + Duration::minutes(3)).unwrap();
+    assert_eq!(due.reason, "would_fire", "{due:?}");
+    assert_eq!(due.batch.len(), 1);
+    assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&owed.id));
+}
