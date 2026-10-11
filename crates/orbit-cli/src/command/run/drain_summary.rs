@@ -404,6 +404,19 @@ pub(super) fn pass_throttle_line(pass: &DrainAdmissionPass) -> Option<String> {
         .map(|throttle| throttle_line(throttle, Some(pass.recorded_at)))
 }
 
+/// The `Requests held:` line for a pull drain whose last pass requested no
+/// claim although its window was open, naming why: the breaker, a refused
+/// settlement, the owner's probe or no runnable crew [ORB-15637].
+pub(super) fn pass_refusal_line(pass: &DrainAdmissionPass) -> Option<String> {
+    pass.admission_refusal.as_ref().map(|refusal| {
+        format!(
+            "{} {refusal} (last pass {})",
+            crate::output::color::bold("Requests held:"),
+            pass.recorded_at.format("%Y-%m-%d %H:%M:%SZ")
+        )
+    })
+}
+
 /// The `Still waiting:` lines for a pull drain, which has no leaf summary of
 /// its own: they come from the owner's last answer, as the drain recorded it
 /// [ORB-14475].

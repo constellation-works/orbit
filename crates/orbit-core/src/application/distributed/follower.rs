@@ -71,10 +71,15 @@ impl crate::OrbitRuntime {
     /// unreachable, or every request claimed — keeps the diagnostics it already
     /// has, with the time the owner gave them, rather than reading as an empty
     /// backlog.
+    ///
+    /// `admission_refusal` is why this pass requested no new claim [ORB-15637],
+    /// recorded so `orbit run show` and readiness can say so; it is never
+    /// carried to a later pass.
     pub(crate) fn record_pull_pass(
         &self,
         run_id: &str,
         resource_throttle: Option<ResourceThrottle>,
+        admission_refusal: Option<&str>,
         error: Option<&str>,
         error_code: Option<&str>,
         owner_answer: OwnerAnswer<'_>,
@@ -136,6 +141,7 @@ impl crate::OrbitRuntime {
                     waiting_by_reason: waiting.by_reason,
                     consecutive_idle_passes,
                     resource_throttle: resource_throttle.clone(),
+                    admission_refusal: admission_refusal.map(ToOwned::to_owned),
                     last_pass_error: error.map(ToOwned::to_owned).or_else(|| {
                         was_degraded
                             .then(|| previous.and_then(|pass| pass.last_pass_error.clone()))

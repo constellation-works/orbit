@@ -516,6 +516,23 @@ impl Pair {
     /// window groups providers from its own registry, so an alias such as
     /// `anthropic` has to be configured there to be excluded with `claude`.
     fn with_configs(owner_config: &str, follower_config: &str, crews: &[Option<&str>]) -> Self {
+        Self::with_owner_host(owner_config, follower_config, crews, |owner| owner)
+    }
+
+    /// [`Self::new`] with the owner's runtime passed through `host` before
+    /// any task exists, say to sample its host pressure from a test probe
+    /// [ORB-15637].
+    fn with_owner(tasks: usize, host: impl FnOnce(OrbitRuntime) -> OrbitRuntime) -> Self {
+        Self::with_owner_host("", "", &vec![None; tasks], host)
+    }
+
+    /// [`Self::with_configs`] with the owner's runtime passed through `host`.
+    fn with_owner_host(
+        owner_config: &str,
+        follower_config: &str,
+        crews: &[Option<&str>],
+        host: impl FnOnce(OrbitRuntime) -> OrbitRuntime,
+    ) -> Self {
         let root = TempDir::new().unwrap();
         let orbit = root.path().join(OWNER).join("repo/.orbit");
         std::fs::create_dir_all(&orbit).unwrap();
@@ -526,6 +543,7 @@ impl Pair {
             std::fs::write(follower_orbit.join("config.toml"), follower_config).unwrap();
         }
         let (owner, owner_repo) = open_runtime(root.path(), OWNER);
+        let owner = host(owner);
         let tasks = crews
             .iter()
             .enumerate()

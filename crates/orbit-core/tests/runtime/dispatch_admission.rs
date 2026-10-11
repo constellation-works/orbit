@@ -1426,7 +1426,7 @@ impl PressureProbe {
 
     /// Hold `set` above its high mark across the ten-second sustain window:
     /// one sample twelve seconds ago, then one now.
-    fn sustain(&self, runtime: &OrbitRuntime, set: impl Fn(&Self)) {
+    pub(super) fn sustain(&self, runtime: &OrbitRuntime, set: impl Fn(&Self)) {
         set(self);
         self.reading.lock().unwrap().2 = Utc::now() - chrono::Duration::seconds(12);
         assert!(

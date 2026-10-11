@@ -157,6 +157,9 @@ pub(super) fn workspace_drains(
 pub(super) struct LivePullDrain {
     pub(super) run_id: String,
     pub(super) stop: Option<DrainAdmissionsStop>,
+    /// Why its last pass requested no claim although its window was open
+    /// [ORB-15637].
+    pub(super) refusal: Option<String>,
 }
 
 /// The running `workspace_pull_pipeline` run, if any. `orbit run auto --stop`
@@ -171,16 +174,20 @@ pub(super) fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullD
         .into_iter()
         .find(|run| run.state == orbit_types::workflow::JobRunState::Running)
         .map(|run| {
-            let stop = runtime
+            let state = runtime
                 .stores()
                 .jobs()
                 .read_run_state(&run.run_id)
                 .ok()
-                .flatten()
-                .and_then(|state| state.drain_admissions_stop);
+                .flatten();
+            let refusal = state
+                .as_ref()
+                .and_then(|state| state.drain_last_pass.as_ref())
+                .and_then(|pass| pass.admission_refusal.clone());
             LivePullDrain {
                 run_id: run.run_id,
-                stop,
+                stop: state.and_then(|state| state.drain_admissions_stop),
+                refusal,
             }
         }))
 }

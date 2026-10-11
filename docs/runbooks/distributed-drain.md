@@ -831,10 +831,14 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   for the declaration and credential-route details. Missing launchers,
   capacity, refusal, crew and host exclusions retain their existing behavior.
 - After three consecutive claims settle as failures, the drain stops
-  requesting work (`circuit_open` in the iteration output) and only keeps
-  settling. Inspect the blocked tasks and their leaf logs, fix the cause,
-  re-backlog them deliberately, and start a new drain. Released claims are
-  not failures and never open the breaker.
+  requesting work (`circuit_open`) and only keeps settling. The breaker stays
+  open for the rest of that drain. `orbit run show <drain-run>` prints it as
+  `Requests held: circuit_open: …`, and `orbit run readiness` on the follower
+  prints `Pull drain requests held: circuit_open: …` (JSON
+  `pipeline_state.drain_last_pass.admission_refusal` and
+  `capacity.pull_drain_refusal`). Inspect the blocked tasks and their leaf
+  logs, fix the cause, re-backlog them deliberately, and start a new drain.
+  Released claims are not failures and never open the breaker.
 - The run outlives its window until every admission has settled, so a leaf
   that finishes late still hands off, and a later drain for the same owner
   carries anything an earlier drain left behind. A second `orbit run auto
@@ -1471,6 +1475,17 @@ no new claims but keep settling and reconciling, and `orbit run ship` without
 task ids (and `orbit run ship-sweep`) is refused with `resource_throttled`.
 Running work is never cancelled, paused or killed.
 
+**Whose resources gate a pull claim.** A claimed leaf runs on the follower,
+so the follower's own readings decide whether its pull drain requests a
+claim. The owner's throttle holds only the owner's own drain waves and
+discovery (`orbit run ship` without task ids, `ship-sweep`). The owner never
+reads its throttle when it serves `orbit.task.pull` or the probe, so a busy
+owner does not idle its followers. The owner's `orbit run readiness`
+"Admissions throttled" line and its backlog's `resource_throttled` waits
+describe the owner's drain, not the followers' pull drains. To see why a
+follower is not claiming, run readiness and `run show` on the follower
+(below).
+
 ```bash
 orbit run readiness          # "Admissions throttled: memory 93% (throttled at ≥ 90% since …"
 orbit run show <drain-run>   # Throttled: line from the drain's last pass
@@ -1542,7 +1557,15 @@ The integer revision remains for persisted requests and lifecycle semantics; req
 changes no longer depend on a manual bump. Deploy matching builds on both hosts and restart
 long-lived processes.
 
-`orbit run show <drain-run>` exposes a pull drain's latest pass error and consecutive failure
+`orbit run show <drain-run>` exposes why a pull drain's last pass requested no claim although
+its window was open: the `Requests held:` line, from `admission_refusal` under
+`pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker),
+`settlement_refused`, `no_runnable_crew`, `host_suppressed`, or the owner probe's refusal.
+The value is set afresh each pass. This host's resource throttle has its own `Throttled:` line,
+and degradation has its own warning. Follower readiness repeats the refusal as
+`Pull drain requests held:` (`capacity.pull_drain_refusal`).
+
+`orbit run show <drain-run>` also exposes a pull drain's latest pass error and consecutive failure
 count. JSON carries `last_pass_error_code`, `last_pass_error`, `consecutive_pass_failures`, and `degraded` under
 `pipeline_state.drain_last_pass`. Three consecutive failed passes latch a visible degraded
 warning and stop new admissions for that drain. A successful pass before the threshold resets
