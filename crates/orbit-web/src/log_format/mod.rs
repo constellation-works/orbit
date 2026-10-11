@@ -15,8 +15,8 @@ pub(crate) use scan::{
 };
 
 /// Longest single log record the web surfaces buffer. The SSE stream drops a
-/// longer record, and the snapshot tail skips an unterminated trailing one
-/// this large instead of reading it into memory.
+/// longer record, as do the snapshot and Errors reverse scans. An oversized
+/// unterminated snapshot tail leaves its cursor at the record's start.
 pub(crate) const MAX_LOG_RECORD_BYTES: usize = 1 << 20;
 
 #[cfg(test)]

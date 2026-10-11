@@ -81,6 +81,13 @@ fn a_segment_straddling_the_window_is_read_only_back_to_its_start() {
     let mut expected = Vec::new();
     for index in 0..4_000 {
         let ts = since + Duration::minutes(5) + Duration::seconds(index);
+        if index == 2_000 {
+            // The oversized in-window ERROR must not hide either neighbour
+            // or force the reverse scan to reread the segment.
+            archive.extend_from_slice(
+                record(ts, "ERROR", "oversized", &"x".repeat(8 << 20)).as_bytes(),
+            );
+        }
         if index % 8 == 0 {
             let id = format!("archive-error-{index}");
             archive.extend_from_slice(record(ts, "ERROR", &id, "failed").as_bytes());

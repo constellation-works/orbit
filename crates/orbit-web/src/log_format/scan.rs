@@ -297,7 +297,7 @@ fn scan_line(raw: &str, filters: &Filters) -> Scanned {
 
 /// Newest matching JSONL events from a seekable reader, scanning backwards.
 ///
-/// Malformed JSON and non-UTF-8 lines are skipped; I/O errors propagate.
+/// Malformed JSON, non-UTF-8 and oversized lines are skipped; I/O errors propagate.
 /// `block_size` is the read window. Callers use [`TAIL_READ_BLOCK`].
 fn read_recent_matching_events_from<R: Read + Seek>(
     reader: R,
@@ -335,7 +335,7 @@ fn scan_recent_matching_events<R: Read + Seek>(
     // only as matching records are found rather than preallocating from it.
     let mut newest_first = Vec::new();
     let mut reached_window_start = false;
-    for line in ReverseLines::with_block_size(reader, block_size)? {
+    for line in ReverseLines::with_limits(reader, block_size, MAX_LOG_RECORD_BYTES)? {
         let line = match line {
             Ok(line) => line,
             // Only skip decoding failures, not an InvalidData from the reader.
