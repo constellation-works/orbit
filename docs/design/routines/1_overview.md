@@ -1,13 +1,13 @@
 ---
 title: Routines — Overview
 owner: claude
-last_updated: 2026-10-08
-last_validated: 2026-10-08
+last_updated: 2026-10-11
+last_validated: 2026-10-11
 status: Accepted
 feature: routines
 doc_role: overview
 type: design
-summary: Durable per-user scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state.
+summary: Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints.
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-cli/src/command/clock/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/driver/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
@@ -17,16 +17,20 @@ related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-1
 # Routines — Overview
 
 Routines make Orbit the constellation's single scheduler. A **routine** is a durable
-YAML definition of recurring work — a cron or state trigger, a job target from the existing
+YAML definition of recurring work — a cron, delivery or state trigger, a job target from the existing
 catalog, and a retry/overlap policy — living under `.orbit/routines/` as per-user
 checkout state. A stateless **`orbit clock tick`** pass, also available
 through the compatibility alias `orbit sweep`, is invoked on the configured OS schedule (one
 minute by default, via launchd on macOS or a systemd timer on Linux). It fires due routines
 through the existing v2 run machinery and evaluates due auto-task definitions in-process.
 Definitions do not travel by git; `orbit workspace init` / `sync` seed shipped defaults
-from the binary. All scheduler state (last fires, pauses, locks, run history)
-is host-local and never synced, so each owner checkout is an independent schedule. [2_design.md](./2_design.md) is the v1 contract;
-[3_vision.md](./3_vision.md) holds what is deliberately out of scope for v1.
+from the binary. All scheduler state (last fires, pauses, locks, run history,
+immutable batches and consumer checkpoints) is host-local and never synced.
+Cron schedules are independent per owner checkout; delivery/state consumers
+admit only on their configured or resolved owner machine.
+[2_design.md](./2_design.md#1-routine-definition) is the current schema-v1 contract;
+its [evaluation section](./2_design.md#31-delivery-and-state-evaluation) explains
+initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred work.
 
 > **Status.** v1 shipped in [ORB-10021]; the At a Glance table lists the actual home of
 > each concern. Targets are `job:<name>` in v1 — see [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads) for why `activity:` is
@@ -34,15 +38,26 @@ is host-local and never synced, so each owner checkout is an independent schedul
 > catalog from `orbit-registry` with registered runtimes; Core keeps the registry-neutral
 > scheduler, validation, and dispatch kernels.
 
-`orbit workspace init` seeds six default routine templates (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_pilot`, `ship_sweep`, `worktree_gc`, and `store_gc`) under
+`orbit workspace init` seeds seven default routine templates (`ci_failure_sweep`,
+`dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `ship_sweep`, `worktree_gc`, and `store_gc`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). Every default is `enabled: false`:
-scheduled execution is an explicit, versioned opt-in made by changing the reviewed
+scheduled execution is an explicit checkout-local opt-in made by changing the
 definition to `enabled: true`. Re-init
 creates newly introduced missing defaults but never rewrites existing routine files; those
 files belong to the workspace after seeding. A destructive force initialization recreates
 templates from defaults. [ORB-10739]
+
+`task_pilot` is a `preparation_eligible` state routine targeting
+`job:task_pilot_pipeline`; init resolves this host's machine ID and the
+workspace's base branch. It assesses new/materially edited eligible tasks in
+bounded batches and stays quiet for fresh assessments, including unready ones.
+See [State routines and task-pilot configuration](./2_design.md#11-state-routines-and-task-pilot-configuration)
+for the loadable YAML, eligibility/freshness controls and preview commands.
+`finding_verification` uses `finding_unverified`; failed-run triage's
+`execution_failed` kind is retained for compatibility and fires nothing.
+Delivery routine configuration and evidence requirements are in
+[Delivery routines](./2_design.md#12-delivery-routines).
 
 The files under `crates/orbit-core/assets/routines/retired/` are provenance shapes of retired defaults, not seeds: workspace sync compares a definition with them to tell an Orbit-seeded copy from an operator's.
 
@@ -91,9 +106,9 @@ fragmentation this feature exists to end.
   `~/.orbit/`. The ID names run ownership and display and binds state-triggered routines
   to their owner machine.
 - **Owner checkout** — a registered checkout whose logical workspace this machine owns
-  (host-registry). The unit of scheduling: each owner checkout evaluates every enabled
-  definition against its own store and `task_prefix`, so N owner checkouts of one
-  repository are N independent schedules.
+  (host-registry). Each owner checkout evaluates its enabled cron definitions
+  against its own store and `task_prefix`; delivery/state definitions additionally
+  bind admission to one owner machine.
 - **Local pause** — a host-local, SQLite-persisted toggle (`orbit routine pause <name>`)
   that suppresses a routine on one host without touching the shared definition.
 - **Fire** — one scheduled dispatch of a routine's target, executed as a normal run with
@@ -106,6 +121,7 @@ fragmentation this feature exists to end.
 | Concern | File | Task |
 |---------|------|------|
 | Routine definition type + fail-closed YAML parse | `crates/orbit-types/src/workflow/routine.rs` | [ORB-10021] |
+| Shared delivery/state evaluation, immutable inputs and receipt validation | `crates/orbit-automation/src/delivery/`, `crates/orbit-automation/src/members/`, `crates/orbit-core/src/application/automation/` | [ORB-11330], [ORB-11331] |
 | Registry-neutral loading, due computation, dispatch, and status | `crates/orbit-core/src/application/routines/` | [ORB-10021], [ORB-12236] |
 | Local identity/catalog composition, workspace discovery, and runtime construction | `crates/orbit-cmd/src/registry/routines.rs`, `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-registry/src/machine_identity.rs`, `crates/orbit-registry/src/workspace_registry/` | [ORB-10270], [ORB-10319] |
 | Host-local scheduler state (fires, pauses) | `crates/orbit-store/src/driver/sqlite/routine_store/` | [ORB-10021] |
@@ -131,8 +147,8 @@ fragmentation this feature exists to end.
   `[routines] role = "source"` config key; registering an owner checkout is the opt-in.
 - [ORB-10319] — historical boundary extraction; current composition lives in `orbit-cmd`
   over `orbit-registry` local files without fleet registry/cache state.
-- [ORB-10739] — added the disabled `task_pilot` default routine; its zero-input target
-  leaves eligibility and bounded partitioning to `prepare_task_pilot`.
+- [ORB-10739] — added the disabled `task_pilot` default routine; [ORB-12745]
+  replaced its cron trigger with owner-bound preparation eligibility and frozen members.
 - [ORB-11107] — added the disabled `ci_failure_sweep` default routine, hourly at `5 * * * *`.
   It targets `job:ci_failure_sweep_pipeline`, which collects CI evidence on the host,
   files current failure clusters into proposed quarantine, pilots them independently,

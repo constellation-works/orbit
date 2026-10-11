@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_updated: 2026-10-11
+last_validated: 2026-10-11
 status: Accepted
 feature: routines
 doc_role: design
@@ -18,7 +18,8 @@ related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-1
 
 This doc is the current contract: the routine definition schema, how definitions are
 discovered, what `orbit clock tick` does on each invocation, where state
-lives, and how the OS clock drives it. Cross-host coordination, event triggers, and everything else deferred is
+lives, and how the OS clock drives cron, delivery and state triggers. Cross-host
+coordination, immediate file-watch/webhook wakeups, and everything else deferred is
 in [3_vision.md](./3_vision.md). Decision rationale lives in [4_decisions.md](./4_decisions.md).
 
 ## OS sweep clock controls
@@ -112,10 +113,16 @@ conflict so delayed or duplicate submissions cannot overwrite newer state.
 
 ---
 
-The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
-from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
-immutable batches and separate successful-coverage checkpoints. It is proposed
-and unimplemented; existing scheduling and action semantics remain current.
+Delivery thresholds, preparation eligibility, immutable batches and separate
+successful-coverage checkpoints are implemented on the existing clock. The
+[automation-trigger operations guide](../automation-triggers/5_operations.md#configuration-and-migration)
+documents the supported schema-v1 configuration; its
+[state preparation section](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+covers state consumers. The broader
+[automation-trigger design](../automation-triggers/2_design.md#1-current-implementation-and-gaps)
+separately identifies deferred multi-member coordination, automatic policy/host
+migration and usage accounting. Its illustrative schema-v2 YAML is not loadable
+configuration. Failed-run triage is retired, not a pending trigger implementation.
 
 The dashboard's Automation › Routines rows show the ten most recent fires as
 outcome dots, oldest to newest. Each dispatched fire links to its run; a
@@ -136,15 +143,18 @@ first) and `failure_streak` (`count`, `since`, `truncated`).
 
 ## 1. Routine Definition
 
-A routine is one YAML file under `.orbit/routines/` in a registered workspace,
-PR-reviewed and versioned like any other shared definition.
+A routine is one YAML file under the registered checkout's gitignored
+`.orbit/routines/`. Choose exactly one of `trigger.cron`,
+`trigger.deliveries_landed` or `trigger.state`. Routines use `schemaVersion: 1`;
+interval (`every_minutes`) scheduling belongs to auto-tasks, not routines.
+The cron form is:
 
 ```yaml
 # .orbit/routines/vault-auto-commit.yaml
 schemaVersion: 1
 name: vault-auto-commit
 description: Commit & push vault changes nightly
-enabled: true                  # global kill-switch, versioned
+enabled: true                  # definition kill-switch
 trigger:
   cron: "0 22 * * *"           # standard 5-field cron, evaluated in host-local time
   missed_run: catch_up_once    # catch_up_once | skip (default: skip)
@@ -158,8 +168,9 @@ policy:
 Field semantics:
 
 - **`name`** — unique across all routine sources on a host; collision is a load-time error.
-- **`enabled`** — the *versioned* toggle layer. A definition carries no host field: every
-  registered owner checkout with an enabled clock evaluates it against its own store
+- **`enabled`** — the definition toggle. Every registered owner checkout with an
+  enabled clock evaluates its cron definitions against its own store;
+  delivery/state consumers additionally require their resolved owner machine (§1.1–1.2)
   ([Definitions carry no host pin](./4_decisions.md#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule)). Effective state also requires no host-local pause (§4).
   A definition written before [ORB-12236] may still carry `hosts:`; it is ignored with a
   load warning naming the file for one release, then rejected as an unknown key.
@@ -174,7 +185,7 @@ Field semantics:
   ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)). There is deliberately no inline command form: the `shell` activity variant
   was removed fail-closed in [ORB-00374] / [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed), and reintroducing arbitrary-command
   payloads through the scheduler would reopen that surface on a timer.
-- **`policy`** — applied by the dispatcher around the run: timeout, bounded retries with
+- **`policy`** — for cron, applied by the dispatcher around the run: timeout, bounded retries with
   fixed backoff, and overlap handling. `overlap: forbid` is the default; `timeout_minutes`
   defaults to 60 and doubles as the staleness horizon (§4), `retries` defaults to
   `{max: 0, backoff_minutes: 2}`. Retries re-dispatch a *failed* fire under the same slot
@@ -187,6 +198,119 @@ Field semantics:
 
 Parsing is fail-closed: an invalid routine file is reported and *that routine* is treated
 as absent; it never degrades into "fire with defaults".
+
+### 1.1 State routines and task-pilot configuration
+
+The shipped `task_pilot.yaml` replaces the cron trigger with this complete form
+(substitute the registered machine ID and workspace base branch):
+
+```yaml
+schemaVersion: 1
+name: task-pilot-example
+enabled: false
+trigger:
+  state:
+    kind: preparation_eligible
+    owner_machine: hm_your_registered_machine
+    branch: agent-main
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+    eligibility:
+      statuses: [proposed, backlog]
+      exclude_tags: [no-diff-expected, no-diff-needed]
+      require_tags: []
+      task_types: []
+target: job:task_pilot_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {max: 1, backoff_minutes: 5}
+```
+
+`owner_machine` is required and only that machine admits new work. State routines
+require `overlap: forbid` and the job fixed by their kind:
+`preparation_eligible` targets `job:task_pilot_pipeline`;
+`finding_unverified` targets `job:finding_verification_pipeline` and uses the
+[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger).
+`execution_failed` still parses for compatibility, but its retired target is
+skipped and dispatches nothing. These are domain eligibility checks, not arbitrary
+status-change subscriptions.
+
+State timing requires positive `debounce_minutes <= max_wait_minutes`,
+`max_items` in 1–50, `retries` in 0–5 and `deadline_minutes` in 1–1440.
+`max_items` bounds the candidates considered for admission; `batch_size` bounds
+members in one attempt, defaults to five capped by `max_items`, and must be
+1–min(50, `max_items`). One consumer has at most one active attempt; a batch
+shares a pinned source and stored crew. The trigger retry budget is capped by
+`policy.retries.max`; retries use the member evaluator's five-minute backoff
+and captured absolute deadline, rather than cron slot/backoff semantics.
+
+For preparation, optional `eligibility` defaults to the values above: statuses
+are a nonempty subset of `proposed`/`backlog`, excluded tags veto a task,
+all required tags must be present, and an empty `task_types` admits every type.
+Optional `freshness` resolves each key from the routine, then
+`[workflow.task_pilot_freshness]` in `config.toml`, then built-in defaults:
+`material_fields: [title, description, criteria, plan, selectors]` and
+`source_sensitivity: ignore`. Thus an ordinary branch-head move or retagging
+does not by itself re-pilot an assessed task. `context_files` and `any` are the
+other source sensitivities. Predicate/freshness edits invalidate affected
+assessments; neither block configures finding verification. See
+[State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+for all material fields, stale-source checks during apply, limits and rollback.
+
+Inspect `orbit routine list`, `orbit routine show <name> --format json`, and
+`orbit clock tick --dry-run --format json` before setting `enabled: true`.
+The seed resolves the name, owner and branch, starts disabled, and evaluates as
+`disabled` until opted in; an empty eligible inventory is `fresh` (or
+`debouncing` while pending material settles). The existing
+[routine seed boundary fixture](../../../crates/orbit-cli/tests/workspace/routine_state_seed.rs)
+exercises that configuration through init, show and dry-run tick.
+Explicit `orbit run task-pilot <id>` remains independent of this scheduled gate.
+Preparation records assessments, including unready verdicts; it does not promote
+or dispatch the assessed tasks or grant commit/merge authority.
+
+### 1.2 Delivery routines
+
+Use `trigger.deliveries_landed` in place of cron/state, retaining an existing
+catalog job that implements the coverage evidence contract:
+
+```yaml
+trigger:
+  deliveries_landed:
+    branch: agent-main
+    threshold: 3
+    max_wait_minutes: 360
+    coverage: landed_code_review_v1
+    max_items: 20
+    retries: 1
+policy:
+  overlap: forbid
+  retries: {max: 1, backoff_minutes: 5}
+```
+
+`owner_machine` is optional: omission resolves to the registered workspace owner;
+an explicit stable machine ID overrides it. Only the resolved owner admits work.
+An enabled definition reports `owned_elsewhere` or `ownership_unresolved` when
+it cannot admit here. This is separate from the retired top-level `hosts:` pin.
+Require `1 <= threshold <= max_items <= 50`, positive `max_wait_minutes`,
+`retries` in 0–5 and `overlap: forbid`. Defaults are 50 items and zero retries;
+the routine policy caps the trigger's retries. Select `landed_code_review_v1`
+for new definitions; `integrated_qa_v1` is retired compatibility data.
+`missed_run` applies to cron slots, not delivery or state eligibility.
+
+The supported ownership/migration rules are in
+[Configuration and migration](../automation-triggers/5_operations.md#configuration-and-migration).
+A routine job must return `coverage_evidence` in a persisted step result matching
+its frozen `input.automation` and admitted run; ordinary job success alone is
+insufficient. See [Evidence submission](../automation-triggers/5_operations.md#evidence-submission)
+for the exact receipt fields and validation, and
+[Inspection and recovery](../automation-triggers/5_operations.md#inspection-and-recovery)
+for persisted debt and failure reasons. Auto-tasks use the same delivery object
+under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 
 ### Seeded defaults and ownership
 
@@ -202,7 +326,7 @@ is a `finding_unverified` state routine rendered the same way [ORB-15662]. Which
 assessed task is `[workflow.task_pilot_freshness]` in `config.toml` (default: title,
 description, criteria, plan and selectors; head moves ignored), overridable by the routine's
 optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions
-are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's versioned
+are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
 
@@ -520,14 +644,17 @@ Per pass:
    updates, and build runtimes for active local **owner** checkouts whose `.orbit/`
    directory exists. Collect routines from each, failing closed per source or definition
    without stopping other valid sources.
-3. Filter to routines that are `enabled` and carry no local pause.
+3. Apply definition enablement and host-local pause controls. A locally paused routine
+   skips evaluation. Unpaused delivery/state consumers still reconcile already-admitted
+   work when disabled, but admit nothing new.
 4. Sync unresolved fires against actual run state. A dispatched `running`/`retrying` run
    whose recorded owner is conclusively stopped is failed immediately, including after a
    host restart; an alive or unprobeable owner keeps its overlap slot. Other unresolved
    entries are reclaimed after the routine's `timeout_minutes` staleness horizon, so a
    sweep that crashed between intent and dispatch cannot block `overlap: forbid` forever.
    Fires recorded for a routine this host no longer loads are deliberately untouched.
-5. For each, compute due-ness from the cron expression and the persisted cursor
+5. Route delivery/state definitions to the shared automation evaluator (§3.1).
+   For each cron definition, compute due-ness from the cron expression and the persisted cursor
    (last slot, else the first-observation baseline — a routine never fires for slots that
    predate its registration on this host; the first sweep records the baseline and fires
    nothing). Due-ness is O(1) via previous-occurrence lookup, never a walk over every
@@ -536,13 +663,13 @@ Per pass:
    the existing 120s grace, while a configured 300s clock keeps a slot natural for 600s.
    This admits one delayed or missed poll without turning genuine downtime into a `skip`
    fire.
-6. For each due routine: check `overlap` against in-flight fires, record the fire intent
+6. For each due cron routine: check `overlap` against in-flight fires, record the fire intent
    (idempotency key: routine name + scheduled slot + attempt, transactionally with the
    cursor advance), then dispatch the target via `submit_pipeline_run` in the routine's
    source workspace with actor `routine/<name>` as run provenance.
    Routine dispatch supplies the run base input with exactly one reserved internal field,
    `__routine_dispatch_orbit_dir`, containing the source workspace's `.orbit` directory.
-   This is workspace-routing metadata, not a caller parameter: routine target jobs still
+   This is workspace-routing metadata, not a caller parameter: cron routine target jobs
    accept no caller-supplied parameters, and every step in such a job must declare its own
    `default_input` rather than inheriting the job base input (which would expose the
    reserved field to the activity).
@@ -591,8 +718,9 @@ silently sweeping the host [ORB-12108].
 `orbit routine list`, `orbit routine show`, and `orbit clock tick` name this host and each
 routine's source workspace in human and JSON output. Scheduler state never moves between
 hosts: a host that starts evaluating a definition has no migrated cursor, so its first
-sweep records the normal first-observation baseline and only the next natural slot can
-fire — the other host's cursor, fires, and pauses are untouched.
+sweep of a cron definition records the normal first-observation baseline and only the
+next natural slot can fire. Delivery/state initialization follows §3.1; the other
+host's cursors, fires, checkpoints and pauses are untouched.
 
 Fires are normal runs: they appear in run history, carry v2 audit envelopes, and are
 debuggable with the existing run tooling — there is no separate "scheduled run" ledger.
@@ -608,13 +736,50 @@ Naming note: `orbit clock tick` is the general scheduler pass and `orbit sweep` 
 compatibility alias. The seeded `ship_sweep` routine is workspace-local; the legacy
 `orbit run ship-sweep` cross-workspace entrypoint is separate.
 
+### 3.1 Delivery and state evaluation
+
+Core supplies authoritative source/task facts and submits jobs; `orbit-automation`
+owns due decisions, frozen inputs and receipt validation; Store owns atomic
+consumer checkpoints and generation fences. Both variants run within the same
+locked clock tick, without cron slots or a second scheduler. Dry-run computes
+diagnostics without persisting state or dispatching work.
+
+- **Delivery:** the first enabled observation records the configured branch head
+  as an explicit baseline exclusion, with no historical replay or coverage claim.
+  Subsequent bounded observations retain verified landing keys, unexamined commits
+  and unresolved evidence. A threshold of uncovered eligible deliveries, or the
+  maximum age of nonempty pending work, freezes one immutable batch. New arrivals
+  remain pending while it runs. Observation and successful coverage have separate
+  checkpoints: only an accepted receipt covering the frozen obligations advances
+  coverage. Failed/invalid evidence retains debt; bounded retries reuse the batch,
+  and exhaustion requires attention. Verified before-PR review certificates may
+  exclude review obligations; tags, task completion and no-diff work cannot create
+  landings or coverage. See
+  [Delivery identity and source gaps](../automation-triggers/5_operations.md#delivery-identity-and-source-gaps).
+- **State:** initialization inventories current eligible members in bounded pages,
+  persisting scan continuation, material fingerprints, first-seen/change times
+  and withheld reasons. Preparation best-effort fetches the configured branch on
+  a live tick and retains a local-ahead head or local fallback on fetch failure;
+  status and dry-run use existing refs without fetching. A member is due after
+  settling for `debounce_minutes` or reaching `max_wait_minutes`. Admission rechecks
+  eligibility and freezes member fingerprints/source, retry budget and deadline.
+  Deterministic per-member apply evidence settles assessments, including fresh
+  unready results; wrapper success is not an assessment. An edit creates new debt,
+  and successful apply certifies its resulting fingerprint without a self-loop.
+  Exhausted members remain withheld at that fingerprint; other members can proceed.
+  Timing edits affect pending work while active budgets stay captured. Kind, owner,
+  target or branch edits report `definition_changed`; restore the original
+  definition to settle it rather than deleting state. See
+  [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+  for stale-source supersession, per-member reconciliation and capacity limits.
+
 ---
 
 ## 4. Host-Local State and Toggles
 
-All scheduler state lives host-locally (the `routine_*` tables in the host-global store
-database `~/.orbit/orbit.db`, module `orbit-store/src/sqlite/routine_store/`), gitignored
-and never synced:
+All scheduler state lives host-locally in the existing host SQLite database
+`~/.orbit/orbit.db`, gitignored and never synced. Cron scheduling and common
+pause controls use `routine_*` tables (`orbit-store/src/driver/sqlite/routine_store/`):
 
 - **routine_cursors** — per routine: first-observation baseline + last slot consumed.
 - **routine_fires** — one row per fire attempt: `(name, slot, attempt)` idempotency key,
@@ -627,8 +792,18 @@ and never synced:
   than a table: the OS releases it on process death, so a crashed sweep never wedges the
   next pass and no lock-staleness logic is needed.
 
-Toggle resolution, in order: `enabled: false` (versioned, everywhere) → local pause
-(unversioned, this host only). `orbit routine list` shows both columns plus computed
+Delivery/state consumers additionally persist automation state, immutable
+batches/attempts and accepted receipts through the automation Store contracts.
+Consumer identity includes machine, workspace, definition kind and name; epochs
+bind trigger/action identity. Separate observation/coverage boundaries and
+member working sets survive reboot and disablement. There is no automatic
+cross-host transfer. Run history remains ordinary job history, not cron fire rows;
+status merges those automation runs with retained cron history. For source pins,
+recovery and rollback limits see the
+[operations guide](../automation-triggers/5_operations.md#rollback-and-limits).
+
+Toggle resolution, in order: `enabled: false` (this checkout's definition) → local
+pause (this host only). `orbit routine list` shows both columns plus computed
 next-due, so "why didn't this fire?" is one command.
 
 ---
@@ -658,8 +833,9 @@ renders and installs the platform unit:
   changing the clock from 60s to 300s changes its natural-slot grace from 120s to 600s.
   The configured wake-up cost and routine enable/pause state are otherwise unchanged.
 
-There is no resident Orbit daemon. Sub-minute triggers and event triggers are explicitly
-out of v1 scope for this reason.
+There is no resident Orbit daemon. Delivery and state eligibility are polled by
+this clock; sub-minute triggers and immediate file-watch/webhook wakeups remain
+out of scope.
 
 ### Existing-host migration
 
@@ -688,17 +864,18 @@ manifest — narrows it: a definition the sync would leave exactly where it is c
 therefore always one that changes something.
 
 Legacy `[routines] role` and routine `hosts:` fields warn during their compatibility
-window but no longer affect eligibility. Every registered owner checkout with an enabled
-host clock evaluates its enabled definitions against its own store; enabling the clock on
-an additional owner therefore creates an independent schedule on that host.
+window but no longer affect eligibility. Every registered owner checkout with an
+enabled host clock evaluates against its own store. Cron schedules are independent
+on each owner; delivery/state admission still requires the consumer's owner machine.
 
 ---
 
 ## 6. Concerns & Honest Limitations
 
-- **No cross-host coordination.** Every owner checkout runs every enabled definition
-  against its own store by design [ORB-12236]; "exactly one of N hosts" has no mechanism.
-  The residual case is a definition with a repo-global side effect, which the author must
+- **No distributed coordination.** Cron runs independently per owner checkout;
+  delivery/state consumers admit only on their owner machine. This is a binding,
+  not a distributed lease or automatic failover/state-transfer mechanism.
+  A cron definition with a repo-global side effect must
   dedupe itself or pause on the extra owners
   ([3_vision.md §1](./3_vision.md#1-open-questions)).
 - **Definition locality.** Sweep reads whatever is on this checkout's disk. Definitions
@@ -716,7 +893,7 @@ an additional owner therefore creates an independent schedule on that host.
   fires once, not seven times. This is the intended semantic for every currently envisioned
   routine (commits, reindexing), but it is a lossy default; a count-preserving mode would
   be a new `missed_run` variant.
-- **First minute of overlap risk is on the dispatcher.** `overlap: forbid` depends on
+- **Cron overlap recovery is on the dispatcher.** `overlap: forbid` depends on
   accurate in-flight bookkeeping; a crashed sweep that recorded a fire intent but died
   before dispatch leaves a stale in-flight entry. The outcome-sync step reclaims intents
   and dispatches older than `policy.timeout_minutes` (marking them `error` / `timed_out`);
@@ -728,17 +905,20 @@ an additional owner therefore creates an independent schedule on that host.
   outcome sync records it as `error` — terminal, never re-fired, so a make-up fire cannot race
   an orphaned run. A dispatched in-flight run is released before that timeout only when its
   recorded owner is conclusively stopped; live and unprobeable owners remain protected.
-- **Routines carry no caller input payload.** v1 dispatch injects only the reserved internal
+- **Cron routines carry no caller input payload.** Cron dispatch injects only the reserved internal
   `__routine_dispatch_orbit_dir` field naming the owning workspace's `.orbit` directory.
   Jobs meant for routines still take no caller-supplied parameters, and each step should
   declare its own `default_input` so that this routing field is never inherited as activity
-  input. Parameterized fires would be a schema addition.
+  input. Parameterized cron fires would be a schema addition. Delivery/state
+  routines receive server-issued frozen automation input (§3.1), not arbitrary
+  caller parameters.
 
 ---
 
 ## Task References
 
-- [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
+- [ORB-11315] — specified shared triggers and durable coverage; delivery/state
+  evaluation shipped in [ORB-11330]/[ORB-11331], while broader extensions remain deferred.
 
 - [ORB-10001] — authored this design-doc folder (proposal; no implementation).
 - [ORB-10021] — implemented routines v1 (types, store, sweep, CLI, clock units).
