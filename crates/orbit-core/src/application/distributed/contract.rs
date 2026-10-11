@@ -119,6 +119,17 @@ impl crate::OrbitRuntime {
             .or_else(|| self.automation_machine_identity().map(ToOwned::to_owned))
     }
 
+    /// The gates this owner holds every candidate to [ORB-15622]. Pull
+    /// admission captures them in each receipt and the probe reports them,
+    /// so a claimed leaf validates against the owner's lists and a replica
+    /// whose own copy drifted is warned.
+    pub(crate) fn owner_validation_gates(&self) -> orbit_types::workflow::ValidationGates {
+        orbit_types::workflow::ValidationGates {
+            required_validation_commands: self.workflow_required_validation_commands().to_vec(),
+            baseline_commands: self.review_baseline_commands().to_vec(),
+        }
+    }
+
     /// Ship configuration as the owner resolves it for its own deliveries.
     pub(crate) fn owner_ship_contract(&self) -> AdmissionShipContract {
         self.owner_ship_contract_for(None)

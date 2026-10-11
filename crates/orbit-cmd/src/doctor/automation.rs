@@ -109,6 +109,52 @@ pub(super) fn doctor_check_pull_protocol(runtime: &OrbitRuntime) -> WorkspaceDoc
     }
 }
 
+/// [ORB-15622] Whether this replica's `workflow.required_validation_commands`
+/// and `review.baseline_commands` differ from the owner's, as the latest pull
+/// drain recorded the owner's from its probe at submission. Claimed leaves
+/// validate against the owner's gates each claim captures, but a leaf of an
+/// older owner falls back to this copy, and untracked config drifts silently.
+pub(super) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    const CHECK: &str = "pull-gates";
+    let inspect = || -> Result<Option<Option<String>>, OrbitError> {
+        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
+            job_id: Some(orbit_core::application::distributed::PULL_DRAIN_JOB.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        })?;
+        let Some(run) = runs.first() else {
+            return Ok(None);
+        };
+        runtime.pull_gate_drift(&run.run_id).map(Some)
+    };
+    match inspect() {
+        Ok(None) => check(
+            CHECK,
+            WorkspaceDoctorStatus::Skipped,
+            "no pull drain has run from this checkout".to_string(),
+        ),
+        Ok(Some(None)) => check(
+            CHECK,
+            WorkspaceDoctorStatus::Ok,
+            "validation gates match the owner's as the latest pull drain recorded them".to_string(),
+        ),
+        Ok(Some(Some(drift))) => actionable_check(
+            CHECK,
+            WorkspaceDoctorStatus::Warning,
+            drift,
+            "Copy the owner's `workflow.required_validation_commands` and \
+             `review.baseline_commands` into this replica's `.orbit/config.toml` (`orbit config \
+             get` on the owner shows them), then start a new pull drain."
+                .to_string(),
+        ),
+        Err(error) => check(
+            CHECK,
+            WorkspaceDoctorStatus::Warning,
+            format!("cannot inspect pull validation gates: {error}"),
+        ),
+    }
+}
+
 /// Follower pull settlements recorded locally but never delivered to the
 /// owner. Nothing retries delivery on a timer, so the owner keeps the claim
 /// `running` until an operator runs a settle-only pass; this row is what makes

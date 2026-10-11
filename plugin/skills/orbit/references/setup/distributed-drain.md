@@ -85,6 +85,12 @@ captured empty list. When configured, the owner requires the reviewer to report
 each captured command as passing evidence, then independently verifies the
 owner's exact-run and exact-head handoff logs against the same command list.
 List skew or missing evidence fails closed.
+Every admission receipt also captures the owner's
+`workflow.required_validation_commands` and `review.baseline_commands`, review or not.
+A claimed leaf validates, replays sandbox deferrals and trusts baseline reruns
+against that capture, not against the follower's own lists. A refusal names
+the gate list it checked and its source. A claim from an older owner that
+captured no gates falls back to the follower's lists with a warning.
 A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
 ignored: `orbit doctor` warns; delete the files. Deny a caller by removing its
 key from `~/.ssh/authorized_keys`.
@@ -169,8 +175,11 @@ snapshot with a settlement diagnostic; `.orbit/tmp/` scratch is excluded.
 On the follower, from the replica checkout, with the owner registered by
 `orbit host add <owner-ssh-target>` (check `orbit host list` shows it reachable
 with this machine's `binary_version` and `protocol_fingerprint`) and the same
-`workflow.required_validation_commands` the owner declares (an empty list on
-both sides runs no required check; the drain starts and notes it):
+`workflow.required_validation_commands` and `review.baseline_commands` the owner
+declares (an empty required list on both sides runs no required check; the
+drain starts and notes it). Per-host `.orbit/` config is untracked, so these
+lists can drift. `orbit run auto --pull` prints a `Warning:` naming each list
+that differs from the owner's, and `orbit doctor` reports it as `pull-gates`:
 
 ```bash
 orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 8h --concurrency 3

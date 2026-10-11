@@ -2298,8 +2298,9 @@ fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
                 .expect_err("only this host's gates replay")
                 .to_string();
             assert!(
-                refused.contains("not one of this host's validation gates"),
-                "{refused}"
+                refused.contains("not one of this host's validation gates")
+                    && refused.contains("from this host's configuration"),
+                "[ORB-15622] the refusal names the gates it checked and their source: {refused}"
             );
         },
     );

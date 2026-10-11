@@ -118,7 +118,7 @@ impl ReviewedLeaf {
         (leaf, worker.expect("the leaf's worker"))
     }
 
-    fn admit_launched(
+    pub(super) fn admit_launched(
         owner_config: &str,
         follower_config: &str,
         launch: impl FnOnce(&Pair, &str) -> String,

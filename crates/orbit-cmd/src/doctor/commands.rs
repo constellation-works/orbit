@@ -185,6 +185,7 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("pull-protocol", |runtime, _| {
         doctor_check_pull_protocol(runtime)
     }),
+    DoctorProbe::one("pull-gates", |runtime, _| doctor_check_pull_gates(runtime)),
     DoctorProbe::one("task-reservations", |runtime, _| {
         doctor_check_task_reservations(runtime)
     }),

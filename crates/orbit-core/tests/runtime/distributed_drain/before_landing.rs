@@ -327,3 +327,93 @@ fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
         )
         .expect("probe")
 }
+
+/// [ORB-15622] A claimed leaf's before-landing review settles a baseline
+/// claim against the owner's `review.baseline_commands`, which its claim
+/// captured, not against the replica's own list: the owner's check is rerun
+/// on the base and confirms the red base, and a check only the replica lists
+/// is refused as one the host does not rerun.
+#[test]
+fn a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands() {
+    if !isolated(
+        module_path!(),
+        "a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands",
+    ) {
+        return;
+    }
+    // Fails to build wherever it runs, base and candidate alike, so the
+    // failure is held for the red base rather than counted known red.
+    let scripts = TempDir::new().unwrap();
+    let command = |name: &str| {
+        let script = scripts.path().join(name);
+        std::fs::write(
+            &script,
+            "echo 'error: suite::broken does not build'\necho '  --> src/lib.rs:1:1'\nexit 1\n",
+        )
+        .unwrap();
+        format!("sh '{}'", script.display())
+    };
+    let (owner_check, replica_check) = (command("owner-check.sh"), command("replica-check.sh"));
+    let owner_config = format!(
+        "[review]\nbefore_landing = true\nbaseline_commands = [\"{owner_check}\"]\n\n\
+         [operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+    );
+    let replica_config = format!("[review]\nbaseline_commands = [\"{replica_check}\"]\n");
+    let settle_claim = |claimed: &str| {
+        let mut leaf = ReviewedLeaf::admit_from(&owner_config, &replica_config);
+        leaf.gate_input["before_landing"] = json!(true);
+        let admitted = leaf.admit_review();
+        assert_eq!(admitted["applies"], true, "{admitted}");
+        let report: orbit_types::workflow::ReviewReport = serde_json::from_value(json!({
+            "schema_version": 1,
+            "attempt_id": admitted["attempt_id"],
+            "verdict": "reject",
+            "summary": "The candidate is sound; the check fails on the base too.",
+            "findings": [],
+            "validation": [{
+                "id": "V1", "command": claimed, "outcome": "failed", "role": "required",
+                "sources": ["src/lib.rs"],
+                "baseline": {
+                    "base_commit": admitted["base_sha"], "outcome": "failed",
+                    "failures": ["suite::broken"],
+                },
+            }],
+            "escalation": "The required check fails on the pinned base.",
+        }))
+        .unwrap();
+        leaf.put_report(&report);
+        let failure = leaf
+            .settle()
+            .expect_err("a failed required check never passes");
+        let certificate: orbit_types::workflow::ReviewCertificate = serde_json::from_slice(
+            &leaf
+                .owner_artifact(orbit_types::workflow::REVIEW_GATE_ARTIFACT)
+                .expect("the certificate is on the owner's task"),
+        )
+        .unwrap();
+        (failure, certificate)
+    };
+
+    let (failure, certificate) = settle_claim(&owner_check);
+    assert!(
+        orbit_types::workflow::is_baseline_red_failure(None, Some(&failure)),
+        "the owner's check confirms the red base: {failure}"
+    );
+    assert_eq!(certificate.baseline_red.len(), 1, "{failure}");
+    assert_eq!(certificate.baseline_red[0].command, owner_check);
+
+    let (failure, certificate) = settle_claim(&replica_check);
+    assert!(
+        !orbit_types::workflow::is_baseline_red_failure(None, Some(&failure)),
+        "{failure}"
+    );
+    assert!(certificate.baseline_red.is_empty());
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+    assert!(
+        certificate.escalation.as_deref().is_some_and(|reason| {
+            reason.contains("baseline_claim_refused") && reason.contains("this check is neither")
+        }),
+        "{:?}",
+        certificate.escalation
+    );
+}

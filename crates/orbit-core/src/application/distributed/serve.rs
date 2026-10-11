@@ -583,6 +583,7 @@ impl crate::OrbitRuntime {
             &AdmissionOrdering {
                 owner_os: self.host_os(),
                 expiring_tasks,
+                gates: Some(self.owner_validation_gates()),
             },
             owner_binary_version(),
             &self.paths().repo_root,

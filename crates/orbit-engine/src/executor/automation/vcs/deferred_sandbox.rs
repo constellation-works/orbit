@@ -5,8 +5,10 @@
 //! [`accept_implementer_deferral`] runs at the implement step boundary. The
 //! implementer names only the validation summary its gate wrote; Orbit derives
 //! the [`DeferredSandboxValidation`] from it, checks it against the gates this
-//! host names and the step's pinned base, and runs the deferring sandbox's
-//! probe in the implementer's lane itself [ORB-15516]. The derived record
+//! host names ([`RuntimeHost::validation_gates`]: on a claimed leaf, the
+//! owner's gates its claim captured [ORB-15622]) and the step's pinned base,
+//! and runs the deferring sandbox's probe in the implementer's lane itself
+//! [ORB-15516]. The derived record
 //! replaces the handoff in the step's output, and an owner run keeps it on the
 //! task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate skips the
 //! implementer, so the obligation must outlive the run that created it. A
@@ -23,7 +25,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact, DeferredSandboxValidation, deferral_handoff,
+    DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact, DeferredSandboxValidation,
+    HostValidationGates, deferral_handoff,
 };
 use serde_json::Value;
 
@@ -41,15 +44,6 @@ pub(crate) struct ImplementerLane<'a> {
     pub(crate) provider: Option<&'a str>,
     /// The step's filesystem profile.
     pub(crate) fs_profile: Option<&'a str>,
-}
-
-/// The gates whose deferrals an implementer may hand off: the required
-/// validation commands, then the review baseline commands.
-fn deferral_gates<H: RuntimeHost + ?Sized>(host: &H) -> Vec<String> {
-    with_replays(
-        host.required_validation_commands(),
-        &host.review_baseline_commands(),
-    )
 }
 
 /// `commands`, then each of `replays` it does not already hold.
@@ -137,7 +131,7 @@ fn derive<H: RuntimeHost + ?Sized>(
     let pending = handoff
         .derive(
             &summary,
-            &deferral_gates(host),
+            &host.validation_gates(),
             input.get("base_sha").and_then(Value::as_str),
         )
         .map_err(|reason| {
@@ -227,7 +221,7 @@ pub(super) fn deferred_replays<H: RuntimeHost + ?Sized>(
     host: &H,
     task_ids: &[String],
 ) -> Result<Vec<String>, OrbitError> {
-    let gates = deferral_gates(host);
+    let gates = host.validation_gates();
     let mut replays = Vec::new();
     for task_id in task_ids {
         if let Some(record) = kept(host, task_id)?.and_then(|kept| kept.deferred) {
@@ -256,17 +250,21 @@ pub(super) fn claimed_deferred_replays<H: RuntimeHost + ?Sized>(
                 "the implementer's deferred sandbox validation cannot be replayed: {error}"
             ))
         })?;
-    Ok(vec![replayable(&record, &deferral_gates(host))?])
+    Ok(vec![replayable(&record, &host.validation_gates())?])
 }
 
 /// The record's command, while it is still one of this host's gates.
-fn replayable(record: &DeferredSandboxValidation, gates: &[String]) -> Result<String, OrbitError> {
-    if record.names_gate(gates) {
+fn replayable(
+    record: &DeferredSandboxValidation,
+    gates: &HostValidationGates,
+) -> Result<String, OrbitError> {
+    if record.names_gate(&gates.gates.deferrable()) {
         return Ok(record.command.trim().to_string());
     }
     Err(OrbitError::PolicyDenied(format!(
         "deferred sandbox validation names `{}`, which is not one of this host's validation \
-         gates, so its deferred coverage cannot be replayed",
-        record.command.trim()
+         gates, so its deferred coverage cannot be replayed; the gates checked are {}",
+        record.command.trim(),
+        gates.describe_deferrable()
     )))
 }

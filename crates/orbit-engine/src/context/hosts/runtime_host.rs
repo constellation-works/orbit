@@ -436,6 +436,18 @@ pub trait RuntimeHost: Send + Sync {
         Vec::new()
     }
 
+    /// The gates this host holds a candidate to, with where it read them
+    /// [ORB-15622]. Defaults to this host's own accessors; a claimed leaf's
+    /// host answers with the owner's gates its claim captured, so a
+    /// replica's drifted configuration never decides which deferrals it
+    /// accepts or replays.
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
+            required_validation_commands: self.required_validation_commands(),
+            baseline_commands: self.review_baseline_commands(),
+        })
+    }
+
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
     /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and

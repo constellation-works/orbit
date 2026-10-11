@@ -2299,6 +2299,53 @@ fn run_show_exposes_degraded_pull_pass_health() {
     );
 }
 
+/// [ORB-15622] `orbit doctor` compares this replica's validation gates with
+/// the owner's that its latest pull drain recorded at submission, and names
+/// each list that differs.
+#[test]
+fn doctor_warns_when_the_replicas_gates_differ_from_the_owners() {
+    if !isolated_run_observation(
+        "run_observation::doctor_warns_when_the_replicas_gates_differ_from_the_owners",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let now = chrono::Utc::now().to_rfc3339();
+    let input = serde_json::json!({"owner_validation_gates": {
+        "required_validation_commands": ["make owner-only-check"],
+        "baseline_commands": [],
+    }});
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES ('jrun-cli-gate-drift',?1,'workspace_pull_pipeline',1,'running',?2,?3,?3,?3,?4)",
+        params![fixture.workspace_id(), input.to_string(), now, std::process::id()],
+    ).unwrap();
+    // The fixture has no provider CLIs, so other doctor rows fail and its
+    // process exits nonzero. Inspect the real JSON diagnostic.
+    let diagnosis = fixture.orbit().args(["doctor", "--json"]).output().unwrap();
+    let diagnosed: Value = serde_json::from_slice(&diagnosis.stdout).unwrap();
+    let row = diagnosed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["check"] == "pull-gates")
+        .unwrap();
+    assert_eq!(row["status"], "warning", "{diagnosed}");
+    assert!(
+        row["message"]
+            .as_str()
+            .unwrap()
+            .contains("but [`make owner-only-check`] on the owner"),
+        "{row}"
+    );
+    assert!(
+        row["remediation"]
+            .as_str()
+            .unwrap()
+            .contains("`.orbit/config.toml`"),
+        "{row}"
+    );
+}
+
 #[cfg(unix)]
 mod agent_invoke;
 

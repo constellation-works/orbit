@@ -198,6 +198,9 @@ impl Execute for AutoCommand {
                 orbit_types::workflow::JobRunTrigger::cli(),
             )?;
             warn_unset_env_pass(runtime);
+            let mut warnings = submission_warnings(runtime);
+            // [ORB-15622] A replica whose gates drifted from the owner's.
+            warnings.extend(runtime.pull_gate_drift(&invoke.run_id)?);
             return workflow_dispatch_payload_with_notices(
                 AUTO_WORKFLOW,
                 &[WorkflowDispatchResult {
@@ -214,7 +217,7 @@ impl Execute for AutoCommand {
                     error_code: None,
                     error_message: None,
                 }],
-                submission_warnings(runtime),
+                warnings,
                 runtime.required_validation_note().into_iter().collect(),
             );
         }

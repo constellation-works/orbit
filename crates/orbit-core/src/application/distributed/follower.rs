@@ -16,6 +16,13 @@
 //! claimed leaves run no required check, as an owner's own delivery does, and
 //! `orbit run auto` notes the empty list.
 //!
+//! The owner's validation gates, as its probe reports them, are recorded on
+//! the drain [ORB-15622]. Claimed leaves validate against the gates each
+//! claim captures, not this replica's, but a replica whose own copy differs
+//! is still warned at submission and by `orbit doctor`
+//! ([`crate::OrbitRuntime::pull_gate_drift`]): untracked per-host config
+//! drifts silently, and a leaf of an older owner falls back to it.
+//!
 //! The resolved destination is persisted on the run, so every iteration, leaf
 //! and retry addresses the same owner and workspace. A destination that later
 //! stops answering is reported by the drain, never replaced by a local store.
@@ -34,7 +41,9 @@ use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::PullDestination;
-use orbit_types::workflow::{DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle};
+use orbit_types::workflow::{
+    DrainAdmissionPass, JobRunTrigger, PullSinglePass, ResourceThrottle, ValidationGates,
+};
 use serde_json::{Value, json};
 
 use super::pull_waiting::{OwnerAnswer, PullWaiting};
@@ -43,6 +52,10 @@ use crate::application::job::PipelineInvokeResult;
 
 /// The job a follower drain runs.
 pub const PULL_DRAIN_JOB: &str = "workspace_pull_pipeline";
+
+/// The drain run-input key holding the owner's validation gates as its probe
+/// reported them at submission, or `null` when an older owner reported none.
+const OWNER_GATES_INPUT_KEY: &str = "owner_validation_gates";
 
 const PASS_FAILURE_THRESHOLD: u32 = 3;
 
@@ -219,11 +232,12 @@ impl crate::OrbitRuntime {
         let allowed_crews = self.canonical_allowed_crews(request.allowed_crews)?;
         // A host that would refuse every leaf claims nothing: no run exists yet.
         self.preflight_git_protection()?;
-        let destination = self.resolve_pull_destination(request.selector)?;
+        let (destination, owner_gates) = self.resolve_pull_destination(request.selector)?;
         let mut input = json!({
             "for_seconds": request.for_seconds.unwrap_or(0),
             "destination": serde_json::to_value(&destination)
                 .map_err(|error| OrbitError::Store(error.to_string()))?,
+            OWNER_GATES_INPUT_KEY: owner_gates,
         });
         if let Some(ceiling) = request.max_active_leaf_runs {
             input["max_active_leaf_runs"] = json!(ceiling);
@@ -231,12 +245,64 @@ impl crate::OrbitRuntime {
         if !allowed_crews.is_empty() {
             input[crate::runtime::engine::crew::ALLOWED_CREWS_INPUT_KEY] = json!(allowed_crews);
         }
-        self.submit_pipeline_run_with_trigger(PULL_DRAIN_JOB, input, None, request.actor, trigger)
+        let drift = self.gate_drift(input.get(OWNER_GATES_INPUT_KEY));
+        let submitted = self.submit_pipeline_run_with_trigger(
+            PULL_DRAIN_JOB,
+            input,
+            None,
+            request.actor,
+            trigger,
+        )?;
+        if let Some(drift) = drift {
+            tracing::warn!("pull drain {}: {drift}", submitted.run_id);
+        }
+        Ok(submitted)
+    }
+
+    /// [ORB-15622] How this replica's `workflow.required_validation_commands`
+    /// and `review.baseline_commands` differ from the owner's, as the pull
+    /// drain `run_id` recorded them from the owner's probe at submission.
+    /// `None` when they match, or when the drain predates the record. `orbit
+    /// run auto --pull` and `orbit doctor` report it as a warning.
+    pub fn pull_gate_drift(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(self
+            .stores()
+            .jobs()
+            .get_job_run(run_id)?
+            .and_then(|run| self.gate_drift(run.input.as_ref()?.get(OWNER_GATES_INPUT_KEY))))
+    }
+
+    fn gate_drift(&self, recorded: Option<&Value>) -> Option<String> {
+        const REMEDY: &str = "copy the owner's values into this replica's `.orbit/config.toml`";
+        let owner = match recorded? {
+            Value::Null => {
+                return Some(format!(
+                    "the owner reported no validation gates (an older build), so claimed leaves \
+                     it admits validate against this replica's \
+                     `workflow.required_validation_commands` and `review.baseline_commands`, \
+                     which may differ from the owner's; upgrade the owner, or {REMEDY}"
+                ));
+            }
+            value => serde_json::from_value::<ValidationGates>(value.clone()).ok()?,
+        };
+        let drift = self.local_validation_gates().drift_from(&owner);
+        (!drift.is_empty()).then(|| {
+            format!(
+                "this replica's validation gates differ from the owner's: {}. Claimed leaves \
+                 validate against the owner's gates each claim captures, but this copy is what \
+                 a leaf of an older owner falls back to; {REMEDY}",
+                drift.join("; ")
+            )
+        })
     }
 
     /// The owner this replica pulls from, checked against the replica's own
-    /// registration and the owner's live answer.
-    fn resolve_pull_destination(&self, selector: &str) -> Result<PullDestination, OrbitError> {
+    /// registration and the owner's live answer, with the validation gates
+    /// that answer reported (`None` from an older owner).
+    fn resolve_pull_destination(
+        &self,
+        selector: &str,
+    ) -> Result<(PullDestination, Option<ValidationGates>), OrbitError> {
         let selector = selector.trim();
         let owner_machine = self.coordination_write_owner().ok_or_else(|| {
             OrbitError::CapabilityRefused(
@@ -340,11 +406,18 @@ impl crate::OrbitRuntime {
             .filter(|id| !id.trim().is_empty())
             .ok_or_else(|| OrbitError::Store("owner probe reported no workspace id".into()))?
             .to_string();
-        Ok(PullDestination {
-            owner_machine_id: owner_machine.to_string(),
-            owner_workspace_id,
-            selector: selector.to_string(),
-            execution_machine_id: execution_machine,
-        })
+        let gates = report
+            .get("validation_gates")
+            .cloned()
+            .and_then(|gates| serde_json::from_value(gates).ok());
+        Ok((
+            PullDestination {
+                owner_machine_id: owner_machine.to_string(),
+                owner_workspace_id,
+                selector: selector.to_string(),
+                execution_machine_id: execution_machine,
+            },
+            gates,
+        ))
     }
 }

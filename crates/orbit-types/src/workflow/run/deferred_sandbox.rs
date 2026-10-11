@@ -33,6 +33,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::validation_gates::HostValidationGates;
 use crate::workflow::host_evidence::{
     BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, SEATBELT_APPLY_REFUSAL,
     SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
@@ -54,7 +55,9 @@ pub const SEATBELT_APPLY_PROBE: &str =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeferredSandboxValidation {
-    /// The gate, spelled as the owner's configuration names it.
+    /// The gate, spelled as the owner's configuration names it. A claimed
+    /// leaf reads that spelling from its claim's captured gates, not the
+    /// replica's configuration [ORB-15622].
     pub command: String,
     pub exit_code: i32,
     /// Tests the gate executed.
@@ -247,13 +250,14 @@ struct GateSummary {
 }
 
 impl DeferralHandoff {
-    /// Check the gate's `summary` against the owner's `gates` and the step's
-    /// `pinned_base`. `Ok` names the probe Orbit must run; `Err` is the first
-    /// reason the gate run is not deferrable, before any probe runs.
+    /// Check the gate's `summary` against the `gates` this host holds the
+    /// candidate to, and the step's `pinned_base`. `Ok` names the probe Orbit
+    /// must run; `Err` is the first reason the gate run is not deferrable,
+    /// before any probe runs.
     pub fn derive(
         &self,
         summary: &[u8],
-        gates: &[String],
+        gates: &HostValidationGates,
         pinned_base: Option<&str>,
     ) -> Result<PendingDeferral, String> {
         let mut decoder = serde_json::Deserializer::from_slice(summary);
@@ -272,11 +276,12 @@ impl DeferralHandoff {
                     .to_string(),
             );
         };
-        if !names_gate(&command, gates) {
+        if !names_gate(&command, &gates.gates.deferrable()) {
             return Err(format!(
                 "names `{command}`, which is not one of the owner's validation gates \
                  (`workflow.required_validation_commands` or `review.baseline_commands`), so no \
-                 host would replay it"
+                 host would replay it; the gates checked are {}",
+                gates.describe_deferrable()
             ));
         }
         let Some(exit_code) = summary.exit_code else {

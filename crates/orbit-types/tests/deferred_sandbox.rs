@@ -7,8 +7,8 @@
 
 use orbit_types::workflow::{
     BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_PROBE, BUBBLEWRAP_NAMESPACE_REFUSAL,
-    DeferredSandboxValidation, NamespaceProbe, SEATBELT_APPLY_PROBE, SEATBELT_DEFERRAL_PREFIX,
-    deferral_handoff,
+    DeferredSandboxValidation, HostValidationGates, NamespaceProbe, SEATBELT_APPLY_PROBE,
+    SEATBELT_DEFERRAL_PREFIX, ValidationGateSource, ValidationGates, deferral_handoff,
 };
 use serde_json::{Value, json};
 
@@ -59,6 +59,14 @@ fn refused_bwrap_probe() -> NamespaceProbe {
     bwrap_probe(1, &format!("bwrap: {BUBBLEWRAP_NAMESPACE_REFUSAL}"))
 }
 
+/// A host whose required validation commands are `commands`.
+fn host_gates(commands: &[&str]) -> HostValidationGates {
+    HostValidationGates::local(ValidationGates {
+        required_validation_commands: commands.iter().map(ToString::to_string).collect(),
+        baseline_commands: Vec::new(),
+    })
+}
+
 /// Derive the record from `handoff`, the `summary` it names and `probe` the
 /// way the implement step boundary does, after checking which probe the
 /// summary asks Orbit to run.
@@ -71,7 +79,7 @@ fn derive(
     let handoff = deferral_handoff(&output)?.expect("the handoff names a summary");
     let pending = handoff.derive(
         &serde_json::to_vec(summary).expect("summary encodes"),
-        &[GATE.to_string(), "make goldens".to_string()],
+        &host_gates(&[GATE, "make goldens"]),
         Some(BASE),
     )?;
     pending.complete(probe)
@@ -110,7 +118,7 @@ fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
             .expect("present")
             .derive(
                 &serde_json::to_vec(&summary(&[notice])).expect("encodes"),
-                &[GATE.to_string()],
+                &host_gates(&[GATE]),
                 Some(BASE),
             )
             .expect("deferrable before the probe")
@@ -319,4 +327,48 @@ fn a_handoff_that_names_no_summary_is_refused_and_none_defers_nothing() {
 
     assert!(refusal.contains("names no gate summary"), "{refusal}");
     assert!(absent.is_none() && null.is_none());
+}
+
+/// [ORB-15622] A record naming a command outside the gates it is checked
+/// against is refused with that list and where the host read it, so an
+/// operator can tell a replica's drifted configuration from the owner's.
+#[test]
+fn a_record_naming_no_gate_is_refused_naming_the_gates_and_their_source() {
+    let output = json!({ "deferred_sandbox_validation": summary_handoff() });
+    let handoff = deferral_handoff(&output)
+        .expect("well formed")
+        .expect("present");
+    for (source, named) in [
+        (
+            ValidationGateSource::OwnerContract,
+            "captured in this claim's admission contract",
+        ),
+        (
+            ValidationGateSource::ReplicaConfig,
+            "this replica's local configuration",
+        ),
+    ] {
+        let gates = HostValidationGates {
+            gates: ValidationGates {
+                required_validation_commands: vec!["make ci-fast".to_string()],
+                baseline_commands: Vec::new(),
+            },
+            source,
+        };
+
+        let reason = handoff
+            .derive(
+                &serde_json::to_vec(&summary(&[bwrap_notice()])).expect("summary encodes"),
+                &gates,
+                Some(BASE),
+            )
+            .expect_err("a gate the host does not list is never deferrable");
+
+        assert!(
+            reason.contains(&format!("names `{GATE}`"))
+                && reason.contains("the gates checked are [`make ci-fast`]")
+                && reason.contains(named),
+            "{source:?}: {reason}"
+        );
+    }
 }

@@ -543,10 +543,22 @@ Drain card follows the same rule: readiness reports `replica: true` and the
 approve-proposed window (`orbit run auto --approve-proposed`, or **Approve
 qualifying** in the owner's Drain card) on the owner.
 
-This host should declare the same `workflow.required_validation_commands` as
-the owner, since the owner re-checks the evidence against its own list. An
-empty list is not a refusal: the drain starts with a `Note:` line saying no
-required validation runs here.
+Every admission receipt captures the owner's
+`workflow.required_validation_commands` and `review.baseline_commands`, whether
+or not review is on. A claimed leaf validates against those captured gates,
+replays its implementer's sandbox deferral against them, and its review
+confirms baseline claims against them. It does not use this host's lists.
+A deferral or replay refusal names the gate list it checked and its source.
+This host should still declare the same lists as the owner. `.orbit/` config
+is untracked, so this host's copy can drift. A claim admitted by an older
+owner build that captured no gates falls back to this host's lists, and the
+leaf logs a warning. At submission the drain records the lists the owner's
+probe reports. `orbit run auto --pull` prints a `Warning:` line naming each
+list that differs, and the `pull-gates` row of `orbit doctor` reports the same
+comparison for the latest drain. Copy the owner's values (`orbit config get`
+on the owner) into this host's `.orbit/config.toml`. An empty required list is
+not a refusal: the drain starts with a `Note:` line saying no required
+validation runs here.
 
 The drain is an ordinary durable run of `workspace_pull_pipeline`:
 
