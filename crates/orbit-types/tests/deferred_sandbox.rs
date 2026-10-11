@@ -1,14 +1,15 @@
 //! Deferred-sandbox records derived through the public workflow API
 //! [ORB-15516]: the implementer names the gate's summary, and the record comes
-//! from that summary and Orbit's own probe.
+//! from that summary, the lane the implementer ran in and Orbit's own probe.
 
 // Test assertions unwrap results, following the test-only crate-root exemption.
 #![allow(clippy::expect_used)]
 
 use orbit_types::workflow::{
     BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_PROBE, BUBBLEWRAP_NAMESPACE_REFUSAL,
-    DeferredSandboxValidation, HostValidationGates, NamespaceProbe, SEATBELT_APPLY_PROBE,
-    SEATBELT_DEFERRAL_PREFIX, ValidationGateSource, ValidationGates, deferral_handoff,
+    DeferralLane, DeferredSandboxValidation, EvidenceHostOs, HostValidationGates, NamespaceProbe,
+    PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_PROBE, SEATBELT_APPLY_PROBE, SEATBELT_DEFERRAL_PREFIX,
+    ValidationGateSource, ValidationGates, deferral_handoff,
 };
 use serde_json::{Value, json};
 
@@ -25,6 +26,26 @@ fn seatbelt_notice() -> String {
          profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not permitted"
     )
 }
+
+fn ps_notice() -> String {
+    format!(
+        "{PS_DENIED_DEFERRAL_PREFIX} \
+         run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them: the \
+         sandbox denied running `ps`: Operation not permitted (os error 1)"
+    )
+}
+
+/// An owner run on Linux, where every deferral but ps-denied is checked.
+const OWNER_LINUX: DeferralLane = DeferralLane {
+    claimed: false,
+    os: Some(EvidenceHostOs::Linux),
+};
+
+/// A claimed leaf on macOS, the only lane that may defer ps-denied tests.
+const CLAIMED_MACOS: DeferralLane = DeferralLane {
+    claimed: true,
+    os: Some(EvidenceHostOs::Macos),
+};
 
 /// The summary a passing gate wrote when its only gap is `notices`.
 fn summary(notices: &[String]) -> Value {
@@ -55,6 +76,21 @@ fn seatbelt_probe(exit_code: i32, output: &str) -> NamespaceProbe {
     }
 }
 
+fn ps_probe(exit_code: i32, output: &str) -> NamespaceProbe {
+    NamespaceProbe {
+        command: PS_EXEC_PROBE.to_string(),
+        exit_code,
+        output: output.to_string(),
+    }
+}
+
+fn refused_ps_probe() -> NamespaceProbe {
+    ps_probe(
+        71,
+        "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
+    )
+}
+
 fn refused_bwrap_probe() -> NamespaceProbe {
     bwrap_probe(1, &format!("bwrap: {BUBBLEWRAP_NAMESPACE_REFUSAL}"))
 }
@@ -68,9 +104,10 @@ fn host_gates(commands: &[&str]) -> HostValidationGates {
 }
 
 /// Derive the record from `handoff`, the `summary` it names and `probe` the
-/// way the implement step boundary does, after checking which probe the
-/// summary asks Orbit to run.
-fn derive(
+/// way the implement step boundary does for an implementer in `lane`, after
+/// checking which probe the summary asks Orbit to run.
+fn derive_in(
+    lane: DeferralLane,
     handoff: Value,
     summary: &Value,
     probe: NamespaceProbe,
@@ -81,8 +118,18 @@ fn derive(
         &serde_json::to_vec(summary).expect("summary encodes"),
         &host_gates(&[GATE, "make goldens"]),
         Some(BASE),
+        lane,
     )?;
     pending.complete(probe)
+}
+
+/// [`derive_in`] for an owner run on Linux.
+fn derive(
+    handoff: Value,
+    summary: &Value,
+    probe: NamespaceProbe,
+) -> Result<DeferredSandboxValidation, String> {
+    derive_in(OWNER_LINUX, handoff, summary, probe)
 }
 
 fn summary_handoff() -> Value {
@@ -120,6 +167,7 @@ fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
                 &serde_json::to_vec(&summary(&[notice])).expect("encodes"),
                 &host_gates(&[GATE]),
                 Some(BASE),
+                CLAIMED_MACOS,
             )
             .expect("deferrable before the probe")
             .probe()
@@ -127,11 +175,136 @@ fn the_summary_names_the_probe_of_the_sandbox_its_notices_defer() {
 
     let bubblewrap = probe_of(bwrap_notice());
     let seatbelt = probe_of(seatbelt_notice());
+    let ps = probe_of(ps_notice());
 
     assert_eq!(bubblewrap.command, BUBBLEWRAP_NAMESPACE_PROBE);
     assert_eq!(bubblewrap.argv.join(" "), BUBBLEWRAP_NAMESPACE_PROBE);
     assert_eq!(seatbelt.command, SEATBELT_APPLY_PROBE);
     assert_eq!(seatbelt.argv[0], "/usr/bin/sandbox-exec");
+    assert_eq!(ps.command, PS_EXEC_PROBE);
+    assert_eq!(ps.argv.join(" "), PS_EXEC_PROBE);
+}
+
+/// [ORB-15587] A macOS claimed leaf whose agent sandbox refuses to exec `ps`
+/// defers those tests to its claim host like a nested-sandbox skip. Every
+/// other lane, mixed kind, unrefused probe or untyped skip is refused.
+#[test]
+fn a_ps_denied_deferral_is_derived_only_for_a_macos_claimed_leaf() {
+    let notices = [ps_notice(), ps_notice()];
+
+    let record = derive_in(
+        CLAIMED_MACOS,
+        summary_handoff(),
+        &summary(&notices),
+        refused_ps_probe(),
+    )
+    .expect("a macOS claimed leaf whose lane refuses `ps` defers its ps-denied tests");
+
+    assert_eq!(record.notices, notices.to_vec());
+    assert_eq!(record.probe, refused_ps_probe());
+
+    let owner_macos = DeferralLane {
+        claimed: false,
+        os: Some(EvidenceHostOs::Macos),
+    };
+    let claimed_linux = DeferralLane {
+        claimed: true,
+        os: Some(EvidenceHostOs::Linux),
+    };
+    let claimed_unnamed = DeferralLane {
+        claimed: true,
+        os: None,
+    };
+    let cases = [
+        (
+            "an owner run on macOS",
+            owner_macos,
+            json!([ps_notice()]),
+            refused_ps_probe(),
+            "only a claimed leaf on macOS may defer; this implementer ran in its owner's run \
+             on macos",
+        ),
+        (
+            "a claimed leaf on Linux",
+            claimed_linux,
+            json!([ps_notice()]),
+            refused_ps_probe(),
+            "ran as a claimed leaf on linux",
+        ),
+        (
+            "a claimed leaf on an unnamed OS",
+            claimed_unnamed,
+            json!([ps_notice()]),
+            refused_ps_probe(),
+            "ran as a claimed leaf on an unnamed OS",
+        ),
+        (
+            "the untyped skip the test helper used to print",
+            CLAIMED_MACOS,
+            json!(["SKIP: the sandbox denied running `ps`: Operation not permitted (os error 1)"]),
+            refused_ps_probe(),
+            "is not a Bubblewrap, Seatbelt or ps-denied deferral",
+        ),
+        (
+            "a Seatbelt notice beside a ps-denied one",
+            CLAIMED_MACOS,
+            json!([ps_notice(), seatbelt_notice()]),
+            refused_ps_probe(),
+            "is not a ps-denied deferral",
+        ),
+        (
+            "a ps-denied notice beside a Bubblewrap one",
+            CLAIMED_MACOS,
+            json!([bwrap_notice(), ps_notice()]),
+            refused_bwrap_probe(),
+            "is not a Bubblewrap deferral",
+        ),
+        (
+            "a lane that runs `ps`",
+            CLAIMED_MACOS,
+            json!([ps_notice()]),
+            ps_probe(0, "    1"),
+            "no refused `ps` probe",
+        ),
+        (
+            "a probe that never ran",
+            CLAIMED_MACOS,
+            json!([ps_notice()]),
+            ps_probe(
+                -1,
+                "the probe could not run: spawn: Operation not permitted (os error 1)",
+            ),
+            "no refused `ps` probe",
+        ),
+        (
+            "a lane that cannot apply its sandbox at all",
+            CLAIMED_MACOS,
+            json!([ps_notice()]),
+            ps_probe(71, "sandbox-exec: sandbox_apply: Operation not permitted"),
+            "no refused `ps` probe",
+        ),
+        (
+            "the Seatbelt probe's answer",
+            CLAIMED_MACOS,
+            json!([ps_notice()]),
+            NamespaceProbe {
+                command: SEATBELT_APPLY_PROBE.to_string(),
+                exit_code: 71,
+                output: "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted"
+                    .to_string(),
+            },
+            "names the probe",
+        ),
+    ];
+
+    for (case, lane, notices, probe, reason) in cases {
+        let mut summary = summary(&[]);
+        summary["notices"] = notices;
+
+        let refusal = derive_in(lane, summary_handoff(), &summary, probe).expect_err(case);
+
+        assert!(refusal.contains(reason), "{case}: {refusal}");
+    }
 }
 
 #[test]
@@ -219,7 +392,7 @@ fn every_refusal_rule_holds_for_a_derived_record() {
         (
             "a notice of neither sandbox",
             with("notices", json!(["SKIP: sandbox denying ps"])),
-            "neither a Bubblewrap nor a Seatbelt deferral",
+            "not a Bubblewrap, Seatbelt or ps-denied deferral",
         ),
         (
             "both sandboxes' notices",
@@ -361,6 +534,7 @@ fn a_record_naming_no_gate_is_refused_naming_the_gates_and_their_source() {
                 &serde_json::to_vec(&summary(&[bwrap_notice()])).expect("summary encodes"),
                 &gates,
                 Some(BASE),
+                OWNER_LINUX,
             )
             .expect_err("a gate the host does not list is never deferrable");
 

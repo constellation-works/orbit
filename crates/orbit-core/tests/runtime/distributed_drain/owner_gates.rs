@@ -54,7 +54,15 @@ fn derive_deferral(
     let handoff = deferral_handoff(&output)?.expect("the handoff names a summary");
     let summary = serde_json::to_vec(&gate_summary(command, base)).expect("summary encodes");
     handoff
-        .derive(&summary, gates, Some(base))?
+        .derive(
+            &summary,
+            gates,
+            Some(base),
+            orbit_types::workflow::DeferralLane {
+                claimed: true,
+                os: orbit_types::workflow::EvidenceHostOs::current(),
+            },
+        )?
         .complete(NamespaceProbe {
             command: BUBBLEWRAP_NAMESPACE_PROBE.to_string(),
             exit_code: 1,

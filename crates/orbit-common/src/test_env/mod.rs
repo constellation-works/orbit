@@ -54,8 +54,8 @@ pub use env::{
 pub use fifo::{create_fixture_fifo, release_fixture_fifo};
 pub(crate) use process::classify_ps;
 pub use process::{
-    PsRun, harden_dir, host_load, prime_executable, ps_lstart_utc, start_identity_probe_blocker,
-    wait_until,
+    PsRun, harden_dir, host_load, prime_executable, ps_denied_deferral_notice, ps_lstart_utc,
+    report_ps_denied, start_identity_probe_blocker, wait_until,
 };
 #[cfg(unix)]
 pub use process::{UnrelatedProcess, spawn_unrelated_process};

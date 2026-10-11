@@ -921,14 +921,14 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
 /// Capture the pre-change stable timestamp independently of Orbit's probe.
 ///
 /// `None` when the sandbox refuses to run `ps`: there is no pre-change token
-/// to capture, so the caller returns after this reports the skip on stderr.
+/// to capture, so the caller returns after this reports `test`'s deferral on
+/// stderr [ORB-15587].
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[allow(clippy::print_stderr)]
-fn ps_lstart_utc(pid: u32) -> Option<String> {
+fn ps_lstart_utc(test: &str, pid: u32) -> Option<String> {
     let output = match test_env::ps_lstart_utc(pid) {
         test_env::PsRun::Ran(output) => output,
         test_env::PsRun::Denied(reason) => {
-            eprintln!("SKIP: {reason}");
+            test_env::report_ps_denied(test, &reason);
             return None;
         }
     };
@@ -976,7 +976,10 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
     }
 
     let pid = std::process::id();
-    let Some(raw) = ps_lstart_utc(pid) else {
+    let Some(raw) = ps_lstart_utc(
+        "run_observation::linux_start_identity_without_ps_matches_pre_change_owner_tokens",
+        pid,
+    ) else {
         return;
     };
     let namespace = current_pid_namespace().expect("Linux PID namespace");
@@ -1028,7 +1031,10 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
     let fixture = Fixture::init();
     for format in ["v2", "v1", "legacy"] {
         let owner = test_env::spawn_unrelated_process();
-        let Some(raw) = ps_lstart_utc(owner.pid()) else {
+        let Some(raw) = ps_lstart_utc(
+            "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
+            owner.pid(),
+        ) else {
             return;
         };
         let token = match format {

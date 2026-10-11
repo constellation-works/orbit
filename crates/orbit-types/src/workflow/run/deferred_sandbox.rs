@@ -6,8 +6,11 @@
 //! confined path: on Linux a [`BUBBLEWRAP_DEFERRAL_PREFIX`] notice, because
 //! Bubblewrap cannot create a nested user namespace; on macOS a
 //! [`SEATBELT_DEFERRAL_PREFIX`] notice, because `sandbox-exec` cannot apply a
-//! nested profile [ORB-15409]. An affected-test gate can therefore exit 0
-//! although those paths never ran.
+//! nested profile [ORB-15409]. A macOS lane's sandbox also refuses to exec
+//! the setuid `ps` that process-identity tests compare against, so they print
+//! a [`PS_DENIED_DEFERRAL_PREFIX`] notice; only a claimed leaf on macOS may
+//! defer that one ([`DeferralLane`]) [ORB-15587]. An affected-test gate can
+//! therefore exit 0 although those paths never ran.
 //!
 //! The implementer hands that gap off by naming only the validation summary
 //! the gate wrote ([`deferral_handoff`]). Orbit builds the
@@ -35,7 +38,8 @@ use serde_json::{Map, Value};
 
 use super::validation_gates::HostValidationGates;
 use crate::workflow::host_evidence::{
-    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, SEATBELT_APPLY_REFUSAL,
+    BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, EvidenceHostOs,
+    PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_REFUSAL, SEATBELT_APPLY_REFUSAL,
     SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
 };
 
@@ -49,6 +53,9 @@ pub const BUBBLEWRAP_NAMESPACE_PROBE: &str = "bwrap --unshare-user --ro-bind / /
 /// the permissive profile Orbit's own test guard applies.
 pub const SEATBELT_APPLY_PROBE: &str =
     "/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true";
+
+/// The probe that shows the lane refuses to exec `ps` [ORB-15587].
+pub const PS_EXEC_PROBE: &str = "/bin/ps -o pid= -p 1";
 
 /// An affected-test gate that passed with only one sandbox's deferrals, as
 /// Orbit derived it from the gate's summary and its own probe.
@@ -66,13 +73,14 @@ pub struct DeferredSandboxValidation {
     pub base: String,
     /// Every skip or deferral line the gate printed.
     pub notices: Vec<String>,
-    /// The deferring sandbox's probe ([`BUBBLEWRAP_NAMESPACE_PROBE`] or
-    /// [`SEATBELT_APPLY_PROBE`]) as Orbit ran it in the implementer's lane.
+    /// The deferring sandbox's probe ([`BUBBLEWRAP_NAMESPACE_PROBE`],
+    /// [`SEATBELT_APPLY_PROBE`] or [`PS_EXEC_PROBE`]) as Orbit ran it in the
+    /// implementer's lane.
     pub probe: NamespaceProbe,
 }
 
-/// One run of a sandbox probe: [`BUBBLEWRAP_NAMESPACE_PROBE`] or
-/// [`SEATBELT_APPLY_PROBE`].
+/// One run of a sandbox probe: [`BUBBLEWRAP_NAMESPACE_PROBE`],
+/// [`SEATBELT_APPLY_PROBE`] or [`PS_EXEC_PROBE`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NamespaceProbe {
@@ -114,6 +122,17 @@ pub struct DeferralProbe {
     pub argv: &'static [&'static str],
 }
 
+/// Where the implementer that handed a deferral off ran, which decides the
+/// kinds it may defer [ORB-15587].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeferralLane {
+    /// The implementer ran as a claimed leaf, whose claim host replays the
+    /// gate outside its sandbox before handing the candidate to its owner.
+    pub claimed: bool,
+    /// The OS of the host the implementer ran on.
+    pub os: Option<EvidenceHostOs>,
+}
+
 /// The sandbox whose refusal a record defers. A record defers one sandbox:
 /// every notice and the probe are that sandbox's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,11 +141,14 @@ enum DeferringSandbox {
     Bubblewrap,
     /// macOS: `sandbox-exec` cannot apply a nested profile [ORB-15409].
     Seatbelt,
+    /// macOS: the lane's sandbox refuses to exec the setuid `ps`. Only a
+    /// claimed leaf may defer it [ORB-15587].
+    PsDenied,
 }
 
 impl DeferringSandbox {
     fn of_notice(notice: &str) -> Option<Self> {
-        [Self::Bubblewrap, Self::Seatbelt]
+        [Self::Bubblewrap, Self::Seatbelt, Self::PsDenied]
             .into_iter()
             .find(|sandbox| notice.starts_with(sandbox.prefix()))
     }
@@ -135,6 +157,7 @@ impl DeferringSandbox {
         match self {
             Self::Bubblewrap => "Bubblewrap",
             Self::Seatbelt => "Seatbelt",
+            Self::PsDenied => "ps-denied",
         }
     }
 
@@ -142,6 +165,25 @@ impl DeferringSandbox {
         match self {
             Self::Bubblewrap => BUBBLEWRAP_DEFERRAL_PREFIX,
             Self::Seatbelt => SEATBELT_DEFERRAL_PREFIX,
+            Self::PsDenied => PS_DENIED_DEFERRAL_PREFIX,
+        }
+    }
+
+    /// Why an implementer in `lane` may not defer this kind, if it may not.
+    fn refuses_lane(self, lane: DeferralLane) -> Option<String> {
+        match self {
+            Self::Bubblewrap | Self::Seatbelt => None,
+            Self::PsDenied if lane.claimed && lane.os == Some(EvidenceHostOs::Macos) => None,
+            Self::PsDenied => Some(format!(
+                "lists `{PS_DENIED_DEFERRAL_PREFIX}` notices, which only a claimed leaf on macOS \
+                 may defer; this implementer ran {} on {}",
+                if lane.claimed {
+                    "as a claimed leaf"
+                } else {
+                    "in its owner's run"
+                },
+                lane.os.map_or("an unnamed OS", EvidenceHostOs::as_str)
+            )),
         }
     }
 
@@ -168,6 +210,10 @@ impl DeferringSandbox {
                     "/usr/bin/true",
                 ],
             },
+            Self::PsDenied => DeferralProbe {
+                command: PS_EXEC_PROBE,
+                argv: &["/bin/ps", "-o", "pid=", "-p", "1"],
+            },
         }
     }
 
@@ -185,6 +231,15 @@ impl DeferringSandbox {
                 probe.exit_code == SEATBELT_APPLY_REFUSAL_EXIT
                     && probe.output.contains(SEATBELT_APPLY_REFUSAL)
             }
+            Self::PsDenied => {
+                // The lane's sandbox wrapper ran and its exec of `ps` was
+                // refused. As for Bubblewrap, a probe that could not run
+                // (-1) justifies nothing, and a wrapper that could not apply
+                // its sandbox at all is not one that refuses `ps`.
+                probe.exit_code > 0
+                    && probe.output.contains(PS_EXEC_REFUSAL)
+                    && !probe.output.contains(SEATBELT_APPLY_REFUSAL)
+            }
         }
     }
 
@@ -197,6 +252,10 @@ impl DeferringSandbox {
             Self::Seatbelt => format!(
                 "has no refused Seatbelt apply probe: in the implementer's lane it must exit \
                  {SEATBELT_APPLY_REFUSAL_EXIT} with `{SEATBELT_APPLY_REFUSAL}`"
+            ),
+            Self::PsDenied => format!(
+                "has no refused `ps` probe: in the implementer's lane it must exit nonzero \
+                 with `{PS_EXEC_REFUSAL}`"
             ),
         }
     }
@@ -251,14 +310,15 @@ struct GateSummary {
 
 impl DeferralHandoff {
     /// Check the gate's `summary` against the `gates` this host holds the
-    /// candidate to, and the step's `pinned_base`. `Ok` names the probe Orbit
-    /// must run; `Err` is the first reason the gate run is not deferrable,
-    /// before any probe runs.
+    /// candidate to, the step's `pinned_base` and the `lane` the implementer
+    /// ran in. `Ok` names the probe Orbit must run; `Err` is the first reason
+    /// the gate run is not deferrable, before any probe runs.
     pub fn derive(
         &self,
         summary: &[u8],
         gates: &HostValidationGates,
         pinned_base: Option<&str>,
+        lane: DeferralLane,
     ) -> Result<PendingDeferral, String> {
         let mut decoder = serde_json::Deserializer::from_slice(summary);
         let summary: GateSummary = serde_path_to_error::deserialize(&mut decoder)
@@ -320,9 +380,9 @@ impl DeferralHandoff {
         };
         let Some(sandbox) = DeferringSandbox::of_notice(first) else {
             return Err(format!(
-                "lists `{first}`, which is neither a Bubblewrap nor a Seatbelt deferral; only \
-                 `{BUBBLEWRAP_DEFERRAL_PREFIX}` or `{SEATBELT_DEFERRAL_PREFIX}` notices are \
-                 deferrable"
+                "lists `{first}`, which is not a Bubblewrap, Seatbelt or ps-denied deferral; \
+                 only `{BUBBLEWRAP_DEFERRAL_PREFIX}`, `{SEATBELT_DEFERRAL_PREFIX}` or \
+                 `{PS_DENIED_DEFERRAL_PREFIX}` notices are deferrable"
             ));
         };
         if let Some(notice) = notices
@@ -335,6 +395,9 @@ impl DeferralHandoff {
                 sandbox.name(),
                 sandbox.prefix()
             ));
+        }
+        if let Some(refusal) = sandbox.refuses_lane(lane) {
+            return Err(refusal);
         }
         Ok(PendingDeferral {
             command,

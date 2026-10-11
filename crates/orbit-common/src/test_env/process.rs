@@ -110,7 +110,8 @@ pub enum PsRun {
     /// `ps` started; its status and output are the caller's to assert.
     Ran(std::process::Output),
     /// An agent executor's sandbox refused to exec the setuid `ps`. The test
-    /// has nothing to compare: it reports this reason as a skip and returns.
+    /// has nothing to compare: it reports this reason through
+    /// [`report_ps_denied`] and returns.
     Denied(String),
 }
 
@@ -141,6 +142,34 @@ pub fn ps_lstart_utc(pid: u32) -> PsRun {
         Err(crate::process::BoundedRunError::Run(error)) => panic!("run ps: {error}"),
     };
     super::classify_ps(spawned)
+}
+
+/// The line a test prints when it returns without comparing against `ps`
+/// because the sandbox refused to exec it: the test's name and the refusal
+/// after [`PS_DENIED_DEFERRAL_PREFIX`]. A macOS claimed leaf's implementer
+/// hands its gate off as a deferred sandbox validation, and the claim host
+/// replays the gate outside the agent sandbox, where a repeat of this line is
+/// refused [ORB-15587].
+///
+/// [`PS_DENIED_DEFERRAL_PREFIX`]: orbit_types::workflow::PS_DENIED_DEFERRAL_PREFIX
+pub fn ps_denied_deferral_notice(test: &str, reason: &str) -> String {
+    format!(
+        "{} {test}: {}",
+        orbit_types::workflow::PS_DENIED_DEFERRAL_PREFIX,
+        reason.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
+}
+
+/// Write [`ps_denied_deferral_notice`] straight to this process's stderr,
+/// past the test harness's output capture, so a passing test's deferral shows
+/// in any run's output, with or without `--nocapture`.
+pub fn report_ps_denied(test: &str, reason: &str) {
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "{}",
+        ps_denied_deferral_notice(test, reason)
+    );
 }
 
 pub(crate) fn classify_ps(spawned: std::io::Result<std::process::Output>) -> PsRun {

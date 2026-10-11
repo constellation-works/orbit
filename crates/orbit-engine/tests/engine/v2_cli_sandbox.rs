@@ -688,7 +688,15 @@ fn the_deferral_probe_records_what_the_lane_answers() {
             baseline_commands: Vec::new(),
         });
     let pending = handoff
-        .derive(&summary, &gates, Some("pinned-base"))
+        .derive(
+            &summary,
+            &gates,
+            Some("pinned-base"),
+            orbit_types::workflow::DeferralLane {
+                claimed: false,
+                os: Some(orbit_types::workflow::EvidenceHostOs::Linux),
+            },
+        )
         .unwrap();
     pending.clone().complete(refused).unwrap();
     let refusal = pending.complete(unresolved).expect_err(

@@ -1,6 +1,6 @@
 //! The implementer's deferred-sandbox handoff, as the engine enforces it
 //! [ORB-15287]: Bubblewrap deferrals on Linux, Seatbelt ones on macOS
-//! [ORB-15409].
+//! [ORB-15409], and ps-denied ones on a macOS claimed leaf [ORB-15587].
 //!
 //! [`accept_implementer_deferral`] runs at the implement step boundary. The
 //! implementer names only the validation summary its gate wrote; Orbit derives
@@ -8,11 +8,12 @@
 //! host names ([`RuntimeHost::validation_gates`]: on a claimed leaf, the
 //! owner's gates its claim captured [ORB-15622]) and the step's pinned base,
 //! and runs the deferring sandbox's probe in the implementer's lane itself
-//! [ORB-15516]. The derived record
-//! replaces the handoff in the step's output, and an owner run keeps it on the
-//! task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate skips the
-//! implementer, so the obligation must outlive the run that created it. A
-//! later implementation that deferred nothing clears it. A claimed leaf
+//! [ORB-15516]. Whether the step is claimed and the host's OS
+//! ([`RuntimeHost::host_os`]) decide which kinds it may defer. The derived
+//! record replaces the handoff in the step's output, and an owner run keeps
+//! it on the task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate skips
+//! the implementer, so the obligation must outlive the run that created it.
+//! A later implementation that deferred nothing clears it. A claimed leaf
 //! always runs its implementer, so its validation reads this attempt's output
 //! instead.
 //!
@@ -25,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact, DeferredSandboxValidation,
+    DEFERRED_SANDBOX_ARTIFACT, DeferralLane, DeferredSandboxArtifact, DeferredSandboxValidation,
     HostValidationGates, deferral_handoff,
 };
 use serde_json::Value;
@@ -75,9 +76,10 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
             "implementer output rejected before delivery: `deferred_sandbox_validation` \
              {reason}. Hand off only `{{\"summary\": \"<path>\"}}` for a passing \
              affected-test gate whose sole gap is one sandbox's notices: Bubblewrap \
-             `DEFERRED:` notices on Linux, or Seatbelt `SKIP: sandbox-exec cannot apply a \
-             profile:` notices on macOS, in a lane that refuses that sandbox; otherwise fix \
-             the gate or report the validation blocker."
+             `DEFERRED: bubblewrap unavailable:` notices on Linux, Seatbelt `SKIP: \
+             sandbox-exec cannot apply a profile:` notices on macOS, or `DEFERRED: ps \
+             denied:` notices on a macOS claimed leaf, in a lane that refuses that sandbox; \
+             otherwise fix the gate or report the validation blocker."
         )
     })?;
     if input.get("claimed").and_then(Value::as_bool) == Some(true) {
@@ -128,11 +130,16 @@ fn derive<H: RuntimeHost + ?Sized>(
             handoff.summary
         )
     })?;
+    let deferring = DeferralLane {
+        claimed: input.get("claimed").and_then(Value::as_bool) == Some(true),
+        os: host.host_os(),
+    };
     let pending = handoff
         .derive(
             &summary,
             &host.validation_gates(),
             input.get("base_sha").and_then(Value::as_str),
+            deferring,
         )
         .map_err(|reason| {
             format!(
