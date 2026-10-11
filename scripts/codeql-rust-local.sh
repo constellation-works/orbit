@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/codeql-rust-local.sh [--ram MB] [--toolchain VERSION] QUERY_OR_SUITE
+Usage: scripts/codeql-rust-local.sh [--ram MB] [--toolchain VERSION] [--fresh] QUERY_OR_SUITE
 
 Run against this checkout using codeql and rustup already on PATH.
 Linux hosts only: elsewhere it exits 3 before preparing anything.
@@ -12,10 +12,13 @@ Default: --ram 16384 --toolchain 1.97.0 (CodeQL 2.27.1 extractor).
 QUERY_OR_SUITE is a CodeQL pack selector, .ql file, or .qls suite.
 Logs, database and SARIF stay in a new directory under $ORBIT_SCRATCH_DIR,
 or this checkout's .orbit/tmp when unset; a passing run then removes the
-database dataset and build scratch. The pinned toolchain is installed once
-per host into ORBIT_CODEQL_CACHE_DIR (default ~/.orbit/cache/codeql-rust-local),
-or into the run directory when that cache is unusable. Extraction and analysis
-wait for one of ORBIT_CODEQL_SLOTS host slots (else <cache>/slot-count, default 2).
+database dataset and build scratch. A passing run there whose inputs match
+this checkout byte for byte is reused instead of run again; --fresh runs anyway.
+The pinned toolchain is installed once per host into ORBIT_CODEQL_CACHE_DIR
+(default ~/.orbit/cache/codeql-rust-local), or into the run directory when
+that cache is unusable. Extraction and analysis
+wait for one of ORBIT_CODEQL_SLOTS host slots (else <cache>/slot-count, default 2)
+and use ORBIT_CODEQL_THREADS threads (default: processors / slots).
 Locks stay under <cache>/slots/; a legacy count file there is migrated first.
 See docs/runbooks/codeql-local.md for confirmation and failure handling.
 EOF
@@ -29,6 +32,7 @@ fail() {
 ram=16384
 toolchain=1.97.0
 query=
+fresh=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ram|--toolchain)
@@ -36,6 +40,7 @@ while [[ $# -gt 0 ]]; do
       if [[ "$1" == --ram ]]; then ram="$2"; else toolchain="$2"; fi
       shift 2
       ;;
+    --fresh) fresh=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) fail "unknown option: $1" ;;
     *)
@@ -75,6 +80,8 @@ config="$repo_root/.github/codeql/codeql-config.yml"
 # whole scratch tree is excluded, which is only safe if it holds no tracked source.
 scratch_ignore=
 scratch_rel=
+# What the input fingerprint below skips: never read by extraction.
+input_prune=(-path ./.git -o -path ./.orbit -o -path ./target)
 if [[ "$scratch_root" == "$repo_root" ]]; then
   fail "scratch $scratch_root is the checkout itself; choose a scratch directory that holds no tracked source"
 elif [[ "$scratch_root" == "$repo_root"/* ]]; then
@@ -85,6 +92,7 @@ elif [[ "$scratch_root" == "$repo_root"/* ]]; then
     || fail "cannot verify that scratch $scratch_root holds no tracked source"
   [[ -z "$tracked" ]] || fail "scratch $scratch_root holds tracked checkout files; choose a scratch directory that holds no tracked source"
   scratch_ignore="$scratch_rel/**"
+  input_prune+=(-o -path "./$scratch_rel")
 fi
 
 # Earlier runs may have used another scratch inside the checkout. Their run
@@ -104,6 +112,7 @@ while IFS= read -r prior; do
     || fail "cannot verify that earlier run directory $repo_root/$prior_rel holds no tracked source"
   [[ -z "$tracked" ]] || fail "$repo_root/$prior_rel holds tracked checkout files, so it cannot be excluded as an earlier run directory"
   scratch_ignore+="${scratch_ignore:+$'\n'}$prior_rel/**"
+  input_prune+=(-o -path "./$prior_rel")
 done <<<"$found"
 
 # The run-scoped configuration is the repository one plus the scratch and
@@ -130,6 +139,50 @@ effective_config="$(IGNORES="$scratch_ignore" awk '
   }' "$config")" \
   || fail "cannot add the scratch exclusions to $config; paths-ignore must be one top-level block list"
 
+note() {
+  echo "codeql-rust-local: $*" >&2
+}
+
+# The inputs of a run: every file of the checkout that extraction can read (all
+# but Git metadata, Orbit state, Cargo output and run scratch), the query, the
+# effective configuration, the toolchain and CodeQL versions, and the
+# environment that configures CodeQL, Cargo or rustc, less what this script
+# overrides. A passing run records their digest; an equal digest later means
+# the same database and SARIF, so that run answers the invocation.
+inputs_environment() {
+  env -0 | { grep -zE '^(CODEQL_|RUSTFLAGS=|RUSTDOCFLAGS=|CARGO_(ENCODED_RUSTFLAGS=|BUILD_|PROFILE_|TARGET_|UNSTABLE_))' || [[ $? -eq 1 ]]; } \
+    | { grep -zv '^CARGO_TARGET_DIR=' || [[ $? -eq 1 ]]; } | LC_ALL=C sort -z | sha256sum
+}
+
+inputs_digest() {
+  {
+    printf '%s\n' "$inputs_header" \
+      && find . \( "${input_prune[@]}" \) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum -- \
+      && find . \( "${input_prune[@]}" \) -prune -o -type l -printf '%p -> %l\n' | LC_ALL=C sort \
+      && if [[ -e "$query" ]]; then
+        find -L "$query" -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum --
+      fi
+  } | sha256sum | cut -d' ' -f1
+}
+
+inputs=
+if codeql_version="$(codeql version --format=terse)" && environment_digest="$(inputs_environment)"; then
+  inputs_header="$(printf 'codeql-rust-local inputs 1\nquery %s\ntoolchain %s\ncodeql %s\nenvironment %s\n%s' \
+    "$query" "$toolchain" "$codeql_version" "$environment_digest" "$effective_config")"
+  inputs="$(inputs_digest)" || inputs=
+fi
+if [[ -z "$inputs" ]]; then
+  note "cannot fingerprint this run's inputs, so no earlier run is reused and no later run will reuse this one"
+elif [[ -z "$fresh" ]]; then
+  for prior in "$scratch_root"/codeql-rust-local.??????; do
+    [[ -f "$prior/inputs.sha256" && -s "$prior/results.sarif" && "$(<"$prior/inputs.sha256")" == "$inputs" ]] || continue
+    echo "codeql-rust-local: run directory: $prior" >&2
+    note "reusing the passing run in $prior: its sources, configuration, query, toolchain and CodeQL version match this invocation byte for byte, so nothing was extracted or queried; pass --fresh to run again"
+    echo "codeql-rust-local: analysis completed; inspect rule and affected locations in $prior/results.sarif"
+    exit 0
+  done
+fi
+
 run_dir="$(mktemp -d "$scratch_root/codeql-rust-local.XXXXXX")" || fail "cannot create run scratch for Rust $toolchain"
 echo "codeql-rust-local: run directory: $run_dir" >&2
 
@@ -144,10 +197,6 @@ export XDG_CACHE_HOME="$run_dir/cache"
 export RUSTC_WRAPPER=
 export RUSTC_WORKSPACE_WRAPPER=
 mkdir -p "$CARGO_HOME" "$CARGO_TARGET_DIR" "$TMPDIR" "$XDG_CACHE_HOME" "$run_dir/codeql-logs"
-
-note() {
-  echo "codeql-rust-local: $*" >&2
-}
 
 # Host state shared by every run: the pinned toolchain and the slot locks.
 # Lock files are opened read-only when the cache cannot be written (a reviewer
@@ -294,6 +343,16 @@ fi
 slots="${slots:-2}"
 [[ "$slots" =~ ^[1-9][0-9]*$ && "$slots" -le 128 ]] || fail "the CodeQL slot count must be from 1 through 128; got '$slots'"
 
+# CodeQL imports and evaluates on one thread unless told otherwise, which kept
+# most of a suite run single-threaded. Each slot gets an equal share of the
+# processors, so full slots do not oversubscribe the host.
+threads="${ORBIT_CODEQL_THREADS:-}"
+if [[ -z "$threads" ]]; then
+  processors="$(nproc)" || fail "cannot count this host's processors; set ORBIT_CODEQL_THREADS"
+  threads=$((processors / slots > 1 ? processors / slots : 1))
+fi
+[[ "$threads" =~ ^[1-9][0-9]*$ && "$threads" -le 1024 ]] || fail "ORBIT_CODEQL_THREADS must be from 1 through 1024; got '$threads'"
+
 now_us() {
   local now="$EPOCHREALTIME"
   echo "${now//[!0-9]/}"
@@ -349,9 +408,11 @@ acquire_slot
 common=("--common-caches=$run_dir/codeql-cache" "--logdir=$run_dir/codeql-logs")
 database="$run_dir/database"
 create_status=0
+phase_started="$(now_us)"
 codeql database create "$database" --language=rust --build-mode=none \
   "--source-root=$repo_root" "--codescanning-config=$run_dir/codeql-config.yml" \
-  "--ram=$ram" "${common[@]}" >"$run_dir/extraction.log" 2>&1 || create_status=$?
+  "--ram=$ram" "--threads=$threads" "${common[@]}" >"$run_dir/extraction.log" 2>&1 || create_status=$?
+note "extraction took $(seconds_since "$phase_started")s with $threads threads"
 
 # Extractor warnings may only be in database/log, not the console stream.
 # Reject all extraction warnings/errors as well as explicit fallback messages:
@@ -372,7 +433,8 @@ if [[ "$create_status" -ne 0 ]]; then
   fail "extraction failed with exit $create_status using Rust $toolchain; no query was run"
 fi
 
-if ! codeql database analyze "$database" "$query" "--ram=$ram" \
+phase_started="$(now_us)"
+if ! codeql database analyze "$database" "$query" "--ram=$ram" "--threads=$threads" \
   --format=sarifv2.1.0 "--output=$run_dir/results.sarif" \
   --no-default-compilation-cache "--compilation-cache=$run_dir/query-cache" \
   "${common[@]}" >"$run_dir/analysis.log" 2>&1; then
@@ -380,6 +442,10 @@ if ! codeql database analyze "$database" "$query" "--ram=$ram" \
   fail "query analysis failed; any partial SARIF is unusable (see $run_dir/analysis.log)"
 fi
 [[ -s "$run_dir/results.sarif" ]] || fail "query produced no SARIF; see $run_dir/analysis.log"
+note "query analysis took $(seconds_since "$phase_started")s with $threads threads"
+# Sources edited while the run read them leave a database of neither version.
+final_inputs=
+if [[ -n "$inputs" ]]; then final_inputs="$(inputs_digest)" || final_inputs=; fi
 if [[ -n "$slot_fd" ]]; then exec {slot_fd}>&-; fi
 
 # The evidence of a passing run is its logs, configuration, database/log,
@@ -390,4 +456,9 @@ pruned=("$database"/db-* "$CARGO_TARGET_DIR" "$CARGO_HOME" "$TMPDIR" "$XDG_CACHE
   "$run_dir/codeql-cache" "$run_dir/query-cache")
 if [[ "$RUSTUP_HOME" == "$run_dir/rustup" ]]; then pruned+=("$RUSTUP_HOME"); fi
 rm -rf -- "${pruned[@]}" || note "could not remove all of the database dataset and build scratch in $run_dir"
+if [[ -n "$inputs" && "$final_inputs" == "$inputs" ]]; then
+  printf '%s\n' "$inputs" >"$run_dir/inputs.sha256"
+elif [[ -n "$inputs" ]]; then
+  note "the checkout changed during this run, or could not be fingerprinted again, so no later run will reuse it"
+fi
 echo "codeql-rust-local: analysis completed; inspect rule and affected locations in $run_dir/results.sarif"
