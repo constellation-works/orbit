@@ -24,11 +24,15 @@ fn cancelling_a_shared_group_owner_stops_only_the_owner() {
         };
         let pgid = unsafe { libc::getpgid(sibling.pid as libc::pid_t) };
         assert!(pgid > 1);
-        let owner = Worker::spawn_in_group(pgid);
+        let owner = if force_kill {
+            term_ignoring_owner(pgid)
+        } else {
+            Worker::spawn_in_group(pgid)
+        };
         assert_eq!(unsafe { libc::getpgid(owner.pid as libc::pid_t) }, pgid);
         assert_ne!(owner.pid, pgid as u32, "the owner must not lead the group");
         if force_kill {
-            // A stopped owner cannot handle TERM, forcing escalation to KILL.
+            // A stopped owner that ignores TERM can only be ended by KILL.
             // Observe the stop before cancelling; the reaper waits only for exit.
             assert_eq!(
                 unsafe { libc::kill(owner.pid as libc::pid_t, libc::SIGSTOP) },
@@ -64,6 +68,28 @@ fn cancelling_a_shared_group_owner_stops_only_the_owner() {
             "cancellation must never signal a sibling sharing the owner's group"
         );
     }
+}
+
+/// An owner that ignores TERM, so a stop must escalate to KILL on every
+/// platform. The disposition is installed before exec and survives it, and
+/// `spawn` returns only once exec has completed, so no stop can race setup.
+#[cfg(unix)]
+fn term_ignoring_owner(pgid: libc::pid_t) -> Worker {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = std::process::Command::new("sleep");
+    command.arg("600").process_group(pgid);
+    // Safety: the closure runs in the forked child before exec and calls only
+    // the async-signal-safe `signal`.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::signal(libc::SIGTERM, libc::SIG_IGN) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Worker::spawn_command(command)
 }
 
 /// [ORB-13892] Cancelling a running pull drain is graceful. The request
