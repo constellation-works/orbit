@@ -3611,6 +3611,16 @@ impl PreparedRebase {
         base: impl FnOnce(&Path) -> String,
     ) -> Self {
         let fixture = Fixture::new();
+        Self::with_fixture(run_id, fixture, candidate, base)
+    }
+
+    /// Prepare from a fixture with a caller-selected common ancestor.
+    fn with_fixture(
+        run_id: &str,
+        fixture: Fixture,
+        candidate: impl FnOnce(&Path) -> String,
+        base: impl FnOnce(&Path) -> String,
+    ) -> Self {
         let host = LifecycleHost::new(&fixture.repo);
         host.add_task("T-REBASE", TaskStatus::Backlog);
         let setup = action(&host, "worktree_setup", &setup_input(&["T-REBASE"], run_id))

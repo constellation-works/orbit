@@ -9,6 +9,8 @@
 //! never loosens the boundary: markers, whitespace errors, untouched
 //! conflicts, moved HEAD or index, a checkpoint that does not describe the
 //! stopped rebase, and changed ownership or authorization all still refuse.
+//! Binary ancestors and failing custom drivers can leave marker-free stops;
+//! a no-op provider must preserve their unmerged index until a real repair.
 
 use super::*;
 
@@ -68,6 +70,236 @@ fn assert_refused_untouched(
         fs::read_to_string(prepared.checkout.path.join("README.md")).unwrap(),
         readme,
         "{case}: the earlier repair stays for diagnosis"
+    );
+}
+
+/// Seed the common ancestor before setup, then stop on two textual sides.
+/// A custom driver may be selected by attribute or by `merge.default`.
+fn marker_free_stop(
+    run_id: &str,
+    ancestor: &str,
+    driver: Option<&str>,
+    attribute: bool,
+) -> (PreparedRebase, Value) {
+    let fixture = Fixture::new();
+    if fs::read(fixture.repo.join("README.md")).unwrap() != ancestor.as_bytes() {
+        commit_edits(&fixture.repo, &[("README.md", Some(ancestor))]);
+    }
+    if let Some(driver) = driver {
+        git(
+            &fixture.repo,
+            &["config", "merge.leave-ours.driver", driver],
+        );
+        if attribute {
+            commit_edits(
+                &fixture.repo,
+                &[(".gitattributes", Some("README.md merge=leave-ours\n"))],
+            );
+        } else {
+            git(&fixture.repo, &["config", "merge.default", "leave-ours"]);
+        }
+    }
+    let prepared = PreparedRebase::with_fixture(
+        run_id,
+        fixture,
+        |checkout| commit_edits(checkout, &[("README.md", Some("candidate\n"))]),
+        |repo| commit_edits(repo, &[("README.md", Some("target\n"))]),
+    );
+    let conflict = stopped_conflict(&prepared);
+    assert_eq!(conflict["conflicting_paths"], json!(["README.md"]));
+    (prepared, conflict)
+}
+
+/// No-op recovery cannot certify Git's untouched marker-free output, even
+/// when a failing driver writes content different from either side.
+#[cfg(unix)]
+#[test]
+fn untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted() {
+    isolated_in(
+        module_path!(),
+        "untouched_binary_ancestor_and_custom_driver_stops_are_not_adopted",
+        || {
+            for (case, ancestor, driver, attribute, stopped) in [
+                ("binary-ancestor", "base\0data\n", None, false, "target\n"),
+                ("custom-driver", "base\n", Some("false"), true, "target\n"),
+                ("default-driver", "base\n", Some("false"), false, "target\n"),
+                (
+                    "custom-output",
+                    "base\n",
+                    Some("printf 'driver output\\n' > %A; false"),
+                    true,
+                    "driver output\n",
+                ),
+            ] {
+                let (prepared, conflict) =
+                    marker_free_stop(&format!("jrun-{case}"), ancestor, driver, attribute);
+                let checkout = &prepared.checkout.path;
+                assert_eq!(
+                    fs::read_to_string(checkout.join("README.md")).unwrap(),
+                    stopped
+                );
+                assert_eq!(git(checkout, &["show", ":1:README.md"]), ancestor.trim());
+                assert_eq!(git(checkout, &["show", ":2:README.md"]), "target");
+                assert_eq!(git(checkout, &["show", ":3:README.md"]), "candidate");
+                git(checkout, &["diff", "--check"]);
+                let unmerged = git(checkout, &["ls-files", "--unmerged"]);
+                if case == "binary-ancestor" {
+                    // Exercise the fallback for strategies without a stopped tree.
+                    git(checkout, &["update-ref", "-d", "AUTO_MERGE"]);
+                }
+                let host = prepared.host.with_provider(&no_op_provider(&prepared));
+                let error = recover(
+                    &host,
+                    &prepared.run_id,
+                    conflict_recovery_input(&prepared, &conflict),
+                )
+                .expect_err("untouched stopped output must not resolve the conflict");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("authorized conflict files were not repaired"),
+                    "{case}: {error}"
+                );
+                assert_refused_untouched(case, &prepared, &host, stopped);
+                assert_eq!(
+                    git(checkout, &["ls-files", "--unmerged"]),
+                    unmerged,
+                    "{case}: all ancestor and side entries remain unstaged"
+                );
+            }
+        },
+    );
+}
+
+/// Real file-only repairs of marker-free stops continue at the host boundary.
+/// A text repair may still take one side verbatim, and custom-driver repairs
+/// are distinguished from the actual stopped output rather than either side.
+#[cfg(unix)]
+#[test]
+fn earlier_repairs_of_binary_ancestor_and_custom_driver_stops_continue() {
+    isolated_in(
+        module_path!(),
+        "earlier_repairs_of_binary_ancestor_and_custom_driver_stops_continue",
+        || {
+            for (case, ancestor, driver, attribute, repair) in [
+                (
+                    "binary-repair",
+                    "base\0data\n",
+                    None,
+                    false,
+                    "candidate and target\n",
+                ),
+                (
+                    "custom-repair",
+                    "base\n",
+                    Some("false"),
+                    true,
+                    "candidate\n",
+                ),
+                (
+                    "default-repair",
+                    "base\n",
+                    Some("false"),
+                    false,
+                    "candidate and target\n",
+                ),
+                ("text-side-repair", "base\n", None, false, "candidate\n"),
+                (
+                    "custom-output-repair",
+                    "base\n",
+                    Some("printf 'driver output\\n' > %A; false"),
+                    true,
+                    "candidate and target\n",
+                ),
+            ] {
+                let (prepared, conflict) =
+                    marker_free_stop(&format!("jrun-{case}"), ancestor, driver, attribute);
+                let checkout = &prepared.checkout.path;
+                fs::write(checkout.join("README.md"), repair).unwrap();
+                if case == "text-side-repair" {
+                    git(checkout, &["update-ref", "-d", "AUTO_MERGE"]);
+                }
+                let host = prepared.host.with_provider(&no_op_provider(&prepared));
+                let outcome = recover(
+                    &host,
+                    &prepared.run_id,
+                    conflict_recovery_input(&prepared, &conflict),
+                )
+                .expect("a real earlier repair continues the rebase");
+                assert!(outcome.success, "{case}: {:?}", outcome.message);
+                assert!(!rebase_in_progress(checkout), "{case}");
+                assert!(is_ancestor(checkout, &prepared.target, "HEAD"), "{case}");
+                assert_eq!(
+                    git(checkout, &["show", "HEAD:README.md"]),
+                    repair.trim(),
+                    "{case}"
+                );
+                assert_eq!(git(checkout, &["status", "--porcelain"]), "", "{case}");
+                assert_eq!(
+                    host.checkpoints().len(),
+                    1,
+                    "{case}: one certified recovery"
+                );
+                let retried = prepared.rebase_on(&host, &prepared.prepared).unwrap();
+                assert_eq!(retried["decision"], "reused_recovery", "{case}");
+            }
+        },
+    );
+}
+
+/// Original stopped-output evidence must exist for custom drivers and stay
+/// unchanged while the provider runs; neither case may stage the repair.
+#[cfg(unix)]
+#[test]
+fn custom_driver_repairs_require_unchanged_stopped_output_evidence() {
+    isolated_in(
+        module_path!(),
+        "custom_driver_repairs_require_unchanged_stopped_output_evidence",
+        || {
+            for (case, refusal) in [
+                ("missing", "authorized conflict files were not repaired"),
+                (
+                    "missing-default",
+                    "authorized conflict files were not repaired",
+                ),
+                (
+                    "changed",
+                    "changed Git metadata identity or recovery instructions",
+                ),
+            ] {
+                let (prepared, conflict) = marker_free_stop(
+                    &format!("jrun-evidence-{case}"),
+                    "base\n",
+                    Some("false"),
+                    case != "missing-default",
+                );
+                let checkout = &prepared.checkout.path;
+                fs::write(checkout.join("README.md"), "candidate and target\n").unwrap();
+                let unmerged = git(checkout, &["ls-files", "--unmerged"]);
+                let provider = if case.starts_with("missing") {
+                    git(checkout, &["update-ref", "-d", "AUTO_MERGE"]);
+                    no_op_provider(&prepared)
+                } else {
+                    let provider = prepared.fixture.root.path().join("codex");
+                    write_executable(&provider, &provider_script("git update-ref -d AUTO_MERGE"));
+                    provider
+                };
+                let host = prepared.host.with_provider(&provider);
+                let error = recover(
+                    &host,
+                    &prepared.run_id,
+                    conflict_recovery_input(&prepared, &conflict),
+                )
+                .expect_err("custom-driver adoption requires original stopped-output evidence");
+                assert!(error.to_string().contains(refusal), "{case}: {error}");
+                assert_refused_untouched(case, &prepared, &host, "candidate and target\n");
+                assert_eq!(
+                    git(checkout, &["ls-files", "--unmerged"]),
+                    unmerged,
+                    "{case}"
+                );
+            }
+        },
     );
 }
 
