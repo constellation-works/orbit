@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Design"
 owner: codex
 last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_validated: 2026-10-10
 status: Draft
 feature: auditability
 doc_role: design
@@ -32,7 +32,7 @@ The split is deliberate: command rows stay compact and queryable; envelopes pres
 
 ## 2. Command Audit Rows
 
-`AuditEvent` lives in `crates/orbit-types/src/telemetry/audit_event.rs`. Rows include execution id, timestamp, command/subcommand, optional tool and target metadata, role, status, exit code, duration, working directory, optional argument/error/stdout/stderr fields, host, pid, and session id. Nullable MCP additions include resolved workspace, caller/process machine and display-host fields, transport, origin-session id, per-call `trace_id`, and best-effort `caller_ip`. Caller machine and IP are audit metadata, not authenticated identity. The effective MCP capability set is persisted; federated routed calls may also carry `mcp_call_id`, while v1 MCP sessions do not carry execution leases, so `lease_id` remains empty. Old rows read with null/empty additions and are not rewritten.
+`AuditEvent` lives in `crates/orbit-types/src/telemetry/audit_event.rs`. Rows include execution id, timestamp, command/subcommand, optional tool and target metadata, role, status, exit code, duration, working directory, optional argument/error/stdout/stderr fields, host, pid, and session id. Nullable MCP additions include resolved workspace, caller/process machine and display-host fields, transport, origin-session id, per-call `trace_id`, best-effort `caller_ip`, and `self_reported_actor`. The canonical `actor_*` projection and `self_reported_actor` are separate from the raw `role`; self-reported values remain untrusted. Caller machine and IP are audit metadata, not authenticated identity. The effective MCP capability set is persisted; federated routed calls may also carry `mcp_call_id`, while v1 MCP sessions do not carry execution leases, so `lease_id` remains empty. Old rows read with null/empty additions and are not rewritten.
 
 After [T20260505-6], command-audit producers use the shared `audit_execution_id` helper instead of timestamp-only ids. The id keeps a stable producer prefix and appends wall-clock nanoseconds, process id, and a per-process atomic sequence so same-workspace parallel `orbit tool run ...` calls do not collide on clocks with coarse effective resolution. The SQLite unique index on `execution_id` remains the enforcement boundary.
 
@@ -134,7 +134,7 @@ The audit-derived fallback for `/api/diagnostics/friction` reads only an 8 KiB s
 
 Orbit currently carries identity through related fields rather than one universal key:
 
-- Direct CLI commands and `orbit-web` runtime construction share the env-derived `agent family` / `unknown` actor rule. MCP is `unverified` outside a managed process envelope; when that envelope is present, its process environment supplies audit identity and correlation rather than caller JSON.
+- Direct CLI commands and `orbit-web` runtime construction share the env-derived `agent family` / `unknown` actor rule. MCP is `unverified` outside a managed process envelope; when that envelope is present, its process environment supplies audit identity and correlation rather than caller JSON. Since [ORB-10890], MCP initialization may also populate the separate nullable `self_reported_actor` field from an unverified claim or client name. That value is never merged into `role` or the canonical actor projection and is not used for authorization; migration v17 does not backfill earlier rows.
 - `V2AuditEnvelope.agent_identity` records the workflow-envelope actor. CLI-launched v2 runs use `system`; concrete provider activity appears in event bodies and metrics.
 - Task records carry `created_by`, `planned_by`, `implemented_by`, `agent`, and `model`.
 - Invocation metrics record agent family and configured runtime model beside job run and activity ids.
@@ -153,7 +153,7 @@ The requirement is not to collapse every field into one value. It is that a revi
 
 ## 8. Query, Export, and Metrics Surfaces
 
-The audit CLI exposes command rows through `orbit audit list`, `show`, `stats`, `export --format json`, `export --format csv`, and `prune`. Additive fields and filters cover workspace, caller/process machine, transport, origin session, canonical run, and compatibility capability/call/lease columns. JSON, CSV, show output, and `orbit-web` projections preserve the nullable schema. Current MCP rows additionally expose a per-call `trace_id` and optional observed `caller_ip`; effective capability filters match the persisted session grants, federated routed calls may populate `mcp_call_id`, and lease filters match nothing because v1 MCP sessions do not carry execution leases.
+The audit CLI exposes command rows through `orbit audit list`, `show`, `stats`, `export --format json`, `export --format csv`, and `prune`. Additive fields and filters cover workspace, caller/process machine, transport, origin session, canonical run, and compatibility capability/call/lease columns. JSON, CSV, and CLI show output include the nullable `self_reported_actor` field. The web per-event projection exposes the canonical actor fields but omits `self_reported_actor`; its audit summary returns `attribution_split` buckets that mark self-reported counts as unverified. Current MCP rows additionally expose a per-call `trace_id` and optional observed `caller_ip`; effective capability filters match the persisted session grants, federated routed calls may populate `mcp_call_id`, and lease filters match nothing because v1 MCP sessions do not carry execution leases.
 
 The dashboard's policy-denials KPI and `orbit audit stats`'s "Denied governed operations" use the same capability/policy decision aggregate. Authorization decisions are canonical; invocation evidence is deduplicated by trace, scoped MCP call identity, or execution identity. Older tool wrappers that repeat the authorization decision message are evidence only because their independently minted execution IDs cannot correlate the attempt. Other denied tool calls and v2 policy decisions remain countable.
 
@@ -269,7 +269,7 @@ Each record contains timestamp, level, target, and structured fields. After [T20
 - **[ORB-00106]** — Preserve per-task implementer attribution when `orbit run ship` moves batch PR tasks from Review to Done.
 - **[ORB-10200]** — Derive CLI audit metadata and the other cross-cutting command policies from one exhaustive command-operation registry.
 - **[ORB-10225]** — Route in-process graph MCP calls through the safe-surface allowlist and shared runtime audit boundary.
-- **[ORB-10228]** — Historical expansion of the MCP audit schema; current v1 uses the resolved workspace/process fields, origin session, transport, trace, and optional caller IP while leaving capability/call/lease fields empty.
+- **[ORB-10228]** — Historical expansion of the MCP audit schema; the current v1 path persists effective capabilities, may carry a federated `mcp_call_id`, and leaves `lease_id` empty because sessions do not carry execution leases. See [Command Audit Rows](./2_design.md#2-command-audit-rows) for the current field contract.
 - **[ORB-10262]** — Historical capability/placement preflight work, no longer part of the v1 MCP execution path.
 - **[ORB-10319]** — Historical MCP boundary move; current ownership is `orbit-mcp` framing, CLI server composition, and Core audit dispatch.
 - **[ORB-10325]** — Remove graph from MCP and registered tool dispatch while preserving the direct `orbit graph` CLI.
