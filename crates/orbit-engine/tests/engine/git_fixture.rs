@@ -83,9 +83,10 @@ pub(super) fn run(repo: &Path, args: &[&str]) -> String {
         .unwrap();
     assert!(
         output.status.success(),
-        "git {} failed in {}:\n{}",
+        "git {} failed in {} ({}):\n{}",
         args.join(" "),
         repo.display(),
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()

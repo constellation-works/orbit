@@ -392,6 +392,7 @@ fn wait_cancellable(
     let mut stopped_descendants: Vec<StoppedDescendant> = Vec::new();
     let mut stdin_write_error = None;
     let mut capture_limited: Option<&'static str> = None;
+    let mut termination_status = None;
     // Annotated because the only `Some(signal)` arms are Unix-only.
     let (timed_out, interrupted_signal, mut exit_success, exit_code): (
         bool,
@@ -479,6 +480,9 @@ fn wait_cancellable(
             // group so any orphan subprocesses still holding the pipes open
             // are reaped before the pipe workers settle below.
             kill_process_group(child.process.id());
+            if !status.success() && status.code().is_none() {
+                termination_status = Some(status);
+            }
             break (false, None, status.success(), status.code());
         }
 
@@ -548,6 +552,15 @@ fn wait_cancellable(
             stderr.push(b'\n');
         }
         stderr.extend_from_slice(b"process timed out");
+    }
+    // Retain the actual child status when it has no exit code (a signal on
+    // Unix). Otherwise even an empty-stderr SIGKILL is just an unexplained
+    // failure to callers of the public execution result.
+    if let Some(status) = termination_status {
+        if !stderr.is_empty() {
+            stderr.push(b'\n');
+        }
+        stderr.extend_from_slice(format!("process terminated with {status}").as_bytes());
     }
     // A capture-limit stop looks like a bare failure otherwise (exit code
     // `None`, often an empty stderr), and a tool such as `github.run.logs`

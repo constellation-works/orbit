@@ -145,6 +145,7 @@ pub(crate) struct GitOutcome {
     pub success: bool,
     pub timed_out: bool,
     pub timeout_ms: u64,
+    pub exit_code: Option<i32>,
 }
 
 /// Raw stdout for Git commands whose output is a fingerprint input. The
@@ -185,9 +186,20 @@ pub(crate) fn timeout_recovery_error(timeout_ms: u64, message: String) -> OrbitE
     }
 }
 
-pub(crate) fn git_failure_error(current_dir: &Path, args: &[&str], stderr: &str) -> OrbitError {
+pub(crate) fn git_failure_error(
+    current_dir: &Path,
+    args: &[&str],
+    exit_code: Option<i32>,
+    stderr: &str,
+) -> OrbitError {
+    // Signal termination is reported by the process supervisor on stderr.
+    // An absent code alone must not be guessed to mean a signal: cancellation
+    // and output-capture limits also return no exit code.
+    let status = exit_code
+        .map(|code| format!("exit status: {code}"))
+        .unwrap_or_else(|| "no exit code".to_string());
     OrbitError::Execution(format!(
-        "git {} failed in '{}': {}",
+        "git {} failed in '{}' ({status}): {}",
         args.join(" "),
         current_dir.display(),
         stderr.trim()
@@ -207,6 +219,7 @@ pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, O
         success: result.success,
         timed_out: result.timed_out,
         timeout_ms,
+        exit_code: result.exit_code,
     })
 }
 
@@ -359,7 +372,12 @@ pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String
         ));
     }
     if !outcome.success {
-        return Err(git_failure_error(current_dir, args, &outcome.stderr));
+        return Err(git_failure_error(
+            current_dir,
+            args,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
     }
 
     Ok(outcome.stdout)
@@ -468,7 +486,12 @@ fn fetch_remote_base_locked(
                     &outcome.stderr,
                 )
             } else {
-                git_failure_error(repo_root, &["fetch", "origin", &spec], &outcome.stderr)
+                git_failure_error(
+                    repo_root,
+                    &["fetch", "origin", &spec],
+                    outcome.exit_code,
+                    &outcome.stderr,
+                )
             };
             if attempt + 1 == GIT_FETCH_CAS_ATTEMPTS {
                 let message = format!(

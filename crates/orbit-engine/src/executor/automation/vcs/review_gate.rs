@@ -384,7 +384,12 @@ pub fn patch_id(
             ));
         }
         if !outcome.success {
-            return Err(git_failure_error(workspace_path, args, &outcome.stderr));
+            return Err(git_failure_error(
+                workspace_path,
+                args,
+                outcome.exit_code,
+                &outcome.stderr,
+            ));
         }
         Ok(outcome.stdout)
     };

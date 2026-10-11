@@ -135,7 +135,12 @@ fn remove_worktree_without_force(
         return Ok(());
     }
     if !outcome.timed_out {
-        return Err(git_failure_error(repo_root, &args, &outcome.stderr));
+        return Err(git_failure_error(
+            repo_root,
+            &args,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
     }
     recover_timed_out_removal(workspace_path, outcome.timeout_ms)
 }
