@@ -51,6 +51,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+mod cleanup;
+use cleanup::ProviderChild;
+
 const CHILD: &str = "ORBIT_CLAIMED_REVIEW_BRIDGE_FIXTURE";
 /// The before-PR reviewer's catalog activity.
 const REVIEWER: &str = "agent_review_repair";
@@ -99,7 +102,7 @@ fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
     orbit_common::test_env::clear_inherited_authority(|name| {
         child.env_remove(name);
     });
-    let output = child
+    child
         .env(CHILD, &base)
         .env("HOME", &follower_home)
         .env("USERPROFILE", &follower_home)
@@ -110,9 +113,12 @@ fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
             "--exact",
             "claimed_review_bridge_sandbox::sandbox_fixture",
             "--nocapture",
-        ])
-        .output()
-        .expect("isolated fixture");
+        ]);
+    let output = orbit_common::test_env::run_child_test(
+        &mut child,
+        "claimed_review_bridge_sandbox::sandbox_fixture",
+        &base,
+    );
     orbit_common::test_env::assert_child_test_passed(
         "claimed_review_bridge_sandbox::sandbox_fixture",
         output.status,
@@ -1096,7 +1102,7 @@ fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewM
 
 /// The reviewer provider, confined as a managed launch confines it.
 struct Confined {
-    child: std::process::Child,
+    child: ProviderChild,
     #[cfg(target_os = "macos")]
     _profile: Arc<tempfile::NamedTempFile>,
 }
@@ -1172,7 +1178,9 @@ impl Confined {
             stderr: Stdio::piped(),
         })
         .expect("spawn real sandbox");
-        Self { child }
+        Self {
+            child: ProviderChild::new(child),
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1200,16 +1208,14 @@ impl Confined {
             })
             .expect("spawn real sandbox");
         Self {
-            child,
+            child: ProviderChild::new(child),
             _profile: profile_file,
         }
     }
 
     /// Wait for the provider and return its report.
     fn finish(self) -> Value {
-        let output = orbit_exec::supervise_child(self.child, Some(600_000), None)
-            .expect("supervise sandbox")
-            .result;
+        let output = self.child.supervise();
         assert!(
             output.success,
             "sandbox provider: {}\n{}",
