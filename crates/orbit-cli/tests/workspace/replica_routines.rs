@@ -20,9 +20,8 @@ use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
 
+use crate::routine_runs::RoutineRuns;
 use crate::{fixture_crew, git_repo};
-mod owned_runs;
-use owned_runs::RoutineRuns;
 
 const OWNER: &str = "gc-owner";
 const REPLICA: &str = "gc-replica";
