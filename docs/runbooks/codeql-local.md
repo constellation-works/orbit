@@ -320,8 +320,10 @@ reason:
 
 `disk_insufficient` and `candidate_unreachable` are retried on later ticks, as
 is a run that ended without an outcome (an interrupted worker). Each hold gets
-at most three runs. Every other refusal needs a new decision. Every
-attempt is audited as `review.evidence_fulfilment` and commented on the task.
+at most three runs. Every other refusal needs a new decision. The owner's
+attempt decision reads the task's full fulfilment history for that hold;
+newer runs for other holds cannot reset its budget or reopen a final refusal.
+Every attempt is audited as `review.evidence_fulfilment` and commented on the task.
 To lower or raise the disk gate, override `min_free_mib` in a workspace copy
 of the job.
 

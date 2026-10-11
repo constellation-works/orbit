@@ -48,7 +48,9 @@
 //! [`EVIDENCE_FULFILMENT_AUDIT`] and commented on the task. At most
 //! [`MAX_ACTIVE_EVIDENCE_FULFILMENTS`] run at once; a hold gets one run
 //! unless a run refused it for a reason that can clear (disk, fetch) or ended
-//! without an outcome, up to [`MAX_FULFILMENT_ATTEMPTS`].
+//! without an outcome, up to [`MAX_FULFILMENT_ATTEMPTS`]. Attempt decisions
+//! use the task's full fulfilment history and the hold's identity, so newer
+//! runs for other holds never reopen a final outcome or reset the budget.
 
 mod codeql;
 mod fulfil;
@@ -81,7 +83,8 @@ pub(crate) const DEFAULT_FULFILMENT_MIN_FREE_MIB: u64 = 30 * 1024;
 const HOLD_KEY_FIELD: &str = "hold_key";
 /// Run-input field the keyed admission matches: the hold key and attempt.
 const ATTEMPT_KEY_FIELD: &str = "attempt_key";
-/// Newest fulfilment runs the tick and keyed admission look through.
+/// Newest fulfilment runs scanned for capacity and keyed admission;
+/// per-hold attempt decisions use the task's full history.
 const RUN_SCAN_LIMIT: usize = 200;
 /// The fulfilment step's id in the shipped job.
 const FULFIL_STEP: &str = "fulfil";
