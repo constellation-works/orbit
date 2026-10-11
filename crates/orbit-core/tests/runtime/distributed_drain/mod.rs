@@ -211,6 +211,7 @@ impl Wire {
                         command: command.clone(),
                         exit_code: 0,
                         output: format!("{command} passed"),
+                        known_red: None,
                     };
                     TaskArtifact {
                         path: format!("validation/{}/{index}.json", handoff.claim_id),
@@ -242,6 +243,7 @@ impl Wire {
             required_commands,
             owner_completion_authority: None,
             review: None,
+            known_red: vec![],
         };
         let request = format!("handoff:{}", handoff.claim_id);
         self.owner

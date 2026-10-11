@@ -381,6 +381,7 @@ impl ReviewedHandoff {
                 reviewed_base_is_ancestor: true,
                 repository: REPOSITORY.into(),
             }),
+            known_red: vec![],
         };
         owner
             .accept_task_handoff(&worker, "handoff", handoff, observation)

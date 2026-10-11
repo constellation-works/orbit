@@ -222,8 +222,12 @@ no origin or PR credentials.
   captured results. A failing candidate therefore never publishes a PR. After `pr_open`,
   `pin_validation` passes the pending result back as `prevalidated`. It re-observes the
   candidate, now with its PR delivery, and requires the same commit, base and command list. It
-  then attaches the logs without running the commands again. A command that fails the same way on
-  the candidate's base is a typed `baseline_red` failure. The drain releases the claim with
+  then attaches the logs without running the commands again. A command whose failing tests all
+  fail on the candidate's base too is known red: its log keeps the non-zero exit with a report of
+  the base and the failures, and the owner accepts it only after its own run of that required
+  command on the base fails every reported test
+  ([CONFIG.md](../../CONFIG.md#a-red-base-is-held-not-blocked), Followers). Any other command that
+  fails the same way on the candidate's base is a typed `baseline_red` failure. The drain releases the claim with
   `ClaimEvidence.baseline_red`, and the owner records a `baseline_red_hold` in the task's history.
   Owner pull admission defers the task until the held command passes on a new
   base tip ([ORB-14258];

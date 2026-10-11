@@ -6,8 +6,9 @@ use orbit_common::security::release::sha256_hex;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep};
 use orbit_types::workflow::{
-    ReviewCertificate, ReviewEvidenceKind, ReviewExternalEvidence, ReviewTiming, ValidationOutcome,
-    ValidationRole, handoff::*,
+    BaselineRedFailures, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, ReviewCertificate,
+    ReviewEvidenceKind, ReviewExternalEvidence, ReviewTiming, ValidationOutcome, ValidationRole,
+    handoff::*,
 };
 
 use super::TaskCommitBoundary;
@@ -371,11 +372,22 @@ impl TaskCommitBoundary {
         Ok(bytes)
     }
 
+    /// Check the validation logs a handoff pinned against the owner's
+    /// required commands, and return the known-red commands among them
+    /// [ORB-15427].
+    ///
+    /// A log passes with exit status 0, or fails only with tests its base
+    /// fails too: a non-zero log must carry the leaf's known-red report for
+    /// the handed-off base. Acceptance passes `known_red`, the owner's own
+    /// base runs, and accepts such a log only when the owner's run shares
+    /// exactly the failures it reports; approval and landing pass `None` and
+    /// recheck the pinned logs, which acceptance already judged.
     fn validate_handoff_evidence(
         &self,
         handoff: &TaskHandoff,
         required: &[String],
-    ) -> Result<(), OrbitError> {
+        known_red: Option<&[KnownRedObservation]>,
+    ) -> Result<Vec<KnownRedValidation>, OrbitError> {
         // An empty requirement list is no required check; any log the
         // handoff still carries must pin this claim's candidate all the same.
         let commands: BTreeSet<_> = required.iter().map(String::as_str).collect();
@@ -383,10 +395,20 @@ impl TaskCommitBoundary {
             return Err(invalid("owner validation requirements blank or duplicated"));
         }
         let mut passed = BTreeSet::new();
+        let mut known = Vec::new();
         for reference in &handoff.validation {
             let log: HandoffValidationLog =
                 serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, reference)?)
                     .map_err(|e| invalid(&format!("invalid validation log: {e}")))?;
+            let report = match (&log.known_red, log.exit_code) {
+                (None, 0) => None,
+                (Some(report), code) if code != 0 => Some(report),
+                _ => {
+                    return Err(invalid(
+                        "validation must pass for the exact claim/run/candidate/base",
+                    ));
+                }
+            };
             if log.schema_version != 1
                 || log.workspace_id != handoff.workspace_id
                 || log.task_id != handoff.task_id
@@ -395,13 +417,15 @@ impl TaskCommitBoundary {
                 || log.run_id != handoff.run_id
                 || log.tested_head != handoff.candidate.candidate.commit
                 || log.candidate != handoff.candidate
-                || log.exit_code != 0
                 || log.command.trim().is_empty()
-                || !passed.insert(log.command)
+                || !passed.insert(log.command.clone())
             {
                 return Err(invalid(
                     "validation must pass for the exact claim/run/candidate/base",
                 ));
+            }
+            if let Some(report) = report {
+                known.push(known_red_validation(&log, report, handoff, known_red)?);
             }
         }
         if !commands.iter().all(|c| passed.contains(*c)) {
@@ -500,12 +524,12 @@ impl TaskCommitBoundary {
                 let log: HandoffValidationLog =
                     serde_json::from_slice(&self.artifact_bytes(&handoff.task_id, reference)?)
                         .map_err(|e| invalid(&format!("invalid validation log: {e}")))?;
-                if log.command != check.validation.command {
+                if log.command != check.validation.command || log.exit_code != 0 {
                     return Err(invalid("already-landed validation log mismatch"));
                 }
             }
         }
-        Ok(())
+        Ok(known)
     }
 
     fn observe_handoff<'a>(
@@ -673,7 +697,37 @@ impl TaskCommitBoundary {
             return Err(invalid("handoff differs from captured ship contract"));
         }
         self.validate_handoff_review(handoff, &ship, observation.review.as_ref(), true)?;
-        self.validate_handoff_evidence(handoff, &observation.required_commands)?;
+        let known_red = self.validate_handoff_evidence(
+            handoff,
+            &observation.required_commands,
+            Some(&observation.known_red),
+        )?;
+        // [ORB-15427] The owner established each known-red command against
+        // its own base run; the task's history names those tests, as the
+        // owner's own delivery records them.
+        for known in &known_red {
+            params
+                .append_history
+                .push(orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: params.actor.clone(),
+                    event: KNOWN_RED_VALIDATION_EVENT.into(),
+                    note: Some(known.text(&format!(
+                        "Required validation '{}' fails on claimed candidate {} only with tests \
+                         that also fail when this owner runs it on base {}, so the candidate \
+                         introduced none of them and the handoff was accepted; {}.",
+                        known.command,
+                        known.tested_head,
+                        known.base_sha,
+                        known
+                            .failures
+                            .describe()
+                            .unwrap_or_else(|| "no failure named".to_string())
+                    ))),
+                    from_status: None,
+                    to_status: None,
+                });
+        }
         let accepted = AcceptedHandoff {
             handoff_id: format!("handoff-{}", sha256_hex(encode(handoff)?.as_bytes())),
             handoff: handoff.clone(),
@@ -772,7 +826,7 @@ impl TaskCommitBoundary {
             observed.review.as_ref(),
             false,
         )?;
-        self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands)?;
+        self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands, None)?;
         self.add_handoff_authorization(
             &accepted,
             &auth.machine_id,
@@ -900,7 +954,7 @@ impl TaskCommitBoundary {
             observation.review.as_ref(),
             false,
         )?;
-        self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands)?;
+        self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands, None)?;
         let authorization = self.current_landing_authorization(&accepted)?;
         if authorization.workspace_id != self.workspace_id
             || authorization.task_id != auth.task_id
@@ -928,6 +982,65 @@ impl TaskCommitBoundary {
         }
         Ok(())
     }
+}
+
+/// The known-red record for `log`, whose leaf reported `report` [ORB-15427].
+/// With the owner's observations (`observed`, at acceptance), the owner's own
+/// base run must share exactly the reported failures; without them the
+/// pinned report is only checked for shape.
+fn known_red_validation(
+    log: &HandoffValidationLog,
+    report: &HandoffKnownRed,
+    handoff: &TaskHandoff,
+    observed: Option<&[KnownRedObservation]>,
+) -> Result<KnownRedValidation, OrbitError> {
+    let refused = |detail: String| {
+        invalid(&format!(
+            "known_red_unverified: required validation '{}' failed on candidate {}; {detail}",
+            log.command, log.tested_head
+        ))
+    };
+    if report.base_sha != handoff.candidate.base.commit || report.failures.is_empty() {
+        return Err(refused(format!(
+            "its report must name the failures it shares with base {}",
+            handoff.candidate.base.commit
+        )));
+    }
+    if let Some(observed) = observed {
+        let observation = observed
+            .iter()
+            .find(|observation| {
+                observation.command == log.command && observation.base_sha == report.base_sha
+            })
+            .ok_or_else(|| {
+                refused(format!(
+                    "the owner has not run it on base {} itself",
+                    report.base_sha
+                ))
+            })?;
+        match &observation.verdict {
+            Ok(failures) if *failures == report.failures => {}
+            Ok(_) => {
+                return Err(refused(format!(
+                    "the owner's check of base {} judged other failures than the report names",
+                    report.base_sha
+                )));
+            }
+            Err(reason) => {
+                return Err(refused(format!(
+                    "the owner's run on base {} does not show the base fails them: {reason}",
+                    report.base_sha
+                )));
+            }
+        }
+    }
+    Ok(KnownRedValidation {
+        command: log.command.clone(),
+        base_sha: report.base_sha.clone(),
+        tested_head: log.tested_head.clone(),
+        run_id: log.run_id.clone(),
+        failures: BaselineRedFailures::new(report.failures.iter().cloned(), ""),
+    })
 }
 
 fn review_refused(refusal: HandoffReviewRefusal, detail: &str) -> OrbitError {

@@ -23,6 +23,25 @@ pub struct HandoffObservation {
     /// What the owner observed about a before-PR handoff's review evidence.
     /// Required to accept one; `None` for a handoff carrying none.
     pub review: Option<HandoffReviewObservation>,
+    /// [ORB-15427] The owner's own judgement of each validation log the
+    /// handoff reports as known red. Acceptance requires one per such log;
+    /// approval and landing recheck the logs the accepted handoff pinned.
+    pub known_red: Vec<KnownRedObservation>,
+}
+
+/// What the owner's own run of a required command on the handed-off base
+/// showed about a leaf's known-red report [ORB-15427]. Built by trusted owner
+/// code that ran, or read its cached run of, an owner-required command; the
+/// leaf's report only names what to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownRedObservation {
+    /// The owner-required command the log reports.
+    pub command: String,
+    /// The base commit the owner ran it on.
+    pub base_sha: String,
+    /// The reported failures when the owner's base run fails every one of
+    /// them, or why the owner could not establish that.
+    pub verdict: Result<std::collections::BTreeSet<String>, String>,
 }
 
 /// The owner's own reading of the facts a before-PR certificate stands on

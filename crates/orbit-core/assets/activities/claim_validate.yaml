@@ -18,7 +18,12 @@ spec:
     that survives is rerun on the candidate's base in a clean detached
     worktree (cached per host, base and command), both logs are attached, and
     a failure the base shares fails as a typed `baseline_red` that releases
-    the claim with a hold instead of failing it. An empty requirement list
+    the claim with a hold instead of failing it, unless every test the
+    candidate fails also fails on the base: that command is known red, its
+    log carries its exit status and a known-red report the owner rechecks
+    against its own run of the base before accepting the handoff, the
+    decision is `passed_with_known_red`, and the next command runs. An empty
+    requirement list
     runs nothing and records `skipped_no_required_commands` with no
     validation references. Task, claim, execution machine and bound run come
     from the trusted worker binding; a step input that disagrees is refused
@@ -87,7 +92,7 @@ spec:
     properties:
       decision:
         type: string
-        enum: [passed, skipped_no_required_commands]
+        enum: [passed, passed_with_known_red, skipped_no_required_commands]
       note:
         type: string
         description: Why no command ran, when the requirement list is empty.
@@ -99,7 +104,16 @@ spec:
           by the run given this output as `prevalidated`.
       results:
         type: array
-        description: Each passed command and its captured output, when publication is pending.
+        description: >
+          Each passed or known-red command with its captured output, exit
+          status and known-red report, when publication is pending.
+        items:
+          type: object
+      known_red:
+        type: array
+        description: >
+          The commands that failed only with tests the base fails too:
+          command, base and candidate commits, run and failing tests.
         items:
           type: object
       candidate:
@@ -122,6 +136,7 @@ spec:
           `config` or `launcher_fallback`), PATH and the login-shell outcome.
       commands:
         type: array
+        description: The commands that passed outright.
         items:
           type: string
       replayed:

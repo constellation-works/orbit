@@ -24,8 +24,8 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::baseline::{
-    FAILING_TESTS_KEY, cached_base_check, compare_with_base_until, hold_failures,
-    run_validation_command_until,
+    FAILING_TESTS_KEY, cached_base_check, compare_with_base, compare_with_base_until,
+    hold_failures, run_validation_command_until,
 };
 use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
 
@@ -408,6 +408,74 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             failures: on_candidate.into_iter().collect(),
         },
     }))
+}
+
+/// [ORB-15427] The owner's check of a claimed leaf's report that `command`
+/// failed on its candidate, with `exit_code`, only with `failures`, every one
+/// of which also fails on `base_sha`. Returns those failures when this host's
+/// own run of the base fails them all, or why it could not establish that.
+///
+/// The leaf's base run is never taken on trust: this runs on the owner,
+/// through the owner's base result cache. A comparable full-selection result
+/// already cached for `(base, command, selection)` is read without running
+/// anything. Otherwise, when the leaf reported a selection and every failure
+/// is a test, the base runs only those tests, as a reviewer's base claim
+/// does; otherwise it runs the whole selection. The known-red rule the
+/// owner's own validation applies judges the result; a whole run must also
+/// fail with the candidate's exit status.
+///
+/// Only call this with a command the owner itself requires: it runs on the
+/// owner's host, outside any agent sandbox.
+pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    base_sha: &str,
+    command: &str,
+    selection: Option<&Value>,
+    exit_code: i32,
+    failures: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, String> {
+    if failures.is_empty() {
+        return Err("the report names no failure to compare".to_string());
+    }
+    let cached = cached_base_check(workspace_path, base_sha, command, selection)
+        .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
+    let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
+        (Some(check), _) => (check, true),
+        (None, Some(narrowed)) => (
+            compare_with_base(host, workspace_path, base_sha, command, Some(&narrowed)),
+            false,
+        ),
+        (None, None) => (
+            compare_with_base(host, workspace_path, base_sha, command, selection),
+            true,
+        ),
+    };
+    if check.fails_all(whole.then_some(exit_code), failures) {
+        return Ok(failures.clone());
+    }
+    let ran = if whole { "it" } else { "the failing tests" };
+    Err(match &check.result {
+        Err(reason) => format!("base {base_sha} could not be judged: {reason}"),
+        Ok(_) if check.not_comparable.is_some() => format!(
+            "the base run of {ran} is not comparable with the candidate's: {}",
+            check.not_comparable.as_deref().unwrap_or_default()
+        ),
+        Ok(base) if base.passed => format!("base {base_sha} passes {ran}"),
+        Ok(base) if base.timed_out => format!("the base run of {ran} timed out"),
+        Ok(base) if whole && base.exit_code != exit_code => format!(
+            "base {base_sha} fails with exit {} where the candidate failed with exit {exit_code}",
+            base.exit_code
+        ),
+        Ok(base) => format!(
+            "base {base_sha} does not fail {}",
+            failures
+                .difference(&base.failures)
+                .map(|failure| format!("`{failure}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
 }
 
 /// `selection` with [`FAILING_TESTS_KEY`] naming the tests to replay on the

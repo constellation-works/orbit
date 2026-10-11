@@ -29,18 +29,20 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
     ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim,
     ExecutionClaimPhase, HandoffObservation, HandoffReviewObservation, JobRunQuery,
+    KnownRedObservation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
     JobRunState,
-    handoff::{HandoffCandidate, HandoffDelivery, TaskHandoff},
+    handoff::{HandoffCandidate, HandoffDelivery, HandoffValidationLog, TaskHandoff},
 };
 use serde::Serialize;
 
@@ -226,7 +228,8 @@ impl crate::OrbitRuntime {
                 &ClaimMutation::Release(evidence),
             ),
             ClaimMutation::AcceptHandoff(handoff) => {
-                let observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
+                let mut observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
+                observation.known_red = self.observe_known_red(&handoff, &observation);
                 self.accept_task_handoff(
                     &context,
                     &handoff_mutation_id(&claim.claim_id),
@@ -341,7 +344,59 @@ impl crate::OrbitRuntime {
             required_commands: self.workflow_required_validation_commands().to_vec(),
             owner_completion_authority: self.owner_completion_authority(),
             review,
+            known_red: Vec::new(),
         })
+    }
+
+    /// The owner's own judgement of each validation log a handoff reports
+    /// as known red [ORB-15427].
+    ///
+    /// The leaf's base run is its claim, not evidence. For each pinned log
+    /// carrying a known-red report, the owner runs the command on the base it
+    /// observed the candidate on — or reads its own cached run — and keeps
+    /// the reported failures only when that run fails every one
+    /// ([`orbit_engine::verify_claimed_known_red`]). Only commands this
+    /// owner requires are run; the log names one, never supplies it. A log
+    /// that cannot be read is left to the claim journal, which refuses it.
+    fn observe_known_red(
+        &self,
+        handoff: &TaskHandoff,
+        observation: &HandoffObservation,
+    ) -> Vec<KnownRedObservation> {
+        let base_sha = &observation.candidate.base.commit;
+        handoff
+            .validation
+            .iter()
+            .filter_map(|reference| {
+                let artifact = self
+                    .get_task_artifact(&handoff.task_id, &reference.path)
+                    .ok()
+                    .flatten()
+                    .filter(|artifact| sha256_hex(&artifact.content) == reference.sha256)?;
+                let log: HandoffValidationLog = serde_json::from_slice(&artifact.content).ok()?;
+                let report = log.known_red?;
+                let verdict = if !observation.required_commands.contains(&log.command) {
+                    Err("it is not a command this owner requires, so the owner runs none".into())
+                } else if report.base_sha != *base_sha {
+                    Err(format!("the report names base {}", report.base_sha))
+                } else {
+                    orbit_engine::verify_claimed_known_red(
+                        self,
+                        &self.paths().repo_root,
+                        base_sha,
+                        &log.command,
+                        report.selection.as_ref(),
+                        log.exit_code,
+                        &report.failures,
+                    )
+                };
+                Some(KnownRedObservation {
+                    command: log.command,
+                    base_sha: base_sha.clone(),
+                    verdict,
+                })
+            })
+            .collect()
     }
 
     /// The owner's reading of the facts a before-PR certificate stands on

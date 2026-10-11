@@ -375,6 +375,8 @@ impl OrbitRuntime {
             // Acceptance observed the review's base and repository; the store
             // rechecks the review evidence the handoff pinned without them.
             review: None,
+            // Acceptance ran the known-red bases; approval rechecks the logs.
+            known_red: Vec::new(),
         };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),

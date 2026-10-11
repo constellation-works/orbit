@@ -26,7 +26,7 @@
 //! `$HOME`/`$TMPDIR`, no inherited Orbit, Git or GitHub authority, and a bounded
 //! wait. The shared supervisor kills and reaps it on timeout.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,7 @@ use orbit_engine::{
     ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost, TaskActivityUpdate,
     TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
+    verify_claimed_known_red,
 };
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
@@ -52,7 +53,9 @@ use orbit_types::task::{
     push_external_ref_if_missing,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
-use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
+use orbit_types::workflow::handoff::{
+    HandoffDelivery, HandoffReviewDisposition, HandoffValidationLog, TaskHandoff,
+};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
     DEFERRED_SANDBOX_ARTIFACT, JobV2StepBody, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
@@ -3021,6 +3024,152 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
     );
 }
 
+/// [ORB-15427] A claimed leaf applies the owner's known-red rule. A
+/// candidate failing the base's tests, or some of them, passes validation as
+/// `passed_with_known_red`, before publication and when pinned: its handoff
+/// log keeps the exit status and reports the base and the failures, the
+/// output names them, and the leaf's pull request lists them. The owner
+/// trusts none of that: its own check of the base
+/// (`verify_claimed_known_red`), here with the base result cache cleared so
+/// it reruns the base, confirms the report. A candidate failing a test the
+/// base does not is released as `baseline_red` as before, and the owner's
+/// check refuses the same report if a leaf made it anyway.
+#[test]
+fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks() {
+    isolated(
+        "a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks",
+        |sandbox| {
+            let base = ["suite::broken", "suite::flaky"];
+            let named = |tests: &[&str]| {
+                tests
+                    .iter()
+                    .map(|test| format!("test orbit-core::runtime {test}"))
+                    .collect::<Vec<_>>()
+            };
+            let cases: [KnownRedCase<'_>; 4] = [
+                ("equal", None, Some(&base)),
+                ("subset", Some(&["suite::flaky"]), Some(&["suite::flaky"])),
+                (
+                    "superset",
+                    Some(&["suite::broken", "suite::flaky", "suite::added"]),
+                    None,
+                ),
+                ("disjoint", Some(&["suite::added"]), None),
+            ];
+            for (case, candidate_tests, known_red) in cases {
+                let fx = Fixture::with_red_tests(sandbox, &base, candidate_tests);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                host.require_commands(&[RED_TESTS]);
+                let mut input = json!({
+                    "workspace_path": fx.repo,
+                    "base_sync": "local",
+                    "base_sha": fx.base_sha,
+                });
+                let outcome = action(&host, "claim_validate", &input);
+                // The owner's own base run, not the one the leaf cached.
+                let cache = PathBuf::from(git(&fx.repo, &["rev-parse", "--git-common-dir"]))
+                    .join("orbit-baseline");
+                let owner_check = |failures: &BTreeSet<String>| {
+                    if cache.exists() {
+                        fs::remove_dir_all(&cache).unwrap();
+                    }
+                    verify_claimed_known_red(
+                        &host,
+                        &fx.repo,
+                        &fx.base_sha,
+                        RED_TESTS,
+                        None,
+                        // make's status for the recipe's failure
+                        2,
+                        failures,
+                    )
+                };
+
+                let Some(known_red) = known_red else {
+                    let message = outcome
+                        .expect_err(&format!("{case}: a failure the base lacks is released"))
+                        .to_string();
+                    let hold = BaselineRedHold::from_text(&message)
+                        .unwrap_or_else(|| panic!("{case}: typed baseline_red: {message}"));
+                    assert_eq!(hold.failures.identities, named(&base), "{case}");
+                    assert!(host.handoffs.lock().unwrap().is_empty(), "{case}");
+                    let claimed = named(candidate_tests.unwrap()).into_iter().collect();
+                    let refusal = owner_check(&claimed)
+                        .expect_err(&format!("{case}: the owner refuses the report"));
+                    assert!(
+                        refusal.contains("does not fail `test orbit-core::runtime suite::added`"),
+                        "{case}: {refusal}"
+                    );
+                    continue;
+                };
+
+                let output = outcome.unwrap_or_else(|error| panic!("{case}: {error}"));
+                assert_eq!(output["decision"], "passed_with_known_red", "{case}");
+                assert_eq!(output["commands"], json!([]), "{case}");
+                let records: Vec<KnownRedValidation> =
+                    serde_json::from_value(output["known_red"].clone()).unwrap();
+                assert_eq!(records.len(), 1, "{case}: {records:?}");
+                assert_eq!(records[0].command, RED_TESTS, "{case}");
+                assert_eq!(records[0].base_sha, fx.base_sha, "{case}");
+                assert_eq!(records[0].tested_head, fx.candidate, "{case}");
+                assert_eq!(records[0].failures.identities, named(known_red), "{case}");
+                let path = "validation/claim-landing/0.json";
+                let log: HandoffValidationLog =
+                    serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
+                assert_eq!(log.exit_code, 2, "{case}: the log keeps the exit status");
+                let report = log.known_red.expect("the log reports known red");
+                assert_eq!(report.base_sha, fx.base_sha, "{case}");
+                assert!(
+                    named(known_red)
+                        .iter()
+                        .all(|test| report.failures.contains(test)),
+                    "{case}: {report:?}"
+                );
+                assert_eq!(
+                    owner_check(&report.failures),
+                    Ok(report.failures.clone()),
+                    "{case}: the owner's base run fails every reported test"
+                );
+
+                // Before publication the results carry the report, and the
+                // pin attaches the same log for the published candidate.
+                *host.ship_mode.lock().unwrap() = "pr".to_string();
+                host.claim_log_contents.lock().unwrap().clear();
+                let pending = action(&host, "claim_validate", &input)
+                    .unwrap_or_else(|error| panic!("{case}: validate before push: {error}"));
+                assert_eq!(pending["publication"], "pending", "{case}");
+                assert_eq!(pending["decision"], "passed_with_known_red", "{case}");
+                assert_eq!(pending["known_red"], output["known_red"], "{case}");
+                action(&host, "pr_open", &{
+                    let mut open = fx.open_input(&fx.candidate, &fx.base_sha);
+                    open["claim_validation"] = pending.clone();
+                    open
+                })
+                .unwrap_or_else(|error| panic!("{case}: open the PR: {error}"));
+                let body = fx
+                    .forge_state("pr-body")
+                    .expect("the forge received a body");
+                assert!(body.contains("## Known-red validation"), "{case}: {body}");
+                for test in known_red {
+                    assert!(
+                        body.contains(&format!("`orbit-core::runtime {test}`")),
+                        "{case}: the PR names {test}: {body}"
+                    );
+                }
+                input["pull_request"] = json!(PR_NUMBER);
+                input["prevalidated"] = pending;
+                let pinned = action(&host, "claim_validate", &input)
+                    .unwrap_or_else(|error| panic!("{case}: pin: {error}"));
+                assert_eq!(pinned["decision"], "passed_with_known_red", "{case}");
+                let pinned_log: HandoffValidationLog =
+                    serde_json::from_slice(&host.claim_log_contents.lock().unwrap()[path]).unwrap();
+                assert_eq!(pinned_log.exit_code, 2, "{case}");
+                assert_eq!(pinned_log.known_red, Some(report), "{case}");
+            }
+        },
+    );
+}
+
 /// [ORB-15375] Captured output keeps only a head and a tail, so a failure in
 /// the middle of a long run never reaches the log. The failing-test set is
 /// read from the complete output: a candidate whose extra failure only the
@@ -4954,6 +5103,8 @@ struct DeliveryHost {
     widenings: Mutex<Vec<Widening>>,
     /// Claimed-leaf validation logs attached to the owner, by path.
     claim_logs: Mutex<Vec<String>>,
+    /// Their contents, by path.
+    claim_log_contents: Mutex<BTreeMap<String, Vec<u8>>>,
     /// Claimed-leaf handoffs recorded as pending settlements.
     handoffs: Mutex<Vec<TaskHandoff>>,
     /// The claim's owner-resolved ship mode.
@@ -4991,6 +5142,7 @@ impl DeliveryHost {
             validation_env: Mutex::default(),
             widenings: Mutex::default(),
             claim_logs: Mutex::default(),
+            claim_log_contents: Mutex::default(),
             handoffs: Mutex::default(),
             ship_mode: Mutex::new("local".to_string()),
             status_events: Mutex::default(),
@@ -5387,8 +5539,12 @@ impl RuntimeHost for DeliveryHost {
         })
     }
 
-    fn attach_claim_validation_log(&self, path: &str, _content: Vec<u8>) -> Result<(), OrbitError> {
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
         self.claim_logs.lock().unwrap().push(path.to_string());
+        self.claim_log_contents
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), content);
         Ok(())
     }
 
