@@ -10,7 +10,7 @@ errors, automation, and settings. It has no login and binds to loopback only.
 To use another machine's dashboard, tunnel to it over SSH, or switch to a
 registered host with the host picker.
 
-![The dashboard's Tasks list with status groups, the load, memory, and disk host chips, and the 24-hour refresh clock.](../../../assets/dashboard/dashboard-tasks.png)
+![The dashboard's Tasks view: the top bar with the host's load, memory, and disk and the refresh clock, tasks in status cards with Approve, View run, and Ship, and the Drain dock on the right.](../../../assets/dashboard/dashboard-tasks.png)
 
 ## Open it locally
 
@@ -237,10 +237,10 @@ state and the accepted handoff.
 The auto-drain card starts and stops a
 [delivery window](../continuous-delivery/): a time-bounded run that ships
 approved backlog tasks in parallel. It sits at the top of the Tasks dock's
-**Drain** mode; `#auto-drain` and `#operations/auto-drain` open it. It needs a
-single active workspace.
+**Drain** mode, with the **Start a window** card below it; `#auto-drain` and
+`#operations/auto-drain` open it. It needs a single active workspace.
 
-![The Drain card with delivery state and capacity, pool readiness counts, window length, parallel tasks, completion mode, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Drain dock: the Auto-drain card with its state, workspace leaf slots, and Send pending results, then Start a window with its eligible and waiting counts, window length, parallel tasks, completion mode, proposed-task handling, and Start.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
@@ -250,10 +250,12 @@ The card shows:
   here too.
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
-- **Pool.** Counts for **Pool: eligible**, **Pool: waiting on locks**,
-  **Pool: waiting on capacity**, and **Pool: waiting, other** from a read-only
-  readiness snapshot. Up to three tasks waiting on another task or run are
-  listed as `ABC-1 waits on ABC-2`, with the lock they contend for.
+- **Readiness.** **Start a window** counts the tasks eligible now and those
+  waiting, from a read-only readiness snapshot. The task list's **Backlog**
+  card splits the same snapshot into **Eligible now**, **Waiting on locks**,
+  **Waiting on capacity**, and **Waiting, other**; click one to filter the
+  card. Each backlog row's dot shows its pool, and its tooltip names the wait,
+  such as `Waits on ABC-2` and the lock they contend for.
 
 | Control | Effect |
 |---|---|
@@ -263,7 +265,7 @@ The card shows:
 | **Proposed tasks** | **Leave for me** (default) leaves `proposed` tasks for you. **Approve qualifying** (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. |
 | **Start … window** | After a confirmation, runs `orbit run auto` with these settings. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
-| **Settle pending** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
+| **Send pending results** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 
 Without operator capability you can still start a window that stops at
 review; **Mark done** and **Approve qualifying** stay disabled and say why. Nothing is reserved or
@@ -467,9 +469,9 @@ Open **Settings › Hosts** (`#config/hosts`) to manage the serving machine's
 [`hosts.toml`](../../reference/config/#host-registry). Through
 `orbit web connect`, this is the remote machine's registry.
 
-![Settings › Hosts: Add host, the local host labelled local · edited here, and an unreachable remote with its error code, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
+![Settings › Hosts: Add host, the local host labelled local · edited here with its load, memory, disk, and drain health, and an unreachable remote with its error code, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
 
-Captured from Orbit 0.28.0 on 2026-10-08 with an isolated demo registry.
+Captured on 2026-10-10 from an isolated demo registry.
 `build-box.invalid` is an intentionally unreachable example SSH target.
 
 The local host comes first, labelled **local · edited here**. Remote rows
@@ -525,7 +527,7 @@ Two gates apply:
    name their owner, and the machine-global **Settings › Hosts** view.
 2. **Operator capability.** Needed for routine and auto-task switches,
    **Mint now**, **Run ▸**, clock controls, **Mark done**, **Stop** and
-   **Settle pending**, settings writes, plugin enable and disable, and the
+   **Send pending results**, settings writes, plugin enable and disable, and the
    owner's handoff approve, revoke, and claim-recovery actions.
 
 The dashboard server has operator capability when:

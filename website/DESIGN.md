@@ -114,7 +114,7 @@ default chrome (auto title, sidebar, TOC).
   dashboard. It stays on its poster frame under
   `prefers-reduced-motion: reduce`, its caption dates the capture so its counts
   read as a snapshot, and its `aria-label` narrates it. The source lives in
-  `marketing/media/video/orbit-dashboard-tour`; the site serves a web re-encode
+  `marketing/media/video/orbit-dashboard-tour-v2`; the site serves a web re-encode
   from `public/media/`.
 - **Below the hero:** short sections that take a reader from what Orbit
   promises, to how it works and runs unattended, to where to go next. Each

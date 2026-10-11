@@ -649,10 +649,9 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: underline;
 }
 
-/* Hero demo: a 37 s tour of the real dashboard, captured on a live workspace
-   and laid out for this column (6:5, drawn at 2x). The published clip fades
-   its side edges over the dashboard panels to hide labels cut by the capture
-   viewport. Its own background prevents letterboxing in either theme. The
+/* Hero demo: a 42 s tour of the real dashboard, captured on a live workspace
+   and laid out for this column (6:5, framed so dashboard text lands near its
+   real size). Its own background prevents letterboxing in either theme. The
    figcaption dates the capture, since its counts are a snapshot. */
 .orbit-demo {
   display: flex;
@@ -664,7 +663,7 @@ html:not([data-has-sidebar]) header.header {
 
 .orbit-demo-video {
   aspect-ratio: 6 / 5;
-  background: #07090d;
+  background: #0a0a0a;
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 10px;
   box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
@@ -1876,5 +1875,5 @@ a.orbit-card:focus-visible :is(h2, h3) {
   border-radius: 8px;
 }
 .sl-markdown-content img[src*="dashboard-drain-card"] {
-  width: 382px;
+  width: 408px;
 }
