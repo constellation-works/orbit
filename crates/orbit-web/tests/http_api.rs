@@ -29,6 +29,8 @@ mod pagination;
 mod plugins;
 #[path = "http_api/projections.rs"]
 mod projections;
+#[path = "http_api/reliability.rs"]
+mod reliability;
 #[path = "http_api/runs.rs"]
 mod runs;
 #[path = "http_api/support.rs"]

@@ -165,6 +165,7 @@ fn accumulate(totals: &mut OutcomeCounts, counts: &OutcomeCounts) {
     totals.failed += counts.failed;
     totals.cancelled += counts.cancelled;
     totals.skipped += counts.skipped;
+    totals.held += counts.held;
     totals.in_flight += counts.in_flight;
     totals.unknown += counts.unknown;
 }
