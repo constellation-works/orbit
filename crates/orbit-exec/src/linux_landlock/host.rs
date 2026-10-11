@@ -64,7 +64,10 @@ pub(crate) const RUNTIME_FILES: &[&str] = &[
 /// `/proc/<pid>/cmdline` would expose other processes' arguments, which may
 /// contain credentials. Landlock's separate ptrace restriction already denies
 /// `environ` outside the child's domain, regardless of filesystem grants. The
-/// child's own `/proc/self` is granted after `fork`, where it resolves to the child.
+/// child's own `/proc/self` is absent too, so a confined child takes its
+/// identity from the parent or from the kernel (`getpid`, `getppid`, or a
+/// pidfd from `SO_PEERPIDFD`, as `runtime/plugin/broker/peer.rs` does). The
+/// `the_child_cannot_read_its_own_proc_entry` boundary test pins this.
 const RUNTIME_PROC_DIRS: &[&str] = &["/proc/sys"];
 const RUNTIME_PROC_FILES: &[&str] = &[
     "/proc/cpuinfo",
