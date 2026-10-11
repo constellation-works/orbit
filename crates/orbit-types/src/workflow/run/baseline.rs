@@ -20,6 +20,7 @@
 //! per red base failure.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Error code of a required validation failure the base shares.
 pub const BASELINE_RED_ERROR_CODE: &str = "baseline_red";
@@ -66,7 +67,7 @@ pub struct BaselineRedHold {
     pub failures: BaselineRedFailures,
 }
 
-/// Most failure identities a hold keeps; the rest are only counted.
+/// Most failure identities a hold displays; the rest are counted and hashed.
 const MAX_BASELINE_RED_FAILURES: usize = 20;
 /// Lines of output a hold keeps when the base run names no failure.
 const BASELINE_RED_TAIL_LINES: usize = 5;
@@ -79,6 +80,11 @@ const DESCRIBED_FAILURES: usize = 5;
 /// small [ORB-15374].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaselineRedFailures {
+    /// SHA-256 of the complete normalized identity set, before display bounds.
+    /// Absent for older holds and output-only failures. Repair deduplication
+    /// uses this digest so omitted or shortened identities remain distinct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_digest: Option<String>,
     /// Each failure the run's output names, sorted: a failed test
     /// (`test <binary-id> <test>` for nextest, `test <name>` for libtest) or
     /// a compiler or lint error at its location. At most 20.
@@ -126,8 +132,17 @@ impl BaselineRedFailures {
                 ..Self::default()
             };
         }
+        // Frame each sorted identity by its byte length: embedded delimiters
+        // cannot make two different sets share the same digest input.
+        let mut digest = Sha256::new();
+        digest.update(b"baseline-red-failures-v1\0");
+        for identity in &identities {
+            digest.update((identity.len() as u64).to_be_bytes());
+            digest.update(identity.as_bytes());
+        }
         let omitted = identities.len().saturating_sub(MAX_BASELINE_RED_FAILURES);
         Self {
+            identity_digest: Some(format!("{:x}", digest.finalize())),
             identities: identities
                 .into_iter()
                 .take(MAX_BASELINE_RED_FAILURES)
