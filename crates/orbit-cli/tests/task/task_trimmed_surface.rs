@@ -10,11 +10,12 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Output;
+use std::process::{Command, Output};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::{Value, json};
+use tempfile::tempdir;
 
 /// [ORB-12245] `done` and `archived` are terminal on the governed surface.
 /// A human on the bare CLI can still override the table with `--force`, and
@@ -804,6 +805,27 @@ fn lint_reads_a_path_closed_by_a_parenthesis_and_full_stop_as_the_file() {
 
 #[test]
 fn task_add_attributes_from_model_flag_and_managed_identity_env() {
+    const TEST: &str =
+        "task_trimmed_surface::task_add_attributes_from_model_flag_and_managed_identity_env";
+    const CHILD: &str = "ORBIT_TASK_ATTRIBUTES_MANAGED_IDENTITY_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let home = tempdir().expect("isolated child home");
+        let output_dir = tempdir().expect("child output directory");
+        let mut command = Command::new(std::env::current_exe().expect("test binary"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = test_env::run_child_test(&mut command, TEST, output_dir.path());
+        test_env::assert_child_test_passed(TEST, output.status, &output.stdout, &output.stderr);
+        return;
+    }
+
     let ambient = workspace();
     let workspace = workspace();
 
