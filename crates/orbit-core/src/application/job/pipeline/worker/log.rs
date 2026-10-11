@@ -525,20 +525,46 @@ fn write_pipeline_worker_spawn_banner(file: &mut File, command: &Command) {
 
 pub(super) fn read_pipeline_worker_log_tail(file: &mut File) -> Option<String> {
     let len = file.metadata().ok()?.len();
+    read_pipeline_worker_log_tail_at_size(file, len)
+}
+
+/// Read only the window selected by a worker log's size snapshot.
+///
+/// Appends after the snapshot are excluded. If the file shrinks before the
+/// read reaches its limit, only the bytes still available in that window are
+/// returned and the diagnostic says so.
+pub(super) fn read_pipeline_worker_log_tail_at_size(file: &mut File, len: u64) -> Option<String> {
     let start = len.saturating_sub(PIPELINE_WORKER_LOG_TAIL_BYTES);
+    let read_limit = len - start;
     file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::with_capacity((len - start) as usize);
-    file.read_to_end(&mut bytes).ok()?;
+    let mut bytes = Vec::with_capacity(read_limit as usize);
+    file.take(read_limit).read_to_end(&mut bytes).ok()?;
+    let bytes_read = bytes.len() as u64;
     let output = String::from_utf8_lossy(&bytes);
     let output = orbit_common::observability::logging::redact_event_text(output.trim());
-    if output.is_empty() {
+
+    let mut diagnostics = Vec::new();
+    if start > 0 {
+        diagnostics.push(format!(
+            "truncated to final {PIPELINE_WORKER_LOG_TAIL_BYTES} bytes of the {len}-byte size snapshot"
+        ));
+    }
+    if bytes_read < read_limit {
+        diagnostics.push(format!(
+            "file changed after size snapshot; read {bytes_read} of {read_limit} selected bytes"
+        ));
+    }
+
+    if output.is_empty() && diagnostics.is_empty() {
         None
-    } else if start > 0 {
-        Some(format!(
-            "[truncated to final {PIPELINE_WORKER_LOG_TAIL_BYTES} bytes]\n{output}"
-        ))
     } else {
-        Some(output)
+        if diagnostics.is_empty() {
+            Some(output)
+        } else if output.is_empty() {
+            Some(format!("[{}]", diagnostics.join("; ")))
+        } else {
+            Some(format!("[{}]\n{output}", diagnostics.join("; ")))
+        }
     }
 }
 
