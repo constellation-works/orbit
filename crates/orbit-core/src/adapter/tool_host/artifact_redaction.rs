@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_home_dir,
     redact_sensitive_env_text,
@@ -12,7 +11,10 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Map, Value, json};
 
-use crate::{AuditEventInsertParams, OrbitRuntime};
+use crate::OrbitRuntime;
+use crate::runtime::audit::system::{
+    AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ArtifactRedactionKind {
@@ -615,44 +617,23 @@ fn emit_audit_events(
             "redaction_kinds": redaction_kinds,
             "redaction_classes": field.classes,
         });
-        runtime.record_audit_event(&AuditEventInsertParams {
-            execution_id: audit_execution_id("audit-artifact-redaction"),
-            command: "artifact_redaction".to_string(),
-            subcommand: Some("field".to_string()),
-            tool_name: Some(tool_name.to_string()),
-            target_type: Some(artifact.artifact_type.to_string()),
-            target_id: Some(artifact.artifact_id.to_string()),
-            role: actor.clone(),
-            status: AuditEventStatus::Success,
-            exit_code: 0,
-            duration_ms: 0,
-            working_directory: runtime.paths().repo_root.to_string_lossy().into_owned(),
-            arguments_json: Some(payload.to_string()),
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: None,
-            host: std::env::var("HOSTNAME").ok(),
-            pid: std::process::id(),
-            session_id: None,
-            workspace_id: None,
-            caller_machine_id: None,
-            caller_machine_name: None,
-            process_machine_id: None,
-            process_machine_name: None,
-            transport: None,
-            effective_capabilities: Default::default(),
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
-            task_id: artifact.task_id.map(ToOwned::to_owned),
-            job_run_id: std::env::var("ORBIT_RUN_ID").ok().filter(|s| !s.is_empty()),
-            activity_id: std::env::var("ORBIT_ACTIVITY_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            step_index: std::env::var("ORBIT_STEP_INDEX")
-                .ok()
-                .and_then(|s| s.parse().ok()),
-        })?;
+        record_system_audit_event(
+            runtime,
+            SystemAuditEvent {
+                execution_id_prefix: "audit-artifact-redaction",
+                command: "artifact_redaction",
+                subcommand: Some("field"),
+                tool_name: Some(tool_name),
+                target_type: artifact.artifact_type,
+                target_id: Some(artifact.artifact_id),
+                role: &actor,
+                status: AuditEventStatus::Success,
+                arguments_json: payload.to_string(),
+                workspace_id: None,
+                task_id: artifact.task_id,
+                attribution: AuditRunAttribution::Environment { run_id: None },
+            },
+        )?;
     }
     Ok(())
 }

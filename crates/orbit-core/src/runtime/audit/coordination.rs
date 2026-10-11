@@ -5,14 +5,14 @@
 //! is not owned by the task-lock module.
 
 use orbit_common::OrbitError;
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::Value;
 
+use super::system::{AuditRunAttribution, SystemAuditEvent, record_system_audit_event};
 use crate::OrbitRuntime;
 
-/// One coordination-hold audit event, before it is widened into the full
-/// `AuditEventInsertParams`.
+/// One coordination-hold audit event, before it is widened into a
+/// [`SystemAuditEvent`].
 ///
 /// [ORB-10709] `target_type` is carried here rather than fixed as a constant
 /// because the workspace claim is a second coordination dimension over the same
@@ -45,54 +45,26 @@ pub(crate) fn record_coordination_audit_event(
         payload,
     } = event;
     let execution_id_prefix = format!("audit-{}", command.replace('.', "-"));
-    let job_run_id = owner_run_id_from_payload(&payload)
-        .or_else(|| std::env::var("ORBIT_RUN_ID").ok().filter(|s| !s.is_empty()));
-    runtime.record_audit_event(&crate::AuditEventInsertParams {
-        execution_id: audit_execution_id(&execution_id_prefix),
-        command: command.to_string(),
-        subcommand: None,
-        tool_name: Some(tool_name.to_string()),
-        target_type: Some(target_type.to_string()),
-        target_id: target_id.map(ToOwned::to_owned),
-        role: "admin".to_string(),
-        status,
-        exit_code: if status == AuditEventStatus::Denied {
-            1
-        } else {
-            0
+    let run_id = owner_run_id_from_payload(&payload);
+    let arguments_json = serde_json::to_string(&payload)
+        .map_err(|error| OrbitError::Execution(format!("serialize audit payload: {error}")))?;
+    record_system_audit_event(
+        runtime,
+        SystemAuditEvent {
+            execution_id_prefix: &execution_id_prefix,
+            command,
+            subcommand: None,
+            tool_name: Some(tool_name),
+            target_type,
+            target_id,
+            role: "admin",
+            status,
+            arguments_json,
+            workspace_id,
+            task_id,
+            attribution: AuditRunAttribution::Environment { run_id },
         },
-        duration_ms: 0,
-        working_directory: runtime.paths().repo_root.to_string_lossy().into_owned(),
-        arguments_json: Some(
-            serde_json::to_string(&payload).map_err(|error| {
-                OrbitError::Execution(format!("serialize audit payload: {error}"))
-            })?,
-        ),
-        stdout_truncated: None,
-        stderr_truncated: None,
-        error_message: None,
-        host: std::env::var("HOSTNAME").ok(),
-        pid: std::process::id(),
-        session_id: None,
-        workspace_id: workspace_id.map(ToOwned::to_owned),
-        caller_machine_id: None,
-        caller_machine_name: None,
-        process_machine_id: None,
-        process_machine_name: None,
-        transport: None,
-        effective_capabilities: Default::default(),
-        origin_session_id: None,
-        mcp_call_id: None,
-        lease_id: None,
-        task_id: task_id.map(ToOwned::to_owned),
-        job_run_id,
-        activity_id: std::env::var("ORBIT_ACTIVITY_ID")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        step_index: std::env::var("ORBIT_STEP_INDEX")
-            .ok()
-            .and_then(|s| s.parse().ok()),
-    })
+    )
 }
 
 fn owner_run_id_from_payload(payload: &Value) -> Option<String> {
