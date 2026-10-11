@@ -44,6 +44,10 @@
 # the snapshot with a reason, and `.orbit/tmp/` is excluded.
 # One it could not carry resumes only on this host; the owner gives
 # a claim elsewhere none and records why in the task's history.
+# ORB-15602: a leaf that pushed its branch and then committed past the pushed
+# head before failing (a rejected before-landing review's fix) has its local
+# tip carried to the same ref, so the owner keeps, and the next claim
+# resumes, the reviewer-fixed candidate rather than the published head.
 # ORB-15314: a leaf cancelled or interrupted while a reviewer is working runs
 # no `failure_activity`. Before the run is finalized, the host that stopped it
 # commits the reviewer's uncommitted edits as one marked partial-repair commit

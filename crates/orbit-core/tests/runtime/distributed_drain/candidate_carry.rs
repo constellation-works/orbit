@@ -21,6 +21,10 @@
 //! then failed in its before-landing review, is blocked; returned to the
 //! backlog, the task's next claim is handed that candidate with its pull
 //! request and continues on the same branch, so it republishes through it.
+//!
+//! [ORB-15602] When that claim's before-landing reviewer committed a fix the
+//! rejected review never pushed, the failure hook carries the reviewer-fixed
+//! tip to the durable ref, and the next claim on another host resumes it.
 
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskStatus};
@@ -875,14 +879,19 @@ fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
         "pr_open": {"pr_number": "41"},
         "landing_review_gate_admit": {"admitted": true},
     });
-    let mut state = pair.follower.read_run_state(&leaf).unwrap().unwrap();
-    for (step, output) in steps.as_object().unwrap() {
-        state.pipeline[step] = output.clone();
-    }
-    pair.follower.write_run_state(&leaf, &state).unwrap();
-    pair.leaf_fails_with(
+    let carry = landing_review_failed(
+        &pair,
         &leaf,
+        &steps,
         "the before-landing review timed out with a partial report",
+    );
+    assert_eq!(carry["carry"], "published", "{carry}");
+    assert_eq!(carry["head_sha"], head.as_str(), "{carry}");
+    assert!(
+        git(&bare(&pair), &["for-each-ref", "refs/orbit/candidates/"])
+            .trim()
+            .is_empty(),
+        "a leaf whose local tip is its pushed head pushes nothing more"
     );
     pair.pass_over(&drain, json!({"window_expired": true}));
     assert_eq!(pair.owner_status(&task), "blocked", "a candidate failure");
@@ -959,5 +968,153 @@ fn a_requeued_claim_continues_its_published_branch_and_pull_request() {
         git(&first, &["rev-parse", "HEAD"]).trim(),
         head,
         "the earlier checkout keeps its commit on a branch renamed aside"
+    );
+}
+
+/// `leaf`, whose pipeline state holds `steps`, fails at its before-landing
+/// review settlement with `error`, after its failure hook ran over that
+/// state the way the engine runs a job's `failure_activity`. Returns the
+/// hook's output, checkpointed on the run.
+fn landing_review_failed(pair: &Pair, leaf: &str, steps: &Value, error: &str) -> Value {
+    let task = pair.claimed_task(leaf);
+    let mut state = pair.follower.read_run_state(leaf).unwrap().unwrap();
+    for (step, output) in steps.as_object().unwrap() {
+        state.pipeline[step] = output.clone();
+    }
+    let carry = engine_action(
+        &pair.follower,
+        "claim_candidate_carry",
+        &json!({
+            "failed_step_id": "landing_review_gate_settle",
+            "activity_name": "review_gate_settle",
+            "error_code": "execution_failed",
+            "error_message": error,
+            "job_input": {"task_ids": [task]},
+            "pipeline": steps,
+            "run_id": leaf,
+        }),
+    );
+    state.record_failure_activity(
+        "claim_candidate_carry".into(),
+        "landing_review_gate_settle".into(),
+        carry.clone(),
+    );
+    pair.follower.write_run_state(leaf, &state).unwrap();
+    pair.leaf_fails_with(leaf, error);
+    carry
+}
+
+/// [ORB-15602] The claim pushed its candidate and opened #41; its
+/// before-landing reviewer committed a fix in the leaf's worktree and the
+/// review was rejected, so the fix was never pushed. The failure hook
+/// carries the reviewer-fixed tip to the durable ref, the owner keeps that
+/// tip, and the task's next claim on a host whose object store never had the
+/// fix resumes it, fix included.
+#[test]
+fn a_rejected_landing_reviews_unpushed_fix_survives_to_another_host() {
+    if !isolated(
+        module_path!(),
+        "a_rejected_landing_reviews_unpushed_fix_survives_to_another_host",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let task = pair.tasks[0].clone();
+    let base = owner_published(&pair);
+    let first = host_checkout(&pair, &pair);
+    let branch = format!("orbit/{task}-aaaaaaaa");
+    git(&first, &["checkout", "-q", "-b", &branch]);
+    std::fs::write(first.join("src/f0.rs"), CARRIED).unwrap();
+    git(&first, &["commit", "-q", "-am", "candidate"]);
+    git(&first, &["push", "-q", "origin", &branch]);
+    let published = git(&first, &["rev-parse", "HEAD"]).trim().to_string();
+    let reviewed = "fn work() { carried(); reviewed(); }\n";
+    std::fs::write(first.join("src/f0.rs"), reviewed).unwrap();
+    git(&first, &["commit", "-q", "-am", "reviewer fix"]);
+    let fixed = git(&first, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), task);
+    let steps = json!({
+        "worktree": {"workspace_path": first, "head_ref": branch, "base_sha": base},
+        "commit": {"commit_sha": published},
+        "prepare_branch": {"head": branch, "head_sha": published, "base": "main", "base_sha": base},
+        "sync_base": {"head": branch, "head_sha": published, "base": "main", "base_sha": base},
+        "review_gate_admit": {"applies": false},
+        "review_gate_settle": {"applies": false},
+        "validate": {"decision": "passed"},
+        "push": {"branch": branch, "local_sha": published},
+        "pr_open": {"pr_number": "41"},
+        "landing_review_gate_admit": {"admitted": true},
+    });
+    let carry = landing_review_failed(&pair, &leaf, &steps, "review_gate_blocked: verdict reject");
+    let reference = format!("refs/orbit/candidates/{task}/{leaf}");
+    assert_eq!(carry["carry"], "durable", "{carry}");
+    assert_eq!(carry["head_sha"], fixed.as_str(), "{carry}");
+    assert_eq!(carry["published_sha"], published.as_str(), "{carry}");
+    assert_eq!(carry["durable_ref"], reference.as_str(), "{carry}");
+    assert_eq!(
+        git(&bare(&pair), &["rev-parse", &reference]).trim(),
+        fixed,
+        "origin holds the reviewer-fixed tip at the durable ref"
+    );
+    assert_eq!(
+        git(
+            &bare(&pair),
+            &["rev-parse", &format!("refs/heads/{branch}")]
+        )
+        .trim(),
+        published,
+        "the pull request's branch is left at its published head"
+    );
+
+    pair.pass_over(&drain, json!({"window_expired": true}));
+    assert_eq!(pair.owner_status(&task), "blocked", "a candidate failure");
+    let kept = settled_candidate(&pair, &leaf, "Fail");
+    assert_eq!(kept["head_sha"], fixed.as_str(), "{kept}");
+    assert_eq!(kept["durable_ref"], reference.as_str(), "{kept}");
+    assert_eq!(kept["pull_request"], "41", "{kept}");
+    assert!(kept.get("published").is_none(), "{kept}");
+
+    returned_to_backlog(&pair, &task);
+    let second = pair.another_host(SECOND);
+    let repo = host_checkout(&pair, &second);
+    assert!(!has_commit(&repo, &fixed));
+    let drain = second.run_drain();
+    let next = second.running_leaf(&drain, 1);
+    assert_eq!(second.claimed_task(&next), task, "the task is pulled again");
+    let offered = claim_candidate(&second, &next).expect("the claim carries the candidate");
+    assert_eq!(offered.head_sha, fixed);
+    assert_eq!(offered.durable_ref.as_deref(), Some(reference.as_str()));
+    let input = second
+        .follower_jobs
+        .get_job_run(&next)
+        .unwrap()
+        .and_then(|run| run.input)
+        .expect("leaf input");
+    let resumed = engine_action(
+        &second.follower,
+        "candidate_resume",
+        &json!({
+            "job_run_id": next,
+            "task_ids": [task],
+            "workspace_path": repo,
+            "base_sha": base,
+            "candidate": input["resume_candidate"],
+            "claimed": true,
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["source_sha"], fixed.as_str(), "{resumed}");
+    assert_eq!(resumed["prior_pull_request"], "41", "{resumed}");
+    assert!(
+        resumed["branch_reuse_refused"].is_string(),
+        "the unpushed tip is not the PR branch's head, so the leaf supersedes #41: {resumed}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("src/f0.rs")).unwrap(),
+        reviewed,
+        "the reviewer's fix is applied for the next claim to continue"
     );
 }

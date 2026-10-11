@@ -760,6 +760,26 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `--discard-candidate`; the earlier pull request then stays open until the
   task reaches done, rejected or archived, which closes it.
 
+  A leaf can also commit past the head it pushed and then fail: a
+  before-landing reviewer's fix is committed in the leaf's worktree before
+  the review settles, so a rejected or incomplete review leaves it there
+  unpushed. The leaf's failure hook then carries its local branch tip,
+  reviewer fix included, to `refs/orbit/candidates/<task>/<run>` on
+  `origin`. Its `claim_candidate_carry` checkpoint reports `carry: durable`
+  with `head_sha` (the carried tip) and `published_sha` (the head on the PR
+  branch), and the settlement keeps the carried tip with that durable ref
+  and the pull request. The task's next claim on any host resumes that tip,
+  so the reviewer's fix is not lost when the worktree is collected or the
+  task moves to another host; the review record's reviewer commit is
+  reachable from that ref. Because the carried tip was never pushed to the
+  PR branch, the leaf does not take over the branch: `branch_reuse_refused`
+  names the unpushed head, and its `pr_open` supersedes the earlier pull
+  request as above. When the local tip is the pushed head, the hook reports
+  `carry: published` and pushes nothing. When the carry push fails, it also
+  reports `published`, with `unpublished_sha` and `reason`; the settlement
+  comment says the commits past the published head stay on that host, so
+  recover them from its worktree before it is collected.
+
   Every fresh start that
   sets a kept candidate aside is in the owner's task history as a
   `candidate_resume` event whose note begins `fresh:` and names the reason
