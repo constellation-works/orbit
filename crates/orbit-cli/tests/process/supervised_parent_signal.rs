@@ -343,6 +343,11 @@ spec:
 
 #[test]
 fn cli_ctrl_c_during_proc_spawn_reports_interrupt() {
+    // `proc.spawn` confines its child with Seatbelt on macOS, which a nested
+    // agent sandbox refuses to apply [ORB-15409].
+    if !orbit_exec::macos_sandbox_test_guard("cli_ctrl_c_during_proc_spawn_reports_interrupt") {
+        return;
+    }
     let fixture = Fixture::init();
     let marker = fixture.work.join("cli.ready");
     let mut child = spawn_cli_proc_spawn(&fixture, &marker);

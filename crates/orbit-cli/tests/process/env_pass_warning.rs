@@ -548,6 +548,14 @@ fn clock_tick_loads_only_pass_listed_names_from_an_owner_only_clock_env() {
 #[test]
 fn clock_credentials_reach_workers_with_ambient_precedence_and_dry_run_loads_nothing() {
     const CHILD: &str = "env_pass_warning::clock_worker_credentials_child";
+    // The clock's worker runs its provider under Seatbelt on macOS, which a
+    // nested agent sandbox refuses to apply [ORB-15409]. Guard here, not in
+    // the child, so the deferrable notice reaches this run's output.
+    if !orbit_exec::macos_sandbox_test_guard(
+        "clock_credentials_reach_workers_with_ambient_precedence_and_dry_run_loads_nothing",
+    ) {
+        return;
+    }
     let temp = tempdir().unwrap();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command.args(["--exact", CHILD, "--ignored", "--nocapture"]);

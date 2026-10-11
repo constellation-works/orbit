@@ -20,7 +20,8 @@ pub enum SandboxExecApplyProbe {
 
 impl SandboxExecApplyProbe {
     /// Return whether a sandbox-dependent test should run, printing a named
-    /// `SKIP:` notice directly to stderr for an apply refusal only.
+    /// [`seatbelt_deferral_notice`] directly to stderr for an apply refusal
+    /// only.
     ///
     /// Panics for missing binaries, unexpected failures, or a refusal when
     /// `ORBIT_REQUIRE_SANDBOX_EXEC=1`. A skipped run is never host evidence.
@@ -41,8 +42,7 @@ impl SandboxExecApplyProbe {
         match self {
             Self::Applied | Self::NotMacos => Ok(true),
             Self::ApplyRefused(reason) if !required => {
-                let notice =
-                    format!("SKIP: sandbox-exec cannot apply a profile: {test}: {reason}\n");
+                let notice = format!("{}\n", seatbelt_deferral_notice(test, reason));
                 output
                     .write_all(notice.as_bytes())
                     .map_err(|error| format!("write skip notice: {error}"))?;
@@ -52,6 +52,18 @@ impl SandboxExecApplyProbe {
             Self::BinaryAbsent(reason) | Self::Failed(reason) => Err(reason.clone()),
         }
     }
+}
+
+/// The line a test prints when it returns without exercising its
+/// Seatbelt-confined path because `sandbox-exec` cannot apply a profile here,
+/// as inside an agent lane whose own Seatbelt sandbox refuses a nested one.
+/// An implementer's gate hands it off as a deferred sandbox validation, and a
+/// native validation run that still prints it is refused [ORB-15409].
+pub fn seatbelt_deferral_notice(test: &str, detail: &str) -> String {
+    format!(
+        "{} {test}: {detail}",
+        orbit_types::workflow::SEATBELT_DEFERRAL_PREFIX
+    )
 }
 
 /// Probe once per process, using a trusted absolute wrapper, a permissive
@@ -91,7 +103,9 @@ pub(super) fn classify_apply_result(
             ..
         })) => {
             let reason = format!("permissive profile exited with {code:?}: {}", stderr.trim());
-            if code == Some(71) && stderr.contains("sandbox_apply") {
+            if code == Some(orbit_types::workflow::SEATBELT_APPLY_REFUSAL_EXIT)
+                && stderr.contains("sandbox_apply")
+            {
                 SandboxExecApplyProbe::ApplyRefused(reason)
             } else {
                 SandboxExecApplyProbe::Failed(reason)

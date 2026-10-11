@@ -56,7 +56,7 @@ use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, 
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
     DEFERRED_SANDBOX_ARTIFACT, JobV2StepBody, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
-    PipelineState, ReviewTiming, ReviewVerdict, is_baseline_red_failure,
+    PipelineState, ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -1852,13 +1852,14 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery() {
     );
 }
 
-/// Every record that is not exactly the Bubblewrap case fails the implement
-/// step before commit [ORB-15287]: nothing is validated, replayed or kept,
-/// and the failure names what is wrong with the record.
+/// Every record that is not exactly one sandbox's case, the Bubblewrap one
+/// [ORB-15287] or the Seatbelt one [ORB-15409], fails the implement step
+/// before commit: nothing is validated, replayed or kept, and the failure
+/// names what is wrong with the record.
 #[test]
-fn a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step() {
+fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
     isolated(
-        "a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step",
+        "a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step",
         |sandbox| {
             let fx = Fixture::new(sandbox);
             let gate = Gate::new(sandbox);
@@ -1868,8 +1869,15 @@ fn a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step() {
                 record[field] = value;
                 record
             };
+            let seatbelt = seatbelt_deferral(&fx, &gate.command());
+            let seatbelt_with = |field: &str, value: Value| {
+                let mut record = seatbelt.clone();
+                record[field] = value;
+                record
+            };
             let alongside = |line: &str| json!([bwrap_notice(), line]);
             let probe = |exit_code: i32, output: &str| json!({ "command": BUBBLEWRAP_NAMESPACE_PROBE, "exit_code": exit_code, "output": output });
+            let seatbelt_probe = |exit_code: i32, output: &str| json!({ "command": SEATBELT_APPLY_PROBE, "exit_code": exit_code, "output": output });
             let mut missing_probe_command = valid.clone();
             missing_probe_command["probe"]
                 .as_object_mut()
@@ -1885,20 +1893,82 @@ fn a_deferral_that_is_not_the_bubblewrap_case_fails_the_implement_step() {
                     "is not a Bubblewrap deferral",
                 ),
                 (
-                    "a non-Bubblewrap notice",
+                    "a notice of neither sandbox",
                     with(
                         "notices",
                         json!(["DEFERRED: landlock unavailable: confined_child: unsupported"]),
                     ),
+                    "is neither a Bubblewrap nor a Seatbelt deferral",
+                ),
+                (
+                    "a Seatbelt denial that is not the guard's notice",
+                    seatbelt_with(
+                        "notices",
+                        json!(["SKIP: seatbelt_child: sandbox_apply: Operation not permitted"]),
+                    ),
+                    "is neither a Bubblewrap nor a Seatbelt deferral",
+                ),
+                (
+                    "a Seatbelt notice beside a Bubblewrap one",
+                    with("notices", alongside(&seatbelt_notice())),
                     "is not a Bubblewrap deferral",
                 ),
                 (
-                    "a Seatbelt denial",
-                    with(
+                    "a Bubblewrap notice beside a Seatbelt one",
+                    seatbelt_with("notices", json!([seatbelt_notice(), bwrap_notice()])),
+                    "is not a Seatbelt deferral",
+                ),
+                (
+                    "a non-Seatbelt skip beside a Seatbelt notice",
+                    seatbelt_with(
                         "notices",
-                        alongside("SKIP: seatbelt_child: sandbox_apply: Operation not permitted"),
+                        json!([
+                            seatbelt_notice(),
+                            "SKIP: the sandbox denied running ps: Operation not permitted (os error 1)",
+                        ]),
                     ),
-                    "is not a Bubblewrap deferral",
+                    "is not a Seatbelt deferral",
+                ),
+                (
+                    "Seatbelt notices with the namespace probe",
+                    seatbelt_with("probe", valid["probe"].clone()),
+                    "names the probe",
+                ),
+                (
+                    "Bubblewrap notices with the Seatbelt probe",
+                    with("probe", seatbelt["probe"].clone()),
+                    "names the probe",
+                ),
+                (
+                    "a Seatbelt probe that applied",
+                    seatbelt_with("probe", seatbelt_probe(0, "")),
+                    "no refused Seatbelt apply probe",
+                ),
+                (
+                    "a Seatbelt probe that failed otherwise",
+                    seatbelt_with(
+                        "probe",
+                        seatbelt_probe(1, "sandbox-exec: sandbox_apply: Operation not permitted"),
+                    ),
+                    "no refused Seatbelt apply probe",
+                ),
+                (
+                    "a Seatbelt probe carrying the namespace refusal",
+                    seatbelt_with(
+                        "probe",
+                        seatbelt_probe(71, "bwrap: No permissions to create a new namespace"),
+                    ),
+                    "no refused Seatbelt apply probe",
+                ),
+                (
+                    "a Seatbelt gate that failed",
+                    seatbelt_with("exit_code", json!(1)),
+                    "exited 1",
+                ),
+                (
+                    "a Seatbelt record that claims a pass",
+                    seatbelt_with("passed", json!(true)),
+                    "is not a",
                 ),
                 (
                     "no notice",
@@ -2050,6 +2120,84 @@ fn a_claimed_leaf_replays_its_implementers_deferral_before_publication() {
     );
 }
 
+/// A macOS implementer whose gate passed with only the Seatbelt guard's skips
+/// hands it off like a Bubblewrap deferral [ORB-15409]. The implement step
+/// accepts the record before commit, and validation outside the agent
+/// sandbox (a claim's on its claim host, before publication) replays the
+/// gate and records the native pass as the gate's evidence. A replay that
+/// still skips is the validation environment's failure, and a replay that
+/// fails is not a pass.
+#[test]
+fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() {
+    isolated(
+        "a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let gate = Gate::new(sandbox);
+            host.require_commands(&["true"]);
+            host.baseline_commands(&[&gate.command()]);
+            let record = seatbelt_deferral(&fx, &gate.command());
+
+            run_implementation(
+                &fx,
+                &host,
+                Some(json!({ "summary": "done", "deferred_sandbox_validation": record })),
+            )
+            .expect("the implement step accepts the Seatbelt record and the replay passes");
+            let kept = host.validation_log(TASK_ID, DEFERRED_SANDBOX_ARTIFACT);
+            assert_eq!(kept["deferred"], record, "the record is kept as handed off");
+            let replay = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
+            assert_eq!(replay["deferred_sandbox_replay"], true);
+            assert_eq!(replay["exit_code"], 0);
+            assert_eq!(gate.runs(), 1);
+
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            let mut input = json!({
+                "workspace_path": fx.repo,
+                "base_sync": "local",
+                "base_sha": fx.base_sha,
+                "implementation": { "deferred_sandbox_validation": record },
+            });
+            let pending =
+                action(&host, "claim_validate", &input).expect("replay before publication");
+            assert_eq!(pending["replayed"], json!([gate.command()]));
+            assert_eq!(
+                gate.runs(),
+                2,
+                "the claim host ran the deferred gate itself"
+            );
+            input["pull_request"] = json!(PR_NUMBER);
+            input["prevalidated"] = pending;
+            let pinned = action(&host, "claim_validate", &input)
+                .expect("the native replay is pinned as the gate's evidence");
+            assert_eq!(pinned["validation"].as_array().unwrap().len(), 2);
+
+            let fields = input.as_object_mut().unwrap();
+            fields.remove("pull_request");
+            fields.remove("prevalidated");
+            gate.skips_seatbelt();
+            let held = action(&host, "claim_validate", &input)
+                .expect_err("a replay that still skips its Seatbelt tests is not a pass")
+                .to_string();
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&held))
+                    && held.contains(&seatbelt_notice()),
+                "the claim host that cannot apply Seatbelt holds the candidate: {held}"
+            );
+
+            gate.fails();
+            let failed = action(&host, "claim_validate", &input)
+                .expect_err("a replay that fails is not a pass")
+                .to_string();
+            assert!(
+                failed.contains(&gate.command()),
+                "the failing replay names the gate: {failed}"
+            );
+        },
+    );
+}
+
 /// The handed-off gate, run by path so a test can change what it does between
 /// runs while its command, and so the kept record, stays the same. Each run
 /// appends a line to `runs`.
@@ -2096,6 +2244,16 @@ impl Gate {
         ));
     }
 
+    /// Skips its Seatbelt tests again: `sandbox-exec` cannot apply a profile
+    /// on this host either.
+    fn skips_seatbelt(&self) {
+        self.set(&format!(
+            "echo '{}' >&2\n{}",
+            seatbelt_notice(),
+            reported_tests(3)
+        ));
+    }
+
     /// Passes without reporting an executed test, as a lint gate does.
     fn executes_nothing(&self) {
         self.set("echo lint-ok");
@@ -2124,6 +2282,31 @@ fn bwrap_notice() -> String {
         "spawn_under_linux_bwrap",
         "bwrap: No permissions to create a new namespace",
     )
+}
+
+fn seatbelt_notice() -> String {
+    orbit_exec::seatbelt_deferral_notice(
+        "cli_ctrl_c_during_proc_spawn_reports_interrupt",
+        "permissive profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not \
+         permitted",
+    )
+}
+
+/// The accepted macOS record example from `agent_implement.yaml`, with the
+/// gate and base substituted for this run's values [ORB-15409].
+fn seatbelt_deferral(fx: &Fixture, command: &str) -> Value {
+    json!({
+        "command": command,
+        "exit_code": 0,
+        "tests_run": 1650,
+        "base": fx.base_sha,
+        "notices": [seatbelt_notice()],
+        "probe": {
+            "command": SEATBELT_APPLY_PROBE,
+            "exit_code": 71,
+            "output": "sandbox-exec: sandbox_apply: Operation not permitted",
+        },
+    })
 }
 
 /// The accepted record example from `agent_implement.yaml`, with the gate and

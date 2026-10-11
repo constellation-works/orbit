@@ -1,5 +1,6 @@
 //! The implementer's deferred-sandbox handoff, as the engine enforces it
-//! [ORB-15287].
+//! [ORB-15287]: Bubblewrap deferrals on Linux, Seatbelt ones on macOS
+//! [ORB-15409].
 //!
 //! [`accept_implementer_deferral`] runs at the implement step boundary. It
 //! checks an implementer's [`DeferredSandboxValidation`] against the gates this
@@ -61,9 +62,11 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
     .map_err(|reason| {
         format!(
             "implementer output rejected before delivery: `deferred_sandbox_validation` \
-             {reason}. Hand off only a passing affected-test gate whose sole gap is \
-             Bubblewrap `DEFERRED:` notices backed by a failing namespace probe; otherwise \
-             fix the gate or report the validation blocker."
+             {reason}. Hand off only a passing affected-test gate whose sole gap is one \
+             sandbox's notices backed by its failing probe: Bubblewrap `DEFERRED:` notices \
+             and the namespace probe on Linux, or Seatbelt `SKIP: sandbox-exec cannot apply \
+             a profile:` notices and the apply probe on macOS; otherwise fix the gate or \
+             report the validation blocker."
         )
     })?;
     if input.get("claimed").and_then(Value::as_bool) == Some(true) {

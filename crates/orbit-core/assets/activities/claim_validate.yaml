@@ -26,10 +26,13 @@ spec:
     claimed `no-diff-expected` skip naming this run and base, takes the
     NoDiff route: recheck it, run required commands on the clean base,
     and pin the checkpoint for owner revalidation without publication.
-    A gate the implementer handed off with Bubblewrap deferrals
+    A gate the implementer handed off with Bubblewrap or Seatbelt deferrals
     (`implementation.deferred_sandbox_validation`) runs after the required
-    commands, on the NoDiff route too, and must report executed tests; one
-    that still defers is the validation environment's failure.
+    commands, on the NoDiff route too, outside the agent sandbox on this
+    claim host, and must report executed tests; one that still prints a
+    `DEFERRED:` or `SKIP: sandbox-exec cannot apply a profile:` line is the
+    validation environment's failure, and a passing replay is pinned with the
+    required commands as the gate's evidence.
   input_schema_json:
     type: object
     required: [workspace_path]

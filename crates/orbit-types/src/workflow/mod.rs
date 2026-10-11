@@ -66,7 +66,8 @@ pub use final_recovery::{
 pub use host_evidence::{
     BUBBLEWRAP_DEFERRAL_PREFIX, BUBBLEWRAP_NAMESPACE_REFUSAL, EvidenceHostOs,
     HOST_TEST_DEFERRED_PREFIX, HostEvidenceReason, HostEvidenceRecord, HostEvidenceRefusal,
-    HostSandboxCommand, judge_host_test_output,
+    HostSandboxCommand, SEATBELT_APPLY_REFUSAL, SEATBELT_APPLY_REFUSAL_EXIT,
+    SEATBELT_DEFERRAL_PREFIX, judge_host_test_output,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
@@ -128,17 +129,18 @@ pub use run::{
     ProviderLimitFailure, PullAuthExclusion, PullAuthRecovery, PullCrewPreflight, PullSinglePass,
     PullWindowClose, REVIEW_DECISION_PENDING_ERROR_CODE, RUN_DELIVERY_EVIDENCE_SOURCE,
     RUN_DELIVERY_SCHEMA_VERSION, ResourcePressure, ResourceThrottle, RunDeliveryObservation,
-    RunDeliveryStatus, RunIdRole, RunRootCause, TASK_BLOCKED_BY_AGENT_ERROR_CODE,
-    TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER, TRANSIENT_FAILURE_ERROR_CODE,
-    TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy, UPGRADE_PENDING_ERROR_CODE,
-    UPGRADE_PENDING_MARKER, UPGRADE_PENDING_REQUEUED_EVENT, VALIDATION_ENVIRONMENT_ERROR_CODE,
-    VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output, deferred_sandbox_validation,
-    failed_provider, is_baseline_red_failure, is_forge_unavailable, is_owner_route_unavailable,
-    is_provider_capacity_exhausted, is_provider_failure, is_provider_limit, is_provider_refusal,
-    is_provider_unavailable, is_task_blocked_by_agent, is_upgrade_pending,
-    is_validation_environment_failure, normalize_unfiled_findings, provider_failure_text,
-    run_id_candidate, run_id_minute_stem, run_id_role, task_blocked_by_agent_kind,
-    task_blocked_by_agent_message, unfiled_findings_shape_error, upgrade_pending_kind,
+    RunDeliveryStatus, RunIdRole, RunRootCause, SEATBELT_APPLY_PROBE,
+    TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER,
+    TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy,
+    UPGRADE_PENDING_ERROR_CODE, UPGRADE_PENDING_MARKER, UPGRADE_PENDING_REQUEUED_EVENT,
+    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER, agent_blocker_from_output,
+    deferred_sandbox_validation, failed_provider, is_baseline_red_failure, is_forge_unavailable,
+    is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
+    is_provider_limit, is_provider_refusal, is_provider_unavailable, is_task_blocked_by_agent,
+    is_upgrade_pending, is_validation_environment_failure, normalize_unfiled_findings,
+    provider_failure_text, run_id_candidate, run_id_minute_stem, run_id_role,
+    task_blocked_by_agent_kind, task_blocked_by_agent_message, unfiled_findings_shape_error,
+    upgrade_pending_kind,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

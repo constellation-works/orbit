@@ -252,10 +252,18 @@ fn plain_char(c: char) -> bool {
 /// Text a sandbox wrapper or a sandbox test prints when this host cannot
 /// apply the sandbox at all.
 const SANDBOX_UNAVAILABLE_MARKERS: &[&str] = &[
-    "sandbox_apply: Operation not permitted",
+    SEATBELT_APPLY_REFUSAL,
     "sandbox-exec cannot apply a profile",
     BUBBLEWRAP_NAMESPACE_REFUSAL,
 ];
+
+/// What `sandbox-exec` prints when an enclosing Seatbelt sandbox refuses to
+/// apply another profile, as inside an agent lane on macOS. It exits
+/// [`SEATBELT_APPLY_REFUSAL_EXIT`].
+pub const SEATBELT_APPLY_REFUSAL: &str = "sandbox_apply: Operation not permitted";
+
+/// The exit status `sandbox-exec` reports with [`SEATBELT_APPLY_REFUSAL`].
+pub const SEATBELT_APPLY_REFUSAL_EXIT: i32 = 71;
 
 /// What Bubblewrap prints when an enclosing sandbox refuses the nested user
 /// namespace it needs, as inside an agent lane on Linux.
@@ -270,6 +278,11 @@ pub const HOST_TEST_DEFERRED_PREFIX: &str = "DEFERRED:";
 /// The deferral a Bubblewrap-gated test prints, followed by the test's name
 /// and the refusal: `DEFERRED: bubblewrap unavailable: <test>: <detail>`.
 pub const BUBBLEWRAP_DEFERRAL_PREFIX: &str = "DEFERRED: bubblewrap unavailable:";
+
+/// The skip a Seatbelt-gated test prints when `sandbox-exec` refuses to apply
+/// a profile, followed by the test's name and the refusal:
+/// `SKIP: sandbox-exec cannot apply a profile: <test>: <detail>` [ORB-15409].
+pub const SEATBELT_DEFERRAL_PREFIX: &str = "SKIP: sandbox-exec cannot apply a profile:";
 
 /// Line prefixes a test prints when it returns without exercising its path.
 const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:", "skipping "];
