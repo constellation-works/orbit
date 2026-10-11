@@ -8,7 +8,10 @@
 //! tip — review fixes included — to `refs/orbit/candidates/<task>/<run>` on
 //! `origin`, and its output, checkpointed on the run, tells the drain's
 //! failure settlement where the candidate is: `published` (the leaf's own
-//! push already put its branch on `origin`), `durable` (the ref it pushed),
+//! push already put its branch tip on `origin`), `durable` (the ref it
+//! pushed; with `published_sha` when the leaf had published its branch and
+//! then committed past it, as a rejected before-landing review's fix does
+//! [ORB-15602]),
 //! `failed` (with why preservation or push did not happen), or `none` (no
 //! candidate). Before the normal commit, dirty files are preserved as one
 //! marked partial commit without moving the branch or changing the index or
@@ -57,19 +60,23 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
     let [task_id] = task_ids.as_slice() else {
         return Ok(none("the leaf names no single task"));
     };
-    if let (Some(branch), Some(head_sha)) = (step("push", "branch"), step("push", "local_sha")) {
-        return Ok(json!({
-            "phase": "candidate_carry",
-            "carry": "published",
-            "task_id": task_id,
-            "branch": branch,
-            "head_sha": head_sha,
-        }));
+    // [ORB-14849] A before-landing reviewer's fix, pushed under a lease, is
+    // the published head from then on.
+    let pushed = |step_id: &str| Some((step(step_id, "branch")?, step(step_id, "local_sha")?));
+    let workspace_path = step("worktree", "workspace_path");
+    if let Some((branch, published_sha)) = pushed("landing_push").or_else(|| pushed("push")) {
+        return Ok(carry_published(
+            host,
+            workspace_path.as_deref().map(Path::new),
+            &branch,
+            &published_sha,
+            task_id,
+            run_id,
+        ));
     }
-    let Some(workspace_path) = step("worktree", "workspace_path") else {
+    let Some(workspace_path) = workspace_path.as_deref().map(Path::new) else {
         return Ok(none("the leaf recorded no worktree"));
     };
-    let workspace_path = Path::new(&workspace_path);
     // The branch the leaf synchronized, or prepared, or set up: its tip is
     // the candidate, with any review fix committed after synchronization.
     // An interrupted rebase leaves the ref at its pre-rebase commit. A leaf
@@ -82,17 +89,8 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
     else {
         return Ok(none("the leaf recorded no candidate branch"));
     };
-    let mut head_sha = match git_output(
-        workspace_path,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}^{{commit}}"),
-        ],
-    ) {
-        Ok(sha) if !sha.trim().is_empty() => sha.trim().to_string(),
-        _ => return Ok(none(&format!("branch '{branch}' no longer resolves"))),
+    let Some(mut head_sha) = branch_tip(workspace_path, &branch) else {
+        return Ok(none(&format!("branch '{branch}' no longer resolves")));
     };
     let partial = step("commit", "commit_sha").is_none();
     if partial {
@@ -141,6 +139,75 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
         }
     }
     Ok(output)
+}
+
+/// The leaf's own push put `branch` on `origin` at `published_sha`.
+/// [ORB-15602] Commits it made on the branch afterwards — a before-landing
+/// reviewer's fix that a rejected review never pushed — exist only on this
+/// host, so a local tip past the published one is carried to the durable ref
+/// and reported `durable`, naming both. A tip that is the published one, or
+/// cannot be read, stays `published`. A carry failure keeps the local tip
+/// as `failed`, with the pushed head and reason, so a later claim on this
+/// host resumes the reviewer fix instead of reverting to the pushed head.
+fn carry_published<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: Option<&Path>,
+    branch: &str,
+    published_sha: &str,
+    task_id: &str,
+    run_id: &str,
+) -> Value {
+    let mut output = json!({
+        "phase": "candidate_carry",
+        "carry": "published",
+        "task_id": task_id,
+        "branch": branch,
+        "head_sha": published_sha,
+    });
+    let Some(workspace_path) = workspace_path else {
+        return output;
+    };
+    let Some(local_sha) = branch_tip(workspace_path, branch).filter(|tip| tip != published_sha)
+    else {
+        return output;
+    };
+    output["head_sha"] = json!(local_sha);
+    output["published_sha"] = json!(published_sha);
+    match carry_to_durable_ref(host, workspace_path, branch, &local_sha, task_id, run_id) {
+        Ok(durable_ref) => {
+            output["carry"] = json!("durable");
+            output["durable_ref"] = json!(durable_ref);
+        }
+        Err(reason) => {
+            tracing::warn!(
+                run_id,
+                task_id,
+                published_sha,
+                local_sha,
+                error = %reason,
+                "commits past the claimed leaf's published head could not be carried"
+            );
+            output["carry"] = json!("failed");
+            output["reason"] = json!(reason);
+        }
+    }
+    output
+}
+
+/// The commit `refs/heads/<branch>` names in `workspace_path`, if any.
+fn branch_tip(workspace_path: &Path, branch: &str) -> Option<String> {
+    git_output(
+        workspace_path,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    )
+    .ok()
+    .map(|sha| sha.trim().to_string())
+    .filter(|sha| !sha.is_empty())
 }
 
 /// Push the committed candidate `head_sha` on `branch` to

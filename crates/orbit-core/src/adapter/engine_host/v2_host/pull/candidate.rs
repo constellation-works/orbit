@@ -77,11 +77,13 @@ pub(super) fn first_incomplete_step(run: &JobRun, state: &PipelineState) -> Opti
 ///
 /// A PR leaf's is the branch it pushed — last by a before-landing reviewer's
 /// fix — with the pull request it opened for it, or the one an earlier claim
-/// opened on the branch it continued [ORB-15308]. Before its push, it is the branch tip its failure hook carried to a
-/// durable ref — or could not, and why — else the branch it synchronized
-/// onto the base, or, when synchronization itself stopped it, the branch it
-/// prepared. A claimed-local leaf's is its worktree branch at the commit it
-/// made [ORB-14338].
+/// opened on the branch it continued [ORB-15308]; a branch tip past that push
+/// its failure hook carried to a durable ref is the candidate instead, with
+/// the same pull request [ORB-15602]. Before its push, it is the branch tip
+/// its failure hook carried to a durable ref — or could not, and why — else
+/// the branch it synchronized onto the base, or, when synchronization itself
+/// stopped it, the branch it prepared. A claimed-local leaf's is its worktree
+/// branch at the commit it made [ORB-14338].
 pub(super) fn preserved_candidate(
     run: &JobRun,
     state: &PipelineState,
@@ -120,20 +122,25 @@ pub(super) fn preserved_candidate(
         (candidate.branch, candidate.head_sha) = (text(step("worktree"), "head_ref")?, committed?);
         return Some(candidate);
     }
-    // [ORB-14849] A before-landing reviewer's fix, pushed under a lease, is
-    // the published head from then on.
-    if let Some(pushed) = both(step("landing_push"), "branch", "local_sha")
-        .or_else(|| both(step("push"), "branch", "local_sha"))
-    {
-        (candidate.branch, candidate.head_sha) = pushed;
-        candidate.published = true;
-        return Some(candidate);
-    }
     let carry = state
         .failure_activity_checkpoint
         .as_ref()
         .filter(|checkpoint| checkpoint.activity_name == CANDIDATE_CARRY_ACTIVITY)
         .map(|checkpoint| &checkpoint.output);
+    // [ORB-14849] A before-landing reviewer's fix, pushed under a lease, is
+    // the published head from then on. [ORB-15602] Commits past it that the
+    // failure hook carried to a durable ref, or kept host-local after a
+    // failed carry, are the candidate instead.
+    let carried_past_push = matches!(text(carry, "carry").as_deref(), Some("durable" | "failed"))
+        && both(carry, "branch", "head_sha").is_some();
+    if let Some(pushed) = both(step("landing_push"), "branch", "local_sha")
+        .or_else(|| both(step("push"), "branch", "local_sha"))
+        .filter(|_| !carried_past_push)
+    {
+        (candidate.branch, candidate.head_sha) = pushed;
+        candidate.published = true;
+        return Some(candidate);
+    }
     if carry
         .and_then(|carry| carry.get("partial"))
         .and_then(serde_json::Value::as_bool)

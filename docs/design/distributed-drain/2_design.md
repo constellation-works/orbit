@@ -643,6 +643,9 @@ owns delivery:
   fixes included) to `refs/orbit/candidates/<task>/<run>` on `origin`, and its checkpointed output
   says where the candidate is. The settlement names that ref (`durable_ref`), or, when the push
   failed, why (`carry_failure`); either way the candidate also stays on the follower that made it.
+  A leaf that pushed and then committed past its pushed head before failing (a rejected
+  before-landing review's fix) has that local tip carried the same way; the settlement keeps the
+  carried tip, unpublished, with its pull request, rather than the pushed head.
   A claimed-local leaf runs only on the owner, in the owner's repository, so its candidate needs
   no push. The owner keeps the reference with the task's spec digest and the machine that
   committed it, on a `Fail` as on a `Release`. Admission attaches the latest one to the claim
