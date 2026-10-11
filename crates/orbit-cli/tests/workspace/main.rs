@@ -15,6 +15,8 @@ mod child_guard;
 mod fixture_crew;
 #[path = "../support/git_repo.rs"]
 mod git_repo;
+#[path = "../support/routine_runs.rs"]
+mod routine_runs;
 #[cfg(unix)]
 #[path = "../support/workflow_gate.rs"]
 mod workflow_gate;

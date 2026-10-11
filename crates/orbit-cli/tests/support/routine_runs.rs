@@ -1,4 +1,4 @@
-//! Own every detached fixture worker through teardown, including unwinds.
+//! Own every routine fixture worker through teardown, including unwinds.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
