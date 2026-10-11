@@ -120,7 +120,7 @@ registry in [`scripts/check-error-translation.sh`](../../scripts/check-error-tra
 `orbit-types` is below `orbit-common` and cannot name `OrbitError`, so a
 translator cannot live beside its errors. Each `orbit-types` error that crosses
 into `OrbitError` instead has one `impl From<Type> for OrbitError` in
-`crates/orbit-common/src/error.rs`. The orphan rule allows it there because
+[error/conversions.rs](../../crates/orbit-common/src/error/conversions.rs). The orphan rule allows it there because
 `orbit-common` owns the target type. Callers convert with `?` or
 `.map_err(OrbitError::from)`.
 

@@ -61,7 +61,7 @@ Patterns to copy:
 
 ## Reference: `StagedTextFile` — `Drop` as rollback
 
-From `crates/orbit-common/src/fs/io.rs:143`:
+From [fs/io/atomic.rs](../../crates/orbit-common/src/fs/io/atomic.rs):
 
 ```rust
 pub struct StagedTextFile {

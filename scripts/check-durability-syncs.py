@@ -15,7 +15,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-HELPER = Path("crates/orbit-common/src/fs/io.rs")
+HELPER = Path("crates/orbit-common/src/fs/io/atomic.rs")
 DIRECT_SYNC = re.compile(r"\.sync_(?:all|data)\(\)")
 PRAGMA = re.compile(r'pragma_update(?:_and_check)?\(\s*None\s*,\s*"synchronous"\s*,\s*(?P<value>[^,)]*)')
 SQL_PRAGMA = re.compile(r"PRAGMA\s+synchronous\s*=", re.IGNORECASE)
