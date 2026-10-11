@@ -24,10 +24,11 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 
 use crate::child_guard::ChildGuard;
+use crate::web_fixture_io::{DeadlineStream, OPERATION_TIMEOUT, http_get, http_get_with_timeout};
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
@@ -112,26 +113,12 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
 
     // Idle connection: accepted by the listener, no request in flight. Must
     // not, by itself, block a graceful shutdown.
-    let idle = TcpStream::connect(("127.0.0.1", port)).expect("open idle connection");
+    let idle = DeadlineStream::connect(port, OPERATION_TIMEOUT).expect("open idle connection");
 
     // Active connection: an in-flight `/api/log/stream` SSE response, the
     // exact shape of open connection the 2026-09-05 restart hung on. Confirm
     // it is actually streaming before sending SIGTERM.
-    let mut active = TcpStream::connect(("127.0.0.1", port)).expect("open active connection");
-    active
-        .write_all(
-            b"GET /api/log/stream HTTP/1.1\r\n\
-              Host: 127.0.0.1\r\n\
-              Connection: keep-alive\r\n\r\n",
-        )
-        .expect("send SSE request");
-    let mut head = [0_u8; 4096];
-    let n = active.read(&mut head).expect("read SSE response head");
-    let head = String::from_utf8_lossy(&head[..n]);
-    assert!(
-        head.contains("text/event-stream"),
-        "expected an open SSE stream before sending SIGTERM, got: {head}"
-    );
+    let active = open_sse(port, OPERATION_TIMEOUT);
 
     let before_sigterm = Instant::now();
     send_sigterm(&server);
@@ -173,30 +160,132 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     assert!(status2.success());
 }
 
-/// A failed assertion must not leave a dashboard holding a deleted fixture
-/// root. Catch the unwind outside the child's ownership scope.
+fn open_sse(port: u16, timeout: Duration) -> DeadlineStream {
+    let mut active = DeadlineStream::connect(port, timeout).expect("open active connection");
+    active
+        .write_all(
+            b"GET /api/log/stream HTTP/1.1\r\n\
+              Host: 127.0.0.1\r\n\
+              Connection: keep-alive\r\n\r\n",
+        )
+        .expect("send SSE request");
+    let mut head = [0_u8; 4096];
+    let n = active.read(&mut head).expect("read SSE response head");
+    let head = String::from_utf8_lossy(&head[..n]);
+    assert!(
+        head.contains("text/event-stream"),
+        "expected an open SSE stream before sending SIGTERM, got: {head}"
+    );
+
+    active
+}
+
+/// A stalled peer must fail before releasing the peer, unwind through the
+/// live dashboard's guard, and reap it instead of leaking a fixture process.
 #[test]
-fn dashboard_is_reaped_and_releases_its_port_when_an_assertion_panics() {
+fn stalled_http_and_sse_reads_fail_with_deadlines_and_reap_the_dashboard() {
+    for (name, sse, prefix) in [
+        ("HTTP without response bytes", false, b"".as_slice()),
+        (
+            "HTTP without EOF",
+            false,
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nok".as_slice(),
+        ),
+        ("SSE without response head", true, b"".as_slice()),
+    ] {
+        exercise_stalled_peer(name, sse, prefix);
+    }
+}
+
+fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("create home");
     let port = free_port();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind stalled peer");
+    let peer_port = listener.local_addr().expect("stalled peer address").port();
+    listener.set_nonblocking(true).expect("nonblocking accept");
+    let (release, released) = std::sync::mpsc::sync_channel(1);
+    let (request_seen, seen) = std::sync::mpsc::sync_channel(1);
     let mut spawned = None;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut server = spawn_dashboard(&home, port);
-        wait_for_listening(port);
-        assert!(matches!(server.try_wait(), Ok(None)), "dashboard is alive");
-        spawned = Some(server.id());
-        assert_eq!(
-            server.id(),
-            0,
-            "forced assertion failure with a live dashboard"
-        );
-    }));
-    let pid = spawned.expect("dashboard was listening before the forced panic");
+    let mut started = None;
+    let (result, elapsed) = std::thread::scope(|scope| {
+        let peer = scope.spawn(move || {
+            // Safety ceilings also bound a broken client/fixture. Successful
+            // execution releases this peer explicitly, never by sleeping.
+            let deadline = Instant::now() + test_env::FIXTURE_STEP_DEADLINE;
+            let mut socket = loop {
+                if released.try_recv().is_ok() {
+                    return;
+                }
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "stalled peer accept deadline");
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("stalled peer accept: {error}"),
+                }
+            };
+            socket.set_nonblocking(false).expect("blocking peer IO");
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .expect("stalled peer request deadline");
+                socket
+                    .set_read_timeout(Some(remaining))
+                    .expect("peer read timeout");
+                let mut byte = [0];
+                socket.read_exact(&mut byte).expect("peer reads request");
+                request.push(byte[0]);
+                assert!(request.len() < 4096, "fixture request is bounded");
+            }
+            socket
+                .set_write_timeout(Some(test_env::FIXTURE_STEP_DEADLINE))
+                .expect("peer write timeout");
+            socket.write_all(prefix).expect("write partial response");
+            request_seen.send(()).expect("report request received");
+            released
+                .recv_timeout(test_env::FIXTURE_STEP_DEADLINE)
+                .expect("peer must be released after the client fails");
+        });
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut server = spawn_dashboard(&home, port);
+            wait_for_listening(port);
+            assert!(matches!(server.try_wait(), Ok(None)), "dashboard is alive");
+            spawned = Some(server.id());
+            started = Some(Instant::now());
+            let timeout = Duration::from_secs(1);
+            if sse {
+                let _ = open_sse(peer_port, timeout);
+            } else {
+                http_get_with_timeout(peer_port, "/healthz", timeout);
+            }
+        }));
+        let elapsed = started.map(|started| started.elapsed());
+        let _ = release.send(());
+        peer.join().expect("stalled peer completed");
+        (result, elapsed)
+    });
+    seen.try_recv()
+        .expect("peer received the full fixture request");
+    let pid = spawned.expect("dashboard was listening before the IO failure");
+    let failure = result.expect_err("stalled IO must unwind through the child guard");
+    let diagnostic = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .expect("IO panic includes a diagnostic");
     assert!(
-        result.is_err(),
-        "the assertion must unwind through the guard"
+        diagnostic.contains("response read")
+            && diagnostic.contains("fixture operation deadline")
+            && diagnostic.contains(&peer_port.to_string()),
+        "{name} must report the failed operation, deadline and peer: {diagnostic}"
+    );
+    assert!(
+        elapsed.expect("IO started") < Duration::from_secs(10),
+        "{name} must bound the 1s IO deadline plus child cleanup, got {elapsed:?}"
     );
     // SAFETY: signal zero only probes the fixture PID; waitpid verifies that
     // the guard reaped it rather than leaving a zombie behind.
@@ -214,7 +303,7 @@ fn dashboard_is_reaped_and_releases_its_port_when_an_assertion_panics() {
         Some(libc::ECHILD)
     );
     assert!(
-        TcpStream::connect(("127.0.0.1", port)).is_err(),
+        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
         "the dashboard must release its listening port during unwinding"
     );
 }
@@ -249,7 +338,8 @@ fn spawn_dashboard(home: &std::path::Path, port: u16) -> ChildGuard {
 fn wait_for_listening(port: u16) {
     let deadline = Instant::now() + STARTUP_DEADLINE;
     loop {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !remaining.is_zero() && DeadlineStream::connect(port, remaining).is_ok() {
             return;
         }
         if Instant::now() >= deadline {
@@ -290,17 +380,4 @@ fn wait_with_deadline(child: &mut Child, deadline: Duration) -> Option<std::proc
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-}
-
-fn http_get(port: u16, path: &str) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-    stream
-        .write_all(
-            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
 }
