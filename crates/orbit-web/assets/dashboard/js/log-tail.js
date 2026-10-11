@@ -399,13 +399,31 @@ function refreshLogStatusBar() {
   writeLogStatusBar(logPanelPrefs.showAgent ? statusNewestEvent : statusQuietEvent);
 }
 
+// No event clears the bar: a snapshot without one, or a host switch, must not
+// leave an earlier line on show.
 function writeLogStatusBar(ev) {
   const bar = $("log-statusbar");
-  if (!bar || !ev) return;
-  const { text: timeStr, title: timeTitle } = logTime(ev.ts);
+  if (!bar) return;
   const t = $("log-statusbar-time");
   const ag = $("log-statusbar-source");
   const m = $("log-statusbar-message");
+  if (!ev) {
+    if (t) {
+      t.textContent = "";
+      t.title = "";
+    }
+    if (ag) {
+      ag.textContent = "";
+      ag.title = "";
+    }
+    if (m) {
+      m.textContent = "";
+      delete m.dataset.level;
+    }
+    bar.classList.add("empty");
+    return;
+  }
+  const { text: timeStr, title: timeTitle } = logTime(ev.ts);
   if (t) {
     t.textContent = timeStr;
     t.title = timeTitle;
@@ -564,7 +582,9 @@ function loadLogSnapshot() {
 
 // ORB-14680: the tail follows the selected host. Another host's log has its
 // own offsets, so a switch drops the rows and cursor and starts from that
-// host's snapshot, exactly as a first load does.
+// host's snapshot, exactly as a first load does. The old host's rows, buffered
+// count and status line go at the switch, not when the snapshot settles: a
+// held or failed snapshot must not leave them shown under the new host.
 let logHost = null;
 
 function restartLogTailForHost() {
@@ -581,7 +601,24 @@ function restartLogTailForHost() {
   logBufferedDropped = 0;
   logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
   logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+  clearLogView();
   loadLogSnapshot();
+}
+
+function clearLogView() {
+  const inner = $("logInner");
+  if (inner) inner.innerHTML = "";
+  logRows = [];
+  applyLogFilters();
+  const btnBuffered = $("log-buffered-count");
+  if (btnBuffered) {
+    btnBuffered.textContent = "";
+    btnBuffered.title = "";
+    btnBuffered.style.display = "none";
+  }
+  statusNewestEvent = null;
+  statusQuietEvent = null;
+  refreshLogStatusBar();
 }
 
 export function initLogTail() {

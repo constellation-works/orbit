@@ -53,6 +53,13 @@ const WORKSPACES = {
 };
 let forwardWrites = { authorized: true, reason: null };
 let routeLog = [];
+// The log tail's snapshots per host. A held host's snapshot requests wait in
+// `heldLogs` until the test settles them; open streams wait in `logStreams`
+// for the test to push events.
+let logSnapshots = {};
+const logHolds = new Set();
+let heldLogs = [];
+let logStreams = [];
 
 function tasksFor(host, workspace) {
   // On the serving host a run recorded on hostb links there; on hostb it
@@ -124,10 +131,14 @@ function hostApi(host, req, rest, url, res) {
   if (rest === 'distributed/claims') return json(claimsFor(host, url.searchParams.get('task')));
   if (rest === 'crews') return json({ default_crew: null, crews: [] });
   if (rest === 'host/resources') return json(resources(host === SERVING ? 25 : 75));
-  if (rest === 'log') return json({ events: [], offset: 0, agent_offset: 0 });
+  if (rest === 'log') {
+    if (logHolds.has(host)) { heldLogs.push({ host, res }); return; }
+    return json(logSnapshots[host] || { events: [], offset: 0, agent_offset: 0 });
+  }
   if (rest === 'log/stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     res.write(': open\n\n');
+    logStreams.push({ host, query: url.search, res });
     return;
   }
   if (rest === 'workflows/auto/readiness') return json({ controls_authorized: true, tasks: [], capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4 } });
@@ -467,6 +478,100 @@ try {
   assert(order, 'the host picker sits above the workspace picker');
   await page.close();
 
+  // 9. The log tail retires the old host's rows, buffered count and status
+  // line at the switch, before the new host's snapshot settles.
+  const logEvent = (message) => ({ ts: '2026-10-11T12:00:00Z', source: 'orbit.fixture', target: 'orbit::fixture',
+    level: 'info', code: 'OK', message_html: message, agent_stdout: false });
+  const pushLog = (host, id, message) => {
+    for (const stream of logStreams.filter((entry) => entry.host === host && !entry.res.writableEnded && !entry.res.destroyed)) {
+      stream.res.write(`id: ${id}\ndata: ${JSON.stringify(logEvent(message))}\n\n`);
+    }
+  };
+  const settleLog = (host, outcome) => {
+    const index = heldLogs.findIndex((entry) => entry.host === host);
+    assert(index >= 0, `a held ${host} snapshot to settle`);
+    const [{ res }] = heldLogs.splice(index, 1);
+    res.writeHead(outcome.status || 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(outcome.body));
+  };
+  const logView = () => page.evaluate(() => {
+    const buffered = document.getElementById('log-buffered-count');
+    return {
+      rows: [...document.querySelectorAll('#logInner .log-line')].map((row) => row.querySelector('.m').textContent),
+      shown: document.getElementById('log-count').textContent,
+      buffered: buffered.style.display === 'none' ? null : buffered.textContent,
+      status: document.getElementById('log-statusbar-message').textContent,
+      source: document.getElementById('log-statusbar-source').textContent,
+      time: document.getElementById('log-statusbar-time').textContent,
+      empty: document.getElementById('log-statusbar').classList.contains('empty'),
+    };
+  });
+  const assertRetired = async (label) => {
+    const view = await logView();
+    assert(view.rows.length === 0 && view.shown === '0', `${label}: no log rows remain: ${JSON.stringify(view)}`);
+    assert(view.buffered === null, `${label}: no buffered count remains: ${JSON.stringify(view)}`);
+    assert(view.status === '' && view.source === '' && view.time === '' && view.empty, `${label}: the status bar is cleared: ${JSON.stringify(view)}`);
+  };
+  logSnapshots = {
+    [SERVING]: { events: [logEvent('alpha-only-event')], offset: 7, agent_offset: 2 },
+    hostb: { events: [], offset: 3, agent_offset: 1 },
+  };
+  logStreams = [];
+  await openPage('/', { fresh: true });
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await until('the alpha stream from its snapshot cursor', () => logStreams.some((entry) => entry.host === SERVING && entry.query === '?from=7&agent_from=2'));
+  let view = await logView();
+  assert(view.rows.join() === 'alpha-only-event' && view.status === 'alpha-only-event' && !view.empty, `alpha's snapshot is shown: ${JSON.stringify(view)}`);
+  await page.evaluate(() => document.getElementById('log-follow-tail').click());
+  pushLog(SERVING, '8:2', 'alpha-stream-event');
+  await until('alpha buffers its paused event', async () => (await logView()).buffered === '1 buffered');
+
+  logHolds.add('hostb');
+  routeLog = [];
+  await switchHost('hostb');
+  await until('the held hostb snapshot', () => heldLogs.some((entry) => entry.host === 'hostb'));
+  await assertRetired('a held hostb snapshot');
+  await capture('host-log-held-1440');
+
+  settleLog('hostb', { status: 500, body: { error: 'log read failed' } });
+  await until('the failed hostb snapshot', async () => (await page.locator('#log-statusbar .sb-label').textContent()) === 'log stream unavailable, retrying');
+  await assertRetired('a failed hostb snapshot');
+  await until('the hostb snapshot retry', () => heldLogs.some((entry) => entry.host === 'hostb'), 5000);
+
+  // Stale responses: a round trip through alpha settles the retried hostb
+  // snapshot on alpha and alpha's snapshot back on hostb; neither may paint.
+  // (Chromium's cache lock queues a second request for one URL behind the
+  // first, so each stale request settles before its URL is asked again.)
+  logHolds.add(SERVING);
+  await switchHost('');
+  await until('the held alpha snapshot', () => heldLogs.some((entry) => entry.host === SERVING));
+  settleLog('hostb', { body: { events: [logEvent('stale-hostb-event')], offset: 5, agent_offset: 5 } });
+  await page.waitForTimeout(300);
+  await assertRetired('a stale hostb snapshot settling on alpha');
+  await switchHost('hostb');
+  await until('the next hostb snapshot', () => heldLogs.some((entry) => entry.host === 'hostb'));
+  settleLog(SERVING, { body: logSnapshots[SERVING] });
+  await page.waitForTimeout(300);
+  await assertRetired('a stale alpha snapshot settling on hostb');
+
+  settleLog('hostb', { body: logSnapshots.hostb });
+  await until('the hostb stream from its own cursor', () => logStreams.some((entry) => entry.host === 'hostb' && entry.query === '?from=3&agent_from=1'));
+  await assertRetired('an empty hostb snapshot');
+  const streamsSinceSwitch = routeLog.filter((entry) => entry.path.includes('/log/stream'));
+  assert(streamsSinceSwitch.every((entry) => entry.path === '/api/on/hostb/log/stream?from=3&agent_from=1'),
+    `only hostb's stream opens, from hostb's cursor: ${JSON.stringify(streamsSinceSwitch)}`);
+  logHolds.clear();
+
+  pushLog('hostb', '4:1', 'hostb-stream-event');
+  await until('hostb buffers its own event', async () => (await logView()).buffered === '1 buffered');
+  view = await logView();
+  assert(view.status === 'hostb-stream-event' && !view.empty, `the status bar follows hostb: ${JSON.stringify(view)}`);
+  await page.evaluate(() => document.getElementById('log-follow-tail').click());
+  view = await logView();
+  assert(view.rows.join() === 'hostb-stream-event' && view.buffered === null, `resuming shows only hostb's line: ${JSON.stringify(view)}`);
+  evidenceLog.logRoutes = routeLog.filter((entry) => entry.path.includes('/log'));
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
@@ -479,6 +584,7 @@ try {
       'browser-remote-run-links',
       'browser-remote-writes-disabled-with-reason',
       'browser-host-picker-keyboard-and-focus',
+      'browser-log-tail-retires-the-old-host-at-the-switch',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,
