@@ -1406,6 +1406,138 @@ fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
 
 #[cfg(unix)]
 #[test]
+fn rendered_validation_redacts_credentials_without_changing_backend_environment() {
+    let fixture = Fixture::new();
+    let source = fixture.source("redaction");
+    let source_arg = source.to_str().expect("utf8 source");
+    let credentials = [
+        ("SERVICE_API_TOKEN", "synthetic-service-credential-a8b92c6d"),
+        // Generic text redaction excludes short values; inspection must still
+        // mask a credential identified by its environment name.
+        ("SERVICE_PASSWORD", "xy"),
+    ];
+    std::fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[execution.env]\npass = [\"SERVICE_API_TOKEN\", \"SERVICE_PASSWORD\", \"SERVICE_REGION\", \"SERVICE_ECHO\"]\n",
+    )
+    .expect("admit synthetic environment in fixture workspace");
+    write_status_plugin(
+        &source,
+        "redaction",
+        "  permissions:\n    env_pass: [SERVICE_API_TOKEN, SERVICE_PASSWORD, SERVICE_REGION, SERVICE_ECHO]\n",
+    );
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
+    let manifest_text = std::fs::read_to_string(&manifest).expect("read fixture manifest");
+    // This fixture checks environment delivery, independent of kernel sandbox
+    // availability, and explicitly grants the opt-out before calling it.
+    std::fs::write(
+        &manifest,
+        manifest_text.replace("    type: exec\n", "    type: exec\n    sandbox: none\n"),
+    )
+    .expect("request unsandboxed fixture backend");
+    let marker = fixture.work.join("backend-ran");
+    std::fs::write(
+        source.join(".orbit-plugin/bin/backend.sh"),
+        format!(
+            "#!/bin/sh\n: > \"$ORBIT_WORKSPACE_ROOT/backend-ran\"\n\
+             if [ \"$SERVICE_API_TOKEN\" = '{}' ] && [ \"$SERVICE_PASSWORD\" = '{}' ] \
+             && [ \"$SERVICE_REGION\" = 'fixture-east' ] && [ \"$SERVICE_ECHO\" = '{}' ]; then\n\
+             printf '{{\"ok\":true,\"output\":{{\"credentials_intact\":true}}}}\\n'\n\
+             else\n\
+             printf '{{\"ok\":true,\"output\":{{\"credentials_intact\":false}}}}\\n'\n\
+             fi\n",
+            credentials[0].1, credentials[1].1, credentials[0].1,
+        ),
+    )
+    .expect("write backend environment check");
+    let workspace = fixture.work.to_str().expect("utf8 workspace");
+    for format in ["plain", "json"] {
+        let rendered = fixture
+            .orbit()
+            .envs(credentials)
+            .env("SERVICE_REGION", "fixture-east")
+            .env("SERVICE_ECHO", credentials[0].1)
+            .args([
+                "plugin",
+                "validate",
+                source_arg,
+                "--render",
+                "--workspace",
+                workspace,
+                "--format",
+                format,
+            ])
+            .output()
+            .expect("render synthetic credential environment");
+        assert!(rendered.status.success(), "{rendered:?}");
+        for bytes in [&rendered.stdout, &rendered.stderr] {
+            assert!(
+                !String::from_utf8_lossy(bytes).contains(credentials[0].1),
+                "{format} inspection must not disclose an admitted credential"
+            );
+        }
+        if format == "json" {
+            let rendered = stdout_json(&rendered);
+            let profile = &rendered["rendered"];
+            assert_eq!(profile["workspace"], workspace);
+            assert_eq!(profile["network"], "none");
+            assert_eq!(profile["unsandboxed"], true);
+            assert!(
+                profile["read"]
+                    .as_array()
+                    .is_some_and(|read| !read.is_empty())
+            );
+            let environment = &profile["environments"][0];
+            assert_eq!(environment["tool"], "redaction.status");
+            let variables = &environment["variables"];
+            for name in ["SERVICE_API_TOKEN", "SERVICE_PASSWORD", "SERVICE_ECHO"] {
+                assert_eq!(variables[name], "[REDACTED_ENV]", "{name}");
+            }
+            assert_eq!(variables["SERVICE_REGION"], "fixture-east");
+            assert_eq!(variables["ORBIT_WORKSPACE_ROOT"], workspace);
+        } else {
+            let text = String::from_utf8_lossy(&rendered.stdout);
+            for name in ["SERVICE_API_TOKEN", "SERVICE_PASSWORD", "SERVICE_ECHO"] {
+                assert!(text.contains(&format!("{name}=[REDACTED_ENV]")), "{text}");
+            }
+            assert!(text.contains("SERVICE_REGION=fixture-east"), "{text}");
+            assert!(
+                text.contains(&format!("ORBIT_WORKSPACE_ROOT={workspace}")),
+                "{text}"
+            );
+        }
+        assert!(!marker.exists(), "validation must not execute the backend");
+    }
+
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "add",
+            source_arg,
+            "--enable",
+            "--grant",
+            "env_pass",
+            "--grant",
+            "unsandboxed",
+        ])
+        .assert()
+        .success();
+    let called = fixture
+        .orbit_as_operator()
+        .envs(credentials)
+        .env("SERVICE_REGION", "fixture-east")
+        .env("SERVICE_ECHO", credentials[0].1)
+        .args(["redaction", "status", "--format", "json"])
+        .output()
+        .expect("call backend with admitted credentials");
+    assert!(called.status.success(), "{called:?}");
+    assert_eq!(stdout_json(&called)["credentials_intact"], true);
+    assert!(marker.exists(), "the actual call must execute the backend");
+}
+
+#[cfg(unix)]
+#[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
     if !orbit_exec::macos_sandbox_test_guard("scaffold_validate_test_and_install_run_end_to_end") {
         return;

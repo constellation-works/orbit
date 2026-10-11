@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::{is_sensitive_env_name, redact_all};
 use orbit_tools::ToolContext;
 use orbit_tools::plugin::{LoadedPlugin, PluginBackend};
 use orbit_types::plugin::{parse_stored_grants, plugin_tool_name};
@@ -12,8 +13,8 @@ use super::summary::PluginPermissionSummary;
 
 use crate::OrbitRuntime;
 
-/// The exact sandbox and environment projection a validated backend would
-/// receive for the selected workspace on this host.
+/// The sandbox and diagnostic environment projection for the selected
+/// workspace on this host. Credential values are redacted for inspection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginRenderedProfile {
     pub workspace: String,
@@ -31,6 +32,7 @@ pub struct PluginRenderedProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginRenderedEnvironment {
     pub tool: Option<String>,
+    /// Child environment names and display values, with credentials redacted.
     pub variables: BTreeMap<String, String>,
 }
 
@@ -73,6 +75,18 @@ pub(super) fn render_backend_profile(
                 .spec()
                 .child_environment(&context, &workspace_text, tool.as_deref())
                 .into_iter()
+                .map(|(name, value)| {
+                    // This is only the diagnostic projection: the backend's
+                    // launch environment retains its admitted values. Mask by
+                    // name even for short values that generic text scrubbing
+                    // leaves readable, and scrub aliases in other variables.
+                    let value = if is_sensitive_env_name(&name) {
+                        "[REDACTED_ENV]".to_string()
+                    } else {
+                        redact_all(&value)
+                    };
+                    (name, value)
+                })
                 .collect(),
             tool,
         })
