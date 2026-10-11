@@ -4,7 +4,9 @@
 use chrono::Utc;
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{
+    NO_AUTO_APPROVE_TAG, Task, TaskComplexity, TaskRelation, TaskRelationType, TaskStatus,
+};
 use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
@@ -109,24 +111,47 @@ fn pilot_with_rationale(
     race: Option<Hook>,
     assessment_rationale: &str,
 ) -> Value {
+    pilot_with_findings(
+        workspace,
+        task,
+        drain,
+        pilot,
+        race,
+        json!({
+            "assessment_rationale": assessment_rationale,
+        }),
+    )
+}
+
+fn pilot_with_findings(
+    workspace: &Workspace,
+    task: &Task,
+    drain: &str,
+    pilot: &str,
+    race: Option<Hook>,
+    findings: Value,
+) -> Value {
     let runtime = &workspace.runtime;
     let prepared = action(
         runtime,
         "prepare_task_pilot",
         json!({"task_ids": [task.id], "workspace_path": workspace.repo, "base_branch": "main"}),
     );
-    let assessment = json!({
+    let mut assessment = json!({
         "task_id": task.id,
         "context_files_before": task.context_files,
         "context_files_after": ["file:README.md"],
         "disposition": "selectors", "recommended_crew": "opus",
         "recommended_complexity": "low", "confidence": "high",
-        "assessment_rationale": assessment_rationale,
+        "assessment_rationale": "README.md holds the change.",
         "validation_approach": "Inspect README.md.",
         "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
         "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
         "duplicate_of": null, "already_landed": null,
     });
+    for (field, value) in findings.as_object().expect("findings") {
+        assessment[field] = value.clone();
+    }
     approval_hook::set_before_lock(race);
     let applied = runtime.run_deterministic(
         "apply_task_pilot_results",
@@ -211,52 +236,194 @@ fn opt_out_landing_before_the_approval_lock_keeps_the_task_proposed() {
 
 #[test]
 fn material_edit_after_the_pilot_write_is_held_for_revalidation() {
-    let workspace = workspace(None);
-    let runtime = &workspace.runtime;
-    let task = qualifying_task(runtime);
-    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
-
-    let applied = pilot_with_race(
-        &workspace,
-        &task,
-        &drain,
-        &pilot,
-        operator_edit(TaskUpdateParams {
-            description: Some("Ship a different change across the CLI.".to_string()),
-            ..Default::default()
-        }),
+    const TEST: &str = concat!(
+        "adapter::engine_host::v2_host::task_pilot::tests::drain_promotion::",
+        "material_edit_after_the_pilot_write_is_held_for_revalidation"
     );
-
-    let decision = &applied["drain_approval"][0];
-    assert_eq!(decision["decision"], "withhold", "{decision}");
-    assert_eq!(
-        decision["classification"], "changed_since_pilot",
-        "{decision}"
-    );
-    assert_eq!(
-        decision["evidence"]["reason"], "material_changed",
-        "{decision}"
-    );
-    assert_eq!(decision["approved"], false, "{decision}");
-    assert_eq!(
-        runtime.get_task(&task.id).expect("task").status,
-        TaskStatus::Proposed
-    );
-    assert_eq!(approvals(runtime, &task), 0);
-
-    // Once that pilot ends, the edited task is piloted again rather than held
-    // for good.
-    runtime
-        .stores()
-        .jobs()
-        .finalize_job_run(&pilot, JobRunState::Success, Utc::now(), None)
-        .expect("finish pilot");
-    let selection = action(
-        runtime,
-        "select_proposed_approvals",
-        json!({"approve_proposed": true, "run_id": drain}),
-    );
-    assert_eq!(selection["task_ids"], json!([task.id]), "{selection}");
+    const MARKER: &str = "ORBIT_TEST_APPROVAL_MUTATIONS_CHILD";
+    if std::env::var_os(MARKER).is_none() {
+        let home = tempfile::TempDir::new().expect("child home");
+        let logs = tempfile::TempDir::new().expect("child logs");
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            command.env_remove(key);
+        });
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(MARKER, "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(home.path());
+        let output = orbit_common::test_env::run_child_test(&mut command, TEST, logs.path());
+        orbit_common::test_env::assert_child_test_passed(
+            TEST,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        return;
+    }
+    // Force each operator edit after a pilot-owned routing tag and crew
+    // redraw, immediately before the approval lock (unit admission criterion 2).
+    for (mut edit, reason, classification) in [
+        (
+            TaskUpdateParams {
+                description: Some("Ship a different change across the CLI.".into()),
+                ..Default::default()
+            },
+            "material_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                title: Some("Another title".into()),
+                ..Default::default()
+            },
+            "material_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                acceptance_criteria: Some(vec!["Another criterion".into()]),
+                ..Default::default()
+            },
+            "material_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                plan: Some("Another plan".into()),
+                ..Default::default()
+            },
+            "material_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                context_files: Some(vec![]),
+                ..Default::default()
+            },
+            "context_files_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Low),
+                ..Default::default()
+            },
+            "complexity_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                tags: Some(vec!["os:linux".into(), "operator-tag".into()]),
+                ..Default::default()
+            },
+            "tags_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                tags: Some(vec![]),
+                ..Default::default()
+            },
+            "tags_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+            "crew_changed",
+            "changed_since_pilot",
+        ),
+        // Pin the very crew the pilot drew: only its provenance changes.
+        (
+            TaskUpdateParams {
+                crew: Some(Some("luna".into())),
+                ..Default::default()
+            },
+            "crew_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                relations: Some(vec![]),
+                ..Default::default()
+            },
+            "relations_changed",
+            "changed_since_pilot",
+        ),
+        (
+            TaskUpdateParams {
+                tags: Some(vec!["os:linux".into(), NO_AUTO_APPROVE_TAG.into()]),
+                ..Default::default()
+            },
+            "",
+            NO_AUTO_APPROVE_TAG,
+        ),
+    ] {
+        let workspace = workspace(Some(
+            "[crews.opus]\nmodel = \"fixture\"\nprovider = \"codex\"\nbackend = \"cli\"\n\
+             [crews.luna]\nmodel = \"fixture\"\nprovider = \"codex\"\nbackend = \"cli\"\n\
+             [workflow]\ndefault_crew = \"opus\"\nmedium_complexity_crews = [\"luna\"]\n",
+        ));
+        let runtime = &workspace.runtime;
+        let task = qualifying_task(runtime);
+        if reason == "relations_changed" {
+            let related = runtime
+                .add_task(TaskAddParams {
+                    title: "Related work".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .expect("related task");
+            edit.relations = Some(vec![TaskRelation {
+                relation_type: TaskRelationType::SpawnedFrom,
+                target: related.id,
+            }]);
+        }
+        let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+        let applied = pilot_with_findings(
+            &workspace,
+            &task,
+            &drain,
+            &pilot,
+            operator_edit(edit),
+            json!({
+                "recommended_complexity": "medium",
+                "required_os": [{"criterion": 1, "os": "linux", "evidence": "Native Linux validation."}],
+            }),
+        );
+        let decision = &applied["drain_approval"][0];
+        assert_eq!(decision["decision"], "withhold", "{decision}");
+        assert_eq!(decision["classification"], classification, "{decision}");
+        if !reason.is_empty() {
+            assert_eq!(decision["evidence"]["reason"], reason, "{decision}");
+        }
+        assert_eq!(decision["approved"], false, "{decision}");
+        assert_eq!(
+            runtime.get_task(&task.id).expect("task").status,
+            TaskStatus::Proposed
+        );
+        assert_eq!(approvals(runtime, &task), 0);
+        runtime
+            .stores()
+            .jobs()
+            .finalize_job_run(&pilot, JobRunState::Success, Utc::now(), None)
+            .expect("finish pilot");
+        let selection = action(
+            runtime,
+            "select_proposed_approvals",
+            json!({"approve_proposed": true, "run_id": drain}),
+        );
+        // Material edits are re-piloted once ready; selectors removed or an
+        // explicit opt-out still refuse selection on their own.
+        if !matches!(reason, "context_files_changed") && classification != NO_AUTO_APPROVE_TAG {
+            assert_eq!(selection["task_ids"], json!([task.id]), "{selection}");
+        }
+    }
 }
 
 #[test]

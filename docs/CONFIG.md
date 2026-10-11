@@ -192,6 +192,8 @@ source_sensitivity = "ignore"
 
 A routine's `eligibility` block still decides which tasks are piloted: a newly eligible task with no fresh assessment is piloted, while retagging an assessed, still-eligible task is not. A task-pilot routine's `trigger.state.freshness` overrides either key (routine, then this table, then defaults). A non-default value is itself material, so changing it re-pilots tasks assessed under the old value once. Assessments from before this setting existed stay fresh while their task is unchanged. See [automation triggers](design/automation-triggers/5_operations.md).
 
+An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds.
+
 ### `[workflow.validation_env]` — the toolchain required validation runs with
 
 ```toml

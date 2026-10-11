@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskRelation, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -56,6 +57,22 @@ pub(super) struct ValidatedTask {
     pub(super) required_os: Vec<crate::application::task::NativeOsRequirement>,
     /// The typed owner-machine finding, persisted in the same hold.
     pub(super) required_machine: Option<crate::application::task::MachineRequirement>,
+    /// Exact material certified by the atomic write, recovered from its audit
+    /// on replay rather than adopted from a later task read.
+    pub(super) applied_material: Option<AppliedTaskMaterial>,
+}
+
+/// The pilot's authorized output, sealed in the same atomic mutation as its
+/// receipt. Selectors and complexity are already carried by `ValidatedTask`.
+#[derive(Serialize, Deserialize)]
+pub(super) struct AppliedTaskMaterial {
+    pub(super) tags: Vec<String>,
+    pub(super) crew: Option<String>,
+    pub(super) crew_source: Option<String>,
+    pub(super) relations: Vec<TaskRelation>,
+    pub(super) material: Option<(String, String)>,
+    pub(super) status_neutral_fingerprint: Option<String>,
+    pub(super) material_components: Option<BTreeMap<String, String>>,
 }
 
 /// One task's promotion decision, by the authority that requested it.

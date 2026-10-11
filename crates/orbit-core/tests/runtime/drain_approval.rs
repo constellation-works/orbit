@@ -17,6 +17,7 @@ use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod pilot_mutations;
 #[cfg(unix)]
 mod required_tools;
 mod step_graph;
@@ -29,6 +30,10 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Self {
+        Self::with_config("")
+    }
+
+    fn with_config(extra_config: &str) -> Self {
         let root = TempDir::new().unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");
@@ -36,7 +41,7 @@ impl Workspace {
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
         std::fs::write(
             repo.join(".orbit/config.toml"),
-            "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.sol]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.grok]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nsystem_crew = \"fixture\"\n",
+            format!("[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.sol]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.grok]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\nsystem_crew = \"fixture\"\n{extra_config}"),
         )
         .unwrap();
         let git = |args: &[&str]| {
