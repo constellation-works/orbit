@@ -248,13 +248,8 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         // and the implementing agent often leaves it empty. Persist the
         // account it returned instead, else derive one read-only from the
         // change about to be delivered or the accepted coverage evidence.
-        let task = ensure_durable_execution_summary(
-            host,
-            task.clone(),
-            &workspace_path,
-            batch_id,
-            input,
-        )?;
+        let task =
+            ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id, input)?;
 
         // ORB-10313: fail closed on the durable execution outcome before staging
         // files, mutating the index, or committing. Only read-only resolution and

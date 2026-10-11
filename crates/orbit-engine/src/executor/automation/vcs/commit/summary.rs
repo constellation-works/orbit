@@ -149,11 +149,10 @@ fn returned_summary<H: RuntimeHost + ?Sized>(
     let summary = if carries_implementer_output(input) {
         implementer_summary(input)
     } else {
-        host.read_run_state(run_id)?
-            .and_then(|state| {
-                let output = state.pipeline.get(IMPLEMENT_STEP_ID)?;
-                implementer_summary(&json!({ "implementation": output }))
-            })
+        host.read_run_state(run_id)?.and_then(|state| {
+            let output = state.pipeline.get(IMPLEMENT_STEP_ID)?;
+            implementer_summary(&json!({ "implementation": output }))
+        })
     };
     Ok(summary.filter(|summary| meaningful_execution_summary(summary).is_some()))
 }

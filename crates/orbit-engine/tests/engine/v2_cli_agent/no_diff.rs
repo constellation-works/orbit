@@ -369,7 +369,13 @@ fn returned_summary_delivers_no_diff_task_and_missing_summaries_still_refuse() {
                 ),
                 // F2026-10-267: the implementer returned only its short
                 // `summary`, which is still its own account of the work.
-                ("short summary only", "", json!({"summary":returned}), true, true),
+                (
+                    "short summary only",
+                    "",
+                    json!({"summary":returned}),
+                    true,
+                    true,
+                ),
                 (
                     "persisted wins",
                     persisted,
