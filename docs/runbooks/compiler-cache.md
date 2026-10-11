@@ -161,6 +161,29 @@ either; the regression applies once the cache is enabled. With the cache enabled
 and namespaces unavailable, the script still prints `skip:`, or fails under
 `REQUIRE_NS=1`. A `skip:` line is not a pass.
 
+Inside an Orbit agent's sandbox the probe always fails: a Linux agent lane runs
+under Bubblewrap, which refuses the nested namespaces this regression creates.
+There, with the cache enabled, the script prints one line and exits 0:
+
+```text
+test-compiler-cache-namespaces: not applicable inside the Orbit agent sandbox, which refuses nested namespaces (bwrap: No permissions to create a new namespace, ...); covered outside the sandbox by the owner's candidate_validate or the claim host's claim_validate run of the required commands
+```
+
+The parenthesis holds Bubblewrap's own refusal.
+
+**That line is not a validation gap either**, and it is not a deferral to
+hand off. `make ci-fast` is a required command, so the owner's
+`candidate_validate`, or the claim host's `claim_validate` for a claimed leaf,
+runs it again outside any agent sandbox before delivery, where Bubblewrap
+creates the namespaces and this regression runs in full
+([deferred sandbox validation](../DEVELOPMENT.md#test-process-environment)).
+The script identifies the lane by `ORBIT_SCRATCH_DIR`: Orbit's CLI runner sets
+it to an existing directory for every agent it dispatches into a worktree, and
+nothing else in Orbit sets it. The validation steps run required commands
+from the worker's own allowlisted environment, which does not hold it, so an
+owner or claim host that cannot create namespaces still prints `skip:`. An
+explicit `ORBIT_COMPILER_CACHE_REQUIRE_NS=1` fails in a lane too.
+
 Only after that regression passes should the orchestrator leave the host cache
 directory writable for workers.
 
@@ -394,8 +417,8 @@ second worktree. The unnormalized pair retains distinct source and target
 paths as a miss control; only the stable-mount namespace checks demonstrate
 cross-worktree normalization. No workers share a mutable target directory.
 Nested implementer sandboxes cannot create a second
-user namespace; that skip is not a pass. Re-run the namespace script on the
-host.
+user namespace; the bench's skip there is not a pass. Re-run the namespace
+script on the host.
 
 ## Invalidation
 
