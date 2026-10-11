@@ -134,10 +134,12 @@ impl Workspace {
         !self.run(run_id).state.is_terminal()
     }
 
-    /// A slot's leaf ends and its task leaves the backlog, as a delivery that
-    /// reaches review does.
+    /// A slot's task leaves the backlog and then its leaf ends, as a delivery
+    /// that reaches review does. In the other order a pass between the two
+    /// writes sees a free slot and the task still in the backlog, and admits
+    /// it again: that duplicate never runs, so it holds the drain's only slot
+    /// until its substitute worker gives up.
     fn settle_leaf(&self, leaf: &str, task: &Task) {
-        self.finish(leaf, JobRunState::Success);
         self.edit(
             task,
             TaskUpdateParams {
@@ -145,6 +147,7 @@ impl Workspace {
                 ..Default::default()
             },
         );
+        self.finish(leaf, JobRunState::Success);
     }
 }
 
