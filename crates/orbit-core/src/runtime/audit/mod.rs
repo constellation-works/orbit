@@ -3,4 +3,5 @@
 
 pub(super) mod coordination;
 pub mod run;
+pub(crate) mod run_detail;
 mod run_projection;

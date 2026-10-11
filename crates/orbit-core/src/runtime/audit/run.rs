@@ -11,8 +11,8 @@ use crate::{OrbitRuntime, V2AuditEventFilter};
 
 use super::run_projection::{
     audit_step_attempts_from_events, audit_steps_from_events, bound_provider_processes,
-    enclosing_step_id, latest_timestamp_from_envelope_rows, provider_processes_from_events,
-    read_invocation_blob, recovery_attempts_from_partitioned_rows, step_index_by_id,
+    cli_invocation_record, latest_timestamp_from_envelope_rows, provider_processes_from_events,
+    recovery_attempts_from_partitioned_rows, run_audit_event, step_index_by_id,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -340,7 +340,7 @@ impl RunExecutionProgress {
 
 /// Provider children carried on the progress projection. A run spawns a
 /// handful per step; the budget only bites on a long retry history.
-const MAX_PROVIDER_PROCESSES: usize = 8;
+pub(super) const MAX_PROVIDER_PROCESSES: usize = 8;
 /// Rows per store read while reconstructing a complete run audit trail.
 ///
 /// This is a paging size, not an evidence limit. Safety decisions such as
@@ -510,36 +510,13 @@ impl OrbitRuntime {
             events_by_id.insert(event_id.to_string(), value);
         }
 
-        let mut events = Vec::new();
-        for event_id in ordered_ids {
-            let Some(raw) = events_by_id.get(&event_id).cloned() else {
-                continue;
-            };
-            events.push(RunAuditEvent {
-                parent_event_id: raw
-                    .get("parent_event_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                event_type: raw
-                    .get("event_type")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                body_kind: raw
-                    .get("body_kind")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                timestamp: raw
-                    .get("ts")
-                    .and_then(Value::as_str)
-                    .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&Utc)),
-                step_id: enclosing_step_id(&raw, &events_by_id),
-                raw,
-                event_id,
-            });
-        }
-
-        Ok(events)
+        Ok(ordered_ids
+            .into_iter()
+            .filter_map(|event_id| {
+                let raw = events_by_id.get(&event_id).cloned()?;
+                Some(run_audit_event(event_id, raw, &events_by_id))
+            })
+            .collect())
     }
 
     /// The newest valid timestamp carried by the newest v2 envelope rows for
@@ -718,10 +695,7 @@ impl OrbitRuntime {
         }
         let events = self.collect_run_audit_events(run_id)?;
         let blob_store = BlobStore::new(self.v2_audit_blob_root());
-        let step_index_by_id = audit_steps_from_events(&events)
-            .into_iter()
-            .map(|step| (step.step_id, step.step_index))
-            .collect::<HashMap<_, _>>();
+        let step_index_by_id = step_index_by_id(&audit_steps_from_events(&events));
         let mut records = Vec::new();
 
         for event in events {
@@ -731,60 +705,13 @@ impl OrbitRuntime {
             {
                 continue;
             }
-            let stdout_blob_ref = event
-                .raw
-                .get("stdout_blob_ref")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let stderr_blob_ref = event
-                .raw
-                .get("stderr_blob_ref")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let (stdout, stdout_blob_truncated) = read_invocation_blob(
+            records.push(cli_invocation_record(
+                run_id,
+                event,
                 &blob_store,
-                stdout_blob_ref.as_deref(),
                 blob_preview_max_bytes,
-            );
-            let (stderr, stderr_blob_truncated) = read_invocation_blob(
-                &blob_store,
-                stderr_blob_ref.as_deref(),
-                blob_preview_max_bytes,
-            );
-            let step_index = event
-                .step_id
-                .as_ref()
-                .and_then(|step_id| step_index_by_id.get(step_id).copied());
-            records.push(RunCliInvocationRecord {
-                run_id: event
-                    .raw
-                    .get("run_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or(run_id)
-                    .to_string(),
-                event_id: event.event_id,
-                ts: event.timestamp,
-                step_index,
-                step_id: event.step_id,
-                provider: event
-                    .raw
-                    .get("provider")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                stdout_blob_ref,
-                stderr_blob_ref,
-                stdout,
-                stderr,
-                stdout_blob_truncated,
-                stderr_blob_truncated,
-                exit_code: event.raw.get("exit_code").and_then(Value::as_i64),
-                timed_out: event
-                    .raw
-                    .get("timed_out")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                duration_ms: event.raw.get("duration_ms").and_then(Value::as_u64),
-            });
+                &step_index_by_id,
+            ));
             if limit.is_some_and(|limit| records.len() >= limit) {
                 break;
             }
@@ -793,7 +720,7 @@ impl OrbitRuntime {
         Ok(records)
     }
 
-    fn v2_audit_blob_root(&self) -> PathBuf {
+    pub(super) fn v2_audit_blob_root(&self) -> PathBuf {
         self.data_root().join("state").join("audit").join("blobs")
     }
 }

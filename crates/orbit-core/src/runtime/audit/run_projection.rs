@@ -10,8 +10,8 @@ use orbit_common::storage::blob_store::BlobStore;
 use serde_json::Value;
 
 use super::run::{
-    MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunProviderProcess, RunRecoveryAttempt,
-    RunRecoveryAttempts, RunRecoveryDecision, RunStoppedDescendant,
+    MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunCliInvocationRecord, RunProviderProcess,
+    RunRecoveryAttempt, RunRecoveryAttempts, RunRecoveryDecision, RunStoppedDescendant,
 };
 
 const MAX_RECOVERY_DIAGNOSTIC_CHARS: usize = 1024;
@@ -425,7 +425,103 @@ fn matching_provider_process_for_completion<'a>(
     records.get_mut(index)
 }
 
-pub(super) fn enclosing_step_id(event: &Value, events: &HashMap<String, Value>) -> Option<String> {
+/// One envelope event of a run's trail. `events_by_id` holds the trail rows
+/// read so far, through which an event without its own `step_id` finds the
+/// step that encloses it.
+pub(super) fn run_audit_event(
+    event_id: String,
+    raw: Value,
+    events_by_id: &HashMap<String, Value>,
+) -> RunAuditEvent {
+    RunAuditEvent {
+        parent_event_id: raw
+            .get("parent_event_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        event_type: raw
+            .get("event_type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        body_kind: raw
+            .get("body_kind")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        timestamp: raw
+            .get("ts")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc)),
+        step_id: enclosing_step_id(&raw, events_by_id),
+        raw,
+        event_id,
+    }
+}
+
+/// The operator record of one `cli_invocation_finished` event, reading its
+/// stdout/stderr blobs whole or, given `blob_preview_max_bytes`, as a preview.
+pub(super) fn cli_invocation_record(
+    run_id: &str,
+    event: RunAuditEvent,
+    blob_store: &BlobStore,
+    blob_preview_max_bytes: Option<usize>,
+    step_index_by_id: &HashMap<String, u32>,
+) -> RunCliInvocationRecord {
+    let blob_ref = |key: &str| {
+        event
+            .raw
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let stdout_blob_ref = blob_ref("stdout_blob_ref");
+    let stderr_blob_ref = blob_ref("stderr_blob_ref");
+    let (stdout, stdout_blob_truncated) = read_invocation_blob(
+        blob_store,
+        stdout_blob_ref.as_deref(),
+        blob_preview_max_bytes,
+    );
+    let (stderr, stderr_blob_truncated) = read_invocation_blob(
+        blob_store,
+        stderr_blob_ref.as_deref(),
+        blob_preview_max_bytes,
+    );
+    let step_index = event
+        .step_id
+        .as_ref()
+        .and_then(|step_id| step_index_by_id.get(step_id).copied());
+    RunCliInvocationRecord {
+        run_id: event
+            .raw
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or(run_id)
+            .to_string(),
+        step_index,
+        provider: event
+            .raw
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        exit_code: event.raw.get("exit_code").and_then(Value::as_i64),
+        timed_out: event
+            .raw
+            .get("timed_out")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        duration_ms: event.raw.get("duration_ms").and_then(Value::as_u64),
+        event_id: event.event_id,
+        ts: event.timestamp,
+        step_id: event.step_id,
+        stdout_blob_ref,
+        stderr_blob_ref,
+        stdout,
+        stderr,
+        stdout_blob_truncated,
+        stderr_blob_truncated,
+    }
+}
+
+fn enclosing_step_id(event: &Value, events: &HashMap<String, Value>) -> Option<String> {
     if let Some(step_id) = event.get("step_id").and_then(Value::as_str) {
         return Some(step_id.to_string());
     }
@@ -625,7 +721,7 @@ fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String 
 /// Returns the blob text and whether the blob has bytes beyond what was
 /// returned (only meaningful in preview mode; a full read is never
 /// truncated here — the caller's own line-budget check covers it).
-pub(super) fn read_invocation_blob(
+fn read_invocation_blob(
     blob_store: &BlobStore,
     blob_ref: Option<&str>,
     preview_max_bytes: Option<usize>,
