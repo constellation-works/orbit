@@ -3,12 +3,14 @@ name: Website checks
 on:
   pull_request:
     paths:
+      - "CHANGELOG.md"
       - "website/**"
       - ".github/workflows/website-check.yml"
   push:
     branches:
       - main
     paths:
+      - "CHANGELOG.md"
       - "website/**"
       - ".github/workflows/website-check.yml"
   workflow_dispatch:
