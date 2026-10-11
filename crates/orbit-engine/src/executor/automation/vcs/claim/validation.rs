@@ -94,34 +94,15 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 
     let replays = claimed_deferred_replays(host, input)?;
     let commands = with_replays(context.required_commands.clone(), &replays);
-    let mut results = Vec::new();
-    let mut validation_env = Value::Null;
-    for (index, command) in commands.iter().enumerate() {
-        let run = run_validation_command(host, &workspace_path, command, None)?;
-        validation_env = run.environment_record();
-        if !run.passed {
-            return Err(claim_failure(
-                host,
-                &context,
-                &workspace_path,
-                input,
-                &candidate,
-                index,
-                &run,
-            ));
-        }
-        let commit = &candidate.candidate.commit;
-        if let Some(failure) = run.deferral_failure(commit).or_else(|| {
-            replays
-                .contains(&run.command)
-                .then(|| run.replay_failure(commit))
-                .flatten()
-        }) {
-            return Err(failure);
-        }
-        require_clean_candidate(&workspace_path, &candidate)?;
-        results.push((run.command, run.output));
-    }
+    let (results, validation_env) = run_claimed_commands(
+        host,
+        &context,
+        &workspace_path,
+        input,
+        &candidate,
+        &commands,
+        &replays,
+    )?;
 
     // A later required command must not invalidate logs from an earlier one.
     // Publish them only after the whole suite has kept the candidate intact.
@@ -150,6 +131,52 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     }
     let references = attach_handoff_logs(host, &context, &candidate, &results)?;
     passed_output(&candidate, &references, results, validation_env)
+}
+
+/// Run `commands` on the observed candidate, in order, and return each
+/// command's output with the last run's validation environment. A failing
+/// command is refused through [`claim_failure`]. A passing one still must not
+/// have deferred a sandbox-confined path, and a command in `replays` must
+/// report executed tests. Shared by the ordinary route and clean-base NoDiff
+/// validation so neither can attach a passing log the other would refuse.
+pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &ClaimExecutionContext,
+    workspace_path: &Path,
+    input: &Value,
+    candidate: &HandoffCandidate,
+    commands: &[String],
+    replays: &[String],
+) -> Result<(Vec<(String, String)>, Value), OrbitError> {
+    let mut results = Vec::new();
+    let mut validation_env = Value::Null;
+    for (index, command) in commands.iter().enumerate() {
+        let run = run_validation_command(host, workspace_path, command, None)?;
+        validation_env = run.environment_record();
+        if !run.passed {
+            return Err(claim_failure(
+                host,
+                context,
+                workspace_path,
+                input,
+                candidate,
+                index,
+                &run,
+            ));
+        }
+        let commit = &candidate.candidate.commit;
+        if let Some(failure) = run.deferral_failure(commit).or_else(|| {
+            replays
+                .contains(&run.command)
+                .then(|| run.replay_failure(commit))
+                .flatten()
+        }) {
+            return Err(failure);
+        }
+        require_clean_candidate(workspace_path, candidate)?;
+        results.push((run.command, run.output));
+    }
+    Ok((results, validation_env))
 }
 
 /// Pin a pre-publication validation onto the published candidate: the
@@ -298,7 +325,7 @@ pub(super) fn passed_output(
 /// attached to the owner's task before the step fails; a failure the base
 /// shares is typed `baseline_red`, and one that still could not reach the
 /// network after its retries is typed `transient`.
-pub(super) fn claim_failure<H: RuntimeHost + ?Sized>(
+fn claim_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace_path: &Path,
