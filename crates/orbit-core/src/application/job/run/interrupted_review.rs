@@ -50,16 +50,22 @@ impl OrbitRuntime {
         let Some(state) = self.read_run_state(&run.run_id)? else {
             return Ok(());
         };
-        if state
-            .pipeline
-            .get(INTERRUPTED_REVIEW_KEY)
-            .is_some_and(|kept| !kept.is_null())
-        {
-            return Ok(());
-        }
         let Some(review) = review_in_flight(&state.pipeline) else {
             return Ok(());
         };
+        // A checkpoint resume or a later review attempt can carry an older
+        // stop's record. Only this run's current review has already been kept.
+        if state
+            .pipeline
+            .get(INTERRUPTED_REVIEW_KEY)
+            .is_some_and(|kept| {
+                kept["run_id"].as_str() == Some(run.run_id.as_str())
+                    && kept["step_id"].as_str() == Some(review.step_id.as_str())
+                    && kept["attempt_id"].as_str() == Some(review.attempt_id.as_str())
+            })
+        {
+            return Ok(());
+        }
         let task_ids = job_run_task_ids(run);
         let [task_id] = task_ids.as_slice() else {
             return Ok(());
@@ -74,6 +80,7 @@ impl OrbitRuntime {
             return Ok(());
         };
         let mut record = json!({
+            "run_id": run.run_id,
             "step_id": review.step_id,
             "attempt_id": review.attempt_id,
             "repair_ref": null,

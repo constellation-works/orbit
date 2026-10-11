@@ -33,7 +33,7 @@ use super::review_gate::{
 };
 
 /// The pipeline-state key under which the host that stopped a run records
-/// what [`preserve_interrupted_review`] kept: `step_id`, `attempt_id`,
+/// what [`preserve_interrupted_review`] kept: `run_id`, `step_id`, `attempt_id`,
 /// `repair_ref` and `repair_commit` (null when nothing was kept), whether it
 /// was `carried` to `origin`, and `carry_failure` or `failure` when not.
 pub const INTERRUPTED_REVIEW_KEY: &str = "interrupted_review";

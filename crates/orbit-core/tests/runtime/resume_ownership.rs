@@ -33,14 +33,14 @@ fn run_isolated_test(test_name: &str) -> bool {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    let output = command
+    command
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env(CHILD, test_name)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .unwrap();
+        .current_dir(home.path());
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, test_name, logs.path());
     orbit_common::test_env::assert_child_test_passed(
         test_name,
         output.status,
@@ -59,6 +59,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::new_for_job(JOB)
+    }
+
+    fn new_for_job(job: &str) -> Self {
         let root = TempDir::new().unwrap();
         // The substitute stays alive until this directory is removed, so a
         // resumed run's worker does not exit and interrupt the run mid-assert.
@@ -68,10 +72,15 @@ impl Fixture {
         let jobs_dir = global.join("resources/jobs");
         std::fs::create_dir_all(&jobs_dir).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        assert_eq!(
+            std::path::Path::new(git(&repo, &["rev-parse", "--show-toplevel"]).trim()),
+            repo.canonicalize().unwrap(),
+        );
         std::fs::write(
-            jobs_dir.join(format!("{JOB}.yaml")),
+            jobs_dir.join(format!("{job}.yaml")),
             format!(
-                "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {JOB}\nspec:\n  state: enabled\n  steps: []\n"
+                "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {job}\nspec:\n  state: enabled\n  steps: []\n"
             ),
         )
         .unwrap();
@@ -180,6 +189,226 @@ impl Fixture {
                 Ok(())
             })
             .unwrap();
+    }
+}
+
+fn git(repo: &std::path::Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .current_dir(repo)
+        .env("GIT_ALLOW_PROTOCOL", "file")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Two deterministic stops with real resume admission in between. The worker
+/// substitute holds the resumed owner alive while we checkpoint its reviewer;
+/// no provider timing or concurrent editing is needed.
+#[cfg(unix)]
+#[test]
+fn checkpoint_resume_preserves_the_later_interrupted_review_repair() {
+    if run_isolated_test(
+        "resume_ownership::checkpoint_resume_preserves_the_later_interrupted_review_repair",
+    ) {
+        return;
+    }
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    std::fs::write(
+        home.join(".gitconfig"),
+        "[protocol]\nallow = never\n[protocol \"file\"]\nallow = always\n",
+    )
+    .unwrap();
+    // Older already-resumed runs can still contain a carried record. Check
+    // that guard too, including a different step/attempt on the current run.
+    for stale in ["none", "ancestor", "attempt", "step", "legacy"] {
+        let job = "task_pr_pipeline";
+        let fx = Fixture::new_for_job(job);
+        let repo = fx._root.path().join("repo");
+        git(&repo, &["config", "user.name", "fixture"]);
+        git(&repo, &["config", "user.email", "fixture@example.test"]);
+        std::fs::write(repo.join("repair.rs"), "// candidate\n").unwrap();
+        git(&repo, &["add", "repair.rs"]);
+        git(&repo, &["commit", "-q", "-m", "candidate"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+        let origin = fx._root.path().join("origin.git");
+        git(&repo, &["init", "--bare", "-q", origin.to_str().unwrap()]);
+        git(
+            &repo,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        let task = fx.task();
+        let source = fx
+            .located(fx.local.clone())
+            .insert_job_run(job, 1, Utc::now(), Some(json!({"task_ids": [task]})), None)
+            .unwrap();
+        fx.bind(&task, &source.run_id);
+        let mut checkpoint = PipelineState::new(
+            source.run_id.clone(),
+            job.into(),
+            source.input.clone().unwrap(),
+        );
+        let worktree = json!({
+            "workspace_path": repo, "job_run_id": source.run_id, "task_ids": [task],
+        });
+        checkpoint.record_step(0, JobRunState::Success, Some(worktree.clone()), None);
+        checkpoint.record_pipeline_output("worktree", worktree);
+        checkpoint.record_pipeline_output(
+            "review_gate_admit",
+            json!({"applies": true, "attempt_id": "first-attempt"}),
+        );
+        fx.jobs
+            .write_run_state(&source.run_id, &checkpoint)
+            .unwrap();
+        // A staged edit and a later unstaged edit must both be kept without
+        // changing the candidate's real index.
+        std::fs::write(repo.join("repair.rs"), "// first repair\n").unwrap();
+        git(&repo, &["add", "repair.rs"]);
+        let index = git(&repo, &["write-tree"]);
+        fx.jobs
+            .mark_job_run_running(
+                &source.run_id,
+                Utc::now() - chrono::Duration::minutes(10),
+                999_999,
+            )
+            .unwrap();
+        assert_eq!(
+            fx.runtime.show_job_run(&source.run_id).unwrap().state,
+            JobRunState::Interrupted,
+        );
+        let first_state = fx.jobs.read_run_state(&source.run_id).unwrap().unwrap();
+        let first = first_state.pipeline["interrupted_review"].clone();
+        assert_eq!(first["run_id"], source.run_id, "{stale}: {first}");
+        let first_ref = first["repair_ref"].as_str().unwrap();
+        let first_commit = first["repair_commit"].as_str().unwrap();
+        assert_eq!(
+            first_ref,
+            format!("refs/orbit/candidates/{task}/{}-review", source.run_id)
+        );
+        assert_eq!(
+            git(&repo, &["show", &format!("{first_ref}:repair.rs")]),
+            "// first repair\n"
+        );
+
+        let resumed = fx
+            .runtime
+            .submit_resume_run(&source.run_id, Some("operator"), None)
+            .expect("resume the interrupted owner from its checkpoints");
+        let mut seeded = fx.jobs.read_run_state(&resumed.run_id).unwrap().unwrap();
+        assert_eq!(seeded.step_output(0), first_state.step_output(0));
+        assert!(
+            seeded.pipeline.get("interrupted_review").is_none(),
+            "{stale}"
+        );
+        assert_eq!(
+            fx.jobs
+                .get_job_run(&resumed.run_id)
+                .unwrap()
+                .unwrap()
+                .retry_source_run_id,
+            Some(source.run_id.clone()),
+        );
+        if stale != "none" {
+            let mut inherited = first.clone();
+            match stale {
+                "attempt" => inherited["run_id"] = json!(resumed.run_id),
+                "step" => {
+                    inherited["run_id"] = json!(resumed.run_id);
+                    inherited["attempt_id"] = json!("second-attempt");
+                    inherited["step_id"] = json!("landing_review");
+                }
+                "legacy" => {
+                    inherited.as_object_mut().unwrap().remove("run_id");
+                }
+                _ => {}
+            }
+            seeded.pipeline["interrupted_review"] = inherited;
+        }
+        fx.jobs.write_run_state(&resumed.run_id, &seeded).unwrap();
+        // The live engine checkpoint merges keys into the resumed pipeline;
+        // an inherited record survives this write and must not suppress B.
+        fx.runtime
+            .checkpoint_step(
+                &resumed.run_id,
+                1,
+                "review_gate_admit",
+                &json!({"applies": true, "attempt_id": "second-attempt"}),
+                &Default::default(),
+            )
+            .unwrap();
+        std::fs::write(repo.join("repair.rs"), "// first repair\n// later repair\n").unwrap();
+        std::fs::write(repo.join("later.rs"), "// later untracked repair\n").unwrap();
+        let status = git(&repo, &["status", "--porcelain"]);
+        let cancel = fx.runtime.cancel_job_run(&resumed.run_id).unwrap();
+        assert_eq!(cancel.final_state, "cancelled", "{stale}: {cancel:?}");
+        let second_state = fx.jobs.read_run_state(&resumed.run_id).unwrap().unwrap();
+        let second = &second_state.pipeline["interrupted_review"];
+        assert_eq!(second["run_id"], resumed.run_id, "{stale}: {second}");
+        assert_eq!(second["step_id"], "review", "{stale}: {second}");
+        assert_eq!(second["attempt_id"], "second-attempt", "{stale}: {second}");
+        assert_eq!(second["carried"], true, "{stale}: {second}");
+        let second_ref = second["repair_ref"].as_str().unwrap();
+        assert_eq!(
+            second_ref,
+            format!("refs/orbit/candidates/{task}/{}-review", resumed.run_id)
+        );
+        assert_ne!(second_ref, first_ref, "{stale}");
+        assert_ne!(second["repair_commit"], first["repair_commit"], "{stale}");
+        assert_eq!(
+            git(&origin, &["show", &format!("{second_ref}:repair.rs")]),
+            "// first repair\n// later repair\n"
+        );
+        assert_eq!(
+            git(&origin, &["show", &format!("{second_ref}:later.rs")]),
+            "// later untracked repair\n"
+        );
+        assert_eq!(
+            git(&repo, &["rev-parse", &format!("{second_ref}^")]).trim(),
+            head
+        );
+        assert_eq!(git(&repo, &["rev-parse", first_ref]).trim(), first_commit);
+        assert_eq!(
+            fx.jobs.read_run_state(&source.run_id).unwrap().unwrap(),
+            first_state
+        );
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), head);
+        assert_eq!(git(&repo, &["branch", "--show-current"]).trim(), "main");
+        assert_eq!(git(&repo, &["write-tree"]), index);
+        assert_eq!(git(&repo, &["status", "--porcelain"]), status);
+        let comments = fx.runtime.get_task_comments(&task).unwrap();
+        for repair_ref in [first_ref, second_ref] {
+            assert_eq!(
+                comments
+                    .iter()
+                    .filter(|comment| comment.message.contains(repair_ref))
+                    .count(),
+                1,
+                "{stale}: {comments:?}"
+            );
+        }
+        // Repeated stop requests must not mint another repair or comment.
+        assert_eq!(
+            fx.runtime.cancel_job_run(&resumed.run_id).unwrap().outcome,
+            "already_terminal"
+        );
+        assert_eq!(
+            fx.jobs
+                .read_run_state(&resumed.run_id)
+                .unwrap()
+                .unwrap()
+                .pipeline["interrupted_review"],
+            *second
+        );
+        assert_eq!(fx.runtime.get_task_comments(&task).unwrap(), comments);
+        assert_eq!(
+            git(&repo, &["rev-parse", second_ref]).trim(),
+            second["repair_commit"].as_str().unwrap()
+        );
     }
 }
 
