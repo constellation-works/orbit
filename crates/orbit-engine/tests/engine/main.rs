@@ -29,6 +29,8 @@ mod handoff_landing;
 mod history_note;
 mod pr_landing;
 #[cfg(unix)]
+mod pre_push_probe;
+#[cfg(unix)]
 mod provider_capacity;
 #[cfg(unix)]
 mod provider_limit;

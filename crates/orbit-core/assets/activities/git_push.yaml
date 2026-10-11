@@ -6,6 +6,8 @@ spec:
   type: deterministic
   description: >
     Push the active worktree branch without overwriting remote-only commits.
+    The read-only pre-push remote probe retries supervisor timeouts up to
+    three attempts, waiting 250 ms then 500 ms between attempts.
     A rewritten branch requires the exact expected remote SHA from the durable
     pre-rewrite checkpoint. A push the forge refuses for a server-side reason
     is retried with exponential backoff; past that budget the run holds at
@@ -21,6 +23,31 @@ spec:
         type: string
       branch:
         type: string
+      # Budgets for the host Git reads before the private push operation.
+      git_timeout_ms:
+        type: integer
+        minimum: 1
+        maximum: 600000
+      git_timeouts:
+        type: object
+        additionalProperties: false
+        properties:
+          default:
+            type: integer
+            minimum: 1
+            maximum: 600000
+          fetch:
+            type: integer
+            minimum: 1
+            maximum: 600000
+          worktree_add:
+            type: integer
+            minimum: 1
+            maximum: 600000
+          rebase:
+            type: integer
+            minimum: 1
+            maximum: 600000
       base:
         type: string
       base_ref:
@@ -90,6 +117,12 @@ spec:
       push_attempts:
         type: integer
       push_waited_ms:
+        type: integer
+      remote_probe_attempts:
+        type: integer
+      remote_probe_elapsed_ms:
+        type: integer
+      remote_probe_waited_ms:
         type: integer
   action: git_push
   config: {}
