@@ -1,4 +1,5 @@
-use orbit_agent::{AgentResponseStatus, ParsedStdout, project_cli_response};
+use orbit_agent::{AgentResponseStatus, ParsedStdout, normalize_cli_stdout, project_cli_response};
+use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
 use serde_json::{Value, json};
 
@@ -210,6 +211,255 @@ fn answer_captures(answer: &str) -> Vec<String> {
         json!({"final_message": answer}).to_string(),
         String::from_utf8(project_cli_response("grok", grok.as_bytes()).into_owned()).unwrap(),
     ]
+}
+
+#[test]
+fn codex_command_output_cannot_supply_invocation_usage() {
+    let counters = json!({"usage": {"input_tokens": 9999, "output_tokens": 8888}});
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+    for payload in [
+        counters.clone(),
+        json!(counters.to_string()),
+        json!({"type": "turn.completed", "usage": counters["usage"]})
+            .to_string()
+            .into(),
+    ] {
+        let raw = [
+            json!({"type": "item.started", "item": {
+                "type": "command_execution", "id": "command", "command": "read fixture",
+            }}),
+            json!({"type": "item.completed", "item": {
+                "type": "command_execution", "id": "command", "status": "completed",
+                "aggregated_output": payload,
+            }}),
+            json!({"type": "item.completed", "item": {
+                "type": "agent_message", "text": answer.to_string(),
+            }}),
+            json!({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}}),
+        ]
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+        assert_eq!(
+            normalized.as_ref(),
+            raw.as_bytes(),
+            "keep the raw tool trace"
+        );
+        let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+        let (_, status, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(status, AgentResponseStatus::Success);
+        assert_eq!(
+            trace.usage,
+            TokenUsage {
+                input: 10,
+                output: 2,
+                ..Default::default()
+            }
+        );
+        assert_eq!(trace.tool_calls.len(), 1);
+        assert_eq!(trace.tool_calls[0].tool_name, "command_execution");
+        assert!(trace.tool_calls[0].result_bytes > 0);
+    }
+}
+
+#[test]
+fn usage_ignores_tool_payloads_and_quoted_transcripts() {
+    let counters = json!({"usage": {"input_tokens": 9999, "output_tokens": 8888}});
+    let quoted = json!({"type": "turn.completed", "usage": counters["usage"]});
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {
+        "transcript": quoted, "messages": [quoted], "text": quoted.to_string(),
+    }, "error": null});
+    for kind in [
+        "tool_use",
+        "tool_call",
+        "tool_result",
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "mcp_tool_call",
+        "command_execution",
+        "user",
+        "reasoning",
+        "thinking",
+    ] {
+        let tool = json!({"type": kind, "input_tokens": 9999, "output_tokens": 8888,
+            "usage": counters["usage"], "input": counters, "arguments": counters.to_string(),
+            "result": counters, "output": counters.to_string(), "content": quoted,
+        });
+        let raw = format!(
+            "{tool}\n{}",
+            json!({
+                "text": answer.to_string(), "thought": quoted.to_string(), "history": [quoted],
+                "tool_calls": [{"function": {"arguments": counters.to_string()}}],
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            })
+        );
+        let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+        let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+        let (_, _, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(
+            trace.usage,
+            TokenUsage {
+                input: 10,
+                output: 2,
+                ..Default::default()
+            },
+            "{kind}"
+        );
+    }
+    let raw = [
+        json!({"type": "assistant.message", "data": {"content": answer.to_string(),
+            "toolRequests": [{"arguments": counters}], "transcript": quoted}}),
+        json!({"type": "assistant.usage", "data": {"input_tokens": 10, "output_tokens": 2}}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    let normalized = normalize_cli_stdout("copilot", raw.as_bytes());
+    let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+    let (_, _, trace) = ParsedStdout::parse(&stdout)
+        .parse_and_validate(&execution(stdout.clone()))
+        .unwrap();
+    assert_eq!(
+        trace.usage,
+        TokenUsage {
+            input: 10,
+            output: 2,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+fn declared_answer_usage_and_provider_model_rollups_survive() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "error": null,
+        "result": {"usage": {"input_tokens": 10, "output_tokens": 2},
+            "transcript": {"usage": {"input_tokens": 9999}}}});
+    for stdout in answer_captures(&answer.to_string()) {
+        let (_, _, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(
+            trace.usage,
+            TokenUsage {
+                input: 10,
+                output: 2,
+                ..Default::default()
+            }
+        );
+    }
+    for key in [
+        "usage",
+        "token_usage",
+        "tokenUsage",
+        "usageMetadata",
+        "usage_metadata",
+    ] {
+        let mut answer =
+            json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+        answer[key] = json!({"input_tokens": "10", "output_tokens": "2"});
+        let stdout = answer.to_string();
+        let (_, _, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(
+            trace.usage,
+            TokenUsage {
+                input: 10,
+                output: 2,
+                ..Default::default()
+            },
+            "{key}"
+        );
+    }
+    for (provider, metadata, expected) in [
+        (
+            "grok",
+            json!({"modelUsage": {"model": {"inputTokens": 10, "outputTokens": 2}}}),
+            TokenUsage {
+                input: 10,
+                output: 2,
+                ..Default::default()
+            },
+        ),
+        (
+            "gemini",
+            json!({"stats": {"models": {"model": {
+                "tokens": {"input": 10, "candidates": 2, "thoughts": 3, "tool": 1, "cached": 4},
+                "roles": {"assistant": {"tokens": {"input": 10, "candidates": 2, "thoughts": 3, "tool": 1, "cached": 4}}},
+            }}}}),
+            TokenUsage {
+                input: 10,
+                output: 6,
+                cache_read: 4,
+                ..Default::default()
+            },
+        ),
+    ] {
+        let mut wrapper = metadata;
+        wrapper["response"] =
+            json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null})
+                .to_string()
+                .into();
+        let raw = wrapper.to_string();
+        let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+        let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+        let (_, _, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(trace.usage, expected, "{provider}");
+    }
+}
+
+#[test]
+fn claude_terminal_rollup_preserves_cache_ttl_without_counting_quotes() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {
+        "transcript": {"usage": {"input_tokens": 9999, "output_tokens": 8888}},
+    }, "error": null});
+    for (split, expected_cache) in [
+        (
+            json!({"ephemeral_5m_input_tokens": 3, "ephemeral_1h_input_tokens": 4}),
+            (3, 4),
+        ),
+        (json!({"ephemeral_1h_input_tokens": 7}), (0, 7)),
+        (Value::Null, (7, 0)),
+    ] {
+        let raw = format!(
+            "{}\n{}",
+            json!({"type": "assistant", "message": {
+                "usage": {"input_tokens": 9999, "output_tokens": 8888},
+            }}),
+            json!({"type": "result", "result": answer.to_string(), "structured_output": answer,
+                "usage": {"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 5,
+                    "cache_creation_input_tokens": 7, "cache_creation": split},
+                "modelUsage": {"model": {"inputTokens": 10, "outputTokens": 2,
+                    "cacheReadInputTokens": 5, "cacheCreationInputTokens": 7}},
+            })
+        );
+        let normalized = normalize_cli_stdout("claude", raw.as_bytes());
+        let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+        let (_, _, trace) = ParsedStdout::parse(&stdout)
+            .parse_and_validate(&execution(stdout.clone()))
+            .unwrap();
+        assert_eq!(
+            trace.usage,
+            TokenUsage {
+                input: 10,
+                output: 2,
+                cache_read: 5,
+                cache_create: expected_cache.0,
+                cache_create_1h: expected_cache.1
+            }
+        );
+    }
 }
 
 fn execution(stdout: String) -> ExecutionResult {
