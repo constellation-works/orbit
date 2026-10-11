@@ -319,12 +319,27 @@ impl BaselineCheck {
         &self,
         run: &'run RequiredCommandRun,
     ) -> Option<&'run BTreeSet<String>> {
-        let base = self.result.as_ref().ok()?;
-        (self.reproduces(run)
+        (run.infrastructure_failure.is_none()
             && !run.timed_out
-            && !run.failures.is_empty()
-            && run.failures.is_subset(&base.failures))
+            && self.fails_all(Some(run.exit_code), &run.failures))
         .then_some(&run.failures)
+    }
+
+    /// The base half of [`Self::known_red`], shared with the owner's check of
+    /// a claimed leaf's known-red report [ORB-15427]: a comparable base run
+    /// that failed without timing out, with `exit_code` when one is given,
+    /// and names every one of `failures`, of which there is at least one.
+    /// `exit_code` is `None` for a base run handed only the failing tests,
+    /// which ran part of the selection.
+    pub(super) fn fails_all(&self, exit_code: Option<i32>, failures: &BTreeSet<String>) -> bool {
+        self.not_comparable.is_none()
+            && self.result.as_ref().is_ok_and(|base| {
+                !base.passed
+                    && !base.timed_out
+                    && exit_code.is_none_or(|code| code == base.exit_code)
+                    && !failures.is_empty()
+                    && failures.is_subset(&base.failures)
+            })
     }
 
     /// `passed`, `failed`, `not_comparable` or `inconclusive`.

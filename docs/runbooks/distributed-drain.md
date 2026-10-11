@@ -130,7 +130,9 @@ passed verdict
 travels in the handoff, and the owner checks the certificate against its own
 copy before it accepts, including the captured owner check list. The owner also
 verifies exact-run and exact-head validation logs using its own required
-commands; a command-list mismatch fails closed. A follower that cannot resolve
+commands; a command-list mismatch fails closed. A log reporting known red is
+accepted only after the owner's own run of a base in its captured base
+branch's history fails every test it names. A follower that cannot resolve
 or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
 before-PR review on is refused (`before_pr_unsupported`).

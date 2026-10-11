@@ -133,6 +133,8 @@ impl OrbitRuntime {
             // Acceptance observed the review's base and repository; the store
             // rechecks the review evidence the handoff pinned without them.
             review: None,
+            // Acceptance ran the known-red bases; landing rechecks the logs.
+            known_red: Vec::new(),
         })
     }
 }

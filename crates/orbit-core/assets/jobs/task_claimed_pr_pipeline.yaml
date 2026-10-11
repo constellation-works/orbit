@@ -367,6 +367,9 @@ spec:
         reviewed_head_sha: "{{ steps.review_gate_settle.output.reviewed_head_sha }}"
         reviewed_base_sha: "{{ steps.review_gate_settle.output.reviewed_base_sha }}"
         review_fixes: "{{ steps.review_gate_settle.output.review_fixes }}"
+        # [ORB-15427] Its `known_red` names required validation that failed
+        # only with tests the base fails too, for the PR body.
+        claim_validation: "{{ steps.validate.output }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
         # [ORB-15308] Its `prior_pull_request` is the one the earlier claim

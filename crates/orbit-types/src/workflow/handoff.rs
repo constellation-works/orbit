@@ -1,6 +1,8 @@
 //! Exact delivery evidence and owner completion authority for distributed handoffs.
 //! These records execute no merge; a before-PR review they carry is evidence
 //! the owner verifies, never authority on its own.
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -164,6 +166,27 @@ pub struct HandoffValidationLog {
     pub command: String,
     pub exit_code: i32,
     pub output: String,
+    /// [ORB-15427] Set on a failed command whose failing tests the leaf's
+    /// own base run fails too. The owner accepts a non-zero log only with
+    /// this report, and only after its own run of the base shares every
+    /// failure it names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_red: Option<HandoffKnownRed>,
+}
+
+/// A claimed leaf's report that a required command failed only with tests
+/// its base fails too [ORB-15427]. It is the leaf's claim, never proof: the
+/// owner reruns the command on this base itself before it accepts the log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffKnownRed {
+    /// The base commit the leaf compared with: the handed-off candidate's base.
+    pub base_sha: String,
+    /// What the candidate run reported testing, which a base run is handed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<serde_json::Value>,
+    /// Every failure the candidate run's complete output names.
+    pub failures: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

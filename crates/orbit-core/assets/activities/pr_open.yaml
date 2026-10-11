@@ -58,6 +58,13 @@ spec:
           raw checks, and "Review validation limits" when an out-of-scope
           diagnostic failed. It is appended to the PR body, generated or
           supplied; empty adds nothing.
+      claim_validation:
+        type: [object, "null"]
+        description: >
+          A claimed leaf's `claim_validate` output. Its `known_red` records
+          for this run, base and head are listed under "Known-red
+          validation", as the owner's delivery lists the known-red history
+          notes it records on the task.
       candidate_resume:
         type: [object, "null"]
         description: >

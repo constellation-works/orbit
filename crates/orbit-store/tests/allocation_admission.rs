@@ -37,8 +37,8 @@ use orbit_store::contracts::{
     AdmissionRequest, AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract,
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimMutationResult, ClaimRun,
     ClaimWorkerUpdate, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation, HandoffObservation,
-    HandoffReviewObservation, HandoffReviewRefusal, JobRunStoreBackend, PullDestination,
-    TaskArtifactUpdateParams, TaskCreateParams,
+    HandoffReviewObservation, HandoffReviewRefusal, JobRunStoreBackend, KnownRedObservation,
+    PullDestination, TaskArtifactUpdateParams, TaskCreateParams,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceCheckoutBinding, task_registry_path,
@@ -72,6 +72,8 @@ use tempfile::TempDir;
 
 #[path = "allocation_admission/dependencies.rs"]
 mod dependencies;
+#[path = "allocation_admission/known_red.rs"]
+mod known_red;
 #[path = "allocation_admission/ordering.rs"]
 mod ordering;
 #[path = "allocation_admission/reservation_grants.rs"]
@@ -1351,6 +1353,8 @@ struct Delivery {
     handoff: TaskHandoff,
     /// The owner's `workflow.required_validation_commands`.
     required: Vec<String>,
+    /// The owner's own judgement of the handoff's known-red logs.
+    known_red: Vec<KnownRedObservation>,
 }
 
 impl Delivery {
@@ -1397,6 +1401,7 @@ impl Delivery {
             claim,
             handoff,
             required: required.iter().map(ToString::to_string).collect(),
+            known_red: Vec::new(),
         }
     }
 
@@ -1415,6 +1420,7 @@ impl Delivery {
                     reviewed_base_is_ancestor: true,
                     repository: REPOSITORY.into(),
                 }),
+            known_red: self.known_red.clone(),
         }
     }
 
@@ -1603,6 +1609,7 @@ fn handoff_with_logs(
                 command: (*command).into(),
                 exit_code: 0,
                 output: format!("{command} captured output"),
+                known_red: None,
             };
             TaskArtifact {
                 path: format!("{command}.json"),

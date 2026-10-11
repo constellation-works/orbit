@@ -109,7 +109,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 pr_opener_model.as_deref(),
             )
         });
-    let body = with_known_red(host, body, context, base_sha);
+    let body = with_known_red(host, body, context, base_sha, input);
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
@@ -329,19 +329,18 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
 }
 
-/// Append the settled review's sections — fixes [ORB-13989], raw validation
-/// evidence, and validation limits [ORB-14192] — to the PR body, generated or
-/// supplied, so the reviewer commit and what the review established are
-/// visible where it is published. Without any applicable sections the body
-/// is unchanged.
 /// [ORB-15375] `body` with the required validation this run found red on the
-/// base too: the delivered tasks' known-red history notes for this run, base
-/// and checked-out head, one per command (the latest).
+/// base too, for this run, base and checked-out head, one per command (the
+/// latest): the delivered tasks' known-red history notes, then the
+/// `known_red` records of a claimed leaf's validation output, handed in as
+/// `claim_validation` [ORB-15427], since a claimed leaf cannot write the
+/// owner's task history.
 fn with_known_red<H: RuntimeHost + ?Sized>(
     host: &H,
     body: String,
     context: &HandoffContext,
     base_sha: &str,
+    input: &Value,
 ) -> String {
     let head = match git_output(&context.workspace_path, &["rev-parse", "HEAD"]) {
         Ok(head) => head,
@@ -380,12 +379,36 @@ fn with_known_red<H: RuntimeHost + ?Sized>(
             records.insert(record.command.clone(), record);
         }
     }
+    let handed = input
+        .get("claim_validation")
+        .and_then(|validation| validation.get("known_red"))
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value::<Vec<KnownRedValidation>>)
+        .transpose()
+        .unwrap_or_else(|error| {
+            tracing::warn!("pr_open ignored a malformed known_red input: {error}");
+            None
+        })
+        .unwrap_or_default();
+    for record in handed.into_iter().filter(|record| {
+        record.run_id == context.batch_id
+            && record.base_sha == base_sha
+            && record.tested_head == head
+    }) {
+        records.insert(record.command.clone(), record);
+    }
     match render_known_red_section(&records.into_values().collect::<Vec<_>>()) {
         Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
         None => body,
     }
 }
 
+/// Append the settled review's sections — fixes [ORB-13989], raw validation
+/// evidence, and validation limits [ORB-14192] — to the PR body, generated or
+/// supplied, so the reviewer commit and what the review established are
+/// visible where it is published. Without any applicable sections the body
+/// is unchanged.
 fn with_review_fixes(body: String, input: &Value) -> String {
     match input_string_field(input, "review_fixes")
         .map(|section| section.trim().to_string())

@@ -85,6 +85,55 @@ impl Gate {
     }
 }
 
+/// A required command that fails with libtest's report of one test until
+/// told to pass, kept outside both checkouts so neither tree changes; each
+/// run, on either host, is counted [ORB-15427].
+struct RedCheck {
+    _dir: TempDir,
+    script: PathBuf,
+    passes: PathBuf,
+    runs: PathBuf,
+}
+
+impl RedCheck {
+    /// The failure identity its report names.
+    const FAILURE: &'static str = "test suite::broken";
+
+    fn new() -> Self {
+        let dir = TempDir::new().unwrap();
+        let check = Self {
+            script: dir.path().join("red-check.sh"),
+            passes: dir.path().join("passes"),
+            runs: dir.path().join("runs"),
+            _dir: dir,
+        };
+        std::fs::write(
+            &check.script,
+            format!(
+                "echo ran >> '{runs}'\nif [ -e '{passes}' ]; then echo 'test suite::broken ... ok'; \
+                 exit 0; fi\necho 'test suite::broken ... FAILED'\nexit 3\n",
+                runs = check.runs.display(),
+                passes = check.passes.display(),
+            ),
+        )
+        .unwrap();
+        check
+    }
+
+    fn command(&self) -> String {
+        format!("sh '{}'", self.script.display())
+    }
+
+    /// From now on the command passes, wherever it runs.
+    fn pass(&self) {
+        std::fs::write(&self.passes, "").unwrap();
+    }
+
+    fn runs(&self) -> usize {
+        std::fs::read_to_string(&self.runs).map_or(0, |runs| runs.lines().count())
+    }
+}
+
 struct CleanLeaf {
     pair: Pair,
     gate: Option<Gate>,
@@ -162,8 +211,32 @@ impl CleanLeaf {
         report: bool,
         gated: bool,
     ) -> Self {
+        Self::build_requiring(already_landed, completion, tags, report, gated, CHECK)
+    }
+
+    /// A tagged clean leaf whose owner and follower require `red`'s command
+    /// instead of [`CHECK`] [ORB-15427].
+    fn red(red: &RedCheck) -> Self {
+        Self::build_requiring(
+            false,
+            "done",
+            &[orbit_types::task::NO_DIFF_EXPECTED_TAG],
+            false,
+            false,
+            &red.command(),
+        )
+    }
+
+    fn build_requiring(
+        already_landed: bool,
+        completion: &str,
+        tags: &[&str],
+        report: bool,
+        gated: bool,
+        required: &str,
+    ) -> Self {
         let mut config = format!(
-            "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{CHECK}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
+            "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{required}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );
         let pair = Pair::with_owner_config(&config, &[None]);
         let gate = gated.then(|| Gate::new(&pair.follower_repo));
@@ -1339,6 +1412,98 @@ fn a_claimed_no_diff_handoff_without_a_deferral_replays_nothing() {
         );
         let settled = fixture.settle(&handoff).expect("the owner accepts it");
         assert_eq!(settled["status"], "review", "{job}: {settled}");
+        fixture.assert_no_blocked();
+    }
+}
+
+/// [ORB-15427] A claimed clean-base leaf whose required command fails only
+/// with tests its base fails too hands off a known-red log instead of
+/// releasing the claim, and the owner takes none of it on the leaf's word:
+/// settling the handoff runs the command on the base on the owner itself.
+/// When that run fails the same test, the handoff is accepted and the
+/// owner's task history names the test. When it passes, the settlement is
+/// refused as `known_red_unverified` and the task stays in progress with
+/// nothing recorded.
+#[test]
+fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
+    use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
+
+    if !isolated(
+        module_path!(),
+        "a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run",
+    ) {
+        return;
+    }
+    for owner_base_red in [true, false] {
+        let red = RedCheck::new();
+        let fixture = CleanLeaf::red(&red);
+        fixture.attach("automation-coverage.json", json!({"findings": []}));
+        let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
+        let owner = &fixture.pair.wire.owner;
+        let artifacts = RuntimeHost::get_task_artifacts(owner, &fixture.task).unwrap();
+        let logs = handoff
+            .validation
+            .iter()
+            .map(|reference| {
+                let artifact = artifacts
+                    .iter()
+                    .find(|artifact| artifact.path == reference.path)
+                    .unwrap();
+                serde_json::from_slice::<HandoffValidationLog>(&artifact.content).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert_eq!(logs[0].command, red.command());
+        assert_eq!(logs[0].exit_code, 3, "the log keeps the exit status");
+        let report = logs[0]
+            .known_red
+            .as_ref()
+            .expect("the leaf reports known red");
+        assert_eq!(report.base_sha, fixture.base);
+        assert_eq!(
+            report.failures,
+            BTreeSet::from([RedCheck::FAILURE.to_string()])
+        );
+
+        let leaf_runs = red.runs();
+        if !owner_base_red {
+            red.pass();
+        }
+        let settled = fixture.settle(&handoff);
+        assert!(
+            red.runs() > leaf_runs,
+            "owner_base_red={owner_base_red}: the owner ran the base itself"
+        );
+        let known_red = fixture.pair.owner_task(&fixture.task)["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["event"] == KNOWN_RED_VALIDATION_EVENT)
+            .map(|event| KnownRedValidation::from_text(event["note"].as_str().unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        if owner_base_red {
+            let settled = settled.expect("the owner's base run fails the reported test");
+            assert_eq!(settled["status"], "review", "{settled}");
+            assert_eq!(known_red.len(), 1, "{known_red:?}");
+            assert_eq!(known_red[0].command, red.command());
+            assert_eq!(known_red[0].base_sha, fixture.base);
+            assert_eq!(
+                known_red[0].failures.identities,
+                vec![RedCheck::FAILURE.to_string()]
+            );
+        } else {
+            let error = settled
+                .expect_err("the owner's base run passes the reported test")
+                .to_string();
+            assert!(
+                error.contains("known_red_unverified")
+                    && error.contains(&format!("base {} passes it", fixture.base)),
+                "{error}"
+            );
+            assert_eq!(fixture.pair.owner_status(&fixture.task), "in-progress");
+            assert!(known_red.is_empty(), "{known_red:?}");
+            assert!(owner.accepted_task_handoff(&handoff.claim_id).is_err());
+        }
         fixture.assert_no_blocked();
     }
 }

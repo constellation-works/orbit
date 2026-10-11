@@ -3,9 +3,12 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::handoff::{
-    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffValidationLog,
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffKnownRed, HandoffValidationLog,
 };
-use orbit_types::workflow::{BaselineRedHold, TRANSIENT_FAILURE_MARKER};
+use orbit_types::workflow::{
+    BaselineRedFailures, BaselineRedHold, KnownRedValidation, TRANSIENT_FAILURE_MARKER,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::context::{ClaimExecutionContext, RuntimeHost};
@@ -37,6 +40,14 @@ use super::observe::{claimed_base_sync, observe, observe_with, require_clean_can
 /// its log and the base's are attached to the owner's task, and a failure
 /// the base shares fails as a typed `baseline_red`, which the leaf's
 /// settlement turns into a held release rather than a failed claim.
+///
+/// [ORB-15427] Unless every test the candidate fails also fails on the base
+/// ([`BaselineCheck::known_red`](super::super::baseline::BaselineCheck::known_red)),
+/// as on the owner's own delivery path: the command's log then carries its
+/// exit status and a known-red report ([`HandoffKnownRed`]), the decision is
+/// `passed_with_known_red`, `known_red` names the tests for the pull request,
+/// and the next command runs. The owner accepts that log only after its own
+/// run of the base fails the same tests.
 ///
 /// An empty requirement list runs no command: the candidate is still observed
 /// and pinned, and the output records `skipped_no_required_commands` with no
@@ -108,16 +119,15 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
     // Publish them only after the whole suite has kept the candidate intact.
     require_clean_candidate(&workspace_path, &candidate)?;
     if pending {
+        let known_red = known_red_records(&context, &candidate, &results);
         let mut output = json!({
-            "decision": "passed",
+            "decision": decision(&known_red),
             "publication": "pending",
             "candidate": null,
             "validation": [],
-            "commands": results.iter().map(|(command, _)| command).collect::<Vec<_>>(),
-            "results": results
-                .iter()
-                .map(|(command, output)| json!({ "command": command, "output": output }))
-                .collect::<Vec<_>>(),
+            "commands": passed_commands(&results),
+            "known_red": known_red,
+            "results": results,
             "tested_head": candidate.candidate.commit,
             "validated_base": candidate.base.commit,
             "validation_env": validation_env,
@@ -130,12 +140,29 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         return Ok(output);
     }
     let references = attach_handoff_logs(host, &context, &candidate, &results)?;
-    passed_output(&candidate, &references, results, validation_env)
+    passed_output(&context, &candidate, &references, results, validation_env)
+}
+
+/// One required command's result on a claimed candidate: it passed, or it
+/// failed only with tests its base fails too, as `known_red` reports
+/// [ORB-15427]. A pre-publication output carries these as `results`, and the
+/// pin attaches them as they were.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ClaimedResult {
+    command: String,
+    output: String,
+    /// Absent from outputs recorded before known red applied to claims,
+    /// which carried only passed commands.
+    #[serde(default)]
+    exit_code: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_red: Option<HandoffKnownRed>,
 }
 
 /// Run `commands` on the observed candidate, in order, and return each
-/// command's output with the last run's validation environment. A failing
-/// command is refused through [`claim_failure`]. A passing one still must not
+/// command's result with the last run's validation environment. A failing
+/// command is judged by [`claim_failure`], which refuses it unless its
+/// failing tests are known red on the base. A passing one still must not
 /// have deferred a sandbox-confined path, and a command in `replays` must
 /// report executed tests. Shared by the ordinary route and clean-base NoDiff
 /// validation so neither can attach a passing log the other would refuse.
@@ -147,14 +174,25 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
     candidate: &HandoffCandidate,
     commands: &[String],
     replays: &[String],
-) -> Result<(Vec<(String, String)>, Value), OrbitError> {
+) -> Result<(Vec<ClaimedResult>, Value), OrbitError> {
     let mut results = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in commands.iter().enumerate() {
         let run = run_validation_command(host, workspace_path, command, None)?;
         validation_env = run.environment_record();
-        if !run.passed {
-            return Err(claim_failure(
+        let commit = &candidate.candidate.commit;
+        let known_red = if run.passed {
+            if let Some(failure) = run.deferral_failure(commit).or_else(|| {
+                replays
+                    .contains(&run.command)
+                    .then(|| run.replay_failure(commit))
+                    .flatten()
+            }) {
+                return Err(failure);
+            }
+            None
+        } else {
+            Some(claim_failure(
                 host,
                 context,
                 workspace_path,
@@ -162,19 +200,15 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
                 candidate,
                 index,
                 &run,
-            ));
-        }
-        let commit = &candidate.candidate.commit;
-        if let Some(failure) = run.deferral_failure(commit).or_else(|| {
-            replays
-                .contains(&run.command)
-                .then(|| run.replay_failure(commit))
-                .flatten()
-        }) {
-            return Err(failure);
-        }
+            )?)
+        };
         require_clean_candidate(workspace_path, candidate)?;
-        results.push((run.command, run.output));
+        results.push(ClaimedResult {
+            command: run.command,
+            output: run.output,
+            exit_code: run.exit_code,
+            known_red,
+        });
     }
     Ok((results, validation_env))
 }
@@ -210,26 +244,18 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
             candidate.base.commit
         )));
     }
-    let results = prevalidated
+    let results: Vec<ClaimedResult> = prevalidated
         .get("results")
-        .and_then(Value::as_array)
-        .map(|results| {
-            results
-                .iter()
-                .map(|result| {
-                    Some((
-                        result.get("command")?.as_str()?.to_string(),
-                        result.get("output")?.as_str()?.to_string(),
-                    ))
-                })
-                .collect::<Option<Vec<_>>>()
-        })
-        .unwrap_or_default()
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "prevalidated results must each carry a command and its output".to_string(),
-            )
-        })?;
+        .cloned()
+        .filter(|results| !results.is_null())
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "prevalidated results must each carry a command and its output: {error}"
+            ))
+        })?
+        .unwrap_or_default();
     let replayed = prevalidated
         .get("replayed")
         .and_then(Value::as_array)
@@ -244,7 +270,7 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
     let expected = with_replays(context.required_commands.clone(), &replayed);
     if results
         .iter()
-        .map(|(command, _)| command.as_str())
+        .map(|result| result.command.as_str())
         .ne(expected.iter().map(|command| command.trim()))
     {
         return Err(refused(
@@ -252,23 +278,35 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
              deferrals they replay; rerun validation",
         ));
     }
+    // Each result passed, or failed known red on the base the published
+    // candidate names [ORB-15427].
+    if results.iter().any(|result| match &result.known_red {
+        None => result.exit_code != 0,
+        Some(known) => result.exit_code == 0 || known.base_sha != candidate.base.commit,
+    }) {
+        return Err(refused(
+            "a prevalidated result is neither a pass nor known red on the published \
+             candidate's base; rerun validation",
+        ));
+    }
     let references = attach_handoff_logs(host, context, &candidate, &results)?;
     let validation_env = prevalidated
         .get("validation_env")
         .cloned()
         .unwrap_or(Value::Null);
-    passed_output(&candidate, &references, results, validation_env)
+    passed_output(context, &candidate, &references, results, validation_env)
 }
 
-/// Attach one typed log per passed command to the owner's task.
+/// Attach one typed log per command to the owner's task: a passed command's,
+/// or a known-red command's with its exit status and report [ORB-15427].
 pub(super) fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     candidate: &HandoffCandidate,
-    results: &[(String, String)],
+    results: &[ClaimedResult],
 ) -> Result<Vec<HandoffArtifactRef>, OrbitError> {
     let mut references = Vec::new();
-    for (index, (command, output)) in results.iter().enumerate() {
+    for (index, result) in results.iter().enumerate() {
         let log = HandoffValidationLog {
             schema_version: 1,
             workspace_id: context.workspace_id.clone(),
@@ -278,9 +316,10 @@ pub(super) fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
             run_id: context.run_id.clone(),
             candidate: candidate.clone(),
             tested_head: candidate.candidate.commit.clone(),
-            command: command.clone(),
-            exit_code: 0,
-            output: output.clone(),
+            command: result.command.clone(),
+            exit_code: result.exit_code,
+            output: result.output.clone(),
+            known_red: result.known_red.clone(),
         };
         let content = serde_json::to_vec(&log)
             .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
@@ -295,19 +334,22 @@ pub(super) fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
 }
 
 pub(super) fn passed_output(
+    context: &ClaimExecutionContext,
     candidate: &HandoffCandidate,
     references: &[HandoffArtifactRef],
-    results: Vec<(String, String)>,
+    results: Vec<ClaimedResult>,
     validation_env: Value,
 ) -> Result<Value, OrbitError> {
     let skipped = results.is_empty();
+    let known_red = known_red_records(context, candidate, &results);
     let mut output = json!({
-        "decision": "passed",
+        "decision": decision(&known_red),
         "candidate": serde_json::to_value(candidate)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
         "validation": serde_json::to_value(references)
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
-        "commands": results.into_iter().map(|(command, _)| command).collect::<Vec<_>>(),
+        "commands": passed_commands(&results),
+        "known_red": known_red,
         "tested_head": candidate.candidate.commit,
         "validated_base": candidate.base.commit,
         "validation_env": validation_env,
@@ -320,15 +362,53 @@ pub(super) fn passed_output(
     Ok(output)
 }
 
-/// The refusal for a claimed command that did not pass. A failure that is not
-/// a missing tool is rerun on the candidate's base, and both logs are
-/// attached to the owner's task before the step fails; a failure the base
-/// shares is typed `baseline_red`, and one that still could not reach the
-/// network after its retries is typed `transient`.
-///
-/// Known red [ORB-15375] does not apply here: the owner accepts only zero-exit
-/// claim validation logs, so a red base holds a claimed leaf even when every
-/// failing test fails on the base too.
+/// The commands that passed outright.
+fn passed_commands(results: &[ClaimedResult]) -> Vec<&str> {
+    results
+        .iter()
+        .filter(|result| result.known_red.is_none())
+        .map(|result| result.command.as_str())
+        .collect()
+}
+
+/// The known-red record of each known-red result, for the pull request
+/// `pr_open` publishes [ORB-15427].
+fn known_red_records(
+    context: &ClaimExecutionContext,
+    candidate: &HandoffCandidate,
+    results: &[ClaimedResult],
+) -> Vec<KnownRedValidation> {
+    results
+        .iter()
+        .filter_map(|result| {
+            let known = result.known_red.as_ref()?;
+            Some(KnownRedValidation {
+                command: result.command.clone(),
+                base_sha: known.base_sha.clone(),
+                tested_head: candidate.candidate.commit.clone(),
+                run_id: context.run_id.clone(),
+                failures: BaselineRedFailures::new(known.failures.iter().cloned(), ""),
+            })
+        })
+        .collect()
+}
+
+/// `passed`, or `passed_with_known_red` when a command was known red.
+fn decision(known_red: &[KnownRedValidation]) -> &'static str {
+    if known_red.is_empty() {
+        "passed"
+    } else {
+        "passed_with_known_red"
+    }
+}
+
+/// Judge a claimed command that did not pass. A failure whose failing tests
+/// all fail on the candidate's base is known red [ORB-15427]: the report for
+/// its handoff log is returned and validation goes on. Any other failure is
+/// refused. One that is not a missing tool is rerun on the candidate's base,
+/// and both logs are attached to the owner's task before the step fails; a
+/// failure the base shares is typed `baseline_red`, and one that still could
+/// not reach the network after its retries is typed `transient`.
 fn claim_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
@@ -337,10 +417,10 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     candidate: &HandoffCandidate,
     index: usize,
     run: &RequiredCommandRun,
-) -> OrbitError {
+) -> Result<HandoffKnownRed, OrbitError> {
     let commit = &candidate.candidate.commit;
     if run.missing_tool.is_some() || run.infrastructure_failure.is_some() {
-        return run.failure(commit);
+        return Err(run.failure(commit));
     }
     let check = compare_with_base(
         host,
@@ -349,6 +429,13 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         &run.command,
         run.selection(),
     );
+    if let Some(failures) = check.known_red(run) {
+        return Ok(HandoffKnownRed {
+            base_sha: check.base_sha.clone(),
+            selection: run.selection().cloned(),
+            failures: failures.clone(),
+        });
+    }
     let red = check.reproduces(run);
     let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
     let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
@@ -403,19 +490,19 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             selection: run.selection().cloned(),
             failures: check.failures(),
         };
-        return baseline_red_failure(&hold, run, commit, &evidence);
+        return Err(baseline_red_failure(&hold, run, commit, &evidence));
     }
     // Still unable to reach the network after its retries, the command said
     // nothing about the candidate [ORB-14257].
     if let Some(network) = &run.network_evidence {
-        return OrbitError::Execution(format!(
+        return Err(OrbitError::Execution(format!(
             "{TRANSIENT_FAILURE_MARKER} required validation '{}' could not reach the network on \
              candidate {commit} after {} retries ({network}); the candidate was not judged. \
              {evidence}",
             run.command, run.network_retries
-        ));
+        )));
     }
-    candidate_failure(run, commit, Some(&check), &evidence)
+    Err(candidate_failure(run, commit, Some(&check), &evidence))
 }
 
 /// The base ref this claim synchronized onto, as the owner names it.

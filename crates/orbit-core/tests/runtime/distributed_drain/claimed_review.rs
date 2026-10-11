@@ -316,6 +316,7 @@ impl ReviewedLeaf {
                 reviewed_base_is_ancestor: true,
                 repository: REPOSITORY.into(),
             }),
+            known_red: vec![],
         };
         self.pair
             .wire

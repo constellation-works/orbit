@@ -24,9 +24,10 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::baseline::{
-    FAILING_TESTS_KEY, cached_base_check, compare_with_base_until, hold_failures,
-    run_validation_command_until,
+    FAILING_TESTS_KEY, cached_base_check, compare_with_base, compare_with_base_until,
+    hold_failures, run_validation_command_until,
 };
+use super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
 use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
 
 /// The share of a [`ReplayBudget`] reserved for the base replay: one part in
@@ -408,6 +409,143 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             failures: on_candidate.into_iter().collect(),
         },
     }))
+}
+
+/// [ORB-15427] A claimed leaf's report that `command` failed on its
+/// candidate, with `exit_code`, only with `failures`, every one of which
+/// also fails on `base_sha`, and the owner's own base it must stand on.
+#[derive(Debug, Clone, Copy)]
+pub struct ClaimedKnownRed<'a> {
+    /// The base branch this owner captured for the claim's admission.
+    pub base_branch: &'a str,
+    /// `remote` to read that branch as `origin/<base_branch>` after a fetch,
+    /// `local` for this checkout's own branch.
+    pub base_sync: &'a str,
+    /// The base the leaf compared with: the handed-off candidate's base.
+    pub base_sha: &'a str,
+    /// The owner-required command the log reports.
+    pub command: &'a str,
+    /// What the candidate run reported testing.
+    pub selection: Option<&'a Value>,
+    /// The candidate run's exit status.
+    pub exit_code: i32,
+    /// Every failure the candidate run named.
+    pub failures: &'a BTreeSet<String>,
+}
+
+/// [ORB-15427] The owner's check of a claimed leaf's known-red `report`.
+/// Returns the reported failures when this host's own run of the base fails
+/// them all, or why it could not establish that.
+///
+/// The leaf's base run is never taken on trust, and neither is its choice of
+/// base: the base must be in the history of this owner's own base branch,
+/// or its failures say nothing about the integration branch, and nothing
+/// runs. Then this runs on the owner, through the owner's base result cache.
+/// A comparable full-selection result already cached for
+/// `(base, command, selection)` is read without running anything.
+/// Otherwise, when the leaf reported a selection and every failure is a
+/// test, the base runs only those tests, as a reviewer's base claim does;
+/// otherwise it runs the whole selection. The known-red rule the owner's own
+/// validation applies judges the result; a whole run must also fail with the
+/// candidate's exit status.
+///
+/// Only call this with a command the owner itself requires: it runs on the
+/// owner's host, outside any agent sandbox.
+pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    report: &ClaimedKnownRed<'_>,
+) -> Result<BTreeSet<String>, String> {
+    let ClaimedKnownRed {
+        base_branch,
+        base_sync,
+        base_sha,
+        command,
+        selection,
+        exit_code,
+        failures,
+    } = *report;
+    if failures.is_empty() {
+        return Err("the report names no failure to compare".to_string());
+    }
+    on_owner_base(workspace_path, base_branch, base_sync, base_sha)?;
+    let cached = cached_base_check(workspace_path, base_sha, command, selection)
+        .filter(|check| check.not_comparable.is_none() && check.result.is_ok());
+    let (check, whole) = match (cached, failing_tests_selection(selection, failures, &[])) {
+        (Some(check), _) => (check, true),
+        (None, Some(narrowed)) => (
+            compare_with_base(host, workspace_path, base_sha, command, Some(&narrowed)),
+            false,
+        ),
+        (None, None) => (
+            compare_with_base(host, workspace_path, base_sha, command, selection),
+            true,
+        ),
+    };
+    if check.fails_all(whole.then_some(exit_code), failures) {
+        return Ok(failures.clone());
+    }
+    let ran = if whole { "it" } else { "the failing tests" };
+    Err(match &check.result {
+        Err(reason) => format!("base {base_sha} could not be judged: {reason}"),
+        Ok(_) if check.not_comparable.is_some() => format!(
+            "the base run of {ran} is not comparable with the candidate's: {}",
+            check.not_comparable.as_deref().unwrap_or_default()
+        ),
+        Ok(base) if base.passed => format!("base {base_sha} passes {ran}"),
+        Ok(base) if base.timed_out => format!("the base run of {ran} timed out"),
+        Ok(base) if whole && base.exit_code != exit_code => format!(
+            "base {base_sha} fails with exit {} where the candidate failed with exit {exit_code}",
+            base.exit_code
+        ),
+        Ok(base) => format!(
+            "base {base_sha} does not fail {}",
+            failures
+                .difference(&base.failures)
+                .map(|failure| format!("`{failure}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
+}
+
+/// `Ok` when `base_sha` is in the history of this owner's `base_branch`, read
+/// as `base_sync` names it [ORB-15427]; otherwise why not. A follower names
+/// the base it synchronized onto, and the owner only checked that the
+/// candidate descends from it, so a commit off the integration branch would
+/// make the candidate's own regressions look like the base's.
+fn on_owner_base(
+    workspace_path: &Path,
+    base_branch: &str,
+    base_sync: &str,
+    base_sha: &str,
+) -> Result<(), String> {
+    let sync = match base_sync {
+        "remote" => BaseSyncMode::Remote,
+        "local" => BaseSyncMode::Local,
+        other => return Err(format!("base sync '{other}' names no owner base")),
+    };
+    let tip = resolve_worktree_start_point(workspace_path, base_branch, sync)
+        .map_err(|error| format!("this owner could not read its base '{base_branch}': {error}"))?;
+    match git_command_success(
+        workspace_path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            base_sha,
+            &tip,
+        ],
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "base {base_sha} is not in the history of this owner's {tip}, so its failures are \
+             not the integration branch's"
+        )),
+        Err(error) => Err(format!(
+            "this owner could not place base {base_sha} in {tip}: {error}"
+        )),
+    }
 }
 
 /// `selection` with [`FAILING_TESTS_KEY`] naming the tests to replay on the
