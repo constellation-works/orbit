@@ -3153,6 +3153,23 @@ function takeTaskActionNotice() {
   return notice;
 }
 
+// A pinned detail kept as an open draft is reused as-is, so only its readiness
+// list is replaced when the drain state behind it changes.
+function refreshPinnedDraftReadiness(wrap, task, context) {
+  const current = wrap.querySelector(".readiness-list");
+  if (!current) return;
+  const drain = taskDrainState(task, context);
+  if (!drain) return;
+  const signature = taskDrainSignature(drain);
+  if (current.dataset.drainSignature === signature) return;
+  const replacement = buildReadinessBlock(readinessOf(task), drain, task.workspace_id);
+  replacement.dataset.drainSignature = signature;
+  const parent = current.parentNode;
+  if (!parent) return;
+  parent.insertBefore(replacement, current);
+  parent.removeChild(current);
+}
+
 // The pinned global-resolver result: a task outside the active filter, shown
 // above the list with its own dismiss control.
 function buildPinnedTask(ptask, context) {
@@ -3169,7 +3186,10 @@ function buildPinnedTask(ptask, context) {
   ]);
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
 
-  const detail = buildTaskDetail(ptask, context, taskDrainState(ptask, context));
+  const drain = taskDrainState(ptask, context);
+  const detail = buildTaskDetail(ptask, context, drain);
+  const readiness = detail.querySelector(".readiness-list");
+  if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
   const dismiss = el("button", { class: "action", text: "Close" });
   dismiss.title = "Dismiss global task detail";
   dismiss.addEventListener("click", (ev) => {
@@ -3188,7 +3208,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${detailFeedbackSignature(ptask.id)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}`;
   return wrap;
 }
 
@@ -3594,7 +3614,14 @@ export function renderTasks(tasks, context) {
   // Render pinned external task detail (for statuses outside active filter) at top.
   if (pinnedExternalTask && pinnedExternalTask.task) {
     const ptask = pinnedExternalTask.task;
-    nodes.push(drafts.get(`pinned-${ptask.id}`) || buildPinnedTask(ptask, context));
+    const pinnedKey = `pinned-${ptask.id}`;
+    const draft = drafts.get(pinnedKey);
+    if (draft) {
+      refreshPinnedDraftReadiness(draft, ptask, context);
+      nodes.push(draft);
+    } else {
+      nodes.push(buildPinnedTask(ptask, context));
+    }
   }
 
   const filtered = filterTasks(tasks, context);
