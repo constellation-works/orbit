@@ -40,7 +40,7 @@ use super::dispatch_admission::isolated;
 /// [ORB-14822] The host commits a recovery's repair before the retry.
 mod repair_commit;
 
-const ORIGINAL_FAILURE: &str = "required validation is red on the candidate";
+const ORIGINAL_FAILURE: &str = "required validation is red on the candidate (exit 3; failing: actual_failure). Candidate log: `validation/run-observed/0.json`; base log: `validation/run-observed/0.baseline.json`. Base verdict: passed";
 const RETRY_FAILURE: &str = "required validation is still red";
 const TASK: &str = "ORB-1";
 
@@ -684,6 +684,13 @@ fn the_written_decision_controls_the_single_retry_whatever_the_final_response_sa
     assert_eq!(declined.deliveries, 1, "a declined recovery is not retried");
     assert!(declined.post_recovery.is_empty());
     assert!(declined.failed_with_original(), "{:?}", declined.result);
+    assert!(
+        declined.envelopes[0]["input"]["error_message"]
+            .as_str()
+            .unwrap()
+            .contains(ORIGINAL_FAILURE),
+        "recovery must retain candidate and base artifact references"
+    );
     let input = &declined.envelopes[0]["input"]["recovery_decision"];
     assert_eq!(input["schema_version"], 1);
     assert_eq!(input["run_id"], "run-declined");

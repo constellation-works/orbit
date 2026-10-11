@@ -163,7 +163,20 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         let red = baseline
             .as_ref()
             .is_some_and(|check| check.reproduces(&run));
-        let coverage_failure = run.coverage_failure(&candidate, replays.contains(&run.command));
+        let evidence = format!(
+            "Candidate log: `{log_path}`; base log: {}.",
+            baseline_path
+                .as_ref()
+                .map_or_else(|| "not run".to_string(), |path| format!("`{path}`"))
+        );
+        let coverage_failure = run.coverage_failure_with_evidence(
+            &candidate,
+            replays.contains(&run.command),
+            baseline
+                .as_ref()
+                .map_or("not checked", BaselineCheck::decision),
+            &evidence,
+        );
         let known = baseline
             .as_ref()
             .filter(|_| coverage_failure.is_none())
@@ -234,12 +247,12 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             // repairs from, so it is attached before the step fails.
             attach_logs(host, &task_ids, &run_id, &logs)?;
             if run.missing_tool.is_some() || run.infrastructure_failure.is_some() {
-                return Err(run.failure(&candidate));
+                return Err(run.failure(
+                    &candidate,
+                    "not checked: candidate environment failed",
+                    &evidence,
+                ));
             }
-            let evidence = match &baseline_path {
-                Some(path) => format!("Candidate log: `{log_path}`; base log: `{path}`."),
-                None => format!("Candidate log: `{log_path}`."),
-            };
             if let Some(check) = baseline.as_ref().filter(|_| red) {
                 let hold = BaselineRedHold {
                     base_ref: input_string_field(input, "base_ref").unwrap_or_default(),

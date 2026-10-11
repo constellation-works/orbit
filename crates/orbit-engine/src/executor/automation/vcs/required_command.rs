@@ -60,8 +60,8 @@ use orbit_exec::{
     run_process_supervised,
 };
 use orbit_types::workflow::{
-    HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand, SEATBELT_DEFERRAL_PREFIX,
-    VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
+    BaselineRedFailures, HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
+    SEATBELT_DEFERRAL_PREFIX, VALIDATION_ENVIRONMENT_MARKER, judge_host_test_output,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,19 @@ pub(super) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
 /// is reader evidence, not a build log archive, so a runaway command cannot
 /// balloon the task bundle. See [`capture`].
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 256 * 1024;
+/// Diagnostic messages carry summaries and artifact references, never logs.
+pub(super) const MAX_VALIDATION_MESSAGE_BYTES: usize = 16 * 1024;
+
+/// Bound a diagnostic field on a UTF-8 boundary, leaving room for evidence.
+pub(super) fn bounded_validation_text(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    format!(
+        "{}…",
+        &text[..floor_char_boundary(text, limit.saturating_sub(3))]
+    )
+}
 
 /// The line a failed run's captured output ends with, naming the `PATH` it
 /// ran under so a missing tool can be diagnosed.
@@ -176,37 +189,78 @@ pub(crate) struct MissingTool {
 
 impl RequiredCommandRun {
     /// The refusal both validation steps report for a command that did not
-    /// pass, carrying its captured output. A missing tool is reported as the
+    /// pass, carrying a bounded summary. A missing tool is reported as the
     /// validation environment's failure, with the marker, PATH and tool.
-    pub(super) fn failure(&self, candidate: &str) -> OrbitError {
+    pub(super) fn failure(&self, candidate: &str, baseline: &str, logs: &str) -> OrbitError {
+        let summary = self.failure_summary(candidate, baseline, logs);
         if let Some(cause) = &self.infrastructure_failure {
             return OrbitError::Execution(format!(
-                "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' was stopped on candidate \
-                 {candidate}: {cause}. The candidate was not judged.\n{}",
-                self.command, self.output
+                "{VALIDATION_ENVIRONMENT_MARKER} {summary} Stopped: {}. The candidate was not judged.",
+                bounded_validation_text(cause, 1024),
             ));
         }
         let Some(missing) = &self.missing_tool else {
             return OrbitError::Execution(format!(
-                "required validation '{}' did not pass on candidate {candidate}: {}",
-                self.command, self.output
+                "{summary} The required validation did not pass."
             ));
         };
         OrbitError::Execution(format!(
-            "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' could not run on candidate \
-             {candidate}: {} the validation environment (source: {}, PATH={}). The candidate was \
+            "{VALIDATION_ENVIRONMENT_MARKER} {summary} {} the validation environment (source: {}, \
+             Required validation PATH={}). The candidate was \
              not judged: make the tool available to the owner's login shell or set \
-             `workflow.validation_env.path`, then resume the run. Evidence: {}\n{}",
-            self.command,
+             `workflow.validation_env.path`, then resume the run. Evidence: {}",
             missing.tool.as_deref().map_or_else(
                 || "a tool it runs is missing from".to_string(),
-                |tool| format!("required tool `{tool}` is missing from")
+                |tool| format!(
+                    "required tool `{}` is missing from",
+                    bounded_validation_text(tool, 256)
+                )
             ),
             self.environment.source.as_str(),
-            self.environment.path().unwrap_or("<unset>"),
-            missing.evidence,
-            self.output
+            bounded_validation_text(self.environment.path().unwrap_or("<unset>"), 1024),
+            bounded_validation_text(&missing.evidence, 1024),
         ))
+    }
+
+    /// Mandatory evidence first, with independently bounded fields so even
+    /// oversized commands and test identities cannot displace the log paths.
+    pub(super) fn failure_summary(&self, candidate: &str, baseline: &str, logs: &str) -> String {
+        let failures = BaselineRedFailures::new(self.failures.iter().cloned(), "")
+            .describe()
+            .unwrap_or_else(|| "no failing test named".to_string());
+        format!(
+            "required validation '{}' on candidate {} (exit {}{}; {}). {} Base verdict: {}",
+            bounded_validation_text(&self.command, 4096),
+            bounded_validation_text(candidate, 128),
+            self.exit_code,
+            if self.timed_out { ", timed out" } else { "" },
+            failures,
+            bounded_validation_text(logs, 2048),
+            bounded_validation_text(baseline, 2048),
+        )
+    }
+
+    /// Coverage refusals use the same evidence as nonzero exits.
+    pub(super) fn coverage_failure_with_evidence(
+        &self,
+        candidate: &str,
+        replay: bool,
+        baseline: &str,
+        logs: &str,
+    ) -> Option<OrbitError> {
+        self.coverage_failure(candidate, replay).map(|error| {
+            let message = format!(
+                "{} {}",
+                self.failure_summary(candidate, baseline, logs),
+                bounded_validation_text(&error.to_string(), 2048)
+            );
+            // Preserve policy refusals and the environment marker for
+            // recovery and settlement.
+            match error {
+                OrbitError::PolicyDenied(_) => OrbitError::PolicyDenied(message),
+                _ => OrbitError::Execution(message),
+            }
+        })
     }
 
     /// The refusal for a command that exited zero but printed a deferral

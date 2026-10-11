@@ -345,7 +345,12 @@ spec:
        A failed `validate` step (`candidate_validate`, or `claim_validate`
        in a claimed leaf) means a command in
        `workflow.required_validation_commands` did not pass on the committed
-       candidate; the error carries its output and the task holds its log.
+       candidate. The error carries a bounded summary with command, exit code,
+       failing tests, base verdict, and candidate/base log artifact paths.
+       Read those paths through the granted `orbit.task.artifact.get` tool
+       (or `orbit tool run orbit.task.artifact.get`) using the owning task's
+       `id` and artifact `path` before diagnosing; captured output lives in
+       the artifacts, not the error message.
        Follow the workspace's own AGENTS.md for validation guidance.
        Repair the candidate so the command passes (for example apply the
        formatter it names) and run the command yourself to confirm. Leave the

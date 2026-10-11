@@ -1467,7 +1467,7 @@ fn pr_open_appends_the_review_fixes_section_to_the_published_body() {
 
 /// The owner path's required validation runs every command on the exact
 /// synchronized candidate. A command that fails refuses the candidate before
-/// anything is pushed, with its output in the error and its log — beside the
+/// anything is pushed, with a summary in the error and its log — beside the
 /// passing log of the command before it — attached to the task. A repair left
 /// uncommitted is refused, because the result would not describe the committed
 /// candidate. Once the repair is committed, as step recovery does, the retry
@@ -1493,8 +1493,9 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             assert!(
                 message.contains("required validation")
                     && message.contains(&fx.candidate)
-                    && message.contains("src/feature.txt: not formatted"),
-                "the refusal names the candidate and carries the output: {message}"
+                    && message.contains("exit 3")
+                    && message.contains(&format!("validation/{RUN_ID}/1.json")),
+                "the refusal names the candidate, exit code and log: {message}"
             );
             assert!(
                 !is_baseline_red_failure(None, Some(&message))
@@ -1547,6 +1548,104 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
             let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/1.json"));
             assert_eq!(log["exit_code"], 0, "the retry replaces the failing log");
             assert_eq!(log["tested_head"], repaired.as_str());
+        },
+    );
+}
+
+/// Large captured output belongs only to artifacts, on both delivery routes.
+#[test]
+fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs() {
+    isolated(
+        "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            let output_path = sandbox.join("validation-output");
+            let output = format!(
+                "foo_bar: passing test stdout\n{}\ntest actual_failure ... FAILED\n",
+                "é evidence\n".repeat(12000)
+            );
+            fs::write(&output_path, &output).unwrap();
+            let command = format!(
+                "test ! -e src/feature.txt || {{ cat '{}'; exit 3; }}",
+                output_path.display()
+            );
+            host.require_commands(&[&command]);
+            let message = action(&host, "candidate_validate", &fx.validate_input())
+                .unwrap_err()
+                .to_string();
+            let candidate_path = format!("validation/{RUN_ID}/0.json");
+            let base_path = format!("validation/{RUN_ID}/0.baseline.json");
+            assert!(
+                message.len() <= 16 * 1024,
+                "diagnostic bound: {}",
+                message.len()
+            );
+            for field in [
+                &command,
+                "exit 3",
+                "actual_failure",
+                "Base verdict:",
+                "passes this command",
+                &candidate_path,
+                &base_path,
+            ] {
+                assert!(
+                    message.contains(field),
+                    "missing evidence {field}: {message}"
+                );
+            }
+            assert!(
+                !message.contains("foo_bar:"),
+                "passing output must stay in artifacts"
+            );
+            let log = host.validation_log(TASK_ID, &candidate_path);
+            assert!(log["output"].as_str().unwrap().starts_with(&output));
+            assert_eq!(log["baseline"]["log"], base_path);
+            assert_eq!(host.validation_log(TASK_ID, &base_path)["exit_code"], 0);
+
+            let input =
+                json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha});
+            let message = action(&host, "claim_validate", &input)
+                .unwrap_err()
+                .to_string();
+            assert!(message.len() <= 16 * 1024);
+            for field in [
+                "actual_failure",
+                "exit 3",
+                "validation/claim-landing/0.failed.json",
+                "validation/claim-landing/0.baseline.json",
+            ] {
+                assert!(
+                    message.contains(field),
+                    "missing claim evidence {field}: {message}"
+                );
+            }
+            let logs = host.claim_log_contents.lock().unwrap();
+            let log: Value =
+                serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"]).unwrap();
+            assert!(log["output"].as_str().unwrap().starts_with(&output));
+            drop(logs);
+
+            // With no failed test identities, a shared nonzero result holds
+            // rather than continuing as known red. Its hold must remain parseable.
+            let output = format!("{}\nbase failure evidence\n", "é evidence\n".repeat(12000));
+            fs::write(&output_path, &output).unwrap();
+            let command = format!("cat '{}'; exit 3", output_path.display());
+            host.require_commands(&[&command]);
+            for (action_name, input) in [
+                ("candidate_validate", fx.validate_input()),
+                ("claim_validate", input),
+            ] {
+                let message = action(&host, action_name, &input).unwrap_err().to_string();
+                assert!(message.len() <= 16 * 1024);
+                let hold =
+                    BaselineRedHold::from_text(&message).expect("bounded hold remains readable");
+                assert_eq!(hold.command, command);
+                assert_eq!(hold.base_sha, fx.base_sha);
+                assert!(message.contains("Base verdict: failed identically"));
+                assert!(!message.contains(&output));
+            }
         },
     );
 }

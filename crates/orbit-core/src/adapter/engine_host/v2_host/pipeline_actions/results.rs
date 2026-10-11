@@ -5,6 +5,7 @@
 //! children that were all cancelled end the parent cancelled, not failed.
 
 use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_common::text::floor_char_boundary;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
@@ -96,7 +97,7 @@ pub(in super::super) fn pipeline_success_guard(
         // An operator cancelled every child that did not succeed: the parent
         // ends cancelled with them, not failed.
         return Err(DispatchError::ChildRunCancelled {
-            message: format!("{context} cancelled: {}", failures.join("; ")),
+            message: bounded_guard_text(&format!("{context} cancelled: {}", failures.join("; "))),
         });
     }
     if !failures.is_empty() {
@@ -105,7 +106,10 @@ pub(in super::super) fn pipeline_success_guard(
         }
         return Err(DispatchError::DeterministicActionFailed {
             action: action.to_string(),
-            message: format!("{context} did not succeed: {}", failures.join("; ")),
+            message: bounded_guard_text(&format!(
+                "{context} did not succeed: {}",
+                failures.join("; ")
+            )),
         });
     }
 
@@ -147,9 +151,16 @@ fn entry_root_cause(runtime: &OrbitRuntime, entry: &Value) -> Option<RunRootCaus
         step: None,
         code: None,
     });
-    // A child the wait gave up on has no failure of its own to name.
-    if cause.leaf_run_id == run_id && cause.code.is_none() && status != "failed" {
-        cause.code = Some(status.to_string());
+    // An unrecorded child may still carry a typed code from the wait result.
+    // Its terminal outcome is the fallback, never its message body.
+    if cause.leaf_run_id == run_id && cause.code.is_none() {
+        cause.code = entry
+            .get("error_code")
+            .or_else(|| entry.get("failure_kind"))
+            .and_then(Value::as_str)
+            .filter(|code| !code.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| Some(status.to_string()));
     }
     Some(cause)
 }
@@ -323,6 +334,21 @@ fn pipeline_wait_entry_failure(
         return None;
     }
 
+    let run_id = entry
+        .get("run_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    if let Some(cause) = root_cause {
+        let known = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".to_string());
+        return Some(format!(
+            "{label} run {} status {status}: echoes leaf run {} (task {}, step {}, code {})",
+            bounded_guard_text(run_id),
+            bounded_guard_text(&cause.leaf_run_id),
+            bounded_guard_text(&known(&cause.task_id)),
+            bounded_guard_text(&known(&cause.step)),
+            bounded_guard_text(&known(&cause.code)),
+        ));
+    }
     let error = entry
         .get("error")
         .and_then(Value::as_str)
@@ -346,22 +372,20 @@ fn pipeline_wait_entry_failure(
             None => format!("{label} task-pilot apply status {status} ({counts})"),
         });
     }
-    let run_id = entry
-        .get("run_id")
-        .and_then(Value::as_str)
-        .unwrap_or("<unknown>");
-    if let Some(cause) = root_cause.filter(|cause| cause.leaf_run_id != run_id) {
-        let known = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".to_string());
-        return Some(format!(
-            "{label} run {run_id} status {status}: echoes leaf run {} (task {}, step {}, code {})",
-            cause.leaf_run_id,
-            known(&cause.task_id),
-            known(&cause.step),
-            known(&cause.code),
-        ));
-    }
     Some(match error {
-        Some(error) => format!("{label} run {run_id} status {status}: {error}"),
+        Some(error) => format!(
+            "{label} run {run_id} status {status}: {}",
+            bounded_guard_text(error)
+        ),
         None => format!("{label} run {run_id} status {status}"),
     })
+}
+
+/// Parent echoes stay bounded even for malformed identities or many children.
+fn bounded_guard_text(text: &str) -> String {
+    const LIMIT: usize = 4096;
+    if text.len() <= LIMIT {
+        return text.to_string();
+    }
+    format!("{}…", &text[..floor_char_boundary(text, LIMIT - 3)])
 }
