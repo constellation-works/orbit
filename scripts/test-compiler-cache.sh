@@ -535,21 +535,88 @@ else
   assert_ns_not_applicable "unwritable cache directory"
 fi
 
-# Usable cache, namespaces refused: the existing skip, and a failure under REQUIRE_NS=1.
+# 12. Usable cache, namespaces refused. Outside an Orbit agent lane the probe
+# failure stays a skip, and REQUIRE_NS=1 fails. Inside one (ORBIT_SCRATCH_DIR
+# names an existing directory, as the CLI runner sets it for every dispatched
+# agent) it is the agent sandbox's expected refusal: one not-applicable line
+# naming the host run that covers it, never skip wording. REQUIRE_NS=1 still
+# fails there, and a disabled cache still wins before any probe.
+assert_ns_skip() {
+  local label="$1"
+  [[ "$NS_STATUS" -eq 0 ]] || fail "$label: expected exit 0, got $NS_STATUS"
+  grep -Fq 'skip: cannot create a mount namespace (bwrap: No permissions to create a new namespace)' "$ns_out" \
+    || fail "$label: expected the skip line, got: $(tr '\n' ' ' <"$ns_out")"
+  if grep -Fq 'agent sandbox' "$ns_out"; then
+    fail "$label: outside an agent lane the skip must not claim the agent-sandbox exemption"
+  fi
+  [[ -e "$NS_BWRAP_LOG" ]] || fail "$label: must probe namespaces"
+}
+
+assert_ns_agent_lane() {
+  local label="$1"
+  [[ "$NS_STATUS" -eq 0 ]] || fail "$label: expected exit 0, got $NS_STATUS"
+  [[ "$(grep -c '' "$ns_out")" -eq 1 ]] || fail "$label: expected exactly one stdout line"
+  grep -Fq 'test-compiler-cache-namespaces: not applicable inside the Orbit agent sandbox, which refuses nested namespaces (bwrap: No permissions to create a new namespace); covered outside the sandbox by the owner'"'"'s candidate_validate or the claim host'"'"'s claim_validate run of the required commands' "$ns_out" \
+    || fail "$label: expected the agent-sandbox line, got: $(tr '\n' ' ' <"$ns_out")"
+  if grep -Fq 'skip:' "$ns_out"; then
+    fail "$label: the agent-sandbox line must not use skip wording"
+  fi
+  [[ ! -s "$ns_err" ]] || fail "$label: unexpected stderr: $(tr '\n' ' ' <"$ns_err")"
+  [[ -e "$NS_BWRAP_LOG" ]] || fail "$label: must still probe namespaces"
+}
+
+assert_ns_required() {
+  local label="$1"
+  [[ "$NS_STATUS" -ne 0 ]] || fail "$label: REQUIRE_NS=1 must fail when namespaces are refused"
+  grep -Fq 'namespace test required' "$ns_err" \
+    || fail "$label: REQUIRE_NS failure should name the required namespace test, got: $(tr '\n' ' ' <"$ns_err")"
+  if grep -Fq 'agent sandbox' "$ns_out"; then
+    fail "$label: REQUIRE_NS=1 must not report the agent-sandbox exemption"
+  fi
+  [[ -e "$NS_BWRAP_LOG" ]] || fail "$label: must probe namespaces"
+}
+
+ns_lane_scratch="$TMP/ns-lane/.orbit/tmp"
+mkdir -p "$ns_lane_scratch"
+
 rm -f "$NS_BWRAP_LOG"
 run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
   ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=0
-[[ "$NS_STATUS" -eq 0 ]] || fail "usable cache with refused namespaces should exit 0, got $NS_STATUS"
-grep -Fq 'skip: cannot create a mount namespace' "$ns_out" \
-  || fail "usable cache with refused namespaces should keep the skip line"
-[[ -e "$NS_BWRAP_LOG" ]] || fail "usable cache must still probe namespaces"
+assert_ns_skip "outside an agent lane"
 
 rm -f "$NS_BWRAP_LOG"
 run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
   ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
-[[ "$NS_STATUS" -ne 0 ]] || fail "usable cache with REQUIRE_NS=1 must fail when namespaces are refused"
-grep -Fq 'namespace test required' "$ns_err" \
-  || fail "REQUIRE_NS failure should name the required namespace test, got: $(tr '\n' ' ' <"$ns_err")"
+assert_ns_required "outside an agent lane"
+
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_SCRATCH_DIR="$ns_lane_scratch"
+assert_ns_agent_lane "inside an agent lane"
+
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_SCRATCH_DIR="$ns_lane_scratch" \
+  ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+assert_ns_required "inside an agent lane"
+
+# Only an existing directory marks a lane: empty or dangling values keep the skip.
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_SCRATCH_DIR=
+assert_ns_skip "empty ORBIT_SCRATCH_DIR"
+
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_SCRATCH_DIR="$TMP/ns-lane/missing"
+assert_ns_skip "missing ORBIT_SCRATCH_DIR directory"
+
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE=0 ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_SCRATCH_DIR="$ns_lane_scratch"
+assert_ns_not_applicable "cache forced off inside an agent lane"
+grep -Fq 'host compiler cache is disabled' "$ns_out" \
+  || fail "cache forced off inside an agent lane should report the disabled cache"
 
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.
