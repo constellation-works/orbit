@@ -4,8 +4,7 @@
       "command": "orbit",
       "args": [
         "mcp",
-        "serve",
-        "--operator"
+        "serve"
       ]
     }
   }
