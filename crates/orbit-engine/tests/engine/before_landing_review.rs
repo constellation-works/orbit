@@ -133,7 +133,7 @@ fn a_before_landing_reviewer_fix_is_validated_pushed_under_a_lease_and_lands() {
 }
 
 /// Every outcome other than an approve stops in the before-landing gate:
-/// nothing is merged and no fix is pushed, and the failed step is a
+/// nothing is merged and `landing_push` does not run, and the failed step is a
 /// completion-stage one, whose failure handoff keeps the PR open and the
 /// task in review.
 #[test]
@@ -167,7 +167,7 @@ fn a_rejected_incomplete_or_timed_out_before_landing_review_never_merges() {
         );
         assert!(
             inputs_of(&calls, "test_stub_git_push").is_empty(),
-            "{outcome:?} pushes nothing"
+            "{outcome:?} makes no `landing_push`; these stubs record no reviewer commit"
         );
         assert!(
             actions(&calls).contains(&"test_stub_pr_open"),
