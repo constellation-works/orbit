@@ -23,7 +23,8 @@
 // Integration fixtures use expect/unwrap for concise failure diagnostics.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::io::{Read, Write};
+use std::collections::VecDeque;
+use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 
@@ -40,6 +41,10 @@ use tempfile::tempdir;
 /// regression back to "hangs until systemd's SIGKILL", not on CI jitter, while
 /// staying far below `orbit-web.service`'s `TimeoutStopUSec=90s`.
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(20);
+
+/// Bound how much of a peer's response we accept before finding the HTTP head
+/// delimiter. `DeadlineStream` independently bounds the elapsed time.
+const SSE_RESPONSE_HEAD_LIMIT: usize = 16 * 1024;
 
 /// How long to wait for the dashboard to start accepting connections.
 const STARTUP_DEADLINE: Duration = Duration::from_secs(10);
@@ -169,15 +174,181 @@ fn open_sse(port: u16, timeout: Duration) -> DeadlineStream {
               Connection: keep-alive\r\n\r\n",
         )
         .expect("send SSE request");
-    let mut head = [0_u8; 4096];
-    let n = active.read(&mut head).expect("read SSE response head");
-    let head = String::from_utf8_lossy(&head[..n]);
-    assert!(
-        head.contains("text/event-stream"),
-        "expected an open SSE stream before sending SIGTERM, got: {head}"
-    );
+    let head = read_http_head(&mut active, SSE_RESPONSE_HEAD_LIMIT)
+        .expect("read complete SSE response head");
+    assert_sse_response_head(&head).unwrap_or_else(|error| {
+        panic!(
+            "expected an open SSE stream before sending SIGTERM: {error}; head={:?}",
+            String::from_utf8_lossy(&head)
+        )
+    });
 
     active
+}
+
+fn read_http_head(reader: &mut impl Read, byte_limit: usize) -> io::Result<Vec<u8>> {
+    let mut head = Vec::with_capacity(byte_limit.min(1024));
+    loop {
+        if let Some(delimiter) = head.windows(4).position(|window| window == b"\r\n\r\n") {
+            head.truncate(delimiter + 4);
+            return Ok(head);
+        }
+        if head.len() == byte_limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("HTTP response head exceeded {byte_limit} bytes without a delimiter"),
+            ));
+        }
+
+        let remaining = byte_limit - head.len();
+        let mut buffer = [0_u8; 1024];
+        let read_limit = remaining.min(buffer.len());
+        let count = reader.read(&mut buffer[..read_limit])?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "HTTP response ended before the complete head delimiter",
+            ));
+        }
+        head.extend_from_slice(&buffer[..count]);
+    }
+}
+
+fn assert_sse_response_head(head: &[u8]) -> io::Result<()> {
+    if !head.ends_with(b"\r\n\r\n") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HTTP response head is not terminated",
+        ));
+    }
+    let text = std::str::from_utf8(head).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("HTTP head is not UTF-8: {error}"),
+        )
+    })?;
+    let mut lines = text[..text.len() - 4].split("\r\n");
+    let status_line = lines.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HTTP response head has no status line",
+        )
+    })?;
+    let mut status_fields = status_line.split_whitespace();
+    let version = status_fields.next();
+    let status = status_fields.next();
+    if !matches!(version, Some("HTTP/1.0" | "HTTP/1.1")) || status != Some("200") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected HTTP/1.x status 200, got {status_line:?}"),
+        ));
+    }
+
+    let mut content_type = None;
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("malformed HTTP response header {line:?}"),
+            )
+        })?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("malformed HTTP response header name {name:?}"),
+            ));
+        }
+        if name.eq_ignore_ascii_case("content-type") && content_type.replace(value.trim()).is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP response has multiple Content-Type headers",
+            ));
+        }
+    }
+
+    let content_type = content_type.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HTTP response has no Content-Type header",
+        )
+    })?;
+    if !content_type
+        .split(';')
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected text/event-stream, got {content_type:?}"),
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn sse_head_reader_reassembles_status_and_content_type_from_separate_fragments() {
+    let mut reader = FragmentedReader::new([
+        b"HTTP/1.1 200 OK\r\n".as_slice(),
+        b"Content-Type: text/".as_slice(),
+        b"event-stream; charset=utf-8\r\n\r\n".as_slice(),
+    ]);
+
+    let head = read_http_head(&mut reader, SSE_RESPONSE_HEAD_LIMIT).expect("complete HTTP head");
+
+    assert_sse_response_head(&head).expect("fragmented SSE response head is valid");
+}
+
+#[test]
+fn sse_head_parser_rejects_non_success_and_non_sse_complete_heads() {
+    for head in [
+        b"HTTP/1.1 503 Unavailable\r\nContent-Type: text/event-stream\r\n\r\n".as_slice(),
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n".as_slice(),
+    ] {
+        let error = assert_sse_response_head(head).expect_err("non-SSE response must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+}
+
+#[test]
+fn sse_head_reader_enforces_its_byte_limit() {
+    let mut reader = io::Cursor::new(vec![b'x'; SSE_RESPONSE_HEAD_LIMIT + 1]);
+
+    let error = read_http_head(&mut reader, SSE_RESPONSE_HEAD_LIMIT)
+        .expect_err("unterminated oversized head must be rejected");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(reader.position(), SSE_RESPONSE_HEAD_LIMIT as u64);
+}
+
+struct FragmentedReader {
+    fragments: VecDeque<Vec<u8>>,
+}
+
+impl FragmentedReader {
+    fn new(fragments: impl IntoIterator<Item = &'static [u8]>) -> Self {
+        Self {
+            fragments: fragments.into_iter().map(<[u8]>::to_vec).collect(),
+        }
+    }
+}
+
+impl Read for FragmentedReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let Some(fragment) = self.fragments.pop_front() else {
+            return Ok(0);
+        };
+        let count = fragment.len().min(buffer.len());
+        buffer[..count].copy_from_slice(&fragment[..count]);
+        if count < fragment.len() {
+            self.fragments.push_front(fragment[count..].to_vec());
+        }
+        Ok(count)
+    }
 }
 
 /// A stalled peer must fail before releasing the peer, unwind through the
@@ -192,6 +363,11 @@ fn stalled_http_and_sse_reads_fail_with_deadlines_and_reap_the_dashboard() {
             b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nok".as_slice(),
         ),
         ("SSE without response head", true, b"".as_slice()),
+        (
+            "SSE response head without its delimiter",
+            true,
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n".as_slice(),
+        ),
     ] {
         exercise_stalled_peer(name, sse, prefix);
     }
