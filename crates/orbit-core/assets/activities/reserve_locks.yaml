@@ -12,7 +12,8 @@ spec:
     `reservation_id` that a later release step (or TTL expiration) can
     use to free the locks. On a conflict the output records the blocking
     `task` / `reservation` holders so the caller can decide whether to
-    wait or abort.
+    wait or abort. `conflicts` and `waiting_on_deps` are always present,
+    empty when they do not apply, so a step that always runs can read them.
 
     Dependency edges are checked before locks. An unmet-but-reachable
     dependency yields `reserved: false` with `waiting_on_deps` populated

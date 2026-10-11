@@ -140,6 +140,7 @@ mod commit;
 mod handoff;
 mod landing;
 mod lifecycle;
+mod owner_wave;
 mod repair;
 mod selection;
 

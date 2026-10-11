@@ -481,6 +481,122 @@ fn a_candidate_changed_after_selection_is_never_admitted_from_the_selection() {
     }
 }
 
+impl Owner {
+    /// `task` as one owner-local drain wave candidate, with the footprint
+    /// its gate would reserve.
+    fn wave_candidate(&self, task: &Task) -> OwnerWaveCandidate {
+        OwnerWaveCandidate {
+            task_id: task.id.clone(),
+            footprint: super::super::admission::canonical_footprint(
+                &task.context_files,
+                &self.repo,
+            )
+            .expect("canonical footprint"),
+        }
+    }
+}
+
+const NO_HOLD: &ValidationHold<'static> =
+    &|_: &Task, _: &[TaskComment], _: &[TaskHistoryEntry]| Ok(None);
+
+/// ORB-15514: the owner's local drain admits a wave between a pull grant's
+/// selection and its admission section, and its gate has not reserved yet.
+/// The wave passed the same section, so the grant reads its footprint there
+/// and takes neither the admitted task nor one that overlaps it.
+#[test]
+fn a_grant_never_takes_a_footprint_the_owner_wave_admitted_before_its_section() {
+    let owner = Owner::open();
+    let overlapping = owner.create(Spec {
+        priority: TaskPriority::Critical,
+        ..Spec::new("overlapping", TaskStatus::Backlog, "src/shared.rs")
+    });
+    // The admitted task itself ranks ahead of the free one, so the grant
+    // examines it too.
+    let local = owner.create(Spec {
+        priority: TaskPriority::High,
+        ..Spec::new("local", TaskStatus::Backlog, "src/shared.rs")
+    });
+    let free = owner.create(Spec {
+        priority: TaskPriority::Low,
+        ..Spec::new("free", TaskStatus::Backlog, "src/free.rs")
+    });
+
+    let boundary = Arc::clone(&owner.boundary);
+    let wave = vec![owner.wave_candidate(&local)];
+    let admitted = Rc::new(std::cell::RefCell::new(None));
+    let recorded = Rc::clone(&admitted);
+    after_selection::set(move || {
+        *recorded.borrow_mut() = Some(boundary.admit_owner_wave(&wave).expect("owner wave"));
+    });
+    // The wave's own section, then the grant's.
+    let (receipt, sections) = owner.admit_sections("pull-1", NO_HOLD);
+    assert_eq!(sections.len(), 2, "{sections:?}");
+
+    assert_eq!(
+        admitted
+            .borrow()
+            .clone()
+            .expect("the wave ran between selection and section"),
+        vec![OwnerWaveAdmission::admitted(&local.id)],
+        "nothing held the wave"
+    );
+    assert_eq!(
+        receipt.claim.as_ref().map(|claim| claim.task_id.as_str()),
+        Some(free.id.as_str()),
+        "ORB-15514: the grant passes over the wave's footprint: {receipt:?}"
+    );
+    for held in [&overlapping, &local] {
+        let deferred = receipt
+            .deferred_conflicts
+            .iter()
+            .find(|diagnostic| diagnostic.task_id == held.id)
+            .unwrap_or_else(|| panic!("{} deferred: {receipt:?}", held.id));
+        assert_eq!(deferred.blocked_by, vec![local.id.clone()], "{receipt:?}");
+        assert_eq!(owner.status(&held.id), TaskStatus::Backlog);
+    }
+}
+
+/// ORB-15514: the other order. A grant that committed before the wave's
+/// section keeps its footprint: the wave refuses the overlapping candidate,
+/// naming the claim, and admits the rest.
+#[test]
+fn an_owner_wave_after_a_grant_refuses_the_claimed_footprint() {
+    let owner = Owner::open();
+    let pulled = owner.create(Spec {
+        priority: TaskPriority::Critical,
+        ..Spec::new("pulled", TaskStatus::Backlog, "src/shared.rs")
+    });
+    let (receipt, _) = owner.admit("pull-1", NO_HOLD);
+    let claim = receipt.claim.expect("a claim");
+    assert_eq!(claim.task_id, pulled.id);
+
+    let overlapping = owner.create(Spec::new(
+        "overlapping",
+        TaskStatus::Backlog,
+        "src/shared.rs",
+    ));
+    let free = owner.create(Spec::new("free", TaskStatus::Backlog, "src/free.rs"));
+    let admissions = owner
+        .boundary
+        .admit_owner_wave(&[
+            owner.wave_candidate(&overlapping),
+            owner.wave_candidate(&free),
+        ])
+        .expect("owner wave");
+
+    assert_eq!(admissions.len(), 2);
+    assert_eq!(admissions[0].task_id, overlapping.id);
+    assert_eq!(
+        admissions[0]
+            .blocked_by
+            .as_ref()
+            .map(|claim| claim.claim_id.as_str()),
+        Some(claim.claim_id.as_str()),
+        "the wave names the claim holding the footprint"
+    );
+    assert_eq!(admissions[1], OwnerWaveAdmission::admitted(&free.id));
+}
+
 /// What an ordinary section in each partition got while an admission
 /// section was deciding.
 struct Neighbours {

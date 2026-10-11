@@ -176,7 +176,12 @@ Two of its answers separate contention from capacity:
   `blocking_task_ids` and `conflicts` name the tasks and selectors, and
   `provenance` says whether the blocker holds the lock (`held_lock`), is a
   task a live child is already carrying (`live_claim`), or was chosen earlier
-  in the same admission wave (`same_wave`). `capacity_saturated`, by contrast,
+  in the same admission wave (`same_wave`). When a blocker is held by a
+  follower's live execution claim, `blocking_claims` names the claim, its
+  machine and run, and the text view prints `claimed-on=<task>@<machine>`: the
+  wait clears when that claim settles. The drain's hold reason names it the
+  same way, and a candidate overlapping a claim is deferred with
+  `execution_claim` provenance. `capacity_saturated`, by contrast,
   means there was no free slot at all.
 - `surface_reserved` means a critical or high-priority task ranked ahead of
   this one waits only on context locks, and this task overlaps its surface.

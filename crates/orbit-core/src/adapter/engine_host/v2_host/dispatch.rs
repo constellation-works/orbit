@@ -466,12 +466,16 @@ pub(crate) fn run_deterministic(
                 action: action.to_string(),
                 message: format!("{err}"),
             })?;
-            // Always publish `waiting_on_deps` (empty here) so the gate
-            // pipeline can reference `steps.reserve.output.waiting_on_deps`
-            // unconditionally, whichever branch produced the output.
+            // Always publish `waiting_on_deps` (empty here) and `conflicts`
+            // (empty once reserved) so the gate pipeline's always-run
+            // starvation step can reference both unconditionally, whichever
+            // branch produced the output [ORB-15514].
             if let Some(object) = output.as_object_mut() {
                 object
                     .entry("waiting_on_deps")
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                object
+                    .entry("conflicts")
                     .or_insert_with(|| Value::Array(Vec::new()));
             }
             let waiting_on_locks = waiting_locks_from_reserve_output(&output);
@@ -522,12 +526,12 @@ pub(crate) fn run_deterministic(
             pipeline_actions::record_pipeline_results_audit(runtime, action, input, &output)?;
             Ok(output)
         }
-        // Post-loop gate signal: the admission window never opened in
-        // time. Emits a `gate.starvation` audit event with task_ids and
-        // conflicting_files so a supervising parent can decide to
-        // replan, then fails the Run with a structured error.
-        CoreDeterministicAction::GateStarvationFail => {
-            pipeline_actions::gate_starvation_fail(runtime, action, input)
+        // Post-loop gate signal [ORB-15514]: when the admission window never
+        // opened in time, emits a `gate.starvation` audit event naming the
+        // blocking tasks and the claims holding them, and returns a deferral
+        // that ends the gate without a child, leaving the task in backlog.
+        CoreDeterministicAction::GateStarvationDefer => {
+            pipeline_actions::gate_starvation_defer(runtime, action, input)
         }
         // The gate's first step: the job this bundle is delivered by — the
         // default `task_<mode>_pipeline`, or the job its tasks select with a

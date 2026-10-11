@@ -112,6 +112,20 @@ pub trait TaskStoreBackend: Send + Sync {
             "deferred branch observations require coordination".into(),
         ))
     }
+    /// Admit an owner-local drain wave through the pull admission section
+    /// [ORB-15514]: a candidate a live execution claim holds, or whose
+    /// footprint overlaps one, is refused, and every other candidate's
+    /// footprint becomes visible to pull grants before the section ends. A
+    /// store without a claim journal serves no pull grant, so it admits all.
+    fn admit_owner_wave(
+        &self,
+        candidates: &[super::OwnerWaveCandidate],
+    ) -> Result<Vec<super::OwnerWaveAdmission>, OrbitError> {
+        Ok(candidates
+            .iter()
+            .map(|candidate| super::OwnerWaveAdmission::admitted(&candidate.task_id))
+            .collect())
+    }
     /// Read-only receipt reconciliation. Creates no receipt, binds no run, and
     /// grants no execution authority; the caller authorizes the identity.
     fn lookup_admission(

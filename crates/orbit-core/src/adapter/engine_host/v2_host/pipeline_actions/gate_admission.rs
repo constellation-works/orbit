@@ -38,6 +38,11 @@ use super::action_failed;
 ///   succeeds having launched nothing, exactly like a stale no-op, so the
 ///   local gate neither runs it a second time nor fails over work in flight.
 ///
+/// - **starvation deferred** ([ORB-15514]) — the gate's wait budget expired
+///   without a reservation. The task stays `backlog` for a later pass; the
+///   bundle succeeds having launched nothing, and the stop carries the
+///   deferral naming what blocked it.
+///
 /// A task that cannot be read at all stays a hard activity failure: that is a
 /// malformed bundle, not a lifecycle decision.
 pub(super) fn gate_admission_stop(
@@ -45,6 +50,25 @@ pub(super) fn gate_admission_stop(
     action: &str,
     input: &Value,
 ) -> Result<Option<Value>, DispatchError> {
+    if let Some(deferral) = starvation_deferral(input) {
+        // `gate_starvation_defer` already audited it as `gate.starvation`.
+        let reason = format!(
+            "task_gate_pipeline deferred: {}",
+            deferral
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("admission window never opened")
+        );
+        let mut output = gate_admission_stop_output(
+            input,
+            &wait_success_status(),
+            "starvation_deferred",
+            &reason,
+            &[],
+        );
+        output["deferral"] = deferral.clone();
+        return Ok(Some(output));
+    }
     let raw_task_ids = optional_string_list_alias(
         input,
         &[
@@ -252,6 +276,13 @@ pub(super) fn gate_admission_stop(
         &reason,
         &task_statuses,
     )))
+}
+
+/// The gate's starvation deferral, when its wait expired [ORB-15514].
+fn starvation_deferral(input: &Value) -> Option<&Value> {
+    input
+        .get("deferral")
+        .filter(|deferral| deferral.get("deferred").and_then(Value::as_bool) == Some(true))
 }
 
 fn summarize_statuses(statuses: &[(String, String)]) -> String {

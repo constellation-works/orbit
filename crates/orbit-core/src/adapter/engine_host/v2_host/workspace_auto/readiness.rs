@@ -13,6 +13,7 @@ use crate::adapter::engine_host::v2_host::admission::auto_admission::{
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
 };
+use crate::adapter::engine_host::v2_host::admission::claim_holders::ClaimHolders;
 use crate::adapter::engine_host::v2_host::admission::cpu_light::{
     CPU_LIGHT_BUDGET_FULL, LightBudget, ResourceGate, is_cpu_light,
 };
@@ -246,6 +247,8 @@ pub fn explain_workspace_auto_readiness(
     let candidate_pool_truncated =
         pending.len() > examined.len() && selection.selected.len() < free_slots;
     let admitted = selection.selected.iter().cloned().collect::<BTreeSet<_>>();
+    // [ORB-15514] A held footprint a follower's claim holds names that claim.
+    let claim_holders = ClaimHolders::read(runtime);
     let occupancy = read_leaf_occupancy(
         runtime,
         &live_leaves
@@ -470,6 +473,12 @@ pub fn explain_workspace_auto_readiness(
                                 "locking_task_id": conflict.locking_task_id,
                             })).collect::<Vec<_>>()),
                         );
+                        let blocking_claims = claim_holders.json_for(
+                            excluded.conflicts.iter().map(|conflict| conflict.locking_task_id.as_str()),
+                        );
+                        if !blocking_claims.is_empty() {
+                            object.insert("blocking_claims".to_string(), json!(blocking_claims));
+                        }
                         // [ORB-14310] Present when this task reserves its
                         // surface against lower-ranked overlapping work.
                         if let Some(detail) = &excluded.detail {
@@ -535,7 +544,13 @@ pub fn explain_workspace_auto_readiness(
                     object.insert("detail".to_string(), json!(detail));
                 }
                 if deferred.reason == DeferralReason::Conflict {
-                    object.insert("blocking_task_ids".to_string(), json!(deferred.blocking_task_ids()));
+                    let blocking_task_ids = deferred.blocking_task_ids();
+                    let blocking_claims =
+                        claim_holders.json_for(blocking_task_ids.iter().map(String::as_str));
+                    if !blocking_claims.is_empty() {
+                        object.insert("blocking_claims".to_string(), json!(blocking_claims));
+                    }
+                    object.insert("blocking_task_ids".to_string(), json!(blocking_task_ids));
                     object.insert("conflicts".to_string(), deferred.to_json()["conflicts"].clone());
                 }
             } else {

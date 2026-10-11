@@ -2,20 +2,24 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_engine::DispatchError;
+use orbit_store::contracts::OwnerWaveCandidate;
+use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{DrainAdmissionPass, DrainCapacity, DrainWaitingTask};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::admission::auto_admission::{
-    AdmissionHolders, DeferralReason, select_admissions,
+    AdmissionHolders, AdmissionSelection, DeferralReason, select_admissions,
 };
 use crate::adapter::engine_host::v2_host::admission::backlog_exclusion::{
     BacklogTaskExclusion, allowlist_from_input, backlog_snapshot,
 };
+use crate::adapter::engine_host::v2_host::admission::claim_holders::ClaimHolders;
 use crate::adapter::engine_host::v2_host::admission::cpu_light::{LightBudget, ResourceGate};
 use crate::adapter::engine_host::v2_host::admission::unknown_footprint::{
     FootprintGuard, whole_tree_holder,
 };
+use crate::runtime::task::locks::lock_context_files_for_task;
 
 use super::action_failed;
 use super::drains::{
@@ -223,7 +227,7 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         whole_tree_holder: whole_tree_holder(&claimed, &snapshot.task_lookup),
         waits: &snapshot.footprint_waits,
     };
-    let selection = select_admissions(
+    let mut selection = select_admissions(
         examined,
         &snapshot.task_lookup,
         runtime.paths().repo_root.as_path(),
@@ -231,6 +235,9 @@ pub(in super::super) fn classify_workspace_auto_tasks(
         free_slots,
         footprint,
     );
+    admit_through_section(runtime, action, &mut selection, &snapshot.task_lookup)?;
+    // [ORB-15514] A lock wait whose blocker a follower's claim holds says so.
+    let claim_holders = ClaimHolders::read(runtime);
     // `max_tasks` bounds how much of the backlog one iteration expands lock
     // footprints for. It only hides work when the wave ran out of *examined*
     // candidates rather than out of slots, so report exactly that case instead
@@ -271,16 +278,21 @@ pub(in super::super) fn classify_workspace_auto_tasks(
             deferred: selection
                 .deferred
                 .iter()
-                .map(|deferred| DrainWaitingTask {
-                    task_id: deferred.task_id.clone(),
-                    reason: (deferred.reason != DeferralReason::Conflict)
-                        .then(|| deferred.reason.as_str().to_string()),
-                    blocked_by: deferred.blocking_task_ids(),
-                    detail: deferred.detail.clone(),
+                .map(|deferred| {
+                    let blocked_by = deferred.blocking_task_ids();
+                    DrainWaitingTask {
+                        task_id: deferred.task_id.clone(),
+                        reason: (deferred.reason != DeferralReason::Conflict)
+                            .then(|| deferred.reason.as_str().to_string()),
+                        detail: deferred.detail.clone().or_else(|| {
+                            claim_holders.detail_for(blocked_by.iter().map(String::as_str))
+                        }),
+                        blocked_by,
+                    }
                 })
                 .collect(),
             deferred_total: selection.deferred.len() as u64,
-            excluded: waiting_excluded(&snapshot.excluded),
+            excluded: waiting_excluded(&snapshot.excluded, &claim_holders),
             excluded_total: snapshot.excluded.len() as u64,
             waiting_recorded_at: None,
             waiting_by_reason: BTreeMap::new(),
@@ -330,25 +342,90 @@ pub(in super::super) fn classify_workspace_auto_tasks(
 /// list so a truncated one still reads as truncated.
 const EXCLUDED_BACKLOG_RECORDED: usize = 20;
 
-fn waiting_excluded(excluded: &[BacklogTaskExclusion]) -> Vec<DrainWaitingTask> {
+fn waiting_excluded(
+    excluded: &[BacklogTaskExclusion],
+    claim_holders: &ClaimHolders,
+) -> Vec<DrainWaitingTask> {
     excluded
         .iter()
         .take(EXCLUDED_BACKLOG_RECORDED)
-        .map(|entry| DrainWaitingTask {
-            task_id: entry.id.clone(),
-            reason: serde_json::to_value(entry.reason)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_string)),
-            blocked_by: entry
+        .map(|entry| {
+            let blocked_by = entry
                 .conflicts
                 .iter()
                 .map(|conflict| conflict.locking_task_id.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
-                .collect(),
-            detail: entry.detail.clone(),
+                .collect::<Vec<_>>();
+            // [ORB-15514] The claim behind a lock wait, beside whatever else
+            // the exclusion already says.
+            let claims = claim_holders.detail_for(
+                blocked_by
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|blocker| *blocker != entry.id),
+            );
+            DrainWaitingTask {
+                task_id: entry.id.clone(),
+                reason: serde_json::to_value(entry.reason)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string)),
+                blocked_by,
+                detail: match (entry.detail.clone(), claims) {
+                    (Some(detail), Some(claims)) => Some(format!("{detail} {claims}")),
+                    (detail, claims) => detail.or(claims),
+                },
+            }
         })
         .collect()
+}
+
+/// [ORB-15514] Pass the wave through the pull admission section. The wave
+/// was chosen from a snapshot and its gates reserve only later, so without
+/// this a pull grant could take an admitted footprint in between, or have
+/// claimed one just before the snapshot that missed it. The section refuses
+/// a candidate a live claim holds and makes every other admitted footprint
+/// visible to pull grants before it ends.
+fn admit_through_section(
+    runtime: &OrbitRuntime,
+    action: &str,
+    selection: &mut AdmissionSelection,
+    task_lookup: &BTreeMap<String, Task>,
+) -> Result<(), DispatchError> {
+    let workspace_root = runtime.paths().repo_root.as_path();
+    let candidates = selection
+        .selected
+        .iter()
+        .filter_map(|task_id| task_lookup.get(task_id))
+        .map(|task| OwnerWaveCandidate {
+            task_id: task.id.clone(),
+            // [ORB-14247] No-diff work holds no lock, so it excludes no
+            // overlapping pull either; the row still keeps the task itself.
+            footprint: if task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
+                Vec::new()
+            } else {
+                lock_context_files_for_task(task, workspace_root)
+            },
+        })
+        .collect::<Vec<_>>();
+    let admissions = runtime
+        .stores()
+        .tasks()
+        .admit_owner_wave(&candidates)
+        .map_err(|error| {
+            action_failed(
+                action,
+                format!("admit the wave through the admission section: {error}"),
+            )
+        })?;
+    for admission in admissions {
+        if let (Some(claim), Some(task)) =
+            (admission.blocked_by, task_lookup.get(&admission.task_id))
+        {
+            selection.refuse_claimed(task, &claim, workspace_root);
+        }
+    }
+    Ok(())
 }
 
 /// Persist what this pass left waiting on the drain's own run state, so

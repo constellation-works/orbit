@@ -421,3 +421,30 @@ pub struct AdmissionStorageUsage {
     pub receipt_bytes: u64,
     pub tombstone_bytes: u64,
 }
+
+/// One task an owner-local drain wave selected, with the canonical lock
+/// footprint its gate will reserve [ORB-15514].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerWaveCandidate {
+    pub task_id: String,
+    pub footprint: Vec<String>,
+}
+
+/// What the owner wave's admission section decided for one candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerWaveAdmission {
+    pub task_id: String,
+    /// The live execution claim that holds the task or an overlapping
+    /// footprint, or `None` once the candidate is admitted and its footprint
+    /// is visible to every later pull grant.
+    pub blocked_by: Option<Box<ExecutionClaim>>,
+}
+
+impl OwnerWaveAdmission {
+    pub fn admitted(task_id: &str) -> Self {
+        Self {
+            task_id: task_id.to_string(),
+            blocked_by: None,
+        }
+    }
+}

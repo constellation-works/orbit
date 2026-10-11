@@ -245,6 +245,10 @@ impl TaskCommitBoundary {
     /// `admission_holds` therefore cannot leave a newly held task claimed from
     /// an older snapshot.
     ///
+    /// A footprint the owner's local drain admitted inside this same section
+    /// is protected as soon as that section ends, before its gate reserves
+    /// it, so a grant can never take it in between [ORB-15514].
+    ///
     /// `held` maps each `backlog` task the owner is withholding for a red
     /// base to why [ORB-14258]. Its last delivery failed a required command
     /// the base fails the same way; it is deferred until the held command
@@ -324,6 +328,7 @@ impl TaskCommitBoundary {
             &orbit_dir.to_string_lossy(),
             Some(&self.workspace_id),
         )?;
+        let owner_wave = self.owner_wave_footprints_locked()?;
         let screen = Screen {
             identity,
             request,
@@ -334,6 +339,7 @@ impl TaskCommitBoundary {
             claims: &claims,
             in_flight: &in_flight.footprints,
             reservations: &reservations,
+            owner_wave: &owner_wave,
         };
         let mut receipt = AdmissionReceipt {
             schema_version: 1,
