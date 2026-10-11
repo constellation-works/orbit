@@ -149,6 +149,18 @@ orbit mcp init --client claude --client codex        # repeatable
 orbit mcp init --all --scope home                    # user-level rather than repo-local
 ```
 
+Existing operator registrations keep their complete server entry, including
+`--operator` and their workspace binding, on both explicit and automatic setup.
+To replace one with agent authority, deliberately run `orbit mcp remove` for the
+same client and scope, then `orbit mcp init`. New `mcp init` entries use agent
+authority; `workspace init --mcp` creates operator registrations.
+
+Every client config write or removal emits an `mcp_config_write` event to
+`~/.orbit/state/logs/orbit.jsonl` with the config path (and symlink target),
+source caller, process ID, working directory, invocation arguments and Orbit
+server arguments. These records use the `orbit::mcp_config` tracing target,
+enabled in the default file filter; an explicit `RUST_LOG` overrides that filter.
+
 Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`,
 `vscode`, `windsurf`. `--scope workspace` (the default) writes repo-local config;
 `--scope home` writes user-level config. The current Google terminal CLI is

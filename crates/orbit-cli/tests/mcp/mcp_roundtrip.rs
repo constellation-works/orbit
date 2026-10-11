@@ -1775,8 +1775,8 @@ fn last_authorization_arguments(workspace: &McpWorkspace) -> String {
 /// the real CLI to generate a Claude Code integration, extracts the exact
 /// argv that integration launches, spawns `orbit` with that argv over the
 /// real MCP stdio transport, and confirms a governed workflow tool is
-/// authorized. Re-running the same reconciliation path must refresh the
-/// entry to a single `--operator` argument rather than duplicating it.
+/// authorized. Re-running the same reconciliation path must retain the
+/// entry's single `--operator` argument rather than duplicating it.
 #[test]
 fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
     let workspace = McpWorkspace::init();
@@ -1826,14 +1826,14 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
     );
 
     // Re-running the same reconciliation path (`--force --mcp`, as a second
-    // `orbit workspace init --mcp` bootstrap would do) must refresh the
+    // `orbit workspace init --mcp` bootstrap would do) must preserve the
     // managed entry rather than append a second `--operator` argument or a
     // second binding.
     reconcile();
     assert_eq!(
         read_generated_args(),
         args,
-        "refreshing the operator-authorized entry must not duplicate its arguments"
+        "preserving the operator-authorized entry must not duplicate its arguments"
     );
 
     // Spawn the exact argv the generated config launches, over the real MCP

@@ -30,8 +30,10 @@ impl Execute for McpCommand {
 pub enum McpSubcommand {
     /// Initialize MCP client integration for the current workspace
     ///
-    /// By default, registers agent-only authority — the same as bare `orbit
-    /// mcp serve`. `--federated` instead adds a separate client entry for the
+    /// New entries register agent-only authority, as bare `orbit mcp serve`
+    /// does. Existing operator entries retain their launch and workspace
+    /// binding; remove the entry first to replace it with agent authority.
+    /// `--federated` instead adds a separate client entry for the
     /// session-unbound mux and preserves the default v1 entry. For the
     /// operator-authorized bootstrap integration (workflow dispatch,
     /// `orbit.command.exec`), use `orbit workspace init --mcp` instead.

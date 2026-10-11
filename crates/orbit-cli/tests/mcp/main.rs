@@ -24,6 +24,7 @@ mod git_repo;
 mod isolated_test;
 
 mod mcp_roundtrip;
+mod mcp_setup_preservation;
 mod mcp_setup_root;
 
 /// Re-execute the real setup, status/push and linked-worktree fixtures with

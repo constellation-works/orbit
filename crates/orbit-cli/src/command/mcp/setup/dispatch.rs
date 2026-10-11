@@ -117,6 +117,30 @@ fn is_legacy_orbit_grok_entry(entry: &toml::Value, server_id: &str) -> bool {
     }
 }
 
+/// Carry the old Grok launch into the shared JSON registry before cleanup.
+/// Only the exact legacy shape is migrated, just as it is for removal.
+fn legacy_grok_entry(
+    target: &ConfigTarget,
+    server_id: &str,
+) -> Result<Option<serde_json::Value>, OrbitError> {
+    let Some(path) = target.legacy_mcp_path.as_ref().filter(|path| path.exists()) else {
+        return Ok(None);
+    };
+    let doc = load_toml_document(path)?;
+    let parsed: toml::Value = doc.to_string().parse().map_err(|err| {
+        OrbitError::InvalidInput(format!("invalid TOML '{}': {err}", path.display()))
+    })?;
+    parsed
+        .get("mcp_servers")
+        .and_then(|servers| servers.get(server_id))
+        .filter(|entry| is_legacy_orbit_grok_entry(entry, server_id))
+        .map(|entry| {
+            serde_json::to_value(entry)
+                .map_err(|err| OrbitError::Execution(format!("serialize legacy Grok entry: {err}")))
+        })
+        .transpose()
+}
+
 pub(super) fn run_action(
     action: McpAction<'_>,
     repo_root: Option<&Path>,
@@ -137,10 +161,15 @@ pub(super) fn run_action(
                 McpProvider::Grok => {
                     if target.legacy_mcp_path.is_some() {
                         // Claude's handler provides the ~/.claude.json lock.
-                        // When Claude is selected it owns the shared write.
-                        if !providers.contains(&McpProvider::Claude) {
-                            apply_claude_init(&shared_grok_target(&target), launch)?;
-                        }
+                        // Reconcile even when Claude was selected: Grok's old
+                        // operator entry may still need migrating. Equal writes
+                        // are no-ops at the file boundary.
+                        let inherited = legacy_grok_entry(&target, server_id_for_action(action))?;
+                        apply_claude_init_with_legacy(
+                            &shared_grok_target(&target),
+                            launch,
+                            inherited.as_ref(),
+                        )?;
                         cleanup_legacy_grok_path(&target, server_id_for_action(action))?;
                     } else {
                         apply_toml_init(&target, launch, false)?;

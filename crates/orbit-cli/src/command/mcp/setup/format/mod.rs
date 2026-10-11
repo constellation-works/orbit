@@ -1,3 +1,4 @@
+mod audit;
 mod json;
 mod target;
 mod toml;

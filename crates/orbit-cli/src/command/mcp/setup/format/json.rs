@@ -5,6 +5,7 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
+use super::audit::{orbit_server_args, record_config_write};
 use super::target::{is_config_symlink, resolve_config_target};
 
 pub(in crate::command::mcp::setup) fn merge_unique_strings(
@@ -60,6 +61,7 @@ pub(in crate::command::mcp::setup) fn load_json_object(
     })
 }
 
+#[track_caller]
 pub(in crate::command::mcp::setup) fn write_json_object(
     path: &Path,
     root: &JsonMap<String, JsonValue>,
@@ -70,17 +72,28 @@ pub(in crate::command::mcp::setup) fn write_json_object(
         })?;
     rendered.push('\n');
     let target = resolve_config_target(path)?;
+    if fs::read_to_string(&target).is_ok_and(|current| current == rendered) {
+        return Ok(());
+    }
     atomic_write_text(&target, &rendered).map_err(|err| {
         OrbitError::Io(format!(
             "failed to atomically write '{}': {err}",
             path.display()
         ))
-    })
+    })?;
+    record_config_write(
+        path,
+        &target,
+        "write",
+        orbit_server_args(&JsonValue::Object(root.clone())),
+    );
+    Ok(())
 }
 
 /// Like [`write_json_object`], but delete the file once it would hold no
 /// entries. A symlinked config is kept, and its target is emptied instead; a
 /// dangling link is left as it is.
+#[track_caller]
 pub(in crate::command::mcp::setup) fn write_or_remove_json_object(
     path: &Path,
     root: &JsonMap<String, JsonValue>,
@@ -92,9 +105,11 @@ pub(in crate::command::mcp::setup) fn write_or_remove_json_object(
         if is_config_symlink(path) {
             return write_json_object(path, root);
         }
-        return fs::remove_file(path).map_err(|err| {
+        fs::remove_file(path).map_err(|err| {
             OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
-        });
+        })?;
+        record_config_write(path, path, "remove", serde_json::json!({}));
+        return Ok(());
     }
     write_json_object(path, root)
 }

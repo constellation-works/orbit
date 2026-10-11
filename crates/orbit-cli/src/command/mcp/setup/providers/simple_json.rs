@@ -3,7 +3,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::super::dispatch::ConfigTarget;
 use super::super::format::*;
-use super::common::{ServerLaunch, server_args, server_id};
+use super::common::{ServerLaunch, preserve_json_operator, server_args, server_id};
 
 pub(in crate::command::mcp::setup) fn apply_simple_json_init(
     target: &ConfigTarget,
@@ -12,6 +12,12 @@ pub(in crate::command::mcp::setup) fn apply_simple_json_init(
 ) -> Result<(), OrbitError> {
     let mut root = load_json_object(&target.mcp_path)?;
     let servers = ensure_json_object(&mut root, top_level_key)?;
+    if servers
+        .get(server_id(launch))
+        .is_some_and(|entry| preserve_json_operator(launch, entry))
+    {
+        return Ok(());
+    }
     servers.insert(
         server_id(launch).to_string(),
         simple_mcp_server_value(launch),
