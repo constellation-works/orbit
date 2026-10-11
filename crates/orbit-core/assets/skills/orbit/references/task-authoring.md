@@ -104,6 +104,17 @@ owner's own machine can produce the evidence (timings against its live store,
 say), the pilot records a machine requirement and the owner refuses pull
 claims from every other machine.
 
+For a criterion that needs a test to run under nested Seatbelt or Bubblewrap,
+name the required validation gate that runs that test. The worker sandbox may
+prevent the nested sandbox from starting; the sanctioned deferred-sandbox
+replay then runs that gate on the claim host, outside the worker sandbox. A
+passing host replay is the native-sandbox evidence and satisfies the criterion,
+including on a clean-base NoDiff handoff. The in-worker skip is not evidence by
+itself; the passing replay is. Do not write acceptance criteria that require
+"no sandbox deferral" or say a skip cannot count as evidence for these tests.
+The replay covers only a required gate named by the deferred record, not a
+standalone test outside that gate.
+
 To route a task an auto-task or a sweep already minted, retag it with
 `orbit.task.update`, sending the full tag list (it replaces the stored one):
 
