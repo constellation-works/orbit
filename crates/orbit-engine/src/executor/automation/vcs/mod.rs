@@ -40,7 +40,7 @@ pub use commit::validate_claim_new_paths;
 pub(crate) use commit::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };
-pub(crate) use deferral_probe::run_deferral_probe;
+pub use deferral_probe::run_deferral_probe;
 pub(crate) use deferred_sandbox::{ImplementerLane, accept_implementer_deferral};
 pub(super) use failure::pr_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};

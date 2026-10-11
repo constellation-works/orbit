@@ -172,7 +172,11 @@ impl DeferringSandbox {
     fn refused(self, probe: &NamespaceProbe) -> bool {
         match self {
             Self::Bubblewrap => {
-                probe.exit_code != 0 && probe.output.contains(BUBBLEWRAP_NAMESPACE_REFUSAL)
+                // A missing exit status or a probe that could not run is
+                // recorded as -1. Its error may contain the namespace
+                // refusal too, but only an executed probe can justify a
+                // deferral.
+                probe.exit_code > 0 && probe.output.contains(BUBBLEWRAP_NAMESPACE_REFUSAL)
             }
             Self::Seatbelt => {
                 probe.exit_code == SEATBELT_APPLY_REFUSAL_EXIT

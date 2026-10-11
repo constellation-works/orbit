@@ -729,19 +729,23 @@ pub trait RuntimeHost: Send + Sync {
         Ok(None)
     }
 
-    /// Run `probe` in the lane an implementer ran in: under the sandbox
-    /// [`Self::resolve_executor_sandbox`] gives `provider` for `fs_profile` in
-    /// `cwd`, or bare when there is no provider or no sandbox. A probe that
-    /// cannot run reports why in its output with a nonzero exit, which no
-    /// deferral accepts [ORB-15516]. Tests override it with a scripted result.
+    /// Run `probe` in the implementer's lane. Hosts must opt into this
+    /// capability and apply the sandbox resolved for the provider, profile
+    /// and checkout. The default reports an unsupported, unexecuted probe,
+    /// which cannot justify a deferral [ORB-15516].
     fn run_deferral_probe(
         &self,
         probe: &DeferralProbe,
-        provider: Option<&str>,
-        fs_profile: Option<&str>,
-        cwd: &Path,
+        _provider: Option<&str>,
+        _fs_profile: Option<&str>,
+        _cwd: &Path,
     ) -> NamespaceProbe {
-        crate::executor::automation::vcs::run_deferral_probe(self, probe, provider, fs_profile, cwd)
+        NamespaceProbe {
+            command: probe.command.to_string(),
+            exit_code: -1,
+            output: "the probe could not run: this host does not support deferral probes"
+                .to_string(),
+        }
     }
 
     /// Optional task snapshot to embed in a CLI agent envelope.

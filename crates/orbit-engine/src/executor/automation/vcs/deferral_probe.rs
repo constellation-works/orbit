@@ -21,8 +21,9 @@ use crate::context::RuntimeHost;
 /// answers; this only bounds a wedged spawn.
 const PROBE_TIMEOUT_MS: u64 = 10_000;
 
-/// [`RuntimeHost::run_deferral_probe`]'s default: run `probe` in the lane.
-pub(crate) fn run_deferral_probe<H: RuntimeHost + ?Sized>(
+/// Run `probe` in the implementer's lane for a host that explicitly supports
+/// [`RuntimeHost::run_deferral_probe`].
+pub fn run_deferral_probe<H: RuntimeHost + ?Sized>(
     host: &H,
     probe: &DeferralProbe,
     provider: Option<&str>,

@@ -22,7 +22,7 @@ use orbit_store::Store;
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, V2AuditEventKind};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// A pipeline step's id is not its activity: `task_claimed_pr_pipeline` step
 /// `review` targets `agent_review_repair`. Policy, `ORBIT_ACTIVITY_NAME`, tool
@@ -573,10 +573,37 @@ impl RuntimeHost for ProbeHost {
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
         if self.unresolvable {
             return Err(DispatchError::CliInvocationPermanent(format!(
-                "no sandbox for `{provider}`"
+                "no sandbox for `{provider}`: bwrap: No permissions to create a new namespace"
             )));
         }
         Ok(None)
+    }
+
+    fn run_deferral_probe(
+        &self,
+        probe: &orbit_types::workflow::DeferralProbe,
+        provider: Option<&str>,
+        fs_profile: Option<&str>,
+        cwd: &Path,
+    ) -> orbit_types::workflow::NamespaceProbe {
+        orbit_engine::run_deferral_probe(self, probe, provider, fs_profile, cwd)
+    }
+}
+
+/// A host that has not opted into executing deferral probes.
+struct UnsupportedProbeHost;
+
+impl RuntimeHost for UnsupportedProbeHost {
+    fn run_deterministic(
+        &self,
+        _action: &str,
+        _config: &Value,
+        _input: &Value,
+        _tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        Err(DispatchError::DeterministicActionNotRegistered(
+            "unused".into(),
+        ))
     }
 }
 
@@ -588,7 +615,7 @@ impl RuntimeHost for ProbeHost {
 fn the_deferral_probe_records_what_the_lane_answers() {
     let checkout = tempfile::tempdir().unwrap();
     let refusing = orbit_types::workflow::DeferralProbe {
-        command: "lane refusal",
+        command: orbit_types::workflow::BUBBLEWRAP_NAMESPACE_PROBE,
         argv: &[
             "/bin/sh",
             "-c",
@@ -604,6 +631,8 @@ fn the_deferral_probe_records_what_the_lane_answers() {
     };
 
     let refused = bare.run_deferral_probe(&refusing, Some("claude"), None, checkout.path());
+    let unsupported =
+        UnsupportedProbeHost.run_deferral_probe(&refusing, Some("claude"), None, checkout.path());
     let missing = bare.run_deferral_probe(&unrunnable, None, None, checkout.path());
     let unresolved = ProbeHost { unresolvable: true }.run_deferral_probe(
         &refusing,
@@ -619,12 +648,16 @@ fn the_deferral_probe_records_what_the_lane_answers() {
             refused.output.as_str()
         ),
         (
-            "lane refusal",
+            orbit_types::workflow::BUBBLEWRAP_NAMESPACE_PROBE,
             1,
             "bwrap: No permissions to create a new namespace"
         )
     );
     assert_ne!(missing.exit_code, 0);
+    assert_eq!(
+        unsupported.exit_code, -1,
+        "an unsupported host never executes the probe"
+    );
     assert!(
         missing.output.starts_with("the probe could not run"),
         "{missing:?}"
@@ -634,4 +667,31 @@ fn the_deferral_probe_records_what_the_lane_answers() {
         unresolved.output.contains("no sandbox for `claude`"),
         "the probe runs in the provider's lane: {unresolved:?}"
     );
+
+    let handoff = orbit_types::workflow::deferral_handoff(&json!({
+        "deferred_sandbox_validation": { "summary": ".orbit/tmp/gate.json" },
+    }))
+    .unwrap()
+    .unwrap();
+    let summary = serde_json::to_vec(&json!({
+        "schema_version": 1,
+        "command": "make ci-test-affected",
+        "exit_code": 0,
+        "tests_run": 1,
+        "base": "pinned-base",
+        "notices": ["DEFERRED: bubblewrap unavailable: fixture"],
+    }))
+    .unwrap();
+    let pending = handoff
+        .derive(
+            &summary,
+            &["make ci-test-affected".to_string()],
+            Some("pinned-base"),
+        )
+        .unwrap();
+    pending.clone().complete(refused).unwrap();
+    let refusal = pending.complete(unresolved).expect_err(
+        "a lane-resolution error carrying the namespace-refusal text is not an executed probe",
+    );
+    assert!(refusal.contains("no failing namespace probe"), "{refusal}");
 }
