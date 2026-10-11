@@ -191,6 +191,7 @@ A test whose subject is the token first calls `orbit_common::test_env::start_ide
 - Wait for observable readiness under a generous ceiling and measure shutdown separately (SIGINT/SIGTERM ceiling: ten seconds). Readiness waits detect early supervisor exit and keep its output. Never add launch retries or relax shutdown assertions to hide startup failures.
 - Observe persisted state rather than CLI timing: the registry-lock fixture reads the worker's run through a read-only SQLite connection while holding the registry writer.
 - Before asserting a task's final state after a detached resume, wait for the recorded worker (PID and start identity) to exit, within a deadline: the run turns terminal before coupled-task cleanup finishes.
+- Keep disposable homes and checkouts alive through detached worker exit, including assertion unwinds. Arm fixture cleanup before submitting, so a failed command or malformed response still owns any admitted run. Enumerate the private registry, wait for pending workers to claim, complete or cancel each run, and probe its recorded PID/start identity until it has exited. A terminal row alone does not establish cleanup. If exit cannot be confirmed, retain the roots and fail the fixture rather than deleting paths a worker may still use. The env-pass warning fixture exercises this ordering with a held worker and an unwind.
 
 ### Tests and macOS temp paths
 
