@@ -51,6 +51,8 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 
 #[cfg(unix)]
 mod build_budget;
+#[cfg(unix)]
+mod no_diff;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.

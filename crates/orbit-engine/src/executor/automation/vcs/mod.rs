@@ -33,6 +33,7 @@ pub(super) use candidate_resume::candidate_resume;
 pub(super) use candidate_validate::candidate_validate;
 pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
+pub(crate) use commit::require_implementer_no_diff_artifacts;
 pub use commit::validate_claim_new_paths;
 pub(crate) use commit::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
