@@ -192,7 +192,7 @@ returns.
   request handed to the owner, which moves the task to `review`. The owner
   approves before anything lands; the follower never merges. With
   `workflow.distributed_completion = "done"` on the owner, acceptance
-  authorizes the handoff and the owner's landing job merges and completes it,
+  authorizes the handoff and the owner's `task_landing_pipeline` merges and completes it,
   as `--complete` does for owner tasks.
 - The drain keeps settling claims after `--for` expires, until none is left.
   `orbit run auto --stop` closes the window early; live leaves keep running.
@@ -353,7 +353,7 @@ A recovered follower pull request that merged at a head other than its
 handed-off candidate completes only after an operator reconciles that merged
 head on the owner. Run `orbit task reconcile-review inspect <task-id>`, then
 `orbit task reconcile-review submit <task-id> --request <key>`, and follow it
-with `orbit task reconcile-review status <task-id>`. The submitted run
+with `orbit task reconcile-review status <task-id>`. The submitted run (`task_review_reconciliation_pipeline`)
 validates and reviews exactly that head under the contract `submit` froze: the
 accepted handoff's captured commands (or, when that acceptance explicitly
 required none, the owner's configured commands, labelled as such) and the
