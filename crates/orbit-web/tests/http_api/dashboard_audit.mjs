@@ -20,7 +20,7 @@ class Node {
   get textContent() { return this.text + this.children.map(child => child.textContent ?? child).join(' '); }
   get childNodes() { return this.children; }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
-  append(child) { this.appendChild(child); }
+  append(child) { this.appendChild(typeof child === 'string' ? document.createTextNode(child) : child); }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parentNode = null; }
   insertBefore(child, before) {
     child.parentNode?.removeChild(child);
@@ -66,8 +66,10 @@ await common.link(() => { throw new Error('unexpected common dependency'); });
 await codebase.link(name => { assert.equal(name, './common.js'); return common; });
 await audit.link(name => ({ './common.js': common, './codebase.js': codebase })[name]);
 await audit.evaluate();
+const incidents = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/incidents.js', import.meta.url), 'utf8'), { context });
+await incidents.link(name => ({ './common.js': common, './audit.js': audit })[name]);
 const diagnostics = new vm.SourceTextModule(fs.readFileSync(new URL('../../assets/dashboard/js/diagnostics.js', import.meta.url), 'utf8'), { context });
-await diagnostics.link(name => ({ './common.js': common, './audit.js': audit })[name]);
+await diagnostics.link(name => ({ './common.js': common, './audit.js': audit, './incidents.js': incidents })[name]);
 await diagnostics.evaluate();
 const payload = {
   window: '24h',
@@ -243,12 +245,26 @@ assert.match(incidentRow().children[1].textContent, /unavailable/i, 'read failur
 assert.doesNotMatch(incidentRow().children[0].textContent, /capped/i);
 
 const findNode = (root, predicate) => descendants(root).find(predicate);
-const expandIncidentAndOpenRawEvents = () => {
-  findNode(diagnosticsBody, node => node.className === 'incident-head').listeners.get('click')();
-  const rawButton = findNode(diagnosticsBody, node => node.tagName === 'button'
-    && node.className === 'chip' && node.textContent === 'Open raw audit events');
-  assert.equal(typeof rawButton?.listeners.get('click'), 'function', 'expanded incident exposes its raw-audit action');
-  rawButton.listeners.get('click')();
+const plainClick = (node) => node.listeners.get('click')({
+  stopPropagation() {},
+  preventDefault() {},
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  button: 0,
+});
+const hasClass = (node, name) => String(node.className).split(' ').includes(name);
+const incidentRows = () => descendants(diagnosticsBody).filter(node => node.tagName === 'button' && hasClass(node, 'incident-row'));
+const detailPanel = () => findNode(diagnosticsBody, node => hasClass(node, 'incident-detail'));
+const inDetail = (predicate) => descendants(detailPanel()).filter(predicate);
+const partOf = (node, name) => descendants(node).find(child => hasClass(child, name));
+const detailButton = (text) => inDetail(node => node.tagName === 'button' && node.textContent === text)[0];
+const classTile = (key) => findNode(diagnosticsBody, node => hasClass(node, 'incident-tile') && node.dataset.class === key);
+const openAuditEvents = () => {
+  const button = detailButton('Audit events');
+  assert.equal(typeof button?.listeners.get('click'), 'function', 'the selected incident links its audit events');
+  button.listeners.get('click')();
 };
 let incidentPayload = {
   window: '24h', incident_count: 1, raw_failed_events: 65, total_events: 100,
@@ -265,16 +281,20 @@ const diagnosticsContext = {
   getLastDiagnostics: () => ({ incidents: incidentPayload }),
 };
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-expandIncidentAndOpenRawEvents();
+assert.equal(incidentRows().length, 1);
+assert.equal(incidentRows()[0]['aria-pressed'], 'true', 'the only incident is selected for the detail panel');
+openAuditEvents();
 let incidentRoute = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(incidentRoute.get('ids'), Array.from({ length: 65 }, (_, index) => index + 1).join(','));
 assert.equal(incidentRoute.has('tool'), false, 'tool-less incidents route by exact event IDs');
 assert.equal(incidentRoute.has('status'), false, 'exact event IDs retain stored failure rows');
-assert.ok(incidentRoute.get('ids').split(',').length >= 65, 'exact route includes at least the incident event count');
 audit.namespace.applyAuditHashQuery(incidentRoute);
 assert.equal(new URLSearchParams(audit.namespace.buildAuditHash().split('?')[1]).get('ids'), incidentRoute.get('ids'));
 
-findNode(diagnosticsBody, node => node.dataset.class === 'all').listeners.get('click')();
+// A class tile picks the class the list shows.
+classTile('denied').listeners.get('click')();
+assert.equal(classTile('denied')['aria-pressed'], 'true');
+assert.equal(classTile('unexpected')['aria-pressed'], 'false');
 incidentPayload = {
   window: '24h', incident_count: 1, raw_failed_events: 1, total_events: 1,
   incidents: [{
@@ -284,11 +304,14 @@ incidentPayload = {
   }],
 };
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-expandIncidentAndOpenRawEvents();
+openAuditEvents();
 incidentRoute = new URLSearchParams(window.location.hash.split('?')[1]);
 assert.equal(incidentRoute.get('ids'), '9001', 'denied incident points to its stored failure row');
 assert.equal(incidentRoute.has('status'), false, 'denied classification does not rewrite the stored status');
 assert.equal(incidentRoute.has('tool'), false, 'exact incident rows are not narrowed by surface');
+classTile('unexpected').listeners.get('click')();
+assert.equal(incidentRows().length, 0, 'the unexpected list does not show a denied incident');
+
 incidentPayload = {
   window: '24h', incident_count: 1, raw_failed_events: 7, total_events: 7,
   incidents: [{
@@ -299,21 +322,31 @@ incidentPayload = {
   }],
 };
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-const listedMessage = () => findNode(diagnosticsBody, node => node.className === 'incident-message').textContent;
+const listedMessage = () => partOf(incidentRows()[0], 'incident-headline').textContent;
+const fullMessage = () => inDetail(node => hasClass(node, 'incident-full-message'))[0].textContent;
 assert.doesNotMatch(listedMessage(), /\|role=/, 'the grouping key is never the incident message');
 assert.match(listedMessage(), /doctor failed; no message recorded/, 'a message-less incident reads as such');
-findNode(diagnosticsBody, node => node.className === 'incident-head').listeners.get('click')();
+assert.equal(partOf(incidentRows()[0], 'incident-flag').textContent, 'no message', 'the row flags it in words');
+assert.equal(fullMessage(), 'doctor failed; no message recorded', 'the detail panel never shows the signature as the message');
 assert.match(
-  descendants(diagnosticsBody).map(node => node.textContent).join(' '),
+  inDetail(node => node.className === 'incident-signature')[0].textContent,
   /unexpected\|role=human\|surface=doctor/,
-  'the signature stays available in the expanded details',
+  'the signature stays available in the audit evidence',
 );
 incidentPayload.incidents[0].message = 'doctor reported findings: 1 failure (review), 0 warnings';
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
 assert.match(listedMessage(), /1 failure \(review\)/, 'a recorded message is shown as is');
+assert.equal(inDetail(node => hasClass(node, 'incident-message-note')).length, 0, 'a whole message has no truncation note');
+incidentPayload.incidents[0].message = 'doctor reported findings: 1 failure (review), 0 warnings, then…';
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.equal(inDetail(node => hasClass(node, 'incident-message-note')).length, 1, 'a message cut before storage says so');
+incidentPayload.incidents[0].events[0].message = 'doctor reported findings: 1 failure (review), 0 warnings, then 2 skipped checks';
+diagnostics.namespace.renderDiagnostics(diagnosticsContext);
+assert.equal(fullMessage(), 'doctor reported findings: 1 failure (review), 0 warnings, then 2 skipped checks', 'an event that kept the whole message supplies it');
+assert.equal(inDetail(node => hasClass(node, 'incident-message-note')).length, 0);
 
-// Identical signatures across runs collapse to one recurring row. Each run
-// stays an incident underneath it, with its own id and links.
+// Identical signatures across runs collapse to one row, sorted by last seen.
+// Each run stays an incident in the detail panel, with its own id and links.
 const sweepMessage = 'execution failed: v2 job dispatch: deterministic action `file_ci_failure_tasks` failed: execution failed: ci_failure_sweep retryable: {"outcome":"retryable_error","stage":"collection_or_investigation"}';
 const sweepSignature = 'unexpected|role=human|surface=run-pipeline-worker|msg=ci_failure_sweep retryable';
 const sweepFires = [
@@ -369,68 +402,44 @@ incidentPayload = {
     sweepIncident('2026-10-10T08:50:00Z', 'jrun-other-surface', 'inc-other-surface', 'unexpected|role=human|surface=orbit.doctor|msg=ci_failure_sweep retryable', 'orbit.doctor'),
   ],
 };
-const incidentList = () => diagnosticsBody.children.find(node => node.className === 'incident-list');
-const topRows = () => incidentList().children.filter(node => String(node.className).includes('incident-row'));
-const recurrenceRow = () => topRows().find(node => String(node.className).includes('incident-recurrence'));
-const plainClick = (node) => node.listeners.get('click')({
-  stopPropagation() {},
-  preventDefault() {},
-  metaKey: false,
-  ctrlKey: false,
-  shiftKey: false,
-  altKey: false,
-  button: 0,
-});
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-assert.equal(topRows().length, 3, 'five sweep fires, one newer one-off, and one same-message other signature are three rows');
-assert.equal(topRows().filter(node => String(node.className).includes('incident-recurrence')).length, 1, 'the sweep is one recurring entry');
-assert.equal(topRows()[0], recurrenceRow(), 'recurring signatures sort ahead of newer one-offs');
-assert.equal(topRows()[1].dataset.key, 'incident-inc-one-off', 'one-offs keep server order after the rollup');
-assert.equal(topRows()[2].dataset.key, 'incident-inc-other-surface', 'the same message with a different signature stays its own incident');
-const summaryText = () => descendants(recurrenceRow()).find(node => node.className === 'incident-recurrence-summary').textContent;
-assert.equal(summaryText(), 'recurring · 5 runs · first 2h · last 13m · every 20 min');
-assert.equal(
-  descendants(recurrenceRow()).find(node => node.className === 'incident-actor').textContent,
-  'human',
-  'the recorded actor stays on the recurring row',
-);
-assert.equal(recurrenceRow().children.filter(node => node.className === 'incident-message').length, 1);
-assert.match(recurrenceRow().children.find(node => node.className === 'incident-message').textContent, /ci_failure_sweep retryable/);
-assert.equal(recurrenceRow().textContent.includes('jrun-sweep-0820'), false, 'runs stay hidden until the recurrence is expanded');
-const recurrenceHead = () => recurrenceRow().children.find(node => node.className === 'incident-head');
-assert.equal(recurrenceHead()['aria-expanded'], 'false');
-recurrenceHead().listeners.get('click')();
-assert.equal(recurrenceHead()['aria-expanded'], 'true');
-const runRows = () => recurrenceRow().children.find(node => node.className === 'incident-recurrence-runs').children;
-assert.deepEqual(runRows().map(node => node.dataset.key), [
-  'incident-inc-sweep-0820',
-  'incident-inc-sweep-0800',
-  'incident-inc-sweep-0740',
-  'incident-inc-sweep-0720',
-  'incident-inc-sweep-0700',
-], 'expansion lists each run newest first, keeping the per-run incident id');
+const rowFacts = () => incidentRows().map(row => ({
+  sub: partOf(row, 'incident-sub').textContent,
+  count: partOf(row, 'incident-count').textContent,
+}));
+assert.deepEqual(rowFacts(), [
+  { sub: 'orbit.doctor · human', count: '1 event' },
+  { sub: 'orbit.task.add · human', count: '1 event' },
+  { sub: 'run-pipeline-worker · human · every 20 min', count: '5 runs' },
+], 'five sweep fires roll up into one row; the same message on another signature and the one-off stay their own rows, newest last seen first');
+const sweepRow = () => incidentRows()[2];
+assert.equal(sweepRow().textContent.includes('jrun-sweep-0820'), false, 'a row does not list its runs');
+plainClick(sweepRow());
+assert.equal(sweepRow()['aria-pressed'], 'true', 'clicking a row selects it');
+assert.equal(inDetail(node => node.className === 'incident-sentence')[0].textContent, '5 runs since 2h ago, every 20 min. Last seen 13m ago.');
+assert.equal(fullMessage(), sweepMessage, 'the detail panel shows the full message');
 assert.deepEqual(
-  runRows().map(node => descendants(node).find(child => child.className === 'incident-run mono').textContent),
-  ['jrun-sweep-0820', 'jrun-sweep-0800', 'jrun-sweep-0740', 'jrun-sweep-0720', 'jrun-sweep-0700'],
+  inDetail(node => node.className === 'incident-related-item').map(node => partOf(node, 'mono').textContent),
+  ['orbit.doctor · human'],
+  'the same message on another signature is related; a different message is not',
 );
-const oldest = runRows().at(-1);
-oldest.children.find(node => node.className === 'incident-head').listeners.get('click')();
-const openedOldest = () => runRows().at(-1);
-assert.match(openedOldest().children.find(node => node.className === 'incident-head').title, /inc-sweep-0700/);
-const openRun = descendants(openedOldest()).find(node => node.tagName === 'button' && node.textContent === 'Open run jrun-sweep-0700');
-assert.equal(typeof openRun.listeners.get('click'), 'function', 'the per-run incident still offers its run link');
-openRun.listeners.get('click')();
-assert.deepEqual(opened, ['runs/jrun-sweep-0700']);
-const runLink = descendants(openedOldest()).find(node => node.tagName === 'a' && node.textContent === 'jrun-sweep-0700');
-const taskLink = descendants(openedOldest()).find(node => node.tagName === 'a' && node.textContent === 'ORB-9001');
+assert.deepEqual(
+  inDetail(node => node.className === 'incident-run').map(node => node.dataset.incident),
+  ['inc-sweep-0820', 'inc-sweep-0800', 'inc-sweep-0740', 'inc-sweep-0720', 'inc-sweep-0700'],
+  'the runs list each run newest first, keeping the per-run incident id',
+);
+detailButton('View runs (5)').listeners.get('click')();
+assert.equal(inDetail(node => hasClass(node, 'incident-runs'))[0].open, true, 'View runs opens the run list');
+const runLink = inDetail(node => node.tagName === 'a' && node.textContent === 'jrun-sweep-0700')[0];
+const taskLink = inDetail(node => node.tagName === 'a' && node.textContent === 'ORB-9001')[0];
 assert.match(runLink.href, /#runs\?run_id=jrun-sweep-0700/);
 assert.match(runLink.href, /workspace=ws_fixture/);
 assert.match(taskLink.href, /#tasks\?open=ORB-9001$/);
 plainClick(runLink);
-assert.deepEqual(opened, ['runs/jrun-sweep-0700', 'navigate:jrun-sweep-0700']);
-assert.equal(runRows().length, 5, 'opening one run leaves the other runs listed');
-recurrenceHead().listeners.get('click')();
-assert.equal(recurrenceRow().children.some(node => node.className === 'incident-recurrence-runs'), false, 'collapsing the recurrence hides the runs');
+assert.deepEqual(opened, ['navigate:jrun-sweep-0700']);
+plainClick(incidentRows()[1]);
+detailButton('View run').listeners.get('click')();
+assert.deepEqual(opened, ['navigate:jrun-sweep-0700', 'runs/jrun-one-off'], 'a single-run incident opens its run');
 
 incidentPayload = {
   window: '24h', incident_count: 2, shown_incident_count: 2, matching_incident_count: 2,
@@ -440,8 +449,7 @@ incidentPayload = {
   ],
 };
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-assert.equal(topRows().length, 2, 'incidents with no signature stay separate even when the message matches');
-assert.equal(topRows().some(node => String(node.className).includes('incident-recurrence')), false);
+assert.equal(incidentRows().length, 2, 'incidents with no signature stay separate even when the message matches');
 
 incidentPayload = {
   window: '24h', incident_count: 4, shown_incident_count: 4, matching_incident_count: 4,
@@ -449,19 +457,21 @@ incidentPayload = {
     .map((ts, index) => sweepIncident(ts, `jrun-irregular-${index}`, `inc-irregular-${index}`, 'unexpected|role=human|surface=run-pipeline-worker|msg=irregular')),
 };
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-assert.match(summaryText(), /about every 5 min/, 'uneven gaps are not labelled as a fixed schedule');
+assert.match(rowFacts()[0].sub, /about every 5 min/, 'uneven gaps are not labelled as a fixed schedule');
 
+const loaded = [];
+diagnosticsContext.loadMoreIncidents = (limit) => { loaded.push(limit); };
 incidentPayload = {
-  window: '24h', incident_count: 80, shown_incident_count: 50, matching_incident_count: 80,
+  window: '24h', incident_count: 80, shown_incident_count: 50, matching_incident_count: 80, limit: 50,
   incidents: [
     sweepIncident('2026-10-10T08:00:00Z', 'jrun-capped-a', 'inc-capped-a', 'unexpected|role=human|surface=run-pipeline-worker|msg=capped'),
     sweepIncident('2026-10-10T08:20:00Z', 'jrun-capped-b', 'inc-capped-b', 'unexpected|role=human|surface=run-pipeline-worker|msg=capped'),
   ],
 };
 diagnostics.namespace.renderDiagnostics(diagnosticsContext);
-assert.match(summaryText(), /2 runs in the newest 50/, 'a capped page says the run count is among the incidents shown');
-assert.match(
-  descendants(recurrenceRow()).find(node => node.className === 'incident-recurrence-summary').title,
-  /newest 50 of 80/,
-);
-console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down, recurrence rollup and refresh passed');
+assert.match(partOf(incidentRows()[0], 'incident-count').title, /among the newest 50 of 80 incidents/, 'a capped page says the run count is among the incidents shown');
+const loadOlder = findNode(diagnosticsBody, node => node.tagName === 'button' && node.textContent === 'Load older');
+assert.equal(typeof loadOlder?.listeners.get('click'), 'function', 'a capped list offers older incidents');
+loadOlder.listeners.get('click')();
+assert.deepEqual(loaded, [100], 'Load older asks for the next page');
+console.log('audit, scoreboard and incident renderers: counts, exact incident drill-down, class tiles, recurrence rollup, detail panel and refresh passed');

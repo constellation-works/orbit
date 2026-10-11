@@ -89,94 +89,254 @@ td .rel-rate { font-size: 12px; }
 .rel-role-ambiguous { color: var(--priority-medium); border-color: var(--priority-medium); }
 .rel-role-unknown { color: var(--fg-dim); }
 
-/* ORB-10871: grouped failure incidents (Diagnostics → Incidents).
-   Every count renders next to what it is out of, and the class chips
-   keep denials, expected negative paths, and unexpected failures
-   visually separate. */
-.incident-summary {
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--bg-alt, var(--bg));
+/* Health › Incidents [ORB-10871, ORB-15221]. Class tiles pick the class the
+   list shows; every row draws its signature's first-to-last lifespan on the
+   axis its header labels; the detail panel holds the full message and the
+   drill-downs. Colour only reinforces the text: a class, a live signature
+   and a missing message are each also spelled out. */
+.incident-head-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 16px; padding: 14px 16px 0;
 }
-.incident-summary-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
-.incident-summary-headline { color: var(--fg); font: 13px var(--font-mono); }
-.incident-summary-denominator { color: var(--fg-dim); font: 11px/1.5 var(--font-sans); }
-.incident-summary-window {
-  padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px;
-  color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap;
+.incident-intro { margin: 0; color: var(--fg-dim); font: 13px/1.45 var(--font-sans); }
+.incident-windows {
+  display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px;
+  background: var(--bg-sunk); border: 1px solid var(--border); border-radius: 10px;
 }
-.incident-class-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.incident-class-chip {
-  padding: 2px 8px; border: 1px solid var(--border); border-left-width: 2px; border-radius: 3px;
-  color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap;
+.incident-seg {
+  min-width: 44px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--fg-dim); font: 500 13px var(--font-sans); cursor: pointer;
 }
-.incident-class-chip.unexpected { border-left-color: var(--state-failed); }
-.incident-class-chip.expected { border-left-color: var(--fg-dim); }
-.incident-class-chip.denied { border-left-color: var(--state-warn, var(--accent)); }
-.incident-class-chip.diagnostic { border-left-color: var(--accent); }
-.incident-truncation-note { margin: 0; color: var(--state-warn, var(--fg-dim)); font: 11px/1.5 var(--font-sans); }
-.incident-lifecycle-note {
-  color: var(--fg-dim); font: 11px/1.5 var(--font-sans); overflow-wrap: anywhere;
+.incident-seg:hover { color: var(--fg); }
+.incident-seg[aria-pressed="true"] { background: #1f252d; color: var(--fg); box-shadow: inset 0 0 0 1px #313842; }
+
+.incident-classes { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 0; }
+.incident-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.incident-tile {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg);
+  color: var(--fg); font: inherit; text-align: left; cursor: pointer;
+}
+.incident-tile:hover { border-color: #3a424d; }
+.incident-tile[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-wash); }
+.incident-tile-label { display: flex; align-items: center; gap: 8px; color: var(--fg-dim); font: 13px var(--font-sans); }
+.incident-tile-count { display: flex; align-items: baseline; gap: 6px; color: var(--fg-dim); font: 13px var(--font-sans); }
+.incident-tile-number { color: var(--fg); font: 600 26px/1.1 var(--font-sans); font-variant-numeric: tabular-nums; }
+.incident-tile-sub { color: var(--fg-mute); font: 12px var(--font-mono); overflow-wrap: anywhere; }
+.incident-tile-note { color: var(--fg-mute); font: 12px var(--font-sans); }
+.incident-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--fg-mute)); }
+.incident-tile.unexpected, .incident-insight.live { --dot: var(--state-failed); }
+.incident-tile.expected, .incident-insight.silent { --dot: var(--status-proposed); }
+.incident-tile.denied { --dot: var(--state-held); }
+.incident-tile.diagnostic { --dot: var(--fg-mute); }
+.incident-denominator { margin: 0; color: var(--fg-mute); font: 12.5px/1.5 var(--font-sans); overflow-wrap: anywhere; }
+.incident-scan-note { margin: 0; color: var(--state-pending); font: 12px/1.5 var(--font-sans); }
+
+.incident-insights { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 0; }
+.incident-insights:empty { display: none; }
+.incident-insight {
+  display: inline-flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg);
+  color: var(--fg); font: 13px var(--font-sans); text-align: left; cursor: pointer;
+}
+.incident-insight:hover { border-color: #3a424d; }
+.incident-insight[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-wash); }
+
+.incident-layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+  gap: 16px; align-items: start; padding: 14px 16px 16px;
+}
+.incident-master, .incident-detail-panel {
+  min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+}
+.incident-master { overflow: hidden; }
+.incident-detail-panel { position: sticky; top: 12px; padding: 18px; }
+/* Sticky binds to the nearest scroll container. The panel body (overflow
+   auto, for the wide tables of the other views) and the panel (overflow
+   hidden) would each be one, so neither scrolls; with Incidents shown both
+   clip instead and the panel sticks to the scrolling tab pane. */
+#diagnostics-panel:has(#diag-body > .incident-layout) { overflow: clip; }
+#diag-body:has(> .incident-layout) { overflow: clip; }
+.incident-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+}
+.incident-list-title { margin: 0; color: var(--fg); font: 600 14px var(--font-sans); }
+.incident-list-count { color: var(--fg-mute); font: 400 12.5px var(--font-mono); }
+.incident-search-wrap { flex: 1 1 200px; min-width: 0; }
+.incident-search {
+  width: 100%; min-height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-elev); color: var(--fg); font: 13px var(--font-sans);
+}
+.incident-search:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(122, 167, 255, 0.2); }
+.incident-toggle, .incident-action {
+  min-height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-elev); color: var(--fg); font: 500 13px var(--font-sans); white-space: nowrap; cursor: pointer;
+}
+.incident-toggle:hover, .incident-action:hover { border-color: #3a424d; }
+.incident-toggle[aria-pressed="true"] { background: #2a1513; border-color: #7a3a33; color: #ffb3aa; }
+
+/* One grid for the axis header and every row, so a bar and its labels line up. */
+.incident-axis-row, .incident-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 200px) 96px 56px;
+  align-items: center; gap: 6px 16px;
+}
+.incident-axis-head { background: var(--bg-sunk); }
+.incident-axis-row {
+  padding: 8px 14px; color: var(--fg-mute);
+  font: 600 11px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase;
+}
+.incident-axis-row > span { color: inherit; font: inherit; }
+.incident-track.incident-axis { display: flex; justify-content: space-between; height: auto; }
+.incident-track.incident-axis::before { content: none; }
+.incident-row {
+  width: 100%; min-height: 56px; padding: 10px 14px; border: 0; border-top: 1px solid var(--hair);
+  background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
+}
+.incident-row:hover { background: var(--bg-hover); }
+.incident-row[aria-pressed="true"] { background: rgba(122, 167, 255, 0.08); box-shadow: inset 0 0 0 1px rgba(122, 167, 255, 0.55); }
+.incident-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.incident-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.incident-headline {
+  min-width: 0; overflow: hidden; overflow-wrap: anywhere; font: 500 13.5px/1.4 var(--font-sans);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.incident-flag { color: var(--status-proposed); font: 600 11.5px var(--font-sans); white-space: nowrap; }
+.incident-sub { color: var(--fg-mute); font: 12px/1.4 var(--font-sans); overflow-wrap: anywhere; }
+.incident-track { position: relative; display: block; height: 20px; }
+.incident-track::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 9px; height: 2px; border-radius: 1px; background: #232931;
+}
+.incident-mark { position: absolute; top: 5px; height: 10px; min-width: 8px; border-radius: 5px; }
+.incident-mark.live { background: var(--state-failed); }
+.incident-mark.quiet { background: #a9554c; }
+.incident-mark.dot { width: 10px; min-width: 10px; transform: translateX(-50%); }
+.incident-count { color: #c9ced6; font: 12.5px var(--font-mono); text-align: right; white-space: nowrap; }
+.incident-last { color: var(--fg-dim); font: 12.5px var(--font-sans); text-align: right; white-space: nowrap; }
+.incident-last.live { color: #ff9b8f; font-weight: 600; }
+.incident-empty {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px;
+  padding: 32px 16px; border-top: 1px solid var(--hair); color: var(--fg-dim); text-align: center;
+}
+.incident-link-button {
+  min-height: 24px; padding: 0; border: 0; background: none; color: var(--accent);
+  font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.incident-footer-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  padding: 12px 14px; border-top: 1px solid var(--border); color: var(--fg-mute); font: 12.5px/1.5 var(--font-sans);
 }
 
-.incident-list { display: flex; flex-direction: column; }
-.incident-row { border-bottom: 1px solid var(--border); padding: 10px 14px; }
-.incident-row.unexpected { border-left: 2px solid var(--state-failed); }
-.incident-row.expected { border-left: 2px solid var(--fg-dim); }
-.incident-row.denied { border-left: 2px solid var(--state-warn, var(--accent)); }
-.incident-row.diagnostic { border-left: 2px solid var(--accent); }
-.incident-head {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; width: 100%;
-  padding: 0; border: 0; background: none; color: var(--fg); text-align: left; cursor: pointer;
+.incident-detail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.incident-detail-empty { margin: 0; color: var(--fg-dim); font: 13px/1.5 var(--font-sans); }
+.incident-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.incident-pill {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px;
+  background: rgba(163, 172, 184, 0.12); color: #b3bcc8;
+  font: 600 11.5px var(--font-sans); letter-spacing: 0.02em; white-space: nowrap;
 }
-.incident-caret { color: var(--fg-dim); font: 10px var(--font-mono); }
-.incident-class { font: 10px var(--font-mono); text-transform: lowercase; }
-.incident-class.unexpected { color: var(--state-failed); }
-.incident-class.expected { color: var(--fg-dim); }
-.incident-class.denied { color: var(--state-warn, var(--accent)); }
-.incident-class.diagnostic { color: var(--accent); }
-.incident-surface { font: 12px var(--font-mono); overflow-wrap: anywhere; }
-.incident-actor { color: var(--fg-dim); font: 11px var(--font-sans); }
-.incident-count { margin-left: auto; color: var(--fg); font: 11px var(--font-mono); white-space: nowrap; }
-.incident-recurrence-summary {
-  margin-left: auto; color: var(--fg); font: 11px var(--font-mono); white-space: normal; overflow-wrap: anywhere;
+.incident-pill.unexpected, .incident-pill.live { background: rgba(255, 122, 107, 0.14); color: #ffb3aa; }
+.incident-pill.expected { background: rgba(242, 178, 76, 0.14); color: #f6c97f; }
+.incident-pill.denied { background: rgba(196, 167, 255, 0.14); color: #d9c8ff; }
+.incident-detail-head { display: flex; flex-direction: column; gap: 6px; }
+.incident-detail-title { margin: 0; color: var(--fg); font: 600 17px/1.35 var(--font-sans); overflow-wrap: anywhere; }
+.incident-sentence { margin: 0; color: #c9ced6; font: 13px/1.5 var(--font-sans); }
+.incident-lifespan { display: flex; flex-direction: column; gap: 6px; }
+.incident-wide-track {
+  position: relative; display: block; height: 28px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-sunk);
 }
-.incident-when { color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
-.incident-run { color: var(--fg-dim); font: 11px var(--font-mono); overflow-wrap: anywhere; }
-.incident-recurrence-runs {
-  display: flex; flex-direction: column; margin: 8px 0 0 14px; border-left: 1px solid var(--border);
+.incident-wide-track .incident-mark { top: 8px; }
+.incident-wide-axis { display: flex; justify-content: space-between; color: var(--fg-mute); font: 11.5px var(--font-sans); }
+.incident-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin: 0; font: 13px var(--font-sans); }
+.incident-facts dt { color: var(--fg-mute); font-size: 12px; }
+.incident-facts dd { margin: 2px 0 0; color: var(--fg); overflow-wrap: anywhere; }
+.incident-facts dd.mono { font: 12.5px var(--font-mono); }
+.incident-message { display: flex; flex-direction: column; gap: 8px; }
+.incident-message-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.incident-eyebrow {
+  margin: 0; color: var(--fg-mute); font: 600 11.5px var(--font-sans);
+  letter-spacing: 0.06em; text-transform: uppercase;
 }
-.incident-recurrence-runs > .incident-row { border-bottom: 1px solid var(--border); padding: 8px 0 8px 10px; }
-.incident-recurrence-runs > .incident-row:last-child { border-bottom: 0; }
-.incident-message {
-  margin-top: 4px; color: var(--fg-dim); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere;
+.incident-copy.copy-id {
+  min-height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-elev); color: var(--fg-dim); font: 500 12.5px var(--font-sans);
 }
-.incident-detail {
-  display: flex; flex-direction: column; gap: 12px; margin-top: 10px;
-  padding: 10px; border: 1px solid var(--border); border-radius: 3px; overflow-x: auto;
+.incident-full-message {
+  max-height: 22rem; margin: 0; padding: 12px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-sunk);
+  color: var(--fg); font: 12px/1.55 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.incident-facts {
-  display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); gap: 4px 12px; margin: 0;
+.incident-full-message.missing { color: var(--fg-dim); }
+.incident-message-note { margin: 0; color: var(--fg-mute); font: 12px/1.5 var(--font-sans); }
+.incident-related { display: flex; flex-direction: column; gap: 6px; }
+.incident-related-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  min-height: 40px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-elev); color: var(--fg); font: 12px var(--font-sans); text-align: left; cursor: pointer;
 }
-.incident-facts dt { color: var(--fg-dim); font: 10px var(--font-sans); }
-.incident-facts dd { margin: 0; color: var(--fg); font: 11px var(--font-mono); overflow-wrap: anywhere; }
-.incident-section-title { color: var(--fg-dim); font: 10px var(--font-sans); }
-.incident-propagation { display: flex; flex-direction: column; gap: 4px; }
+.incident-related-item .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incident-related-meta { color: var(--fg-mute); white-space: nowrap; }
+.incident-related-more { margin: 0; color: var(--fg-mute); font: 12px var(--font-sans); }
+.incident-disclosure summary { padding: 6px 0; color: var(--fg-dim); font: 600 12.5px var(--font-sans); cursor: pointer; }
+.incident-run-list { display: flex; flex-direction: column; margin: 6px 0 0; padding: 0; list-style: none; }
+.incident-run {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 6px 0;
+  border-top: 1px solid var(--hair); font: 12px var(--font-sans);
+}
+.incident-run-links, .incident-run-tasks { min-width: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.incident-run-meta { color: var(--fg-mute); }
+.incident-signature { margin: 6px 0 0; }
+.incident-signature dt { color: var(--fg-mute); font: 12px var(--font-sans); }
+.incident-signature dd { margin: 2px 0 0; color: var(--fg-dim); font: 11px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.incident-section-title { color: var(--fg-dim); font: 11px var(--font-sans); }
+.incident-propagation { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .incident-propagation-link {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
   padding-left: 10px; border-left: 1px dashed var(--border);
 }
 .incident-propagation-link .chain-mark { color: var(--fg-dim); }
 .incident-propagation-link .chain-surface { font: 11px var(--font-mono); }
-.incident-propagation-link .chain-count { color: var(--fg-dim); font: 10px var(--font-mono); }
+.incident-propagation-link .chain-count { color: var(--fg-dim); font: 11px var(--font-mono); }
 .incident-propagation-link .chain-message {
-  flex: 1 1 12rem; color: var(--fg-dim); font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere;
+  flex: 1 1 12rem; color: var(--fg-dim); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere;
 }
+.incident-evidence-wrap { margin-top: 8px; overflow-x: auto; }
 .incident-evidence { width: 100%; border-collapse: collapse; }
 .incident-evidence th, .incident-evidence td {
-  padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top;
+  padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; white-space: nowrap;
 }
-.incident-evidence td { font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
-.incident-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.incident-evidence td { font: 11px/1.5 var(--font-mono); }
+.incident-evidence td.stderr { min-width: 14rem; white-space: normal; overflow-wrap: anywhere; }
+.incident-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+.incident-seg:focus-visible, .incident-tile:focus-visible, .incident-insight:focus-visible,
+.incident-toggle:focus-visible, .incident-action:focus-visible, .incident-related-item:focus-visible,
+.incident-link-button:focus-visible, .incident-copy:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.incident-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The panel is the container (`runs-card`): beside the rail it narrows well
+   before the viewport does. The detail panel stacks under the list, then the
+   row puts its title on its own line above the bar, count and last seen. */
+@container runs-card (max-width: 1000px) {
+  .incident-layout { grid-template-columns: minmax(0, 1fr); }
+  .incident-detail-panel { position: static; }
+}
+@container runs-card (max-width: 640px) {
+  .incident-head-bar, .incident-classes, .incident-insights { padding-left: 12px; padding-right: 12px; }
+  .incident-layout { padding: 12px; gap: 12px; }
+  .incident-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .incident-tile { padding: 12px; }
+  .incident-tile-number { font-size: 22px; }
+  .incident-axis-row, .incident-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 12px; }
+  .incident-row > .incident-main { grid-column: 1 / -1; }
+  .incident-axis-row > .incident-main { display: none; }
+  .incident-detail-panel { padding: 14px; }
+  .incident-facts { gap: 10px 12px; }
+  .incident-facts > div:first-child { grid-column: 1 / -1; }
+  .incident-action { flex: 1 1 auto; }
+}
 
 /* Errors stay within their panel while the message can use the available row
    width. The disclosure keeps a readable two-line preview and retains the
@@ -199,29 +359,11 @@ td .rel-rate { font-size: 12px; }
 }
 .diagnostics-load-more { color: var(--accent-hover); white-space: nowrap; }
 
-/* Narrow viewports: the incident summary and its expansion have to stay
-   scannable without clipping between 480 and 720px. */
+/* Narrow viewports: the Audit tool-health cards keep their labels readable. */
 @media (max-width: 720px) {
-  .incident-summary { padding: 10px; }
-  .incident-summary-denominator, .incident-class-chip, .incident-lifecycle-note, .lifecycle-failure-counts {
-    font-size: 11px; overflow-wrap: anywhere;
-  }
-  .incident-class-chip { white-space: normal; }
   .tool-health-grid { grid-template-columns: minmax(0, 1fr); }
   .health-card .card-header { flex-wrap: wrap; align-items: flex-start; }
   .health-card .tool-name { white-space: normal; overflow-wrap: anywhere; }
-  .incident-count, .incident-recurrence-summary { margin-left: 0; }
-  .incident-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
-  .incident-facts dt { margin-top: 6px; }
-  .incident-evidence { display: block; overflow-x: auto; white-space: nowrap; }
-  .incident-evidence td.stderr { white-space: normal; min-width: 14rem; }
-}
-@media (max-width: 520px) {
-  .incident-row { padding: 10px; }
-  .incident-recurrence-runs { margin-left: 0; }
-  .incident-head { align-items: flex-start; }
-  .incident-surface { flex: 1 1 100%; }
-  .incident-actions > * { flex: 1 1 100%; }
 }
 
 /* Errors: one card per failed event on phones (see `.card-table`). */
@@ -246,8 +388,6 @@ td .rel-rate { font-size: 12px; }
   .diagnostics-errors-main td.c-message { width: auto; min-width: 0; }
 }
 
-.incident-class-chip { background: transparent; cursor: pointer; }
-.incident-class-chip[aria-pressed="true"] { background: var(--bg-elev); color: var(--fg); border-color: var(--accent); }
 .agent-diagnostics summary { cursor: pointer; padding: 12px 14px; color: var(--fg-dim); }
 #diag-implement-one-body .card-title { overflow-wrap: anywhere; }
 #diag-implement-one-body .summary-table { table-layout: auto; }

@@ -122,6 +122,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/diagnostics.js"),
     ),
     (
+        "/static/js/incidents.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/incidents.js"),
+    ),
+    (
         "/static/js/router.js",
         JS,
         include_bytes!("../assets/dashboard/js/router.js"),

@@ -113,8 +113,8 @@ function fixture(url) {
       const selectedClass = url.searchParams.get('class');
       const limit = Number(url.searchParams.get('limit'));
       healthQueries.push({ path: url.pathname, window: url.searchParams.get('since'), class: selectedClass, limit });
-      // Older unexpected incidents fall outside All's recency cap, but remain
-      // reachable when the server filters by class before applying that cap.
+      // Older unexpected incidents fall outside a mixed-class recency cap, but
+      // remain reachable when the server filters by class before applying it.
       const incidents = Array.from({ length: limit + 3 }, (_, index) => ({
         incident_id: `fixture-${index}`,
         class: index === 1 || index >= limit ? 'unexpected' : 'expected',
@@ -617,33 +617,30 @@ setActiveTab('diagnostics/incidents'); await settle();
 check(healthQueries.at(-1).class === 'unexpected', 'default incident request isolates unexpected failures before limit');
 const incidentRows = () => [...node('diag-body').querySelectorAll('.incident-row')];
 const checkIncidentSelection = selectedClass => {
-  const group = node('diag-body').querySelector('.incident-class-chips');
-  check(group.getAttribute('role') === 'group' && group.getAttribute('aria-label'), 'incident filters have a named accessible group');
-  const chips = [...group.querySelectorAll('button')];
-  check(chips.length === 5, 'all incident classes are reachable');
-  for (const chip of chips) {
-    check(chip.getAttribute('type') === 'button', 'class chips have an explicit button type');
-    check(chip.getAttribute('aria-pressed') === String(chip.dataset.class === selectedClass), 'only the active class chip is pressed');
+  const group = node('diag-body').querySelector('.incident-tiles');
+  check(group.getAttribute('role') === 'group' && group.getAttribute('aria-label'), 'incident class tiles have a named accessible group');
+  const tiles = [...group.querySelectorAll('button')];
+  check(tiles.map(tile => tile.dataset.class).join() === 'unexpected,expected,denied,diagnostic', 'every incident class has a tile');
+  for (const tile of tiles) {
+    check(tile.getAttribute('type') === 'button', 'class tiles have an explicit button type');
+    check(tile.getAttribute('aria-pressed') === String(tile.dataset.class === selectedClass), 'only the active class tile is pressed');
   }
   const selected = group.querySelector('[aria-pressed="true"]');
   const other = group.querySelector('[aria-pressed="false"]');
-  check(getComputedStyle(selected).backgroundColor !== getComputedStyle(other).backgroundColor, 'pressed incident chip renders a distinct selected background');
+  check(getComputedStyle(selected).backgroundColor !== getComputedStyle(other).backgroundColor, 'pressed incident tile renders a distinct selected background');
 };
-check(incidentRows().length === 4 && incidentRows().every(row => row.classList.contains('unexpected')), 'default list includes older unexpected failures beyond the All cap');
+check(incidentRows().length === 4 && incidentRows().every(row => row.classList.contains('unexpected')), 'default list includes older unexpected failures beyond a mixed-class recency cap');
 checkIncidentSelection('unexpected');
-click(node('diag-body').querySelector('[data-class="all"]')); await settle();
+click(node('diag-body').querySelector('.incident-tile[data-class="expected"]')); await settle();
 const incidentLimit = healthQueries.at(-1).limit;
-check(healthQueries.at(-1).class === null, 'All requests every class within the recency cap');
-check(incidentRows().length === incidentLimit && incidentRows().every((row, index) => row.dataset.key === `incident-fixture-${index}`), 'All preserves server recency order across classes');
-check(text('diag-count').includes(`Newest ${incidentLimit} of ${incidentLimit + 3}`), 'All labels its newest shown and matching counts even without scan truncation');
-checkIncidentSelection('all');
-click(node('diag-body').querySelector('[data-class="expected"]')); await settle();
+check(healthQueries.at(-1).class === 'expected', 'a class tile requests its class before the limit');
 check(incidentRows().length === incidentLimit - 1 && incidentRows().every(row => row.classList.contains('expected')), 'one click isolates expected paths');
 checkIncidentSelection('expected');
-click(node('diag-body').querySelector('[data-class="unexpected"]')); await settle();
+click(node('diag-body').querySelector('.incident-tile[data-class="unexpected"]')); await settle();
 check(incidentRows().length === 4 && incidentRows().every(row => row.classList.contains('unexpected')), 'one click restores older unexpected failures');
 checkIncidentSelection('unexpected');
-click(incidentRows()[0].querySelector('.incident-head')); await settle();
+check(incidentRows()[0].dataset.key === 'incident-single:fixture-1' && incidentRows()[0].getAttribute('aria-pressed') === 'true', 'the newest incident is selected for the detail panel');
+click(node('diag-body').querySelector('.incident-evidence-details summary')); await settle();
 const evidenceRow = node('diag-body').querySelector('.incident-evidence tbody tr');
 const evidenceRunLink = evidenceRow.querySelector('td:nth-child(8) a');
 const evidenceTaskLink = evidenceRow.querySelector('td:nth-child(9) a');
