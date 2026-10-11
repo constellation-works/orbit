@@ -437,8 +437,9 @@ try {
   await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
 
   // ORB-15226: a plain click on a Drain run link follows it inside the page,
-  // while a Ctrl-click is left to the browser, which opens the link's own
+  // while a new-tab click is left to the browser, which opens the link's own
   // address in a new tab. That address names the workspace and time window.
+  // macOS opens a new tab on Meta-click, not Control-click.
   await page.evaluate(async () => {
     (await import('/js/common.js')).setWindow('7d');
     await globalThis.setDrainFixturePhase('draining');
@@ -447,13 +448,14 @@ try {
   const drainRunUrl = new URL(await drainRunLink.getAttribute('href'), page.url());
   if (drainRunUrl.searchParams.get('workspace') !== 'one' || drainRunUrl.searchParams.get('window') !== '7d' || drainRunUrl.hash !== '#runs?run_id=jrun-20260923-0400-a1') throw new Error(`Drain run link lost its scope: ${drainRunUrl}`);
   const urlBeforeClicks = page.url();
-  const [linkedTab] = await Promise.all([page.context().waitForEvent('page'), drainRunLink.click({ modifiers: ['Control'] })]);
+  const newTabModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const [linkedTab] = await Promise.all([page.context().waitForEvent('page'), drainRunLink.click({ modifiers: [newTabModifier] })]);
   try {
     await linkedTab.waitForURL(drainRunUrl.href);
   } finally {
     await linkedTab.close();
   }
-  if (page.url() !== urlBeforeClicks) throw new Error(`A Ctrl-click on the Drain run link also moved this page: ${urlBeforeClicks} -> ${page.url()}`);
+  if (page.url() !== urlBeforeClicks) throw new Error(`A new-tab click on the Drain run link also moved this page: ${urlBeforeClicks} -> ${page.url()}`);
   await drainRunLink.click();
   await page.waitForFunction(() => location.hash.startsWith('#runs/jrun-20260923-0400-a1'));
   if (page.context().pages().length !== 1) throw new Error('A plain click on the Drain run link opened a new tab');
