@@ -8,6 +8,8 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/bound_server.rs"]
+mod bound_server;
 #[path = "../support/child_guard.rs"]
 mod child_guard;
 #[path = "../support/fixture_crew.rs"]
@@ -27,6 +29,7 @@ mod workflow_gate;
 mod env_pass_warning;
 mod job_resume_detached;
 mod run_observation;
+mod server_readiness;
 mod supervised_parent_signal;
 mod update;
 #[cfg(unix)]

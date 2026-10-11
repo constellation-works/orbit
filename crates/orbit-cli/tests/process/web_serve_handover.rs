@@ -11,13 +11,14 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use std::net::TcpListener;
+use std::hash::{BuildHasher, RandomState};
+use std::net::SocketAddr;
 use std::path::Path;
 
 use crate::generation_fixture;
 use std::process::{Command, Stdio};
 
-use crate::child_guard::ChildGuard;
+use crate::bound_server::{Announcement, BoundServer};
 use crate::web_fixture_io::{DeadlineStream, OPERATION_TIMEOUT, http_get};
 use std::time::{Duration, Instant};
 
@@ -67,7 +68,7 @@ fn a_handed_over_dashboard_is_reaped_when_an_assertion_panics() {
     );
 }
 
-fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
+fn exercise_handover(after_handover: impl FnOnce(BoundServer, u32, u16)) {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let install = temp.path().join("installation");
@@ -76,12 +77,9 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
     let installed = install.join("orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
 
-    let port = free_port();
-    let mut server = spawn_dashboard(&installed, &home, port);
+    let (mut server, address) = start_dashboard(&installed, &home);
+    let port = address.port();
     let pid = server.id();
-    test_env::wait_until("listening", || {
-        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_ok()
-    });
     assert!(http_get(port, "/healthz").contains("ok"));
 
     let candidate = temp.path().join("candidate");
@@ -97,23 +95,45 @@ fn exercise_handover(after_handover: impl FnOnce(ChildGuard, u32, u16)) {
         matches!(server.try_wait(), Ok(None)),
         "the dashboard must exec in place, not exit"
     );
-    test_env::wait_until("listening after the handover", || {
-        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_ok()
-    });
+    let replacement_address = server
+        .wait_for_address(test_env::FIXTURE_STEP_DEADLINE)
+        .expect("replacement dashboard bound");
+    assert_eq!(
+        replacement_address, address,
+        "handover must keep its assigned address"
+    );
     assert!(http_get(port, "/healthz").contains("ok"));
 
     after_handover(server, pid, port);
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
+// Handover reuses argv, so this fixture needs a nonzero requested port.
+// Let the child itself claim each candidate; no temporary listener is dropped
+// to select a port. A competing bind is a retry, never successful readiness.
+fn start_dashboard(program: &Path, home: &Path) -> (BoundServer, SocketAddr) {
+    let offset = (RandomState::new().hash_one(home) % 16384) as u16;
+    for attempt in 0..16 {
+        let port = 49152 + (offset + attempt) % 16384;
+        let mut server = spawn_dashboard(program, home, port);
+        match server.wait_for_address(test_env::FIXTURE_STEP_DEADLINE) {
+            Ok(address) => {
+                assert_eq!(address, SocketAddr::from(([127, 0, 0, 1], port)));
+                return (server, address);
+            }
+            Err(error) => {
+                let diagnostic = error.to_string();
+                assert!(
+                    diagnostic.contains(&format!("bind 127.0.0.1:{port}:"))
+                        && diagnostic.contains("Address already in use"),
+                    "dashboard startup failed: {diagnostic}"
+                );
+            }
+        }
+    }
+    panic!("dashboard could not bind any candidate address");
 }
 
-fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> ChildGuard {
+fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> BoundServer {
     let mut command = Command::new(program);
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
@@ -122,11 +142,11 @@ fn spawn_dashboard(program: &Path, home: &Path, port: u16) -> ChildGuard {
         .env("HOME", home)
         .env("USERPROFILE", home)
         .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     // The copy was just written. Retry only ExecutableFileBusy; every other
     // spawn error still fails on the first attempt.
     generation_fixture::launch(|| command.spawn())
-        .map(ChildGuard::new)
+        .map(|child| BoundServer::new(child, Announcement::Dashboard))
         .expect("spawn orbit web serve")
 }

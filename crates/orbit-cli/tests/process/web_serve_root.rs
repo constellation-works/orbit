@@ -16,12 +16,12 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use crate::child_guard::ChildGuard;
-use std::time::{Duration, Instant};
+use crate::bound_server::{Announcement, BoundServer};
+use std::time::Duration;
 
 use orbit_common::test_env;
 use serde_json::Value;
@@ -83,11 +83,13 @@ fn web_serve_honors_an_explicit_root_over_the_global_registry() {
         &["workspace", "init", "--name", "global-only"],
     );
 
-    let port = free_port();
     // cwd is outside both repos, so nothing but `--root` can decide what is
     // served.
-    let mut server = spawn_dashboard(temp.path(), &home, Some(&root_arg), port);
-    wait_for_listening(port, &mut server);
+    let mut server = spawn_dashboard(temp.path(), &home, Some(&root_arg));
+    let port = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("dashboard bound")
+        .port();
     let served = workspace_names(port);
     stop(&mut server);
 
@@ -125,9 +127,11 @@ fn web_serve_without_an_explicit_root_still_serves_the_global_registry() {
         &["workspace", "init", "--name", "global-only"],
     );
 
-    let port = free_port();
-    let mut server = spawn_dashboard(temp.path(), &home, None, port);
-    wait_for_listening(port, &mut server);
+    let mut server = spawn_dashboard(temp.path(), &home, None);
+    let port = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("dashboard bound")
+        .port();
     let served = workspace_names(port);
     stop(&mut server);
 
@@ -156,37 +160,18 @@ fn web_serve_approved_hosts_announce_reachable_api_and_health_urls() {
     );
 
     for host in ["127.0.0.1", "::1"] {
-        let mut server = ChildGuard::new(
+        let mut server = BoundServer::new(
             base_command(temp.path(), &home)
                 .args(["web", "serve", "--host", host, "--port", "0", "--no-open"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
                 .expect("spawn orbit web serve"),
+            Announcement::Dashboard,
         );
-        let stdout = server.stdout.take().expect("piped stdout");
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let reader = std::thread::spawn(move || {
-            let mut announcement = String::new();
-            let result = std::io::BufRead::read_line(
-                &mut std::io::BufReader::new(stdout),
-                &mut announcement,
-            )
-            .map(|_| announcement);
-            let _ = sender.send(result);
-        });
-        let announcement = receiver
-            .recv_timeout(STARTUP_DEADLINE)
-            .expect("dashboard must announce its URL before the startup deadline")
-            .expect("read announcement");
-        reader.join().expect("announcement reader");
-        let addr: SocketAddr = announcement
-            .trim()
-            .strip_prefix("Dashboard listening on http://")
-            .and_then(|authority| authority.parse().ok())
-            .unwrap_or_else(|| {
-                panic!("announcement must contain a socket address: {announcement:?}")
-            });
+        let addr = server
+            .wait_for_address(STARTUP_DEADLINE)
+            .expect("dashboard bound");
         assert_eq!(addr.ip(), host.parse::<std::net::IpAddr>().unwrap());
         assert_ne!(addr.port(), 0, "--port 0 must announce the assigned port");
 
@@ -293,43 +278,18 @@ fn init_git_repo(repo: &Path) {
     }
 }
 
-fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>, port: u16) -> ChildGuard {
+fn spawn_dashboard(cwd: &Path, home: &Path, root: Option<&str>) -> BoundServer {
     let mut command = base_command(cwd, home);
     if let Some(root) = root {
         command.args(["--root", root]);
     }
     command
-        .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .args(["web", "serve", "--port", "0", "--no-open"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .map(ChildGuard::new)
+        .map(|child| BoundServer::new(child, Announcement::Dashboard))
         .expect("spawn orbit web serve")
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
-fn wait_for_listening(port: u16, server: &mut Child) {
-    let deadline = Instant::now() + STARTUP_DEADLINE;
-    loop {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return;
-        }
-        if let Ok(Some(status)) = server.try_wait() {
-            panic!("orbit web serve exited before listening on {port}: {status:?}");
-        }
-        if Instant::now() >= deadline {
-            stop(server);
-            panic!("orbit web serve did not listen on {port} within {STARTUP_DEADLINE:?}");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 /// Registered workspace names as the dashboard itself reports them, sorted.

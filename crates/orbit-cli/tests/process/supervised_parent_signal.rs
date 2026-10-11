@@ -14,13 +14,14 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::bound_server::{Announcement, BoundServer};
 use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::{Builder, TempDir};
@@ -127,9 +128,10 @@ impl Fixture {
 fn mcp_listen_exits_on_sigterm_while_plugin_child_runs() {
     let fixture = Fixture::init();
     install_signal_plugin(&fixture);
-    let addr = free_loopback_addr();
-    let mut server = spawn_mcp_listen(&fixture, addr);
-    wait_for_listening(&mut server, addr);
+    let mut server = spawn_mcp_listen(&fixture);
+    let addr = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("MCP listener bound");
 
     let stream = TcpStream::connect(addr).expect("connect to mcp listen");
     stream
@@ -375,15 +377,20 @@ fn orbit_command(work: &Path, home: &Path) -> Command {
     command
 }
 
-fn spawn_mcp_listen(fixture: &Fixture, addr: SocketAddr) -> ChildGuard {
-    ChildGuard(
-        orbit_command(&fixture.work, &fixture.home)
-            .args(["mcp", "listen", &addr.to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn orbit mcp listen"),
+fn spawn_mcp_listen(fixture: &Fixture) -> BoundServer<ChildGuard> {
+    BoundServer::with_guard(
+        ChildGuard(
+            orbit_command(&fixture.work, &fixture.home)
+                .args(["mcp", "listen", "127.0.0.1:0"])
+                .env("RUST_LOG", "warn,orbit::command::mcp::server=info")
+                .env("NO_COLOR", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn orbit mcp listen"),
+        ),
+        Announcement::Mcp,
     )
 }
 
@@ -411,26 +418,6 @@ fn spawn_cli_proc_spawn(fixture: &Fixture, marker: &Path) -> ChildGuard {
     );
     wait_for_marker(&mut child, marker);
     child
-}
-
-fn free_loopback_addr() -> SocketAddr {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("probe a free loopback port")
-        .local_addr()
-        .expect("probe address")
-}
-
-fn wait_for_listening(child: &mut Child, addr: SocketAddr) {
-    let deadline = Instant::now() + STARTUP_DEADLINE;
-    loop {
-        if TcpStream::connect(addr).is_ok() {
-            return;
-        }
-        if child.try_wait().expect("poll mcp listen").is_some() || Instant::now() >= deadline {
-            fail_startup(child, &format!("orbit mcp listen did not bind {addr}"));
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 fn mcp_initialize(writer: &mut TcpStream, reader: &mut TcpStream, workspace: &Path) {

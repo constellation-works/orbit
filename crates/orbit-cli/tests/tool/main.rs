@@ -10,6 +10,9 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 #[cfg(unix)]
+#[path = "../support/bound_server.rs"]
+mod bound_server;
+#[cfg(unix)]
 #[path = "../support/child_guard.rs"]
 mod child_guard;
 #[path = "../support/fixture_crew.rs"]

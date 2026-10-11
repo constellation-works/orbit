@@ -28,7 +28,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 
-use crate::child_guard::ChildGuard;
+use crate::bound_server::{Announcement, BoundServer};
 use crate::web_fixture_io::{DeadlineStream, OPERATION_TIMEOUT, http_get, http_get_with_timeout};
 use std::time::{Duration, Instant};
 
@@ -71,9 +71,11 @@ fn dashboard_outlives_shutdown_grace_period_when_no_signal_is_sent() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("create home");
 
-    let port = free_port();
-    let mut server = spawn_dashboard(&home, port);
-    wait_for_listening(port);
+    let mut server = spawn_dashboard(&home);
+    let port = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("dashboard bound")
+        .port();
 
     std::thread::sleep(LONGER_THAN_SHUTDOWN_GRACE_PERIOD);
 
@@ -112,9 +114,11 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("create home");
 
-    let port = free_port();
-    let mut server = spawn_dashboard(&home, port);
-    wait_for_listening(port);
+    let mut server = spawn_dashboard(&home);
+    let port = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("dashboard bound")
+        .port();
 
     // Idle connection: accepted by the listener, no request in flight. Must
     // not, by itself, block a graceful shutdown.
@@ -150,9 +154,11 @@ fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     // A fresh server on a new port must come up and serve /healthz normally:
     // shutdown must not have wedged process-owned resources (log-stream gate
     // permits, etc) that a restarted process would inherit.
-    let port2 = free_port();
-    let mut restarted = spawn_dashboard(&home, port2);
-    wait_for_listening(port2);
+    let mut restarted = spawn_dashboard(&home);
+    let port2 = restarted
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("restarted dashboard bound")
+        .port();
     let body = http_get(port2, "/healthz");
     assert!(
         body.contains("ok"),
@@ -377,7 +383,7 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("create home");
-    let port = free_port();
+    let mut port = None;
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind stalled peer");
     let peer_port = listener.local_addr().expect("stalled peer address").port();
     listener.set_nonblocking(true).expect("nonblocking accept");
@@ -427,8 +433,13 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
                 .expect("peer must be released after the client fails");
         });
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut server = spawn_dashboard(&home, port);
-            wait_for_listening(port);
+            let mut server = spawn_dashboard(&home);
+            port = Some(
+                server
+                    .wait_for_address(STARTUP_DEADLINE)
+                    .expect("dashboard bound")
+                    .port(),
+            );
             assert!(matches!(server.try_wait(), Ok(None)), "dashboard is alive");
             spawned = Some(server.id());
             started = Some(Instant::now());
@@ -479,20 +490,12 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
         Some(libc::ECHILD)
     );
     assert!(
-        DeadlineStream::connect(port, OPERATION_TIMEOUT).is_err(),
+        DeadlineStream::connect(port.expect("dashboard bound"), OPERATION_TIMEOUT).is_err(),
         "the dashboard must release its listening port during unwinding"
     );
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind(("127.0.0.1", 0))
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
-fn spawn_dashboard(home: &std::path::Path, port: u16) -> ChildGuard {
+fn spawn_dashboard(home: &std::path::Path) -> BoundServer {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
     // ORB-11300: the dashboard serves whichever workspace it resolves. Without
     // this the inherited `ORBIT_REGISTRY_ROOT`/`ORBIT_WORKSPACE` pair pointed
@@ -503,28 +506,12 @@ fn spawn_dashboard(home: &std::path::Path, port: u16) -> ChildGuard {
     command
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .args(["web", "serve", "--port", "0", "--no-open"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .map(ChildGuard::new)
+        .map(|child| BoundServer::new(child, Announcement::Dashboard))
         .expect("spawn orbit web serve")
-}
-
-fn wait_for_listening(port: u16) {
-    let deadline = Instant::now() + STARTUP_DEADLINE;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if !remaining.is_zero() && DeadlineStream::connect(port, remaining).is_ok() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "orbit web serve did not start listening on port {port} within {STARTUP_DEADLINE:?}"
-            );
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }
 
 fn send_sigterm(child: &Child) {
