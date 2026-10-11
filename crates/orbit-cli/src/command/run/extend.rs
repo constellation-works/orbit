@@ -21,7 +21,8 @@ closed, while it still waits for its in-flight tasks to settle; it then resumes 
 work. An owner drain stops admitting once its window closes and is refused then.\n\nRefused: a \
 drain whose admissions were stopped with `orbit run auto --stop` or that is being cancelled, \
 since an extension never reopens one, and a drain started without `--for`, which makes a single \
-admission pass and has no window to extend.\n\n`--concurrency` also changes how many tasks the \
+admission pass and has no window to extend. A pull drain is refused too once a pass has \
+closed its window with nothing left to settle: that drain is ending.\n\n`--concurrency` also changes how many tasks the \
 drain keeps in flight, exactly as `orbit run concurrency --set` does.\n\nExamples:\n  \
 orbit run extend jrun-20260905-0546 --for 4h\n  orbit run extend jrun-20260905-0546 --for 2h \
 --concurrency 5 --reason 'overnight backlog'"

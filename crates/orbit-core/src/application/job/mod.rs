@@ -59,4 +59,4 @@ pub use run::{
     fold_run_incidents, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };
-pub(crate) use run::{RunOwnerLiveness, drain_deadline, run_owner_liveness};
+pub(crate) use run::{RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness};

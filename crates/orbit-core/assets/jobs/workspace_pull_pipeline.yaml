@@ -14,7 +14,11 @@
 # owner drain; live leaves keep running. `orbit run extend` lengthens it on
 # this same run [ORB-15383], also during that settling tail, which reopens
 # requests; a repeat `orbit run auto --pull` would instead queue behind this
-# run (`max_active_runs: 1`) until the tail ends.
+# run (`max_active_runs: 1`) until the tail ends. `pull_refill` rereads the
+# window from run state rather than trusting the forwarded `window_expired`,
+# and the pass that ends the drain records the close in the transaction an
+# extension checks, so an extension either keeps the drain admitting or is
+# refused, never accepted after the loop has decided to exit [ORB-15417].
 #
 # `for_seconds: 0` (`--for` omitted) is one admission pass [ORB-14174]. Its
 # window is expired from the first iteration, so `pull_refill` takes that pass

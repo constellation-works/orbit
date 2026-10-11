@@ -40,6 +40,13 @@
 //! delivered: by the leaf's own bound worker as it ends, by any later settle
 //! pass, or by this drain's next iteration, whichever gets there first.
 //!
+//! Each pass reads the window from the run's own state rather than trusting
+//! the answer the job forwarded, so an `orbit run extend` accepted after that
+//! answer reopens requests [ORB-15417]. The pass that would end the drain
+//! records the close in the transaction that rereads the deadline, the one an
+//! extension checks: an extension accepted first keeps the drain admitting,
+//! and one requested after the close is refused.
+//!
 //! A settlement the owner refuses while it still holds the claim holds new
 //! requests too [ORB-13979]: the owner answered, and will answer the same
 //! until an operator changes it. The refusal is recorded on the admission,
@@ -82,6 +89,7 @@ use crate::OrbitRuntime;
 use crate::application::distributed::{
     OwnerAnswer, PullCrewWindow, RefusedPullSettlement, owner_binary_version,
 };
+use crate::application::job::pull_window_closed;
 
 /// The job that runs this action. Recorded in each request's run context, so
 /// the owner's claim names the drain that holds it.
@@ -120,7 +128,7 @@ pub(crate) fn pull_refill(
         .and_then(|value| {
             serde_json::from_value(value).map_err(|error| failed(format!("`destination`: {error}")))
         })?;
-    let window_expired = bool_input(input, "window_expired");
+    let forwarded_expired = bool_input(input, "window_expired");
     let single_pass = single_pass_input(input);
     let ceiling = u64_input(input, "max_active_leaf_runs", DEFAULT_MAX_ACTIVE_LEAF_RUNS);
     let poll = u64_input(input, "poll_sleep_seconds", DEFAULT_POLL_SLEEP_SECONDS);
@@ -176,11 +184,19 @@ pub(crate) fn pull_refill(
     // is read again afterwards: an operator can record it while reconciliation
     // runs, and the value from before that work must not admit new work.
     runtime.reconcile_orphaned_claimed_leaves(&destination);
-    let cancel = read_pass_state()?.and_then(|state| state.drain_cancel);
-    if let Some(cancel) = cancel {
-        return cancelling_pass(runtime, &drain, &run_id, &destination, &cancel, poll)
+    let pass_state = read_pass_state()?;
+    if let Some(cancel) = pass_state
+        .as_ref()
+        .and_then(|state| state.drain_cancel.as_ref())
+    {
+        return cancelling_pass(runtime, &drain, &run_id, &destination, cancel, poll)
             .map_err(|error| failed(error.to_string()));
     }
+    // The window as run state has it now: an extension accepted since the
+    // job's window answer reopens it [ORB-15417].
+    let window_expired = pass_state.as_ref().map_or(forwarded_expired, |state| {
+        pull_window_closed(state, forwarded_expired, chrono::Utc::now())
+    });
 
     // A windowless drain's only admission pass is this one if nothing has
     // taken it yet; a timed window is open until it expires.
@@ -376,7 +392,18 @@ pub(crate) fn pull_refill(
     };
     let unsettled_holding = unsettled.is_none_or(|count| count > 0);
     // A windowless drain admits on no later pass, whether or not this one did.
-    let done = (single_pass || window_expired) && !unsettled_holding;
+    // A timed one ends only if its window is still closed when the close is
+    // recorded, so an extension accepted during this pass keeps it running.
+    let mut done = (single_pass || window_expired) && !unsettled_holding;
+    if done && !single_pass {
+        match runtime.close_pull_window(&run_id, forwarded_expired) {
+            Ok(closed) => done = closed,
+            Err(failure) => {
+                error.get_or_insert(failure.to_string());
+                done = false;
+            }
+        }
+    }
     let sleep_seconds = if admitted > 0 {
         0
     } else if unsettled_holding || error.is_some() || resource.throttle.is_some() {

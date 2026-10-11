@@ -241,7 +241,9 @@ returns.
 - `orbit run extend <run-id> --for <d> [--concurrency N]` lengthens a live
   pull drain's window on the same run, even in its settling tail after the
   window closed; a second `orbit run auto --pull` would only queue behind it.
-  A stopped, cancelling or single-pass (`--for` omitted) drain refuses it.
+  A stopped, cancelling or single-pass (`--for` omitted) drain refuses it, as
+  does one whose last pass already closed its window with nothing left to
+  settle.
 - Each iteration reclaims the `target/` build output of every settled leaf
   whose worker has exited (`reclaimed_build_bytes`) and keeps the checkout.
   `orbit gc worktrees --confirm` on the follower removes settled leaves'
