@@ -29,7 +29,7 @@ fn recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw() {
     pair.leaf_fails_with(&leaf, failure);
     pair.pass(&drain);
     assert_eq!(pair.owner_status(&task_id), "blocked");
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "failed");
+    assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
 
     let owner_repo = pair.wire.owner.paths().repo_root.clone();
     std::fs::write(owner_repo.join(".gitignore"), ".orbit/\n").unwrap();
@@ -528,7 +528,7 @@ fn a_claimed_leaf_final_recovery_decision_is_applied_by_the_owner_through_settle
         "the follower wrote nothing to the owner's task"
     );
 
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "failed");
+    assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
     let applied = pair.owner_task(&task);
     assert_eq!(applied["status"], "rejected", "{applied:#}");
     let header = format!("final_recovery run_id={leaf} decision=reject");

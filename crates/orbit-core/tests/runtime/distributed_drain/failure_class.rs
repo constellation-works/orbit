@@ -268,7 +268,10 @@ fn released(
             .is_some_and(|reason| !reason.contains("[") && !reason.is_empty()),
         "the reason quotes the error without Orbit's marker: {release}"
     );
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "revoked");
+    assert_eq!(
+        pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
+        "revoked"
+    );
     assert!(
         comments_of(&pair.owner_task(&task)).contains(class),
         "the release comment names the class: {}",
@@ -718,7 +721,7 @@ fn a_candidate_failure_still_blocks_the_task() {
     assert_eq!(pair.owner_status(&task), "blocked", "{pass}");
     let failed = &settlement_of(&pair, &leaf)["Fail"];
     assert_eq!(failed["failure"]["class"], "candidate", "{failed}");
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "failed");
+    assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
     let owner_record = &pair.wire.owner.leaf_settlements(None, false).unwrap()[0];
     assert_eq!(
         (owner_record.kind, owner_record.evidence),
@@ -779,7 +782,10 @@ fn cancelling_a_launched_claimed_leaf_returns_its_task_to_backlog_with_the_reaso
     );
     let release = &settlement_of(&pair, &leaf)["Release"];
     assert_eq!(release["failure"]["class"], "operator_cancel", "{release}");
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "revoked");
+    assert_eq!(
+        pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
+        "revoked"
+    );
     let exclusion = sol_exclusion(&pair, &drain).expect("a cancel excludes its crew");
     assert_eq!(exclusion.source, CrewExclusionSource::LeafReleased);
     assert!(

@@ -1614,7 +1614,7 @@ fn a_task_under_a_live_claim_is_never_admitted_by_the_local_drain() {
             .is_empty(),
         "no local delivery run starts beside the claim"
     );
-    assert_eq!(pair.owner_claims()[0]["claim"]["phase"], "claimed");
+    assert_eq!(pair.only_owner_claim()["claim"]["phase"], "claimed");
 
     // Replay is a fresh admission too, including older singular task input.
     for input in [json!({"task_ids": [task]}), json!({"task_id": task})] {

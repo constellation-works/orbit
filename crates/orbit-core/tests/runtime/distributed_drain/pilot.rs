@@ -109,7 +109,7 @@ fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
     let drain = pair.start_drain();
     let first_leaf = pair.running_leaf(&drain, 1);
     assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
-    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[1]);
+    assert!(pair.owner_has_claim_for_task(&pair.tasks[1]));
     let records = pair.follower_jobs.local_pull_admissions().unwrap();
     let receipt = records
         .iter()
@@ -241,7 +241,7 @@ fn owner_pull_holds_host_operational_until_a_decision_or_newer_assessment() {
         }
         let second = pair.pass(&drain);
         assert!(launch_refused(&second), "{second}");
-        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+        assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
     }
 }
 
@@ -264,7 +264,7 @@ fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
         let drain = pair.start_drain();
         let first = pair.pass(&drain);
         assert!(launch_refused(&first), "{first}");
-        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+        assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
     }
 }
 
@@ -379,7 +379,7 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
             .unwrap();
         let second = pair.pass(&drain);
         assert!(launch_refused(&second), "{second}");
-        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+        assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
     }
 }
 
@@ -451,7 +451,7 @@ fn a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_
         .with_host_os(Some(orbit_types::task::HostOs::Macos));
     let mac_drain = pair.start_drain();
     pair.pass(&mac_drain);
-    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+    assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
 }
 
 #[test]
@@ -509,7 +509,7 @@ fn a_machine_finding_keeps_the_task_off_every_other_machine() {
         )
         .unwrap();
     pair.pass(&drain);
-    assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+    assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
 }
 
 #[test]
@@ -546,6 +546,6 @@ fn owner_pull_ignores_stale_validation_and_advisory_transport_findings() {
         let drain = pair.start_drain();
         let pass = pair.pass(&drain);
         assert!(launch_refused(&pass), "{pass}");
-        assert_eq!(pair.owner_claims()[0]["claim"]["task_id"], pair.tasks[0]);
+        assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
     }
 }
