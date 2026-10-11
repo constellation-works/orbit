@@ -181,19 +181,41 @@ fn owner_and_provider_never_escalate_against_a_replacement_identity() {
         generation: u32,
         signals: Vec<(u32, i32)>,
         waits: usize,
+        authorized: bool,
+        prepared: bool,
     }
     struct Target {
         state: Rc<RefCell<State>>,
         change_at: usize,
         grouped: bool,
         ignore_term: bool,
+        captured_generation: u32,
+        pid: u32,
     }
     impl TeardownTarget for Target {
+        fn prepare(&mut self) -> Result<(), orbit_common::OrbitError> {
+            let mut state = self.state.borrow_mut();
+            assert!(
+                state.authorized,
+                "a group snapshot requires identity authorization"
+            );
+            state.prepared = true;
+            if self.grouped && self.change_at == 6 {
+                return Err(orbit_common::OrbitError::Execution(
+                    "injected group snapshot refusal".into(),
+                ));
+            }
+            Ok(())
+        }
         fn pgid(&self) -> Option<libc::pid_t> {
-            self.grouped.then_some(43210)
+            self.grouped.then_some(self.pid as libc::pid_t)
         }
         fn signal(&self, signal: i32) -> Result<(), orbit_common::OrbitError> {
             let mut state = self.state.borrow_mut();
+            assert!(
+                state.prepared,
+                "prepare the verified group before any signal"
+            );
             // Exit/reuse immediately before the first signal's delivery.
             if (self.change_at == 1 && state.signals.is_empty())
                 || (self.change_at == 5 && signal == libc::SIGKILL)
@@ -201,17 +223,18 @@ fn owner_and_provider_never_escalate_against_a_replacement_identity() {
                 state.generation = 1;
             }
             // A bound handle still addresses generation 0; no numeric fallback.
-            if state.generation == 0 {
-                state.signals.push((0, signal));
+            if state.generation == self.captured_generation {
+                let generation = state.generation;
+                state.signals.push((generation, signal));
                 if signal == libc::SIGKILL || !self.ignore_term {
-                    state.generation = 1;
+                    state.generation += 1;
                 }
             }
             Ok(())
         }
         fn liveness(&self) -> Result<(bool, bool), orbit_common::OrbitError> {
             Ok((
-                self.state.borrow().generation == 0,
+                self.state.borrow().generation == self.captured_generation,
                 self.grouped && self.change_at == 4,
             ))
         }
@@ -226,39 +249,69 @@ fn owner_and_provider_never_escalate_against_a_replacement_identity() {
         }
     }
     let token = format!("{STABLE_TOKEN_PREFIX}pidns=-:Sun Aug  2 20:13:45 2026");
+    let pid = if std::process::id() == 43210 {
+        43211
+    } else {
+        43210
+    };
     for provider in [false, true] {
         for grouped in [false, true] {
             for (change_at, ignore_term, expected_signals) in [
-                (0, true, vec![]),               // after initial verification, before binding
+                (0, true, vec![]),               // replacement during initial verification
                 (1, true, vec![]),               // bound original exits just before TERM
                 (2, true, vec![libc::SIGTERM]),  // reuse during grace
                 (3, false, vec![libc::SIGTERM]), // ordinary TERM
                 (3, true, vec![libc::SIGTERM, libc::SIGKILL]), // escalation
                 (4, true, vec![libc::SIGTERM]),  // unbound/reused group remains
                 (5, true, vec![libc::SIGTERM]),  // exit/reuse just before KILL
+                (
+                    6,
+                    true,
+                    if grouped {
+                        vec![]
+                    } else {
+                        vec![libc::SIGTERM, libc::SIGKILL]
+                    },
+                ),
             ] {
                 let state = Rc::new(RefCell::new(State::default()));
                 let bind = |_, _: Option<&str>| {
-                    if change_at == 0 {
-                        state.borrow_mut().generation = 1;
-                        return Ok(None);
-                    }
                     Ok(Some(Target {
                         state: state.clone(),
                         change_at,
                         grouped,
                         ignore_term,
+                        captured_generation: state.borrow().generation,
+                        pid,
                     }))
                 };
                 if provider {
                     let result = stop_provider_process_with_binding(
-                        43210,
+                        pid,
                         Some(&token),
-                        |_, _| ProcessLiveness::Alive,
-                        |_| ProbeOutcome::Token(token.clone()),
+                        |_, _| {
+                            assert!(!state.borrow().prepared);
+                            ProcessLiveness::Alive
+                        },
+                        |_| {
+                            assert!(
+                                !state.borrow().prepared,
+                                "prepare groups only after the identity probe"
+                            );
+                            state.borrow_mut().authorized = true;
+                            if change_at == 0 {
+                                state.borrow_mut().generation = 1;
+                            }
+                            ProbeOutcome::Token(token.clone())
+                        },
                         bind,
                     );
-                    if grouped && change_at == 4 {
+                    if grouped && change_at == 6 {
+                        assert!(
+                            matches!(result, Err(orbit_common::OrbitError::Execution(_))),
+                            "group snapshot refusal must survive authorization and stop teardown"
+                        );
+                    } else if grouped && change_at == 4 {
                         assert!(
                             matches!(
                                 result,
@@ -272,22 +325,30 @@ fn owner_and_provider_never_escalate_against_a_replacement_identity() {
                         );
                     } else {
                         let result = result.unwrap();
-                        assert_eq!(
-                            result,
-                            if change_at == 0 {
-                                ProviderStop::NotRunning
-                            } else {
-                                ProviderStop::Stopped
-                            }
-                        );
+                        assert_eq!(result, ProviderStop::Stopped);
                     }
                 } else {
                     let result = signal_run_owner_with_binding(
-                        &owner_run(Some(43210), Some(token.clone())),
-                        OwnerIdentity::Verified,
+                        &owner_run(Some(pid), Some(token.clone())),
+                        || {
+                            assert!(
+                                !state.borrow().prepared,
+                                "prepare groups only after the identity probe"
+                            );
+                            state.borrow_mut().authorized = true;
+                            if change_at == 0 {
+                                state.borrow_mut().generation = 1;
+                            }
+                            OwnerIdentity::Verified
+                        },
                         bind,
                     );
-                    if grouped && change_at == 4 {
+                    if grouped && change_at == 6 {
+                        assert!(
+                            matches!(result, Err(orbit_common::OrbitError::Execution(_))),
+                            "group snapshot refusal must survive authorization and stop teardown"
+                        );
+                    } else if grouped && change_at == 4 {
                         assert!(
                             matches!(
                                 result,
@@ -304,9 +365,8 @@ fn owner_and_provider_never_escalate_against_a_replacement_identity() {
                         assert_eq!(
                             result,
                             match (change_at, ignore_term, grouped) {
-                                (0, _, _) => "already_exited",
-                                (3 | 5, true, true) => "killed_process_group",
-                                (3 | 5, true, false) => "killed_owner",
+                                (3 | 5 | 6, true, true) => "killed_process_group",
+                                (3 | 5 | 6, true, false) => "killed_owner",
                                 (_, _, true) => "terminated_process_group",
                                 (_, _, false) => "terminated_owner",
                             }
@@ -324,22 +384,29 @@ fn owner_and_provider_never_escalate_against_a_replacement_identity() {
             }
         }
     }
-    // Even a matching second-resolution token must not adopt the PID if its
-    // kernel-resolution identity changed since the initial verification.
-    let replacement = orbit_common::test_env::spawn_unrelated_process();
-    let ProbeOutcome::Token(token) = probe_process_start_identity(replacement.pid()) else {
-        panic!("replacement identity must be readable");
-    };
-    let mut recorded_key =
-        orbit_common::process::ancestry::process_start_key(replacement.pid()).unwrap();
-    recorded_key.starttime ^= 1;
-    assert!(
-        super::super::owner::BoundTarget::bind(replacement.pid(), Some(&token), Some(recorded_key))
-            .unwrap()
-            .is_none()
+    // Binding must precede the liveness probe too: its real implementation
+    // compares the persisted identity internally, before the explicit probe.
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let result = stop_provider_process_with_binding::<_, _, Target>(
+        pid,
+        Some(&token),
+        |_, _| {
+            order.borrow_mut().push("liveness");
+            ProcessLiveness::Alive
+        },
+        |_| {
+            order.borrow_mut().push("identity");
+            ProbeOutcome::Token(token.clone())
+        },
+        |_, _| {
+            order.borrow_mut().push("bind");
+            Ok(None)
+        },
     );
-    assert!(
-        process_is_alive(replacement.pid()),
-        "binding must refuse a changed kernel identity even when coarse tokens match"
+    assert_eq!(result.unwrap(), ProviderStop::NotRunning);
+    assert_eq!(
+        *order.borrow(),
+        ["bind", "liveness", "identity"],
+        "the native handle must be retained before either identity-bearing probe"
     );
 }

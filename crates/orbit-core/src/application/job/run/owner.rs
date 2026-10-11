@@ -44,32 +44,31 @@ pub(super) fn signal_run_owner_process(run: &JobRun) -> Result<String, OrbitErro
     if !process_is_alive(pid) {
         return Ok("already_exited".to_string());
     }
-    // Capture the kernel-resolution start key before the initial token probe.
-    // Persisted lstart tokens have only second resolution; a same-second reuse
-    // between verification and binding must not silently adopt a replacement.
-    let start_key = orbit_common::process::ancestry::process_start_key(pid);
-    signal_run_owner_with_binding(run, classify_run_owner(run), |pid, token| {
-        BoundTarget::bind(pid, token, start_key)
-    })
+    signal_run_owner_with_binding(run, || classify_run_owner(run), BoundTarget::bind)
 }
 
-// The binding seam forces exit/reuse after the initial identity check without
+// The binding seam forces exit/reuse during initial identity verification without
 // consuming real PIDs or depending on scheduler timing.
 #[cfg(unix)]
 pub(super) fn signal_run_owner_with_binding<T: TeardownTarget>(
     run: &JobRun,
-    identity: OwnerIdentity,
+    identity: impl FnOnce() -> OwnerIdentity,
     bind: impl FnOnce(u32, Option<&str>) -> Result<Option<T>, OrbitError>,
 ) -> Result<String, OrbitError> {
-    if identity != OwnerIdentity::Verified {
-        return Ok("owner_identity_mismatch".into());
-    }
     let Some(pid) = run.pid else {
         return Ok("no_pid".into());
     };
-    let Some(target) = bind(pid, run.pid_start_time.as_deref())? else {
+    // Acquire before verification: start times have finite resolution and
+    // cannot prove that a handle opened after a probe captures that process.
+    // Defer binding errors until authorization, preserving mismatch outcomes.
+    let target = bind(pid, run.pid_start_time.as_deref());
+    if identity() != OwnerIdentity::Verified {
+        return Ok("owner_identity_mismatch".into());
+    }
+    let Some(mut target) = target? else {
         return Ok("already_exited".into());
     };
+    target.prepare()?;
     let grouped = target.pgid().is_some();
     let killed = terminate_target(&target, pid)?;
     Ok(match (grouped, killed) {
@@ -186,13 +185,12 @@ where
     L: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
     I: Fn(u32) -> ProbeOutcome,
 {
-    let start_key = orbit_common::process::ancestry::process_start_key(pid);
     stop_provider_process_with_binding(
         pid,
         pid_start_time,
         liveness_probe,
         identity_probe,
-        |pid, token| BoundTarget::bind(pid, token, start_key),
+        BoundTarget::bind,
     )
 }
 
@@ -213,6 +211,9 @@ where
     if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
         return Ok(ProviderStop::Unverified);
     }
+    // Retain the identity before either observational probe can race exit and
+    // reuse. An unverified observation still authorizes no signal or error.
+    let target = bind(pid, pid_start_time);
     match liveness_probe(pid, pid_start_time) {
         ProcessLiveness::Exited => return Ok(ProviderStop::NotRunning),
         ProcessLiveness::Unknown => return Ok(ProviderStop::Unverified),
@@ -232,9 +233,10 @@ where
         }
     }
 
-    let Some(target) = bind(pid, pid_start_time)? else {
+    let Some(mut target) = target? else {
         return Ok(ProviderStop::NotRunning);
     };
+    target.prepare()?;
     terminate_target(&target, pid)?;
     Ok(ProviderStop::Stopped)
 }
@@ -242,6 +244,8 @@ where
 /// One retained cancellation identity set, shared by owner and provider paths.
 #[cfg(unix)]
 pub(super) trait TeardownTarget {
+    /// Prepare group identities after authorization, without adopting a new leader.
+    fn prepare(&mut self) -> Result<(), OrbitError>;
     fn pgid(&self) -> Option<libc::pid_t>;
     fn signal(&self, signal: libc::c_int) -> Result<(), OrbitError>;
     fn liveness(&self) -> Result<(bool, bool), OrbitError>;
@@ -273,6 +277,7 @@ fn terminate_target(target: &impl TeardownTarget, pid: u32) -> Result<bool, Orbi
 
 #[cfg(unix)]
 pub(super) struct BoundTarget {
+    pid: u32,
     leader: orbit_common::process::signal::BoundProcess,
     members: Vec<orbit_common::process::signal::BoundProcess>,
     pgid: Option<libc::pid_t>,
@@ -280,35 +285,53 @@ pub(super) struct BoundTarget {
 
 #[cfg(unix)]
 impl BoundTarget {
-    pub(super) fn bind(
-        pid: u32,
-        token: Option<&str>,
-        start_key: Option<orbit_common::process::ancestry::ProcessStartKey>,
-    ) -> Result<Option<Self>, OrbitError> {
+    pub(super) fn bind(pid: u32, _token: Option<&str>) -> Result<Option<Self>, OrbitError> {
+        // Capture only: the caller verifies the persisted token with this
+        // handle retained, then prepares its group. A later snapshot refusal
+        // must not be suppressed by another observational identity probe.
+        let Some(leader) = orbit_common::process::signal::BoundProcess::bind(pid, None)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            pid,
+            leader,
+            members: Vec::new(),
+            pgid: None,
+        }))
+    }
+
+    fn refuse_live_group_after_leader_exit(&self) -> Result<(), OrbitError> {
+        // A live or unreadable group is only grounds for refusal, never for
+        // adopting its current membership after the retained leader exits.
+        if process_group_is_alive(self.pid as libc::pid_t) {
+            return Err(OrbitError::RunCancellationIncomplete {
+                pid: self.pid,
+                pgid: Some(self.pid as libc::pid_t),
+                term_sent: false,
+                kill_sent: false,
+                leader_alive: false,
+                group_alive: true,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+impl TeardownTarget for BoundTarget {
+    fn prepare(&mut self) -> Result<(), OrbitError> {
         use orbit_common::process::signal::{BoundProcess, process_group_members};
-        let Some(start_key) = start_key else {
-            return Err(OrbitError::Execution(
-                "kernel process start identity unavailable for cancellation binding".into(),
-            ));
-        };
-        let Some(leader) = BoundProcess::bind(pid, token)? else {
-            return Ok(None);
-        };
-        if !leader.is_alive()? {
-            return Ok(None);
+        let pid = self.pid;
+        if !self.leader.is_alive()? {
+            return self.refuse_live_group_after_leader_exit();
         }
-        match orbit_common::process::ancestry::process_start_key(pid) {
-            Some(current) if current == start_key => {}
-            Some(_) => return Ok(None),
-            None => {
-                return Err(OrbitError::Execution(
-                    "kernel process identity became unreadable during cancellation binding".into(),
-                ));
-            }
+        let group = self.leader.process_group()?;
+        // Exit while resolving the group is as uncertain as exit during the
+        // token probe; it cannot silently turn a group owner into a PID fallback.
+        if !self.leader.is_alive()? {
+            return self.refuse_live_group_after_leader_exit();
         }
-        let pgid = leader
-            .process_group()?
-            .filter(|group| *group > 1 && *group as u32 == pid);
+        let pgid = group.filter(|group| *group > 1 && *group as u32 == pid);
         if pgid == Some(unsafe { libc::getpgrp() }) {
             return Err(OrbitError::Execution(
                 "owner process group matches current process".into(),
@@ -328,20 +351,14 @@ impl BoundTarget {
             }
             // A reused group may have been enumerated if the leader exited
             // during the snapshot. Reject it before delivering any signal.
-            if !leader.is_alive()? || leader.process_group()? != Some(pgid) {
+            if !self.leader.is_alive()? || self.leader.process_group()? != Some(pgid) {
                 return Err(OrbitError::Execution("owner exited or left its group during identity binding; group teardown unverified".into()));
             }
         }
-        Ok(Some(Self {
-            leader,
-            members,
-            pgid,
-        }))
+        self.members = members;
+        self.pgid = pgid;
+        Ok(())
     }
-}
-
-#[cfg(unix)]
-impl TeardownTarget for BoundTarget {
     fn pgid(&self) -> Option<libc::pid_t> {
         self.pgid
     }
