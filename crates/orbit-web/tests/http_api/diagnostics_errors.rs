@@ -1,10 +1,62 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_cmd::DiagnosticsCommands;
 use orbit_core::{JobRunState, V2AuditEventInsertParams};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
+
+#[test]
+fn recent_diagnostics_skip_oversized_records_without_losing_neighbours() {
+    isolated(
+        "diagnostics_errors::recent_diagnostics_skip_oversized_records_without_losing_neighbours",
+        || {
+            let fixture = Fixture::new();
+            let record = |step: &str, input: &str| {
+                format!(
+                    "{}\n",
+                    json!({"ts":"2026-10-03T01:00:00Z", "job_run":"fixture", "step":step,
+                        "command":"fixture", "input":input, "stderr":""})
+                )
+            };
+            let bytes = [
+                record("older", "small"),
+                record("oversized", &"x".repeat(8 << 20)),
+                record("newer", "small"),
+            ]
+            .concat();
+            for category in ["metrics", "friction"] {
+                let month = fixture
+                    .runtime
+                    .data_root()
+                    .join("state/diagnostics")
+                    .join(category)
+                    .join("2026-10");
+                fs::create_dir_all(&month).unwrap();
+                fs::write(month.join("entries.jsonl"), &bytes).unwrap();
+                let steps: Vec<_> = if category == "metrics" {
+                    fixture
+                        .runtime
+                        .read_metrics_entries_limited("2026-10", 2)
+                        .unwrap()
+                        .into_iter()
+                        .map(|entry| entry.step)
+                        .collect()
+                } else {
+                    fixture
+                        .runtime
+                        .read_friction_entries_limited("2026-10", 2)
+                        .unwrap()
+                        .into_iter()
+                        .map(|entry| entry.step)
+                        .collect()
+                };
+                assert_eq!(steps, ["newer", "older"], "{category} recent records");
+            }
+        },
+    );
+}
 
 fn insert(fixture: &Fixture, id: &str, run: &str, ts: DateTime<Utc>, mut body: Value) {
     body["event_id"] = json!(id);

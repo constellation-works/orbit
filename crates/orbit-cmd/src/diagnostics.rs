@@ -21,6 +21,9 @@ use serde::de::DeserializeOwned;
 
 use orbit_core::OrbitRuntime;
 
+/// Maximum bytes buffered for a recent diagnostics record, excluding `\n`.
+const MAX_DIAGNOSTICS_RECORD_BYTES: usize = 1 << 20;
+
 /// Diagnostics-stream read surface for [`OrbitRuntime`] (extension trait —
 /// the implementation moved out of orbit-core in [ORB-10016]).
 pub trait DiagnosticsCommands {
@@ -291,7 +294,8 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
     let mut entries = Vec::new();
     for path in files.into_iter().rev() {
         let file = fs::File::open(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
-        let lines = ReverseLines::new(file).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let lines = ReverseLines::with_max_line_bytes(file, MAX_DIAGNOSTICS_RECORD_BYTES)
+            .map_err(|e| OrbitError::Io(e.to_string()))?;
         for (lines_from_end, line) in lines.enumerate() {
             let line = line.map_err(|e| OrbitError::Io(e.to_string()))?;
             let line = line.trim();

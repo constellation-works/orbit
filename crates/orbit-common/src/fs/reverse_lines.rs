@@ -12,18 +12,25 @@ pub const REVERSE_READ_BLOCK: usize = 64 * 1024;
 /// Iterates a seekable reader's lines from last to first.
 ///
 /// Lines are split on `\n`, with one trailing `\r` stripped. Each line must
-/// be UTF-8; an invalid one yields [`io::ErrorKind::InvalidData`]. Blank lines,
-/// including the one after a final newline, are yielded as empty strings.
+/// be UTF-8; an invalid one yields [`io::ErrorKind::InvalidData`]. Blank lines
+/// are yielded as empty strings; a final newline terminates the last line.
+/// The bounded constructors skip lines exceeding their byte limit before
+/// decoding them. Scanning and copying are linear in the bytes visited.
 pub struct ReverseLines<R> {
     reader: R,
     block_size: usize,
     /// Start of the bytes not yet read.
     pos: u64,
-    /// A line's leading bytes, whose start lies before `pos`.
+    /// Current block and the end of its unconsumed prefix.
+    block: Vec<u8>,
+    block_end: usize,
+    /// A line's bytes in reverse order, so earlier blocks append without
+    /// moving bytes already collected. Reversed once when the line completes.
     carry: Vec<u8>,
-    /// Complete lines of the current block, oldest first.
-    pending: Vec<Vec<u8>>,
-    /// Whether the empty remainder after a final newline was skipped.
+    max_line_bytes: usize,
+    skipping: bool,
+    finished: bool,
+    /// Whether the final newline has been handled.
     started: bool,
 }
 
@@ -35,7 +42,26 @@ impl<R: Read + Seek> ReverseLines<R> {
 
     /// Reads backwards in `block_size` blocks (`0` means the default), so
     /// tests can force a line to span blocks without a huge fixture.
-    pub fn with_block_size(mut reader: R, block_size: usize) -> io::Result<Self> {
+    pub fn with_block_size(reader: R, block_size: usize) -> io::Result<Self> {
+        Self::with_limits(reader, block_size, usize::MAX)
+    }
+
+    /// Reads default-size blocks, skipping lines longer than `max_line_bytes`.
+    /// The limit excludes `\n` but includes a trailing `\r`.
+    pub fn with_max_line_bytes(reader: R, max_line_bytes: usize) -> io::Result<Self> {
+        Self::with_limits(reader, REVERSE_READ_BLOCK, max_line_bytes)
+    }
+
+    /// Reads `block_size` blocks (`0` means the default), buffering at most
+    /// `max_line_bytes` per line. Oversized lines are skipped through their
+    /// preceding newline without retaining more bytes. Memory is bounded by
+    /// the block size plus the line limit, independent of an oversized line's
+    /// length. The limit excludes `\n` but includes a trailing `\r`.
+    pub fn with_limits(
+        mut reader: R,
+        block_size: usize,
+        max_line_bytes: usize,
+    ) -> io::Result<Self> {
         let pos = reader.seek(SeekFrom::End(0))?;
         Ok(Self {
             reader,
@@ -45,8 +71,12 @@ impl<R: Read + Seek> ReverseLines<R> {
                 block_size
             },
             pos,
+            block: Vec::new(),
+            block_end: 0,
             carry: Vec::new(),
-            pending: Vec::new(),
+            max_line_bytes,
+            skipping: false,
+            finished: pos == 0,
             started: false,
         })
     }
@@ -55,41 +85,62 @@ impl<R: Read + Seek> ReverseLines<R> {
         let len = u64::min(self.block_size as u64, self.pos);
         let start = self.pos - len;
         self.reader.seek(SeekFrom::Start(start))?;
-        let mut block = vec![0; len as usize];
-        self.reader.read_exact(&mut block)?;
-        block.append(&mut self.carry);
+        self.block.resize(len as usize, 0);
+        self.reader.read_exact(&mut self.block)?;
         self.pos = start;
-
-        let mut segments = block.split(|&byte| byte == b'\n');
-        // The first segment may continue in earlier bytes; hold it back.
-        let first = segments.next().unwrap_or_default().to_vec();
-        self.pending.extend(segments.map(<[u8]>::to_vec));
-        if start == 0 {
-            self.pending.insert(0, first);
-        } else {
-            self.carry = first;
+        self.block_end = self.block.len();
+        if !self.started {
+            self.started = true;
+            if self.block.last() == Some(&b'\n') {
+                self.block_end -= 1;
+            }
         }
         Ok(())
     }
 
     fn next_raw(&mut self) -> io::Result<Option<Vec<u8>>> {
         loop {
-            if let Some(line) = self.pending.pop() {
-                return Ok(Some(line));
-            }
-            if self.pos == 0 {
+            if self.finished {
                 return Ok(None);
             }
-            self.read_block()?;
-            if !self.started {
-                self.started = true;
-                // A trailing newline terminates the last line; it does not
-                // start an empty one.
-                if self.pending.last().is_some_and(Vec::is_empty) {
-                    self.pending.pop();
+            if self.block_end == 0 {
+                if self.pos == 0 {
+                    self.finished = true;
+                    return Ok(self.finish_line());
+                }
+                self.read_block()?;
+            }
+
+            let newline = self.block[..self.block_end]
+                .iter()
+                .rposition(|&byte| byte == b'\n');
+            let start = newline.map_or(0, |index| index + 1);
+            let fragment = &self.block[start..self.block_end];
+            if !self.skipping {
+                if fragment.len() > self.max_line_bytes.saturating_sub(self.carry.len()) {
+                    self.carry.clear();
+                    self.skipping = true;
+                } else {
+                    self.carry.extend(fragment.iter().rev());
                 }
             }
+            self.block_end = newline.unwrap_or(0);
+            if newline.is_some()
+                && let Some(line) = self.finish_line()
+            {
+                return Ok(Some(line));
+            }
         }
+    }
+
+    fn finish_line(&mut self) -> Option<Vec<u8>> {
+        if self.skipping {
+            self.skipping = false;
+            return None;
+        }
+        let mut line = std::mem::take(&mut self.carry);
+        line.reverse();
+        Some(line)
     }
 }
 

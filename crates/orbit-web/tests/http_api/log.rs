@@ -143,9 +143,9 @@ fn dashboard_log_message_priority_and_agent_filter() {
 }
 
 #[test]
-fn snapshots_and_diagnostics_skip_non_utf8_log_records() {
+fn snapshots_and_diagnostics_skip_invalid_and_oversized_log_records() {
     isolated(
-        "log::snapshots_and_diagnostics_skip_non_utf8_log_records",
+        "log::snapshots_and_diagnostics_skip_invalid_and_oversized_log_records",
         || {
             let fixture = Fixture::new();
             fixture.seed_run("http-log-fixture", "fixture", JobRunState::Failed);
@@ -164,6 +164,8 @@ fn snapshots_and_diagnostics_skip_non_utf8_log_records() {
             bytes.extend_from_slice(
                 b"{\"level\":\"ERROR\",\"fields\":{\"message\":\"torn-\xe2\x82\"}}\n",
             );
+            let oversized = record("2026-10-03T01:00:30Z", "ERROR", &"x".repeat(8 << 20));
+            bytes.extend_from_slice(oversized.as_bytes());
             bytes.extend_from_slice(record("2026-10-03T01:01:00Z", "INFO", "info").as_bytes());
             bytes.extend_from_slice(
                 record("2026-10-03T01:02:00Z", "ERROR", "newer-error").as_bytes(),

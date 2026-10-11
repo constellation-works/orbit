@@ -72,8 +72,11 @@ retaining more bytes; rotation or truncation resets that state. Subsequent
 ordinary records still pass through the selected filters and output mode.
 
 The dashboard log snapshot (`/api/log`) and Errors tab
-(`/api/diagnostics/errors`) skip malformed JSON and non-UTF-8 lines, continuing
-to show valid records on either side. File access and read errors still fail the
+(`/api/diagnostics/errors`) skip malformed JSON, non-UTF-8 lines and records
+larger than 1 MiB excluding the newline, continuing to show valid records on
+either side. Reverse scans use bounded memory and linear work even for oversized
+records. Recent metrics and friction diagnostics readers use the same record cap.
+File access and read errors still fail the
 request. The snapshot reads only the active file. The Errors tab also reads
 rotated archives that reach into its window, reading each only back to its first
 record older than the window (a 60 s margin allows for out-of-order stamps) and not
