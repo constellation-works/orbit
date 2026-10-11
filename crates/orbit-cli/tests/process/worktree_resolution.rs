@@ -205,6 +205,171 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
+#[test]
+fn submodule_bootstrap_and_runtime_keep_the_submodule_workspace() {
+    check_submodule_roots(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn submodule_roots_remain_independent_when_git_is_unavailable() {
+    check_submodule_roots(true);
+}
+
+fn check_submodule_roots(without_git: bool) {
+    // Cover both legacy discovery before any workspace exists and bootstrap
+    // with an initialized, registered superproject above the submodule.
+    for initialize_superproject in [false, true] {
+        let temp = tempdir().expect("submodule fixture");
+        let home = temp.path().join("home");
+        let superproject = temp.path().join("superproject");
+        fs::create_dir_all(&home).expect("home");
+        let submodule = init_submodule_fixture(&superproject);
+        let nested = submodule.join("nested");
+        fs::create_dir_all(&nested).expect("nested working directory");
+
+        if initialize_superproject {
+            run_orbit_success(&superproject, &home, &["workspace", "init"], None);
+        }
+        let mut bootstrap = orbit_command(&nested, &home, &["workspace", "init"], None);
+        if without_git {
+            bootstrap.env("PATH", home.join("stub-bin"));
+        }
+        bootstrap.assert().success();
+        let submodule_orbit = submodule.join(".orbit");
+        assert!(
+            submodule_orbit.join("config.yaml").is_file(),
+            "bootstrap must create the submodule workspace at its repository boundary"
+        );
+        assert_eq!(
+            superproject.join(".orbit").exists(),
+            initialize_superproject,
+            "submodule bootstrap must not create superproject state"
+        );
+        let mut command = orbit_command(&nested, &home, &["config", "show", "--json"], None);
+        if without_git {
+            command.env("PATH", home.join("stub-bin"));
+        }
+        let output = command.assert().success();
+        let config: Value = serde_json::from_slice(&output.get_output().stdout).expect("config");
+        assert_root_fields(&config, &submodule_orbit, &submodule_orbit);
+    }
+}
+
+#[test]
+fn submodule_runtime_respects_its_registered_data_directory() {
+    let temp = tempdir().expect("submodule fixture");
+    let home = temp.path().join("home");
+    let superproject = temp.path().join("superproject");
+    fs::create_dir_all(&home).expect("home");
+    let submodule = init_submodule_fixture(&superproject);
+    run_orbit_success(&superproject, &home, &["workspace", "init"], None);
+    let data_dir = canonicalize_or_original(temp.path()).join("submodule-data");
+    run_orbit_success(&submodule, &home, &["workspace", "init"], None);
+    fs::rename(submodule.join(".orbit"), &data_dir).expect("relocate submodule state");
+    let registry_path = home.join(".orbit/workspaces.json");
+    let mut registry: Value = serde_json::from_slice(&fs::read(&registry_path).expect("registry"))
+        .expect("registry JSON");
+    let checkout = registry["checkouts"]
+        .as_array_mut()
+        .expect("checkouts")
+        .iter_mut()
+        .find(|checkout| checkout["repo_root"].as_str() == submodule.to_str())
+        .expect("submodule checkout");
+    checkout["orbit_dir"] = serde_json::json!(data_dir);
+    fs::write(
+        &registry_path,
+        serde_json::to_vec(&registry).expect("registry JSON"),
+    )
+    .expect("registered relocated data directory");
+    run_orbit_success(&submodule, &home, &["workspace", "init", "--force"], None);
+    let config = run_orbit_json(&submodule, &home, &["config", "show", "--json"], None);
+    assert_root_fields(&config, &data_dir, &data_dir);
+    assert!(
+        !submodule.join(".orbit").exists(),
+        "the registered data directory must remain authoritative"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_worktree_gitfile_fallback_checks_the_common_directory() {
+    let temp = tempdir().expect("worktree fixture");
+    let home = temp.path().join("home");
+    let main_repo = temp.path().join("repo");
+    let linked = temp.path().join("linked");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&main_repo).expect("main repository");
+    init_git_repo(&main_repo);
+    run_git(
+        &main_repo,
+        &["worktree", "add", linked.to_str().expect("worktree path")],
+    );
+    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+    let main_repo = fs::canonicalize(main_repo).expect("main repository");
+    let linked = fs::canonicalize(linked).expect("linked worktree");
+    let main_orbit = main_repo.join(".orbit");
+    let local_orbit = linked.join(".orbit");
+    let nested = linked.join("nested");
+    fs::create_dir_all(&nested).expect("nested directory");
+
+    // Git emits an absolute gitfile. Exercise its relative form as well.
+    let absolute_gitfile = fs::read_to_string(linked.join(".git")).expect("gitfile");
+    for gitfile in [
+        absolute_gitfile.as_str(),
+        "gitdir: ../repo/.git/worktrees/linked\n",
+    ] {
+        fs::write(linked.join(".git"), gitfile).expect("gitfile");
+        let mut command = orbit_command(&nested, &home, &["config", "show", "--json"], None);
+        command.env("PATH", home.join("stub-bin"));
+        let output = command.assert().success();
+        let config: Value = serde_json::from_slice(&output.get_output().stdout).expect("config");
+        assert_root_fields(&config, &main_orbit, &local_orbit);
+        assert!(
+            !local_orbit.exists(),
+            "fallback must not create local state"
+        );
+    }
+
+    // A plausible worktrees/ path alone is insufficient: a mismatched or
+    // missing commondir must not redirect resolution to another repository.
+    fs::create_dir_all(&local_orbit).expect("local lookup boundary");
+    fs::write(local_orbit.join("config.toml"), "").expect("local config");
+    let commondir = main_repo.join(".git/worktrees/linked/commondir");
+    fs::create_dir_all(main_repo.join("other.git")).expect("unrelated common directory");
+    for invalid in [None, Some(""), Some("../../../other.git")] {
+        match invalid {
+            None => fs::remove_file(&commondir).expect("missing common directory"),
+            Some(value) => fs::write(&commondir, value).expect("invalid common directory"),
+        }
+        let mut command = orbit_command(&nested, &home, &["config", "show", "--json"], None);
+        command.env("PATH", home.join("stub-bin"));
+        let output = command.assert().success();
+        let config: Value = serde_json::from_slice(&output.get_output().stdout).expect("config");
+        assert_root_fields(&config, &local_orbit, &local_orbit);
+    }
+}
+
+fn init_submodule_fixture(superproject: &Path) -> PathBuf {
+    let source = superproject.parent().expect("fixture root").join("source");
+    fs::create_dir_all(&source).expect("submodule source");
+    fs::create_dir_all(superproject).expect("superproject");
+    init_git_repo(&source);
+    init_git_repo(superproject);
+    run_git(
+        superproject,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            source.to_str().expect("source path"),
+            "sub",
+        ],
+    );
+    fs::canonicalize(superproject.join("sub")).expect("submodule checkout")
+}
+
 /// Restores a path's permissions when dropped, so an assertion that panics
 /// while the path is read-only cannot leave a directory the tempdir cannot
 /// delete (the leftover would sit inside an agent worktree's `.orbit/tmp`).

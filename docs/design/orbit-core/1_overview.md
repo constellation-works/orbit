@@ -58,7 +58,11 @@ owners without externalizing it as new crates.
   `shared_root`, and `local_root`. On the primary checkout `shared_root` and
   `local_root` are equal; in a linked worktree `shared_root` is the primary
   checkout's `.orbit/` and `local_root` is the worktree's own. An explicit
-  `--root` or `ORBIT_ROOT` pins both.
+  `--root` or `ORBIT_ROOT` pins both. A submodule is an independent checkout:
+  bootstrap stops at its repository boundary and runtime honors its registered
+  data directory. Its gitfile does not make it a linked worktree of the
+  superproject. When Git is unavailable, linked-worktree discovery requires a
+  `worktrees/<name>` gitdir whose `commondir` points to the enclosing `.git`.
 - **Registry-aware composition** — opening a selected registered checkout and
   composing routine discovery from local `host.toml` plus `workspaces.json`
   lives in `orbit-cmd::registry_runtime` and `orbit-cmd::registry_routines`,
