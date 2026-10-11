@@ -18,6 +18,11 @@
 //! ([`BaselineRedFailures`]), so the hold text, its verdicts and the
 //! readiness detail say what is red, and the owner can file one repair task
 //! per red base failure.
+//!
+//! [ORB-15375] A candidate whose failing tests all fail on the base too
+//! introduced none of them, so it is not held: it proceeds, and the run, the
+//! task and the pull request record those tests as known red
+//! ([`KnownRedValidation`]).
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -31,6 +36,14 @@ pub const BASELINE_RED_MARKER: &str = "[baseline_red]";
 /// Task history event that moves a task to `backlog` under a
 /// [`BaselineRedHold`]. Admission withholds the task while the hold stands.
 pub const BASELINE_RED_HOLD_EVENT: &str = "baseline_red_hold";
+
+/// Task history event recording a required command a candidate failed only
+/// with tests its base fails too [ORB-15375]. The note is a
+/// [`KnownRedValidation`] text.
+pub const KNOWN_RED_VALIDATION_EVENT: &str = "known_red_validation";
+
+/// The marker a [`KnownRedValidation`] note starts with.
+pub const KNOWN_RED_MARKER: &str = "[known_red]";
 
 /// Whether a step failure says its required validation is red on the base.
 #[must_use]
@@ -265,5 +278,60 @@ impl BaselineRedHold {
             .next()?
             .ok()
             .filter(|hold| !hold.base_sha.trim().is_empty() && !hold.command.trim().is_empty())
+    }
+}
+
+/// A required command a candidate failed only with tests its base fails too
+/// [ORB-15375]. The candidate introduced none of them, so delivery proceeds,
+/// and this record says which tests were known red on the run, the task's
+/// history ([`KNOWN_RED_VALIDATION_EVENT`]) and the pull request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownRedValidation {
+    /// The required command, as configured.
+    pub command: String,
+    /// The base commit the same tests fail on.
+    pub base_sha: String,
+    /// The candidate commit validated.
+    pub tested_head: String,
+    /// The run that validated it.
+    pub run_id: String,
+    /// The candidate's failing tests, every one also failing on the base.
+    pub failures: BaselineRedFailures,
+}
+
+impl KnownRedValidation {
+    /// `detail` prefixed with the marker and this record, the task history
+    /// note's form.
+    #[must_use]
+    pub fn text(&self, detail: &str) -> String {
+        let record = serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string());
+        format!("{KNOWN_RED_MARKER} {record} {}", detail.trim())
+    }
+
+    /// The record a history note carries, if any.
+    #[must_use]
+    pub fn from_text(text: &str) -> Option<Self> {
+        let (_, rest) = text.split_once(KNOWN_RED_MARKER)?;
+        serde_json::Deserializer::from_str(rest.trim_start())
+            .into_iter::<Self>()
+            .next()?
+            .ok()
+            .filter(|record| !record.command.trim().is_empty())
+    }
+
+    /// Every failure kept, as a markdown list item each, then a count of
+    /// those omitted.
+    #[must_use]
+    pub fn failure_lines(&self) -> Vec<String> {
+        let mut lines = self
+            .failures
+            .identities
+            .iter()
+            .map(|identity| format!("`{}`", identity.strip_prefix("test ").unwrap_or(identity)))
+            .collect::<Vec<_>>();
+        if self.failures.omitted > 0 {
+            lines.push(format!("and {} more", self.failures.omitted));
+        }
+        lines
     }
 }

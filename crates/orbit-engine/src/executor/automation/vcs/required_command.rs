@@ -24,7 +24,9 @@
 //!
 //! Captured output keeps a head and a tail of each stream. A long stdout
 //! cannot drop the stderr failure before that classification, and the end of
-//! the recorded text still holds it.
+//! the recorded text still holds it. The failures a failed run names are read
+//! from the complete streams first ([`RequiredCommandRun::failures`]), so a
+//! failure in the dropped middle still counts [ORB-15375].
 //!
 //! A command that exits zero after printing a `DEFERRED:` notice returned
 //! without running a sandbox-confined path, because the host it ran on could
@@ -43,6 +45,7 @@
 //! of a diff-selecting command (`make ci-test-affected`) tests what the
 //! candidate run tested rather than the base's own, empty, diff.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -61,6 +64,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
+
+use super::base_claim::failure_identities;
 
 /// The file a required command may write its [`ValidationSummary`] to.
 pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
@@ -106,6 +111,10 @@ pub(super) struct RequiredCommandRun {
     pub(super) network_evidence: Option<String>,
     /// What the command reported it ran, when it reports that.
     pub(super) summary: Option<ValidationSummary>,
+    /// The failures a failed run's complete output names
+    /// ([`failure_identities`]), before capture bounded it [ORB-15375].
+    /// Empty for a run that passed.
+    pub(super) failures: BTreeSet<String>,
     /// The timeout allowance in milliseconds the command ran under [ORB-15350].
     pub(super) timeout_ms: u64,
 }
@@ -378,6 +387,14 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
                 .map(str::to_string)
         })
         .flatten();
+    let failures = if passed {
+        BTreeSet::new()
+    } else {
+        failure_identities(
+            &format!("{}\n{}", outcome.stdout, outcome.stderr),
+            workspace_path,
+        )
+    };
     let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
@@ -403,6 +420,7 @@ pub(super) fn run_required_command<H: RuntimeHost + ?Sized>(
         network_retries: 0,
         network_evidence: None,
         summary,
+        failures,
         timeout_ms,
     })
 }

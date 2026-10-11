@@ -241,12 +241,17 @@ pub(super) fn resume<H: RuntimeHost + ?Sized>(
                 run.command
             )));
         }
+        let check = compare_with_base(host, workspace_path, base_sha, &command, run.selection());
+        // [ORB-15375] Failing tests the base fails too are not the
+        // candidate's: the delivery's own validation records them and
+        // proceeds, as this check does.
+        if check.known_red(&run).is_some() {
+            continue;
+        }
         // [ORB-14258] A base that fails the same way leaves nothing for the
         // implementer to repair; the delivery's own validation holds the
         // task again, from the shared base result.
-        if compare_with_base(host, workspace_path, base_sha, &command, run.selection())
-            .reproduces(&run)
-        {
+        if check.reproduces(&run) {
             return Ok(Outcome::Unjudged(format!(
                 "required validation '{}' fails on base {base_sha} exactly as on the candidate",
                 run.command

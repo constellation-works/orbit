@@ -48,14 +48,15 @@ use orbit_engine::{
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
-    TaskComment, TaskPriority, TaskStatus, TaskType, push_external_ref_if_missing,
+    TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    push_external_ref_if_missing,
 };
 use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, DeterministicSpec};
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffReviewDisposition, TaskHandoff};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
-    DEFERRED_SANDBOX_ARTIFACT, JobV2StepBody, PipelineState, ReviewTiming, ReviewVerdict,
-    is_baseline_red_failure,
+    DEFERRED_SANDBOX_ARTIFACT, JobV2StepBody, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+    PipelineState, ReviewTiming, ReviewVerdict, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -2686,50 +2687,201 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr() {
     );
 }
 
-/// [ORB-15374] A red base's hold names the tests nextest reports failing
-/// there: one identity per `FAIL` summary line, without the bare libtest line
-/// nextest echoes for the same test, and the failure text names them too.
+/// The command a red-test fixture requires ([`Fixture::with_red_tests`]).
+const RED_TESTS: &str = "make ci-test";
+
+/// A known-red case: its name, the candidate's own failing tests (`None`
+/// fails exactly as the base), and the tests it proceeds with as known red
+/// (`None` is held).
+type KnownRedCase<'a> = (&'a str, Option<&'a [&'a str]>, Option<&'a [&'a str]>);
+
+/// nextest's `FAIL` summary line for each of `tests`.
+fn nextest_failures(tests: &[&str]) -> String {
+    tests
+        .iter()
+        .enumerate()
+        .map(|(index, test)| {
+            format!(
+                "        FAIL [   0.512s] ({}/{}) orbit-core::runtime {test}\n",
+                index + 1,
+                tests.len()
+            )
+        })
+        .collect()
+}
+
+/// [ORB-15375] A candidate whose failing tests all fail on a red base — the
+/// same tests, or some of them — introduced none of them: validation passes
+/// as `passed_with_known_red`, and the run's output, the log, the task's
+/// history and the pull request name the known-red tests. A candidate that
+/// fails a test the base does not, beside the base's or instead of them, is
+/// held as before, and the hold names what fails on the base (one identity
+/// per nextest `FAIL` line, without libtest's echo of the same test)
+/// [ORB-15374].
 #[test]
-fn a_red_base_hold_records_the_nextest_failures_of_the_base_run() {
+fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them() {
     isolated(
-        "a_red_base_hold_records_the_nextest_failures_of_the_base_run",
+        "a_candidate_failing_only_known_red_tests_proceeds_and_records_them",
         |sandbox| {
-            const RED_TESTS: &str = "make ci-test";
-            let fx = Fixture::new(sandbox);
-            fx.commit_on_base(
-                "Makefile",
-                "ci-test:\n\t@echo 'test suite::broken ... FAILED'\n\
-                 \t@echo '        FAIL [   0.512s] (1/2) orbit-core::runtime suite::broken'\n\
-                 \t@echo '        FAIL [   0.101s] (2/2) orbit-core::runtime suite::flaky'\n\
-                 \t@exit 100\n",
+            let base = ["suite::broken", "suite::flaky"];
+            let named = |tests: &[&str]| {
+                tests
+                    .iter()
+                    .map(|test| format!("test orbit-core::runtime {test}"))
+                    .collect::<Vec<_>>()
+            };
+            let cases: [KnownRedCase<'_>; 4] = [
+                ("equal", None, Some(&base)),
+                ("subset", Some(&["suite::flaky"]), Some(&["suite::flaky"])),
+                (
+                    "superset",
+                    Some(&["suite::broken", "suite::flaky", "suite::added"]),
+                    None,
+                ),
+                ("disjoint", Some(&["suite::added"]), None),
+            ];
+            for (case, candidate_tests, known_red) in cases {
+                let fx = Fixture::with_red_tests(sandbox, &base, candidate_tests);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+                host.require_commands(&[RED_TESTS]);
+                let mut input = fx.validate_input();
+                input["base_ref"] = json!(BASE);
+
+                let outcome = action(&host, "candidate_validate", &input);
+                let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+                let recorded = host
+                    .history(TASK_ID)
+                    .into_iter()
+                    .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
+                    .map(|entry| {
+                        KnownRedValidation::from_text(entry.note.as_deref().unwrap_or_default())
+                            .expect("the note carries its record")
+                    })
+                    .collect::<Vec<_>>();
+
+                let Some(known_red) = known_red else {
+                    let message = outcome
+                        .expect_err(&format!("{case}: a failure the base lacks is held"))
+                        .to_string();
+                    assert!(
+                        is_baseline_red_failure(None, Some(&message)),
+                        "{case}: {message}"
+                    );
+                    let hold = BaselineRedHold::from_text(&message).expect("the hold");
+                    assert_eq!(hold.failures.identities, named(&base), "{case}: {hold:?}");
+                    assert!(
+                        message.contains(
+                            "failing: `orbit-core::runtime suite::broken`, \
+                             `orbit-core::runtime suite::flaky`"
+                        ),
+                        "{case}: the failure names the tests failing on the base: {message}"
+                    );
+                    assert_eq!(log["failure_kind"], "baseline_red", "{case}");
+                    assert!(recorded.is_empty(), "{case}: {recorded:?}");
+                    continue;
+                };
+
+                let output = outcome.unwrap_or_else(|error| panic!("{case}: {error}"));
+                assert_eq!(output["decision"], "passed_with_known_red", "{case}");
+                assert_eq!(
+                    output["commands"],
+                    json!([]),
+                    "{case}: nothing passed outright"
+                );
+                let record = KnownRedValidation {
+                    command: RED_TESTS.to_string(),
+                    base_sha: fx.base_sha.clone(),
+                    tested_head: fx.candidate.clone(),
+                    run_id: RUN_ID.to_string(),
+                    failures: recorded[0].failures.clone(),
+                };
+                assert_eq!(record.failures.identities, named(known_red), "{case}");
+                assert_eq!(
+                    output["known_red"],
+                    json!([record]),
+                    "{case}: the run records it"
+                );
+                assert_eq!(log["failure_kind"], "known_red", "{case}");
+                assert_eq!(
+                    log["known_red"]["identities"],
+                    json!(named(known_red)),
+                    "{case}: the log records it"
+                );
+                assert_eq!(
+                    recorded,
+                    vec![record],
+                    "{case}: the task's history records it"
+                );
+
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap_or_else(|error| panic!("{case}: open the PR: {error}"));
+                let body = fx
+                    .forge_state("pr-body")
+                    .expect("the forge received a body");
+                assert!(body.contains("## Known-red validation"), "{case}: {body}");
+                assert!(
+                    body.contains(&format!("`{RED_TESTS}` fails on base `{}`", fx.base_sha)),
+                    "{case}: {body}"
+                );
+                for test in known_red {
+                    assert!(
+                        body.contains(&format!("`orbit-core::runtime {test}`")),
+                        "{case}: the PR names {test}: {body}"
+                    );
+                }
+            }
+        },
+    );
+}
+
+/// [ORB-15375] Captured output keeps only a head and a tail, so a failure in
+/// the middle of a long run never reaches the log. The failing-test set is
+/// read from the complete output: a candidate whose extra failure only the
+/// dropped middle names is held, not passed as known red.
+#[test]
+fn a_failure_only_the_truncated_middle_names_still_holds_the_candidate() {
+    isolated(
+        "a_failure_only_the_truncated_middle_names_still_holds_the_candidate",
+        |sandbox| {
+            let base = ["suite::broken", "suite::flaky"];
+            let fx = Fixture::with_red_tests(sandbox, &base, Some(&base));
+            // About 590 KB: past the 256 KiB recorded budget, under the 1 MiB
+            // supervisor capture limit that stops a run as an environment failure.
+            let padding = "padding line that names no failure\n".repeat(8 * 1024);
+            let candidate = fx.commit(
+                "failing.txt",
+                &format!(
+                    "{}{padding}{}{padding}{}",
+                    nextest_failures(&base[..1]),
+                    nextest_failures(&["suite::added"]),
+                    nextest_failures(&base[1..]),
+                ),
             );
-            git(&fx.repo, &["rebase", BASE]);
             let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
             host.require_commands(&[RED_TESTS]);
-            let mut input = fx.validate_input();
-            input["base_sha"] = json!(git(&fx.repo, &["rev-parse", BASE]));
-            input["base_ref"] = json!(BASE);
 
-            let message = action(&host, "candidate_validate", &input)
-                .expect_err("a red base fails validation")
+            let message = action(&host, "candidate_validate", &fx.validate_input())
+                .expect_err("a failure the base lacks is held")
                 .to_string();
 
-            let hold = BaselineRedHold::from_text(&message).expect("the failure names its hold");
-            assert_eq!(
-                hold.failures.identities,
-                vec![
-                    "test orbit-core::runtime suite::broken".to_string(),
-                    "test orbit-core::runtime suite::flaky".to_string(),
-                ],
-                "{hold:?}"
-            );
-            assert!(hold.failures.tail.is_empty(), "{hold:?}");
+            assert!(is_baseline_red_failure(None, Some(&message)), "{message}");
+            let log = host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"));
+            assert_eq!(log["tested_head"], candidate.as_str());
+            let captured = log["output"].as_str().unwrap_or_default();
             assert!(
-                message.contains(
-                    "failing: `orbit-core::runtime suite::broken`, \
-                     `orbit-core::runtime suite::flaky`"
-                ),
-                "the failure names the tests failing on the base: {message}"
+                captured.contains("truncated") && !captured.contains("suite::added"),
+                "the extra failure is only in the dropped middle"
+            );
+            assert_eq!(log["failure_kind"], "baseline_red");
+            assert!(
+                host.history(TASK_ID)
+                    .iter()
+                    .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
+                "nothing is recorded as known red"
             );
         },
     );
@@ -4247,6 +4399,36 @@ impl Fixture {
         }
     }
 
+    /// [`Fixture::new`] whose base fails [`RED_TESTS`] with nextest's `FAIL`
+    /// line for each of `base_tests` (and libtest's echo of the first), with
+    /// the candidate rebased onto it. A candidate given `candidate_tests`
+    /// commits its own list on top; otherwise it fails exactly as the base.
+    fn with_red_tests(
+        sandbox: &Path,
+        base_tests: &[&str],
+        candidate_tests: Option<&[&str]>,
+    ) -> Self {
+        let fixture = Self::new(sandbox);
+        let mut base_output = base_tests
+            .first()
+            .map(|test| format!("test {test} ... FAILED\n"))
+            .unwrap_or_default();
+        base_output.push_str(&nextest_failures(base_tests));
+        fixture.commit_on_base("failing.txt", &base_output);
+        fixture.commit_on_base("Makefile", "ci-test:\n\t@cat failing.txt\n\t@exit 100\n");
+        git(&fixture.repo, &["rebase", BASE]);
+        git(&fixture.repo, &["push", "--force", "origin", BRANCH]);
+        let candidate = match candidate_tests {
+            Some(tests) => fixture.commit("failing.txt", &nextest_failures(tests)),
+            None => fixture.head(),
+        };
+        Self {
+            base_sha: git(&fixture.repo, &["rev-parse", BASE]),
+            candidate,
+            ..fixture
+        }
+    }
+
     /// Commit `file` on the base and push it, leaving the candidate checked out.
     fn commit_on_base(&self, file: &str, contents: &str) {
         git(&self.repo, &["checkout", BASE]);
@@ -4595,6 +4777,8 @@ struct DeliveryHost {
     ship_mode: Mutex<String>,
     /// Status history written by automation updates, as (task, event, note).
     status_events: Mutex<Vec<StatusEvent>>,
+    /// History entries automation updates append, by task.
+    history: Mutex<BTreeMap<String, Vec<TaskHistoryEntry>>>,
     /// Rebase recovery attempts reserved, as (run, step, scope), oldest first.
     recovery_attempts: Mutex<Vec<(String, String, RebaseRecoveryAttemptScope)>>,
     /// Certified rebase recoveries, as (run, step, checkpoint), oldest first.
@@ -4627,6 +4811,7 @@ impl DeliveryHost {
             handoffs: Mutex::default(),
             ship_mode: Mutex::new("local".to_string()),
             status_events: Mutex::default(),
+            history: Mutex::default(),
             recovery_attempts: Mutex::default(),
             recovery_certificates: Mutex::default(),
             run_states: Mutex::default(),
@@ -4711,6 +4896,15 @@ impl DeliveryHost {
 
     fn comments(&self, id: &str) -> Vec<TaskComment> {
         self.comments
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn history(&self, id: &str) -> Vec<TaskHistoryEntry> {
+        self.history
             .lock()
             .unwrap()
             .get(id)
@@ -4887,6 +5081,10 @@ impl RuntimeHost for DeliveryHost {
         Ok(self.comments(task_id))
     }
 
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        Ok(self.history(task_id))
+    }
+
     /// The guarded transition: like the task store, refuse a write whose
     /// expected status is stale.
     fn update_task_from_activity(
@@ -4940,6 +5138,12 @@ impl RuntimeHost for DeliveryHost {
             .entry(task_id.to_string())
             .or_default()
             .extend(update.append_comments);
+        self.history
+            .lock()
+            .unwrap()
+            .entry(task_id.to_string())
+            .or_default()
+            .extend(update.append_history);
         Ok(())
     }
 

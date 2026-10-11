@@ -17,6 +17,13 @@
 //! `step_failure_recovery` to repair the candidate (for example commit a
 //! formatting fix) before the one post-recovery attempt reruns every command.
 //!
+//! [ORB-15375] A shared failure whose failing tests all fail on the base too
+//! ([`BaselineCheck::known_red`]) is not held: the candidate introduced none
+//! of them. The step records the known-red tests in its output, its log and
+//! each delivered task's history ([`KNOWN_RED_VALIDATION_EVENT`]), where
+//! `pr_open` reads them for the pull request, and goes on to the next
+//! command.
+//!
 //! [ORB-15287] An implementer whose affected-test gate passed with only
 //! Bubblewrap deferrals hands the gate off instead of failing, and the task
 //! keeps that record (see [`super::deferred_sandbox`]). The gate then runs
@@ -26,14 +33,17 @@
 
 use std::collections::BTreeSet;
 
+use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::ContextWideningStep;
-use orbit_types::workflow::BaselineRedHold;
+use orbit_types::task::{ContextWideningStep, TaskHistoryEntry};
 use orbit_types::workflow::handoff::HandoffArtifactRef;
+use orbit_types::workflow::{
+    BaselineRedFailures, BaselineRedHold, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
 use super::baseline::{
@@ -61,7 +71,9 @@ use super::handoff::completed_task_ids_from_input;
 /// a clean checkout of a named branch that contains the `base_sha` this run
 /// synchronized onto, and must stay exactly that while the suite runs. A
 /// failing command fails the step after its log — those of the commands that
-/// passed before it, and the base's run of it — is attached.
+/// passed before it, and the base's run of it — is attached, unless its
+/// failing tests are all known red on the base [ORB-15375]: then the
+/// decision is `passed_with_known_red` and `known_red` names them.
 pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -129,6 +141,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
 
     let mut logs = Vec::new();
     let mut passed = Vec::new();
+    let mut known_red = Vec::new();
     let mut validation_env = Value::Null;
     for (index, command) in commands.iter().enumerate() {
         let run = run_validation_command(host, &workspace_path, command, None)?;
@@ -148,6 +161,15 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         let red = baseline
             .as_ref()
             .is_some_and(|check| check.reproduces(&run));
+        let known = baseline.as_ref().and_then(|check| {
+            check.known_red(&run).map(|failures| KnownRedValidation {
+                command: run.command.clone(),
+                base_sha: check.base_sha.clone(),
+                tested_head: candidate.clone(),
+                run_id: run_id.clone(),
+                failures: BaselineRedFailures::new(failures.iter().cloned(), ""),
+            })
+        });
         let content = serde_json::to_vec(&json!({
             "schema_version": 1,
             "run_id": run_id,
@@ -160,7 +182,16 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
             "timed_out": run.timed_out,
             "output": run.output,
             "validation_env": validation_env,
-            "failure_kind": if red { json!("baseline_red") } else if baseline.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) { json!("environment") } else { run.failure_kind() },
+            "failure_kind": if known.is_some() {
+                json!("known_red")
+            } else if red {
+                json!("baseline_red")
+            } else if baseline.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
+                json!("environment")
+            } else {
+                run.failure_kind()
+            },
+            "known_red": known.as_ref().map(|known| &known.failures),
             "deferred_notice": run.deferred_notice,
             "deferred_sandbox_replay": replays.contains(&run.command),
             "missing_tool": run.missing_tool_name(),
@@ -177,6 +208,12 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                 OrbitError::Execution(format!("encode baseline validation log: {error}"))
             })?;
             logs.push((path.clone(), content));
+        }
+        if let Some(known) = known {
+            record_known_red(host, &task_ids, &known)?;
+            require_clean_checkout(&workspace_path, &branch, &candidate, "the candidate")?;
+            known_red.push(known);
+            continue;
         }
         if !run.passed {
             // The failing log is the evidence a recovery agent or reader
@@ -196,7 +233,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     command: run.command.clone(),
                     run_id: run_id.clone(),
                     selection: run.selection().cloned(),
-                    failures: check.failures(&workspace_path, run.selection()),
+                    failures: check.failures(),
                 };
                 return Err(baseline_red_failure(&hold, &run, &candidate, &evidence));
             }
@@ -223,8 +260,9 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     let references = attach_logs(host, &task_ids, &run_id, &logs)?;
     let mut output = json!({
         "phase": "validate",
-        "decision": "passed",
+        "decision": if known_red.is_empty() { "passed" } else { "passed_with_known_red" },
         "commands": passed,
+        "known_red": known_red,
         "branch": branch,
         "tested_head": candidate,
         "validation": serde_json::to_value(&references)
@@ -288,6 +326,43 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
         false,
     );
     Ok(changed.into_iter().collect())
+}
+
+/// Record `known` on each delivered task's history, the note `pr_open` reads
+/// for the pull request.
+fn record_known_red<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_ids: &[String],
+    known: &KnownRedValidation,
+) -> Result<(), OrbitError> {
+    let note = known.text(&format!(
+        "Required validation '{}' fails on candidate {} only with tests that also fail on base \
+         {}, so the candidate introduced none of them and delivery proceeds; {}.",
+        known.command,
+        known.tested_head,
+        known.base_sha,
+        known
+            .failures
+            .describe()
+            .unwrap_or_else(|| "no failure named".to_string())
+    ));
+    for task_id in task_ids {
+        host.apply_task_automation_update(
+            task_id,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".to_string(),
+                    event: KNOWN_RED_VALIDATION_EVENT.to_string(),
+                    note: Some(note.clone()),
+                    from_status: None,
+                    to_status: None,
+                }],
+                ..TaskAutomationUpdate::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn attach_logs<H: RuntimeHost + ?Sized>(

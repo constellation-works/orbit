@@ -325,6 +325,10 @@ pub(super) fn passed_output(
 /// attached to the owner's task before the step fails; a failure the base
 /// shares is typed `baseline_red`, and one that still could not reach the
 /// network after its retries is typed `transient`.
+///
+/// Known red [ORB-15375] does not apply here: the owner accepts only zero-exit
+/// claim validation logs, so a red base holds a claimed leaf even when every
+/// failing test fails on the base too.
 fn claim_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
@@ -397,7 +401,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             command: run.command.clone(),
             run_id: context.run_id.clone(),
             selection: run.selection().cloned(),
-            failures: check.failures(workspace_path, run.selection()),
+            failures: check.failures(),
         };
         return baseline_red_failure(&hold, run, commit, &evidence);
     }

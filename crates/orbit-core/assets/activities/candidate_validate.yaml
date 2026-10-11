@@ -22,6 +22,11 @@ spec:
     the candidate's; a failure the base shares fails as a typed
     `baseline_red` that no recovery repairs and that holds the task in the
     backlog until `base_ref` moves to a commit where the command passes.
+    A shared failure whose failing tests, read from the complete output,
+    all fail on the base too is not held: the candidate introduced none of
+    them, so the step goes on and records them as `known_red` in its output,
+    the command's log and each delivered task's `known_red_validation`
+    history event, which `pr_open` lists in the pull request body.
     With `ownership_base_sha`, every path the candidate changed since that
     commit is first attributed to the delivered tasks; a path no selector owns
     widens a task's selectors with review provenance rather than failing. An
@@ -66,14 +71,22 @@ spec:
         type: string
       decision:
         type: string
-        enum: [passed, skipped_no_required_commands]
+        enum: [passed, passed_with_known_red, skipped_no_required_commands]
       note:
         type: string
         description: Why no command ran, when the requirement list is empty.
       commands:
         type: array
+        description: The commands that passed.
         items:
           type: string
+      known_red:
+        type: array
+        description: >
+          Commands that failed only with tests the base fails too, each with
+          command, base_sha, tested_head, run_id and failures.
+        items:
+          type: object
       branch:
         type: string
       owned_paths:

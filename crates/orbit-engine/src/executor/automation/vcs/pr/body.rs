@@ -1,5 +1,6 @@
 use orbit_common::text::floor_char_boundary;
 use orbit_types::task::Task;
+use orbit_types::workflow::KnownRedValidation;
 
 use crate::context::PrConfig;
 
@@ -135,6 +136,34 @@ pub(super) fn render_execution_summary_section(execution_summary: &str) -> Strin
 
 pub(super) fn render_validation_section() -> String {
     "## Validation\n\n- Not reported".to_string()
+}
+
+/// [ORB-15375] The section naming required validation that failed only with
+/// tests the base fails too, or `None` when there is none.
+pub(super) fn render_known_red_section(records: &[KnownRedValidation]) -> Option<String> {
+    if records.is_empty() {
+        return None;
+    }
+    let commands = records
+        .iter()
+        .map(|record| {
+            let failures = record
+                .failure_lines()
+                .into_iter()
+                .map(|line| format!("  - {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "- `{}` fails on base `{}` with the same tests:\n{failures}",
+                record.command, record.base_sha
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "## Known-red validation\n\nThese required validation failures also fail on the base, \
+         so this change did not introduce them and was not held for them.\n\n{commands}"
+    ))
 }
 
 pub(super) fn render_branch_freshness_section(freshness: &BranchFreshness) -> String {

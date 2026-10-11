@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::baseline::{
-    FAILING_TESTS_KEY, cache_paths, cached_base_check, compare_with_base_until, hold_failures,
+    FAILING_TESTS_KEY, cached_base_check, compare_with_base_until, hold_failures,
     run_validation_command_until,
 };
 use super::required_command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
@@ -292,7 +292,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             None,
         ));
     }
-    let on_candidate = failure_identities(&run.output, workspace_path);
+    let on_candidate = run.failures.clone();
     let full = run.selection().cloned();
     // Only a comparable, conclusive record stands in for a run.
     let cached = cut
@@ -304,8 +304,8 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
     let narrowed = (!run.timed_out || cut.is_some())
         .then(|| failing_tests_selection(full.as_ref(), &on_candidate, claimed_failures))
         .flatten();
-    let (replay, handed, check) = match (cached, narrowed) {
-        (Some(check), _) => (BaseReplay::CachedFailureSet, full, check),
+    let (replay, check) = match (cached, narrowed) {
+        (Some(check), _) => (BaseReplay::CachedFailureSet, check),
         (None, Some(narrowed)) => {
             let check = compare_with_base_until(
                 host,
@@ -315,7 +315,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
                 Some(&narrowed),
                 Some(base_deadline),
             );
-            (BaseReplay::FailingTests, Some(narrowed), check)
+            (BaseReplay::FailingTests, check)
         }
         (None, None) => {
             if let Some(reason) = &cut {
@@ -339,7 +339,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
                 full.as_ref(),
                 Some(base_deadline),
             );
-            (BaseReplay::FullSelection, full, check)
+            (BaseReplay::FullSelection, check)
         }
     };
     let base_log = check.log(run_id);
@@ -394,12 +394,8 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             "the claimed failure `{missing}` is not in base {base_sha}'s output"
         ))));
     }
-    let base_root = cache_paths(workspace_path, base_sha, command, handed.as_ref())
-        .map(|paths| paths.worktree)
-        .unwrap_or_default();
-    let on_base = failure_identities(&base.output, &base_root);
     let added = on_candidate
-        .difference(&on_base)
+        .difference(&base.failures)
         .cloned()
         .collect::<Vec<_>>();
     Ok(checked(match (added.is_empty(), &cut) {
@@ -509,8 +505,8 @@ fn normalize_output(text: &str) -> String {
 /// with its header line). Paths under `root`, where the run happened, are
 /// made relative so a base worktree and the candidate compare equal.
 ///
-/// Identities come from the captured text, which keeps a head and a tail of
-/// each stream; anything a long output drops is not compared.
+/// Required validation runs read them from the complete streams before
+/// capture bounds the text ([`super::required_command`]) [ORB-15375].
 pub(super) fn failure_identities(output: &str, root: &Path) -> std::collections::BTreeSet<String> {
     static PATTERNS: OnceLock<Option<[Regex; 4]>> = OnceLock::new();
     let Some([libtest, nextest, header, location]) = PATTERNS
