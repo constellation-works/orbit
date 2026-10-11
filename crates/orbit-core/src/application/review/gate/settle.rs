@@ -761,13 +761,15 @@ fn settled_outcome(
     context: &GateContext,
     certificate: ReviewCertificate,
 ) -> Result<Settled, OrbitError> {
-    // [ORB-14849] A before-landing review already published its PR and
-    // promoted the task, so an evidence-only verdict is not held in progress:
-    // like any other verdict but an approve, it leaves the PR open.
-    let holds_evidence = context
-        .admission
-        .as_ref()
-        .is_none_or(|admission| !admission.gates_landing());
+    // An owner before-landing run already promoted its task to review and
+    // leaves the PR open for a recorded decision. A claimed leaf has not
+    // handed off yet: its owner's task is still in progress, so unavailable
+    // evidence must release the claim with the same hold as before-PR review.
+    let holds_evidence = context.claimed
+        || context
+            .admission
+            .as_ref()
+            .is_none_or(|admission| !admission.gates_landing());
     if !certificate.verdict.passed() {
         for task_id in context.task_ids.iter().filter(|_| holds_evidence) {
             if let Some(hold) =

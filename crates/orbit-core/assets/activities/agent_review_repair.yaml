@@ -341,10 +341,13 @@ spec:
        - `incomplete`: the review could not be completed (a denied required
          check, ambiguous intent, mismatch, or a failed check whose base
          replay did not fit the budget); set `escalation`. Evidence this host
-         cannot produce is owner-side follow-up, not an `incomplete` verdict by
-         itself. This reviewer's host produces its own check runs in its lane,
-         the base replay of failing tests within its reserve, and the
-         sandbox-gated runs in step 4. Anything else it cannot produce, such as
+         cannot produce is owner-side follow-up. When that is the only gap,
+         return an `incomplete` report with named `external_evidence`:
+         settlement ends the run as `held`, rather than failing the review.
+         Never report `accept` or `accept_with_fixes` with an unrun required
+         check. This reviewer runs checks its platform and agent sandbox
+         support, and replays failing tests on the base within its reserve.
+         Anything else it cannot produce, such as
          a hosted CI job, a native OS run, a CodeQL result on another OS, or a
          sandbox-gated test of another OS, is named in `external_evidence` for
          the owner to fulfil. If the only remaining work is a named hosted CI

@@ -317,6 +317,57 @@ fn a_mac_reviewers_named_linux_only_evidence_holds_instead_of_blocking() {
     assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
 }
 
+/// A claimed before-landing review must release its lane with an evidence
+/// hold just like a before-PR review, without approving an unverified head.
+#[test]
+fn a_mac_before_landing_review_holds_named_linux_and_hosted_evidence() {
+    if !isolated(
+        module_path!(),
+        "a_mac_before_landing_review_holds_named_linux_and_hosted_evidence",
+    ) {
+        return;
+    }
+    let mut leaf = ReviewedLeaf::admit_before_landing();
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.gate_input["before_landing"] = json!(true);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    let named = vec![
+        owed(),
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostedCi,
+            name: "CI".into(),
+            command: CI.into(),
+            artifact: CI_ARTIFACT.into(),
+            os: None,
+        },
+    ];
+    let mut reviewer_report = report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![
+            ci_fast(),
+            record("V2", CODEQL, ValidationOutcome::NotRun),
+            record("V3", CI, ValidationOutcome::NotRun),
+        ],
+        Some("Linux and hosted checks need owner-side evidence"),
+    );
+    reviewer_report.external_evidence = named.clone();
+    leaf.put_report(&reviewer_report);
+    let refused = leaf.settle().expect_err("missing evidence cannot land");
+    assert!(
+        refused.contains("review_awaiting_evidence"),
+        "an evidence-only claimed before-landing review must hold: {refused}"
+    );
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("named evidence remains an owner-side follow-up");
+    assert_eq!(hold.requirements, named);
+    leaf.leaf_holds(&hold);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+}
+
 /// A check that failed on the candidate is an answer, not an evidence gap: a
 /// later run of it on another OS cannot settle it, so the review blocks.
 #[test]

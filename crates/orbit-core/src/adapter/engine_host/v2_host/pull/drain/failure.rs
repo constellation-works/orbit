@@ -132,13 +132,15 @@ pub(crate) fn leaf_failure_settlement(
 }
 
 /// The evidence hold a held leaf's review settlement recorded in its run
-/// state, under the `review_gate_settle` step's output.
+/// state, under its before-PR or before-landing settlement step's output.
 fn held_evidence(state: Option<&PipelineState>) -> Option<ReviewEvidenceHold> {
-    let hold = state?
-        .pipeline
-        .get("review_gate_settle")?
-        .get("evidence_hold")?;
-    serde_json::from_value(hold.clone()).ok()
+    let pipeline = &state?.pipeline;
+    ["landing_review_gate_settle", "review_gate_settle"]
+        .into_iter()
+        .find_map(|step| {
+            let hold = pipeline.get(step)?.get("evidence_hold")?;
+            serde_json::from_value(hold.clone()).ok()
+        })
 }
 
 /// A `held` leaf whose review settled into an evidence hold did not fail: its
@@ -166,7 +168,7 @@ fn evidence_hold_release(
         comment: Some(format!(
             "Follower drain {drain} on {machine} released this claim: {why}. The task stays in \
              progress under the evidence hold; attaching every named result queues a fresh \
-             review. No pull request was opened."
+             review. Delivery remains gated until the named evidence arrives."
         )),
         evidence_hold: Some(hold),
         ..Default::default()
