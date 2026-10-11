@@ -14,7 +14,9 @@
 // the editor's reach warning for an in-effect, an overridden and a
 // not-inherited key, a refused save, a removal, Add key, the sidebar's crew
 // tables (never "No crew is defined"), 44px targets, and a 375px phone with
-// no horizontal page scroll. No Orbit store is contacted.
+// no horizontal page scroll. Held responses exercise Save, Add, Rename and
+// Remove across host switches and workspace round trips, including refused
+// drafts and pending state through reload. No Orbit store is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -188,6 +190,11 @@ function api(rest, url, req, res) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/global-file-race') {
+    res.setHeader('content-type', 'text/html');
+    res.end('<!doctype html><html><body><div id="config-body"></div></body></html>');
+    return;
+  }
   if (!url.pathname.startsWith('/api/')) {
     const served = dashboardFile(url.pathname);
     if (!served) { res.writeHead(404); res.end(); return; }
@@ -233,6 +240,205 @@ const rowOf = async (key) => (await rows()).find((entry) => entry.key === key);
 const row = (key) => page.locator(`#config-body .cgf-row[data-key="${key}"]`);
 const warning = (key) => row(key).locator('.cgf-reach-warn').evaluate((node) => ({ kind: node.dataset.reach, text: node.textContent }));
 const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+
+// The shipped modules run without a poller. Explicit fetch and reload barriers
+// choose the interleaving; a frame drains the resulting promise callbacks.
+async function checkVisitRaces(browser, payload) {
+  const racePage = await browser.newPage();
+  const errors = [];
+  racePage.on('pageerror', (error) => errors.push(error.message));
+  try {
+    await racePage.goto(`${origin}/global-file-race`);
+    const cases = await racePage.evaluate(async (payload) => {
+      const common = await import('/static/js/common.js');
+      const view = await import('/static/js/config-global-file.js');
+      const unsubscribe = common.onWorkspaceChange(view.resetGlobalFile);
+      const body = document.getElementById('config-body');
+      const assert = (condition, message) => { if (!condition) throw new Error(message); };
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const row = (key) => body.querySelector(`.cgf-row[data-key="${key}"]`);
+      const button = (root, label) => [...root.querySelectorAll('button')].find((node) => node.textContent === label);
+      const cases = [];
+      let reloads = 0;
+      let releaseReload;
+      const context = {
+        canEdit: true,
+        render: () => { body.replaceChildren(); view.renderGlobalFile(body, payload, context); },
+        reload: async () => {
+          const visit = common.captureWorkspaceVisit();
+          reloads += 1;
+          await new Promise((resolve) => { releaseReload = resolve; });
+          if (visit.isCurrent()) context.render();
+        },
+      };
+      const start = (operation, value) => {
+        let input;
+        if (operation === 'add') {
+          button(body.querySelector('.cwf-head'), '+ Add key').click();
+          const picker = body.querySelector('#cgf-add-key');
+          picker.value = 'workflow.release_branch';
+          picker.dispatchEvent(new Event('change'));
+          input = body.querySelector('#cgf-add-value');
+        } else if (operation === 'rename') {
+          button(body.querySelector('.cgf-id[data-key="machine.name"]'), 'Rename').click();
+          input = body.querySelector('#cgf-rename-value');
+        } else {
+          button(row('review.minutes'), 'Edit').click();
+          input = body.querySelector('#cgf-edit-value');
+        }
+        input.value = value;
+        input.dispatchEvent(new Event('input'));
+        const form = input.closest('form');
+        const submit = operation === 'remove'
+          ? () => button(form, 'Remove from file').dispatchEvent(new MouseEvent('click'))
+          : () => form.dispatchEvent(new Event('submit', { cancelable: true }));
+        submit();
+        return submit;
+      };
+      const originalFetch = window.fetch;
+      try {
+        for (const boundary of ['host-switch', 'workspace-round-trip']) {
+          for (const operation of ['save', 'add', 'rename', 'remove']) {
+            for (const refused of [false, true]) {
+              common.setHost(boundary === 'host-switch' ? null : 'beta');
+              common.setWorkspace('ws_same');
+              view.resetGlobalFile();
+              context.render();
+              reloads = 0;
+              const requests = [];
+              window.fetch = (target, options) => new Promise((resolve) => {
+                requests.push({ target, method: options.method, body: options.body, release: (refused = false) => resolve({
+                  ok: !refused, status: refused ? 400 : 200,
+                  text: async () => JSON.stringify(refused ? { error: 'fixture write refused', code: 'invalid_value' } : { ok: true }),
+                }) });
+              });
+              const label = `${boundary}/${operation}/${refused ? 'refused' : 'success'}`;
+              const key = operation === 'add' ? 'workflow.release_branch' : operation === 'rename' ? 'machine.name' : 'review.minutes';
+              const suffix = operation === 'remove' ? '?scope=global&workspace=ws_same' : '?workspace=ws_same';
+              const prefix = boundary === 'host-switch' ? '/api/' : '/api/on/beta/';
+              const obsoleteSubmit = start(operation, operation === 'save' || operation === 'remove' ? '80' : 'old draft');
+              assert(requests.length === 1 && requests[0].target === `${prefix}config/keys/${key}${suffix}`,
+                `${label}: the first mutation is held on its starting host/workspace`);
+              assert(requests[0].method === (operation === 'remove' ? 'DELETE' : 'PUT'), `${label}: the operation sends its expected method`);
+              if (operation !== 'remove') assert(JSON.parse(requests[0].body).scope === 'global', `${label}: the PUT writes the global file`);
+              if (boundary === 'host-switch') common.setHost('beta');
+              else { common.setWorkspace('ws_other'); common.setWorkspace('ws_same'); }
+              context.render();
+              const fresh = body.innerHTML;
+              obsoleteSubmit();
+              assert(requests.length === 1 && body.innerHTML === fresh,
+                `${label}: an expired draft cannot dispatch a later mutation into the new visit`);
+              const value = operation === 'save' || operation === 'remove' ? '45' : 'new draft';
+              const submit = start(operation, value);
+              assert(requests.length === 2 && requests[1].target === `/api/on/beta/config/keys/${key}${suffix}`,
+                `${label}: a newer visit owns its mutation`);
+              const before = body.innerHTML;
+              requests[0].release(refused);
+              await frame();
+              assert(requests.length === 2 && reloads === 0 && body.innerHTML === before,
+                `${label}: stale settlement sends no mutation, reload or new-visit draft/status change`);
+              // A render exposes an invisible pending-state change; forced
+              // events check admission independently of native disabled buttons.
+              context.render();
+              const input = body.querySelector('#cgf-add-value, #cgf-rename-value, #cgf-edit-value');
+              assert(input.disabled && input.value === value, `${label}: the newer draft remains disabled and unchanged`);
+              submit();
+              if (operation === 'save' || operation === 'remove') {
+                const form = input.closest('form');
+                form.dispatchEvent(new Event('submit', { cancelable: true }));
+                button(form, 'Remove from file').dispatchEvent(new MouseEvent('click'));
+              }
+              assert(requests.length === 2, `${label}: stale results cannot admit duplicate PUT or DELETE`);
+
+              requests[1].release(refused);
+              await frame();
+              if (refused) {
+                const field = body.querySelector('#cgf-add-value, #cgf-rename-value, #cgf-edit-value');
+                assert(reloads === 0 && !field.disabled && field.value === value
+                  && body.querySelector('[role="alert"]')?.textContent === 'fixture write refused',
+                `${label}: the owning refusal preserves and re-enables its draft without a reload`);
+                assert(document.activeElement === field, `${label}: the refused draft regains focus`);
+                const form = field.closest('form');
+                if (operation === 'remove') button(form, 'Remove from file').click();
+                else form.dispatchEvent(new Event('submit', { cancelable: true }));
+                assert(requests.length === 3, `${label}: the owner can retry the refused mutation`);
+                requests[2].release();
+                await frame();
+              }
+              assert(reloads === 1 && releaseReload, `${label}: owning success begins one reload`);
+              context.render();
+              assert(button(row('review.minutes'), 'Edit').disabled
+                && button(body.querySelector('.cwf-head'), '+ Add key').disabled
+                && button(body.querySelector('.cgf-id[data-key="machine.name"]'), 'Rename').disabled,
+              `${label}: mutations remain disabled through the owning reload`);
+              submit();
+              assert(requests.length === (refused ? 3 : 2), `${label}: pending reload prevents another mutation`);
+              releaseReload();
+              releaseReload = null;
+              await frame();
+              assert(!body.querySelector('.cgf-editor, .cwf-add, .cgf-rename')
+                && !button(row('review.minutes'), 'Edit').disabled && body.querySelector('.cwf-status.ok'),
+              `${label}: the owning operation settles and releases its controls after reload`);
+              cases.push({ label, requests: requests.map(({ release, ...request }) => request), reloads });
+            }
+          }
+        }
+
+        // A scope change during the owning reload also expires its finalizer.
+        for (const boundary of ['host-switch', 'workspace-round-trip']) {
+          common.setHost(boundary === 'host-switch' ? null : 'beta');
+          common.setWorkspace('ws_same');
+          view.resetGlobalFile();
+          context.render();
+          reloads = 0;
+          const requests = [];
+          window.fetch = (target, options) => new Promise((resolve) => {
+            requests.push({ target, method: options.method, body: options.body, release: () => resolve({
+              ok: true, status: 200, text: async () => JSON.stringify({ ok: true }),
+            }) });
+          });
+          const label = `${boundary}/reload`;
+          start('save', '80');
+          requests[0].release();
+          await frame();
+          assert(reloads === 1 && releaseReload, `${label}: the first Save is reloading`);
+          const releaseOldReload = releaseReload;
+          if (boundary === 'host-switch') common.setHost('beta');
+          else { common.setWorkspace('ws_other'); common.setWorkspace('ws_same'); }
+          context.render();
+          const submit = start('save', '45');
+          const before = body.innerHTML;
+          releaseOldReload();
+          await frame();
+          assert(body.innerHTML === before && reloads === 1, `${label}: the old reload cannot settle the newer visit`);
+          context.render();
+          assert(body.querySelector('#cgf-edit-value').disabled, `${label}: the newer write still owns pending state`);
+          submit();
+          assert(requests.length === 2, `${label}: an obsolete reload cannot unlock a duplicate write`);
+          requests[1].release();
+          await frame();
+          assert(reloads === 2, `${label}: the newer Save starts its own reload`);
+          releaseReload();
+          releaseReload = null;
+          await frame();
+          assert(!body.querySelector('.cgf-editor') && !button(row('review.minutes'), 'Edit').disabled,
+            `${label}: the newer Save finishes normally`);
+          cases.push({ label, requests: requests.map(({ release, ...request }) => request), reloads });
+        }
+      } finally {
+        window.fetch = originalFetch;
+        unsubscribe();
+      }
+      return cases;
+    }, payload);
+    assert(errors.length === 0, `no visit-race page errors: ${errors.join('; ')}`);
+    return cases;
+  } finally {
+    await racePage.close();
+  }
+}
+
+const racePayload = { ...fileView('global'), workspace_file: fileView('workspace') };
 
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
@@ -400,6 +606,7 @@ try {
     await page.keyboard.press('Escape');
   }
 
+  evidenceLog.visitRaces = await checkVisitRaces(browser, racePayload);
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'config-global-file-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -414,11 +621,12 @@ try {
       'browser-config-global-file-machine-rename',
       'browser-config-global-file-add-key',
       'browser-config-global-file-phone-no-horizontal-scroll',
+      'browser-config-global-file-visit-and-operation-ownership',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard Settings › Global file browser checks passed at 1440px, 768px and 375px: machine card, reach counts and cells, editor reach warnings, rename, add key.');
+  console.log('Dashboard Settings › Global file browser checks passed at 1440px, 768px and 375px, including 16 held-response mutation cases and two stale reload cases.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'config-global-file-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   await page?.screenshot({ path: path.join(evidence, 'config-global-file-failure.png'), fullPage: true }).catch(() => {});
