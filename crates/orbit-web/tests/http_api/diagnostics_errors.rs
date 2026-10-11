@@ -274,3 +274,104 @@ fn step_errors_without_failure_detail_report_its_absence() {
         },
     );
 }
+
+/// The dashboard API's per-message cap for list projections.
+const LIST_MESSAGE_MAX_BYTES: usize = 2048;
+
+#[test]
+fn long_step_errors_are_bounded_in_errors_and_friction_and_the_run_keeps_them() {
+    isolated(
+        "diagnostics_errors::long_step_errors_are_bounded_in_errors_and_friction_and_the_run_keeps_them",
+        || {
+            let fixture = Fixture::new();
+            let start = Utc::now() - Duration::minutes(2);
+            // A failed validation's message: a few hundred KB, with a bare
+            // token straddling the cap that a cut before redaction would leak.
+            let mut long = "required validation did not pass: ".to_string();
+            long.push_str(&"x".repeat(LIST_MESSAGE_MAX_BYTES - 8 - long.len()));
+            long.push_str(&format!(" ghp_{} ", "b".repeat(36)));
+            long.push_str(&"y".repeat(300_000));
+            long.push_str(" tail-marker");
+            for (run, message) in [("long", long.as_str()), ("short", "boom")] {
+                fixture.seed_run(run, "fixture", JobRunState::Failed);
+                insert(
+                    &fixture,
+                    &format!("{run}-start"),
+                    run,
+                    start,
+                    json!({"body_kind":"step_started", "step_id":"X"}),
+                );
+                insert(
+                    &fixture,
+                    &format!("{run}-finish"),
+                    run,
+                    start + Duration::seconds(2),
+                    json!({"body_kind":"step_finished", "step_id":"X", "outcome":"failed", "error_message": message}),
+                );
+            }
+            // A run-less row whose detail is in the process log itself.
+            let mut unaffiliated =
+                process(None, "unaffiliated-detail", start + Duration::seconds(3));
+            unaffiliated["fields"]["error_message"] = json!(long);
+            write_process_rows(
+                &fixture,
+                &[
+                    process(Some("long"), "long", start + Duration::seconds(2)),
+                    process(Some("short"), "short", start + Duration::seconds(2)),
+                    unaffiliated,
+                ],
+            );
+            let server = fixture.server(false);
+
+            let errors = server
+                .get("/api/diagnostics/errors?since=24h&workspace=ws_http_fixture")
+                .text()
+                .unwrap();
+            assert!(!errors.contains("ghp_"), "redaction precedes the cut");
+            let errors: Value = serde_json::from_str(&errors).unwrap();
+            let rows = errors["items"].as_array().unwrap();
+            let row = |id: &str| rows.iter().find(|row| row["event_id"] == id).unwrap();
+            for id in ["long", "unaffiliated-detail"] {
+                let message = row(id)["message"].as_str().unwrap();
+                assert_eq!(message.len(), LIST_MESSAGE_MAX_BYTES, "{id}");
+                assert!(long.starts_with(&message[..1024]), "{id} keeps the start");
+                assert_eq!(row(id)["truncated"], true, "{id}");
+            }
+            assert_eq!(row("short")["message"], "boom");
+            assert_eq!(row("short")["truncated"], false);
+
+            let month = start.format("%Y-%m");
+            let friction = server
+                .get(&format!(
+                    "/api/diagnostics/friction?month={month}&workspace=ws_http_fixture"
+                ))
+                .text()
+                .unwrap();
+            assert!(!friction.contains("ghp_"), "redaction precedes the cut");
+            let friction: Value = serde_json::from_str(&friction).unwrap();
+            let friction = friction.as_array().unwrap();
+            let entry = |run: &str| friction.iter().find(|row| row["job_run"] == run).unwrap();
+            assert_eq!(
+                entry("long")["stderr"].as_str().unwrap().len(),
+                LIST_MESSAGE_MAX_BYTES
+            );
+            assert_eq!(entry("long")["truncated"], true);
+            assert_eq!(entry("short")["stderr"], "boom");
+            assert_eq!(entry("short")["truncated"], false);
+
+            // Both feeds link the row to its run, whose step keeps the full text.
+            assert_eq!(row("long")["job_run"], "long");
+            let run = json_ok(server.get("/api/runs/long?workspace=ws_http_fixture"));
+            let step = run["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|step| step["target_id"] == "X")
+                .unwrap();
+            assert_eq!(
+                step["error_message"], long,
+                "the run link reaches the full message"
+            );
+        },
+    );
+}

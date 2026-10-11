@@ -369,6 +369,7 @@ td .rel-rate { font-size: 12px; }
 .diagnostics-errors-main .error-message-full {
   margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg);
 }
+.diagnostics-errors-main .error-message-note { margin: 4px 0 0; color: var(--fg-mute); font: 12px/1.5 var(--font-sans); }
 .diagnostics-load-more { color: var(--accent-hover); white-space: nowrap; }
 
 /* Narrow viewports: the Audit tool-health cards keep their labels readable. */

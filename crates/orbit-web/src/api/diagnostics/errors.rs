@@ -12,7 +12,10 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::super::{DiagnosticsQuery, HISTORY_DEFAULT_LIMIT, bounded_limit, map_runtime_error};
+use super::super::{
+    DiagnosticsQuery, Excerpt, HISTORY_DEFAULT_LIMIT, bounded_limit, map_runtime_error,
+    message_excerpt, redacted_excerpt,
+};
 use super::audit::audit_blob_store;
 use super::friction::{EnvelopeLinks, enclosing_step_id_for_event};
 use super::metrics::DiagnosticsRange;
@@ -61,6 +64,8 @@ pub(in crate::api) async fn list_diagnostics_errors(
 /// `all`), and `coverage_since`, the instant from which both sources were read
 /// completely. It equals `since` unless log retention, the process-log scan
 /// cap or the stderr blob cap stopped a source later than the window start.
+/// Each item's `message` is a bounded excerpt; `truncated` says it was cut,
+/// and the owning run keeps the full text.
 fn diagnostics_errors(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
@@ -152,7 +157,7 @@ fn diagnostics_error_rows(
                     .map(str::trim)
                     .filter(|message| !message.is_empty())
                 {
-                    row["message"] = json!(redact_all(message));
+                    set_message(&mut row, message_excerpt(message));
                 }
             }
         }
@@ -227,6 +232,11 @@ fn global_error_rows_in_range(
     Ok((rows, scanned.coverage_since))
 }
 
+fn set_message(row: &mut Value, message: Excerpt) {
+    row["message"] = json!(message.text);
+    row["truncated"] = json!(message.truncated);
+}
+
 fn row_timestamp(row: &Value) -> Option<DateTime<Utc>> {
     row["ts"].as_str().and_then(|ts| ts.parse().ok())
 }
@@ -243,17 +253,21 @@ fn process_error_row(event: &Value) -> Value {
         "unaffiliated"
     };
 
+    let message = optional_log_field(fields, &["error_message", "error"])
+        .map(message_excerpt)
+        .unwrap_or_else(|| {
+            redacted_excerpt(if target == "orbit.job.step_finished" {
+                "no failure detail recorded".to_string()
+            } else {
+                strip_htmlish(&format_message_html(target, fields))
+            })
+        });
+
     json!({
         "ts": ts,
         "source": "process",
-        "message": optional_log_field(fields, &["error_message", "error"])
-            .map(redact_all).unwrap_or_else(|| {
-                if target == "orbit.job.step_finished" {
-                    "no failure detail recorded".to_string()
-                } else {
-                    strip_htmlish(&format_message_html(target, fields))
-                }
-            }),
+        "message": message.text,
+        "truncated": message.truncated,
         "event_id": optional_log_field(fields, &["event_id"]),
         "job_run": job_run,
         "step": optional_log_field(fields, &["step_id", "step", "activity_id"]),
@@ -365,10 +379,12 @@ fn agent_stderr_error_rows(
         if messages.is_empty() {
             continue;
         }
+        let message = redacted_excerpt(messages.join("\n"));
         rows.push(json!({
             "ts": timestamps.into_iter().max().map(|ts| ts.to_rfc3339()).unwrap_or(fallback_ts),
             "source": "agent-stderr",
-            "message": messages.join("\n"),
+            "message": message.text,
+            "truncated": message.truncated,
             "job_run": event.run_id.as_deref(),
             "step": step,
             "step_index": step_index,

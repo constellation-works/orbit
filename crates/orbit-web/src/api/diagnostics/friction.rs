@@ -5,14 +5,15 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::DiagnosticsCommands;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::OrbitRuntime;
+use orbit_types::record::FrictionEntry;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::super::runs::{RUN_LOG_PREVIEW_MAX_BYTES, bounded_preview};
+use super::super::runs::RUN_LOG_PREVIEW_MAX_BYTES;
 use super::super::{
-    DiagnosticsQuery, HISTORY_DEFAULT_LIMIT, bounded_limit, current_year_month_utc,
-    map_runtime_error, month_bounds_utc, validate_year_month,
+    DiagnosticsQuery, Excerpt, HISTORY_DEFAULT_LIMIT, bounded_limit, current_year_month_utc,
+    map_runtime_error, message_excerpt, month_bounds_utc, validate_year_month,
 };
 use super::audit::{audit_blob_store, events_by_id, v2_audit_values};
 use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
@@ -68,6 +69,11 @@ pub(super) fn diagnostics_friction_row<'a>(
             if exit_code == Some(0) && !timed_out {
                 return None;
             }
+            let stderr = event
+                .get("stderr_blob_ref")
+                .and_then(Value::as_str)
+                .map(|blob_ref| read_blob_excerpt_best_effort(blob_store, blob_ref))
+                .unwrap_or_else(|| message_excerpt(""));
             Some(json!({
                 "ts": ts,
                 "job_run": event.get("run_id").and_then(Value::as_str).unwrap_or(""),
@@ -76,11 +82,8 @@ pub(super) fn diagnostics_friction_row<'a>(
                 "command": event.get("provider").and_then(Value::as_str).unwrap_or("cli"),
                 "input": "",
                 "exit_code": exit_code,
-                "stderr": event
-                    .get("stderr_blob_ref")
-                    .and_then(Value::as_str)
-                    .map(|blob_ref| read_blob_preview_best_effort(blob_store, blob_ref))
-                    .unwrap_or_default(),
+                "stderr": stderr.text,
+                "truncated": stderr.truncated,
                 "actor_identity": event.get("agent_identity").cloned().unwrap_or(Value::Null),
             }))
         }
@@ -93,6 +96,10 @@ pub(super) fn diagnostics_friction_row<'a>(
                 return None;
             }
             let step = event.get("step_id").and_then(Value::as_str).unwrap_or("");
+            let stderr = match event.get("error_message").and_then(Value::as_str) {
+                Some(message) => message_excerpt(message),
+                None => message_excerpt(&format!("step finished with outcome '{outcome}'")),
+            };
             Some(json!({
                 "ts": ts,
                 "job_run": event.get("run_id").and_then(Value::as_str).unwrap_or(""),
@@ -101,16 +108,20 @@ pub(super) fn diagnostics_friction_row<'a>(
                 "command": step,
                 "input": "",
                 "exit_code": null,
-                "stderr": event
-                    .get("error_message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("step finished with outcome '{outcome}'")),
+                "stderr": stderr.text,
+                "truncated": stderr.truncated,
                 "actor_identity": event.get("agent_identity").cloned().unwrap_or(Value::Null),
             }))
         }
         "step_denied" | "tool_denied" | "fs_call_denied" => {
             let step = enclosing_step_id_for_event(event, events_by_id).unwrap_or_default();
+            let stderr = message_excerpt(
+                event
+                    .get("reason")
+                    .or_else(|| event.get("matched_rule"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(body_kind),
+            );
             Some(json!({
                 "ts": ts,
                 "job_run": event.get("run_id").and_then(Value::as_str).unwrap_or(""),
@@ -123,11 +134,8 @@ pub(super) fn diagnostics_friction_row<'a>(
                     .unwrap_or(body_kind),
                 "input": "",
                 "exit_code": null,
-                "stderr": event
-                    .get("reason")
-                    .or_else(|| event.get("matched_rule"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(body_kind),
+                "stderr": stderr.text,
+                "truncated": stderr.truncated,
                 "actor_identity": event.get("agent_identity").cloned().unwrap_or(Value::Null),
             }))
         }
@@ -180,17 +188,27 @@ impl EnvelopeLinks for Value {
     }
 }
 
-fn read_blob_preview_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
-    // One extra byte distinguishes an exact-cap blob from a truncated one
-    // without loading the rest of the file.
+fn read_blob_excerpt_best_effort(blob_store: &BlobStore, blob_ref: &str) -> Excerpt {
+    // Reads the run-log preview prefix, which is wider than the excerpt, so
+    // redaction sees past the cut; one extra byte tells an exact-size blob
+    // from a longer one without loading the rest of the file.
     let Ok(bytes) = blob_store.read_prefix(blob_ref, RUN_LOG_PREVIEW_MAX_BYTES + 1) else {
-        return String::new();
+        return message_excerpt("");
     };
-    let mut preview = bounded_preview(&String::from_utf8_lossy(&bytes));
-    if preview.truncated || bytes.len() > RUN_LOG_PREVIEW_MAX_BYTES {
-        preview.text.push_str("\n[truncated]");
-    }
-    preview.text
+    let mut excerpt = message_excerpt(&String::from_utf8_lossy(&bytes));
+    excerpt.truncated |= bytes.len() > RUN_LOG_PREVIEW_MAX_BYTES;
+    excerpt
+}
+
+/// A legacy friction record with its `stderr` bounded like the audit-derived
+/// rows. The record's other fields keep their persisted shape.
+fn friction_entry_to_json(entry: &FrictionEntry) -> Result<Value, orbit_core::OrbitError> {
+    let stderr = message_excerpt(&entry.stderr);
+    let mut row =
+        serde_json::to_value(entry).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+    row["stderr"] = json!(stderr.text);
+    row["truncated"] = json!(stderr.truncated);
+    Ok(row)
 }
 
 pub(in crate::api) async fn list_diagnostics_friction(
@@ -218,8 +236,11 @@ pub(in crate::api) async fn list_diagnostics_friction(
                     diagnostics_friction_from_v2_audit(&compute_runtime, &month, limit)
                         .map(Value::Array)
                 } else {
-                    serde_json::to_value(&entries)
-                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
+                    entries
+                        .iter()
+                        .map(friction_entry_to_json)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(Value::Array)
                 }
             },
         )

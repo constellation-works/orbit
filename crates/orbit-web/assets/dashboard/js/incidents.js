@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, auditActorLabel, el, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, formatDateTime, runHref, bindTaskLink, makeCopyButton } from './common.js';
+import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, formatDateTime, runHref, bindTaskLink, makeCopyButton } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -70,6 +70,8 @@ let evidenceOpen = false;
 let lastPayload = null;
 let lastCtx = {};
 let layout = null;
+// Full messages loaded for the detail panel, by workspace and audit row.
+const fullMessageLoads = new Map();
 
 export function getIncidentClass() { return incidentClass; }
 
@@ -130,13 +132,19 @@ function incidentMessageText(row) {
   return recordedMessage(row) || `${row.surface || "unknown surface"} failed; no message recorded`;
 }
 
-// The payload has no per-incident truncation flag. A message that ends in an
-// ellipsis was cut before it was stored; when one of the incident's own audit
-// events carries a longer copy of the same text, that copy is the message.
+// The feed bounds every message and flags a cut one `truncated` [ORB-15527];
+// `message_event_id` names the audit row the detail panel loads it from. A
+// message that ends in an ellipsis was cut before it was stored; when one of
+// the incident's own audit events carries a longer copy of the same text,
+// that copy is the message.
 function fullMessage(incidents) {
   const sample = incidents[0];
   const recorded = recordedMessage(sample);
   if (!recorded) return { text: incidentMessageText(sample), recorded: false, truncated: false };
+  if (sample.truncated === true) {
+    const eventId = Number.isSafeInteger(sample.message_event_id) && sample.message_event_id > 0 ? sample.message_event_id : null;
+    return { text: recorded, recorded: true, truncated: true, eventId };
+  }
   if (!TRAILING_ELLIPSIS.test(recorded)) return { text: recorded, recorded: true, truncated: false };
   const stem = recorded.replace(TRAILING_ELLIPSIS, "");
   for (const incident of incidents) {
@@ -1061,18 +1069,60 @@ function relatedNode(group, groups, ctx) {
   return relatedItems(section, related, ctx, "message");
 }
 
+function fullMessageKey(eventId) {
+  return `${getWorkspace() || ""}:${eventId}`;
+}
+
+function loadFullMessage(eventId) {
+  const key = fullMessageKey(eventId);
+  const current = fullMessageLoads.get(key);
+  if (current && current.state !== "error") return;
+  fullMessageLoads.set(key, { state: "loading" });
+  rerender();
+  fetchJson(`/api/audit/events/${encodeURIComponent(eventId)}/message`).then(body => {
+    fullMessageLoads.set(key, { state: "done", text: body && typeof body.message === "string" ? body.message : "" });
+  }, error => {
+    fullMessageLoads.set(key, { state: "error", error: (error && error.message) || String(error) });
+  }).finally(() => {
+    // Another Health tab may own the panel by now; only repaint this one.
+    if (layout && layout.root && layout.root.isConnected !== false) rerender();
+  });
+}
+
+// A message the feed cut short: the excerpt, and a button that loads the
+// rest from its audit row.
+function clippedMessageNote(message, load, group) {
+  if (load && load.state === "done") return null;
+  if (load && load.state === "error") {
+    return el("p", { class: "incident-message-note" }, [
+      `The full message did not load: ${load.error}. `,
+      auditButton(group, "Open the audit events", "incident-link-button"),
+      " to read each underlying record.",
+    ]);
+  }
+  const loading = Boolean(load && load.state === "loading");
+  const button = el("button", { class: "incident-link-button", type: "button", text: loading ? "Loading the full message…" : "Load the full message" });
+  button.disabled = loading;
+  button.addEventListener("click", () => loadFullMessage(message.eventId));
+  return el("p", { class: "incident-message-note" }, ["The feed shows the start of this long message. ", button, "."]);
+}
+
 function detailNode(group, groups, axis, now, ctx) {
   const live = isLive(group, now);
   const track = trackNode(group, axis, now, "incident-wide-track");
   const message = group.message;
+  const load = message.eventId ? fullMessageLoads.get(fullMessageKey(message.eventId)) : null;
+  const text = load && load.state === "done" ? load.text : message.text;
   const messageChildren = [
     el("div", { class: "incident-message-head" }, [
       el("h4", { class: "incident-eyebrow", text: "Message" }),
-      makeCopyButton(message.text, { class: "incident-copy", text: "Copy", title: "Copy the full message" }),
+      makeCopyButton(text, { class: "incident-copy", text: "Copy", title: "Copy the full message" }),
     ]),
-    el("pre", { class: `incident-full-message${message.recorded ? "" : " missing"}`, text: message.text }),
+    el("pre", { class: `incident-full-message${message.recorded ? "" : " missing"}`, text }),
   ];
-  if (message.truncated) {
+  if (message.eventId) {
+    messageChildren.push(clippedMessageNote(message, load, group));
+  } else if (message.truncated) {
     messageChildren.push(el("p", { class: "incident-message-note" }, [
       "This message was cut short before it reached the incidents feed. ",
       auditButton(group, "Open the audit events", "incident-link-button"),

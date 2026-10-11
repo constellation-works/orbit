@@ -3,6 +3,8 @@ use axum::extract::{FromRequest, Request};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
+use orbit_common::security::redaction::redact_all;
+use orbit_common::text::floor_char_boundary;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -411,6 +413,37 @@ where
         .map_err(|rejection| bad_request(rejection.body_text()))?;
         Ok(OptionalJson(parsed.0))
     }
+}
+
+/// Most bytes of one message or stderr field in a dashboard list projection:
+/// Health › Incidents, the Errors feed and the run friction feed. One failed
+/// validation can record a message of a few hundred KB, and these lists copy
+/// it into every row, sample and poll [ORB-15527]. A longer field is cut to
+/// this many bytes and its object carries `truncated: true`; the full text
+/// stays behind the run link or the incident message fetch.
+pub(super) const LIST_MESSAGE_MAX_BYTES: usize = 2048;
+
+/// A message bounded to [`LIST_MESSAGE_MAX_BYTES`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Excerpt {
+    pub(super) text: String,
+    pub(super) truncated: bool,
+}
+
+/// Redacts `raw`, then bounds it. Redaction runs over the whole text before
+/// the cut, so a secret that straddles the cut cannot survive as an
+/// unredacted fragment.
+pub(super) fn message_excerpt(raw: &str) -> Excerpt {
+    redacted_excerpt(redact_all(raw))
+}
+
+/// Bounds text that is already redacted, cutting on a `char` boundary.
+pub(super) fn redacted_excerpt(mut text: String) -> Excerpt {
+    let truncated = text.len() > LIST_MESSAGE_MAX_BYTES;
+    if truncated {
+        text.truncate(floor_char_boundary(&text, LIST_MESSAGE_MAX_BYTES));
+    }
+    Excerpt { text, truncated }
 }
 
 pub(super) fn not_found(message: String) -> Response {
