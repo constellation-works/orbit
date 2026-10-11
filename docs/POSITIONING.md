@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Positioning"
-last_validated: 2026-10-06
+last_validated: 2026-10-10
 ---
 
 # Orbit Positioning
@@ -66,6 +66,17 @@ When auditability conflicts with performance, ergonomics, or feature surface, au
 - **Configurable, not rigidly opinionated.** Job DAGs, activities, skills, role profiles are YAML data, not code.
 
 `task_id` is locally meaningful by design — a personal search key for the task author, recorded in local audit. Not resolvable on another engineer's machine; for cross-engineer references, use `external_refs` to link tasks to your team's tracker (Jira, Linear, GitHub Issues, etc.).
+
+## Delivery philosophy
+
+**Delivery runs in one direction and does not stop: land fast, then remediate.** The rigor lives in the record (task, audit trail, independent review), not in gates that hold work back.
+
+- **No merge gates on the landing branch.** Orbit's own repository lands agent work on `agent-main` without required status checks; branch protection there only prevents deletion. Gating merges would stall parallel dispatch, which is the opposite of the design. The release branch `main` is a separate question.
+- **CI is a signal, not a gate.** Failures feed the queue instead of blocking it: the `ci_failure_sweep` routine and the `qa-sweep` auto-task turn red builds and QA findings into remediation tasks. Improving CI quality means improving that failure → task loop, not adding a blocker.
+- **Review is independent and, by default, after landing.** An implementer reviewing its own work is not review. The `delivery-code-review` auto-task reviews landed deliveries in batches; `review.before_pr` and `review.before_landing` exist for operators who want a review layer before landing, and both default to off. A reviewer fixes what it finds as one second commit rather than looping work back, a verdict never grants merge permission, and a landing that reproduces an already-reviewed tree is not reviewed twice. See the [review gate](design/review-gate/1_overview.md).
+- **Humans control admission, not landing.** Filing a task is not dispatch: new tasks land in `proposed`, and promotion to the backlog is a separate approval. Work that reaches the backlog carries its file footprint, so parallel runs execute in isolated worktrees under file-level locks instead of colliding.
+
+The trade is deliberate: a defect that lands is cheap to find and fix because every change is a task with an audit trail, while a gate that blocks a fleet of parallel agents costs throughput on every run.
 
 ## The decision lens
 
