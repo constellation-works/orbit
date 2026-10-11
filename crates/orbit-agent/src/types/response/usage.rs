@@ -1,7 +1,10 @@
 use orbit_types::telemetry::TokenUsage;
 use serde_json::Value;
 
-use super::JsonMap;
+use super::{
+    JsonMap,
+    protocol_schema::{RESPONSE_ENVELOPE_SCHEMA_VERSION, RESPONSE_ENVELOPE_STATUSES},
+};
 
 const USAGE_CHILD_KEYS: &[&str] = &[
     "usage",
@@ -22,83 +25,171 @@ enum UsageKeyMode {
 pub(in crate::types) fn sum_usage(documents: &[Value]) -> TokenUsage {
     let mut usage = TokenUsage::default();
     for document in documents {
-        collect_usage(document, &mut usage, true, UsageKeyMode::Standard);
+        collect_usage(document, &mut usage);
     }
     usage
 }
 
-fn collect_usage(
-    value: &Value,
-    usage: &mut TokenUsage,
-    allow_direct_usage: bool,
-    key_mode: UsageKeyMode,
-) {
+// Provider metadata and assistant-declared usage have separate boundaries.
+// Never search arbitrary payloads or decode strings as provider events: tools
+// and quoted transcripts can contain exactly the same counter names.
+fn collect_usage(value: &Value, usage: &mut TokenUsage) {
     match value {
         Value::Object(map) => {
-            if allow_direct_usage && let Some(found) = usage_from_map(map, key_mode) {
-                add_usage(usage, found);
+            if is_payload(map) {
+                return;
+            }
+            if collect_local_usage(map, usage) {
+                return;
+            }
+            if is_response_envelope(map) {
+                collect_result_usage(map, usage);
                 return;
             }
 
-            if matches!(map.get("type").and_then(Value::as_str), Some("tool_result")) {
-                return;
+            // These are provider frame containers, not conversation histories.
+            for key in ["data", "message", "item", "stats"] {
+                if let Some(child) = map.get(key).filter(|child| child.is_object()) {
+                    collect_usage(child, usage);
+                }
             }
-
             let has_model_token_usage = map
                 .get("tokens")
                 .and_then(Value::as_object)
                 .and_then(|tokens| usage_from_map(tokens, UsageKeyMode::TokenBlock))
                 .is_some();
-            // Claude CLI result docs put the same billed session totals on
-            // `usage` and again on `modelUsage`. Summing both doubled
-            // cache_read (ORB-10906 / F2026-08-031). Prefer the `usage`
-            // rollup so the cache-creation TTL split is kept; skip the
-            // sibling map. Sidecar-only tokens stay in `modelUsage` and
-            // are still collected when no sibling rollup is present.
-            let skip_model_usage = sibling_usage_rollup_present(map);
-
-            for &key in USAGE_CHILD_KEYS {
-                if let Some(mode) = usage_key_mode(key)
-                    && let Some(child) = map.get(key)
-                {
-                    collect_usage(child, usage, true, mode);
+            for key in ["models", "roles"] {
+                if key == "roles" && has_model_token_usage {
+                    continue;
+                }
+                if let Some(entries) = map.get(key).and_then(Value::as_object) {
+                    for entry in entries.values() {
+                        collect_usage(entry, usage);
+                    }
                 }
             }
 
-            for (key, child) in map {
-                if key != "tool_calls"
-                    && usage_key_mode(key).is_none()
-                    && !(has_model_token_usage && key == "roles")
-                    && !(skip_model_usage && key == "modelUsage")
+            // Parse only complete declared-answer contracts, never arbitrary
+            // JSON strings. Prefer structured_output over its result echo.
+            for key in [
+                "structured_output",
+                "text",
+                "result",
+                "response",
+                "final",
+                "final_message",
+                "output",
+                "content",
+            ] {
+                if let Some(answer) = map.get(key)
+                    && collect_declared_usage(answer, usage)
                 {
-                    let allow_child = allow_direct_usage
-                        || matches!(
-                            key.as_str(),
-                            "text"
-                                | "result"
-                                | "response"
-                                | "message"
-                                | "messages"
-                                | "content"
-                                | "final"
-                                | "final_message"
-                                | "output"
-                        );
-                    collect_usage(child, usage, allow_child, UsageKeyMode::Standard);
+                    break;
                 }
             }
         }
         Value::Array(items) => {
             for item in items {
-                collect_usage(item, usage, allow_direct_usage, key_mode);
+                collect_usage(item, usage);
             }
         }
-        Value::String(raw) => {
-            if allow_direct_usage && let Ok(nested) = serde_json::from_str::<Value>(raw) {
-                collect_usage(&nested, usage, true, key_mode);
-            }
+        Value::String(_) => {
+            collect_declared_usage(value, usage);
         }
         _ => {}
+    }
+}
+
+fn is_payload(map: &JsonMap) -> bool {
+    matches!(
+        map.get("type").and_then(Value::as_str),
+        Some(
+            "tool_use"
+                | "tool_call"
+                | "tool_result"
+                | "function_call"
+                | "function_call_output"
+                | "custom_tool_call"
+                | "custom_tool_call_output"
+                | "command_execution"
+                | "mcp_tool_call"
+                | "reasoning"
+                | "thinking"
+                | "user"
+        )
+    ) || matches!(
+        map.get("role").and_then(Value::as_str),
+        Some("tool" | "user" | "system")
+    )
+}
+
+// Returns true when direct counters are the rollup for this object; callers
+// must not descend into its detail breakdown and count it again.
+fn collect_local_usage(map: &JsonMap, usage: &mut TokenUsage) -> bool {
+    if let Some(found) = usage_from_map(map, UsageKeyMode::Standard) {
+        add_usage(usage, found);
+        return true;
+    }
+    for &key in USAGE_CHILD_KEYS {
+        if let Some(mode) = usage_key_mode(key)
+            && let Some(child) = map.get(key).and_then(Value::as_object)
+            && let Some(found) = usage_from_map(child, mode)
+        {
+            add_usage(usage, found);
+        }
+    }
+    // Claude's usage and modelUsage describe the same billed totals. Keep
+    // the rollup, including its cache TTL split (ORB-10906 / F2026-08-031).
+    if !sibling_usage_rollup_present(map)
+        && let Some(models) = map.get("modelUsage").and_then(Value::as_object)
+    {
+        for model in models.values().filter_map(Value::as_object) {
+            if let Some(found) = usage_from_map(model, UsageKeyMode::Standard) {
+                add_usage(usage, found);
+            }
+        }
+    }
+    false
+}
+
+fn is_response_envelope(map: &JsonMap) -> bool {
+    map.get("schemaVersion").and_then(Value::as_u64)
+        == Some(u64::from(RESPONSE_ENVELOPE_SCHEMA_VERSION))
+        && map
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| RESPONSE_ENVELOPE_STATUSES.contains(&status))
+        && map.contains_key("result")
+}
+
+fn collect_result_usage(map: &JsonMap, usage: &mut TokenUsage) {
+    // The result may declare its own usage, but its application data (including
+    // quoted provider streams) is not invocation telemetry.
+    if let Some(result) = map.get("result").and_then(Value::as_object)
+        && !is_payload(result)
+    {
+        collect_local_usage(result, usage);
+    }
+}
+
+fn collect_declared_usage(value: &Value, usage: &mut TokenUsage) -> bool {
+    match value {
+        Value::Object(map) if !is_payload(map) && is_response_envelope(map) => {
+            if !collect_local_usage(map, usage) {
+                collect_result_usage(map, usage);
+            }
+            true
+        }
+        Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("text") => map
+            .get("text")
+            .is_some_and(|text| collect_declared_usage(text, usage)),
+        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+            // Do not recursively decode quoted strings or provider transcripts.
+            Ok(Value::Object(map)) => collect_declared_usage(&Value::Object(map), usage),
+            _ => false,
+        },
+        Value::Array(items) => items.iter().any(|item| collect_declared_usage(item, usage)),
+        _ => false,
     }
 }
 

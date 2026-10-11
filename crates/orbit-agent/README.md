@@ -21,6 +21,15 @@ returns a protocol error, with no peeked status or failure, rather than returnin
 an earlier envelope or synthesizing an outcome. Surrounding prose never supplies
 response fields.
 
+Invocation usage reads counter blocks and known provider metadata containers,
+including Codex terminal usage, Copilot usage events and Gemini model stats.
+Tool inputs and outputs, reasoning, conversation histories and quoted provider
+streams cannot supply counters. A complete Orbit answer envelope can declare
+usage directly or on its immediate result object; deeper result data is ignored.
+Claude's terminal usage rollup takes precedence over its duplicate model map and
+retains the separate five-minute and one-hour cache creation counts. Raw Codex
+tool events remain available to invocation tracing.
+
 ## Provider boundary tests
 
 `./scripts/build-budget.py -- cargo test -p orbit-agent --test provider_invocation`
