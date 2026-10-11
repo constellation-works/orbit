@@ -112,6 +112,10 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   bound it to the cited paths, and the per-complexity over-attachment finding counts retained
   selectors. A selector that no longer resolves is dropped and reported like any other missing
   target, and an operator `orbit.task.update` that narrows the scope is respected.
+  The canonical workspace-root selector `dir:.` resolves to the pinned commit's root tree.
+  Proposed selectors, evidence retention and missing-target inspection share that lookup;
+  they never infer its kind from the mutable checkout. Parent and absolute anchors, symlink
+  targets, Git links and file selectors for directory trees remain refused.
 - The original canonical footprint is immutable in the admission receipt. The live claim
   protects it through execution and review, including after reservation expiry; only owner-validated
   widening at handoff may add selectors, and checkout contents cannot shrink it.

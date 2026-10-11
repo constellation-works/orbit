@@ -167,26 +167,40 @@ impl SourceSnapshot {
         workspace: &Path,
         anchor: &Path,
     ) -> Result<GitPathKind, DispatchError> {
-        let relative = git_tree_path(anchor).ok_or_else(|| {
-            action_failed(
+        let output = if anchor == Path::new(".") {
+            // The root is the pinned commit's tree object, not an entry in
+            // that tree. Query it explicitly without consulting the checkout.
+            git(
                 action,
-                format!(
-                    "selector anchor {} is not a repository-relative path",
-                    anchor.display()
-                ),
-            )
-        })?;
-        let output = git(
-            action,
-            workspace,
-            &[
-                "ls-tree",
-                "--format=%(objectmode) %(objecttype)",
-                &self.source_revision,
-                "--",
-                &format!(":(literal){relative}"),
-            ],
-        )?;
+                workspace,
+                &[
+                    "cat-file",
+                    "-t",
+                    &format!("{}^{{tree}}", self.source_revision),
+                ],
+            )?
+        } else {
+            let relative = git_tree_path(anchor).ok_or_else(|| {
+                action_failed(
+                    action,
+                    format!(
+                        "selector anchor {} is not a repository-relative path",
+                        anchor.display()
+                    ),
+                )
+            })?;
+            git(
+                action,
+                workspace,
+                &[
+                    "ls-tree",
+                    "--format=%(objectmode) %(objecttype)",
+                    &self.source_revision,
+                    "--",
+                    &format!(":(literal){relative}"),
+                ],
+            )?
+        };
         if !output.success {
             return Err(action_failed(
                 action,
@@ -195,7 +209,7 @@ impl SourceSnapshot {
         }
         Ok(match output.stdout.trim() {
             "100644 blob" | "100755 blob" => GitPathKind::Blob,
-            "040000 tree" => GitPathKind::Tree,
+            "tree" | "040000 tree" => GitPathKind::Tree,
             "" => GitPathKind::Missing,
             _ => GitPathKind::Other,
         })
