@@ -424,6 +424,41 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
 }
 
 #[test]
+fn resume_context_is_opaque_when_the_target_inherits_job_input() {
+    let refusal = "The record contains an unresolved {{ input.missing }} template";
+    let rationale = "Keep {{ input.missing }} literal while repairing the record";
+    let host = RecoveryHost::new([
+        (
+            "work",
+            vec![
+                Reply::Diagnostic(refusal.to_string()),
+                Reply::Ok(json!({"repaired": true})),
+            ],
+        ),
+        (
+            "decide",
+            vec![Reply::Ok(json!({
+                "decision": "resume", "step_id": "work", "rationale": rationale,
+            }))],
+        ),
+    ]);
+    let observed = run(&pipeline(false), &host, None);
+    assert!(
+        observed.result.expect("the resumed run completes").success,
+        "repair context is data, not another template to evaluate"
+    );
+    let inputs = host.inputs("work");
+    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs[1]["final_recovery_resume"]["rationale"], rationale);
+    assert!(
+        inputs[1]["final_recovery_resume"]["refusal"]
+            .as_str()
+            .unwrap()
+            .contains(refusal)
+    );
+}
+
+#[test]
 fn a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart() {
     use orbit_types::workflow::FinalRecoveryResume;
 

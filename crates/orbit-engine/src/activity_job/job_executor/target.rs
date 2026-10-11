@@ -10,9 +10,16 @@ pub(super) fn run_target(
     // output is recorded, letting `record_pipeline` write in place.
     let mut rendered_input = {
         let tctx = ctx.template_ctx();
+        // Recovery's rationale and refused output are opaque data. An
+        // inherited input must not render template tokens inside that data;
+        // the engine-owned context is inserted unchanged after rendering.
+        let mut inherited_input = ctx.input.clone();
+        if let Some(input) = inherited_input.as_object_mut() {
+            input.remove("final_recovery_resume");
+        }
         render_input(
             t.default_input.as_ref(),
-            &ctx.input,
+            &inherited_input,
             &tctx,
             t.input_schema_json.as_ref(),
         )?
