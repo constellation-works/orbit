@@ -1,4 +1,7 @@
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
+use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -15,6 +18,7 @@ use super::super::handoff::{
 use super::super::operations;
 use super::body::{
     GITHUB_PR_BODY_BYTE_LIMIT, bound_pr_body, build_batch_pr_body, default_pr_title,
+    render_known_red_section,
 };
 
 pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
@@ -105,6 +109,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 pr_opener_model.as_deref(),
             )
         });
+    let body = with_known_red(host, body, context, base_sha);
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
@@ -329,6 +334,58 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
 /// supplied, so the reviewer commit and what the review established are
 /// visible where it is published. Without any applicable sections the body
 /// is unchanged.
+/// [ORB-15375] `body` with the required validation this run found red on the
+/// base too: the delivered tasks' known-red history notes for this run, base
+/// and checked-out head, one per command (the latest).
+fn with_known_red<H: RuntimeHost + ?Sized>(
+    host: &H,
+    body: String,
+    context: &HandoffContext,
+    base_sha: &str,
+) -> String {
+    let head = match git_output(&context.workspace_path, &["rev-parse", "HEAD"]) {
+        Ok(head) => head,
+        Err(error) => {
+            tracing::warn!("pr_open could not read HEAD for known-red validation: {error}");
+            return body;
+        }
+    };
+    let mut records = BTreeMap::new();
+    for task in &context.tasks {
+        let history = match host.get_task_history(&task.id) {
+            Ok(history) => history,
+            Err(error) => {
+                tracing::warn!(
+                    task_id = task.id,
+                    "pr_open could not read task history for known-red validation: {error}"
+                );
+                continue;
+            }
+        };
+        for record in history
+            .iter()
+            .filter(|entry| entry.event == KNOWN_RED_VALIDATION_EVENT)
+            .filter_map(|entry| {
+                entry
+                    .note
+                    .as_deref()
+                    .and_then(KnownRedValidation::from_text)
+            })
+            .filter(|record| {
+                record.run_id == context.batch_id
+                    && record.base_sha == base_sha
+                    && record.tested_head == head
+            })
+        {
+            records.insert(record.command.clone(), record);
+        }
+    }
+    match render_known_red_section(&records.into_values().collect::<Vec<_>>()) {
+        Some(section) => format!("{}\n\n{section}\n", body.trim_end()),
+        None => body,
+    }
+}
+
 fn with_review_fixes(body: String, input: &Value) -> String {
     match input_string_field(input, "review_fixes")
         .map(|section| section.trim().to_string())

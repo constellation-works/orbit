@@ -21,6 +21,10 @@
 //!   failure typed `[baseline_red]`: no recovery repairs it, and the
 //!   task is held until the base moves to a commit where the command passes
 //!   ([`baseline_hold_status`]);
+//! - unless every test the candidate fails also fails on the base
+//!   ([`BaselineCheck::known_red`]) [ORB-15375]: the candidate introduced
+//!   none of them, so it is not held, and the step records the known-red
+//!   tests and proceeds;
 //! - a base that passes leaves the failure the candidate's, rejected as before.
 //!
 //! A base run that cannot be set up, or whose own result is a missing tool or
@@ -43,7 +47,7 @@
 //! [`super::base_claim`], which may hand a base run only the candidate's
 //! failing tests ([`FAILING_TESTS_KEY`]) [ORB-15328].
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -61,7 +65,6 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::base_claim::failure_identities;
 use super::git::{fetch_remote_base, git_output, git_run};
 use super::required_command::{
     RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS, ValidationSummary,
@@ -93,7 +96,8 @@ const CACHE_DIR: &str = "orbit-baseline";
 /// timeout is treated as inconclusive and never cached.
 /// Version 5 excludes capture-limit and signal stops: they are infrastructure
 /// failures, never conclusive base results.
-const CACHE_SCHEMA_VERSION: u32 = 5;
+/// Version 6 records the failures the complete output names [ORB-15375].
+const CACHE_SCHEMA_VERSION: u32 = 6;
 /// Where version 1 checked bases out, under [`CACHE_DIR`]. Any checkout left
 /// there trips the Linux Git protection scan until it is removed.
 const LEGACY_WORKTREES_DIR: &str = "worktrees";
@@ -218,6 +222,9 @@ pub struct BaseCommandResult {
     /// What the base run reported it tested [ORB-15131].
     #[serde(default)]
     pub summary: Option<ValidationSummary>,
+    /// The failures the base run's complete output names [ORB-15375].
+    #[serde(default)]
+    pub failures: BTreeSet<String>,
     pub recorded_at: chrono::DateTime<Utc>,
 }
 
@@ -299,6 +306,27 @@ impl BaselineCheck {
             .map(String::as_str)
     }
 
+    /// [ORB-15375] The candidate's failing tests when the base fails them
+    /// all: the run fails exactly as the base does ([`Self::reproduces`]),
+    /// without a timeout that could have cut its failures short, and names
+    /// at least one failure, every one of which the base's complete output
+    /// names too. The candidate introduced none of them, so it is not held.
+    ///
+    /// `None` holds or fails the candidate as before: a run that names no
+    /// failure cannot be compared, and one that names a failure the base
+    /// does not is not the base's to answer for.
+    pub(super) fn known_red<'run>(
+        &self,
+        run: &'run RequiredCommandRun,
+    ) -> Option<&'run BTreeSet<String>> {
+        let base = self.result.as_ref().ok()?;
+        (self.reproduces(run)
+            && !run.timed_out
+            && !run.failures.is_empty()
+            && run.failures.is_subset(&base.failures))
+        .then_some(&run.failures)
+    }
+
     /// `passed`, `failed`, `not_comparable` or `inconclusive`.
     pub(super) fn decision(&self) -> &'static str {
         match &self.result {
@@ -325,20 +353,12 @@ impl BaselineCheck {
 
     /// What the base run named as failing, for the hold to record
     /// [ORB-15374]: the failures its output names, or its last lines when it
-    /// names none. `selection` is what the base run was handed, which locates
-    /// the checkout it ran in.
-    pub(super) fn failures(
-        &self,
-        workspace_path: &Path,
-        selection: Option<&Value>,
-    ) -> BaselineRedFailures {
+    /// names none.
+    pub(super) fn failures(&self) -> BaselineRedFailures {
         let Ok(base) = &self.result else {
             return BaselineRedFailures::default();
         };
-        let root = cache_paths(workspace_path, &self.base_sha, &base.command, selection)
-            .map(|paths| paths.worktree)
-            .unwrap_or_default();
-        hold_failures(failure_identities(&base.output, &root), &base.output)
+        hold_failures(base.failures.iter().cloned(), &base.output)
     }
 
     /// The captured base log: identity, result and output.
@@ -498,6 +518,7 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
                 output: run.output,
                 network_retries: run.network_retries,
                 summary: run.summary,
+                failures: run.failures,
                 recorded_at: Utc::now(),
             };
             if let Err(error) = serde_json::to_vec(&result)
@@ -774,7 +795,7 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
             if let Err(reason) = &check.result {
                 record_inconclusive_hold(repo, &tip, hold, reason);
             }
-            judge_moved_base(repo, hold, &tip, check.result)
+            judge_moved_base(hold, &tip, check.result)
         }
         Err(status) => status,
     }
@@ -849,7 +870,7 @@ fn recorded_moved_base_status(
         // A full run could not locate the cache either.
         Err(error) => Err(format!("locate the base result cache: {error}")),
     };
-    Some(judge_moved_base(repo, hold, tip, result))
+    Some(judge_moved_base(hold, tip, result))
 }
 
 /// The commit the hold's base ref now names, when it moved off the red
@@ -894,7 +915,6 @@ fn moved_base_tip(repo: &Path, hold: &BaselineRedHold) -> Result<String, Baselin
 /// The hold's status once its base moved to `tip`, from the command's result
 /// there or why there is none.
 fn judge_moved_base(
-    repo: &Path,
     hold: &BaselineRedHold,
     tip: &str,
     result: Result<BaseCommandResult, String>,
@@ -923,10 +943,7 @@ fn judge_moved_base(
             hold.base_sha, hold.command
         )),
         (Ok(result), None) => {
-            let root = cache_paths(repo, tip, &hold.command, hold.selection.as_ref())
-                .map(|paths| paths.worktree)
-                .unwrap_or_default();
-            let now = hold_failures(failure_identities(&result.output, &root), &result.output);
+            let now = hold_failures(result.failures, &result.output);
             BaselineHoldStatus::Holding(format!(
                 "`{base_ref}` moved to {tip}, where required validation `{}` still fails{}",
                 hold.command,

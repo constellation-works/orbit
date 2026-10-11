@@ -19,7 +19,8 @@ pub use agent_blocker::{
 };
 pub use baseline::{
     BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER, BaselineRedFailures,
-    BaselineRedHold, is_baseline_red_failure,
+    BaselineRedHold, KNOWN_RED_MARKER, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+    is_baseline_red_failure,
 };
 pub use deferred_sandbox::{
     BUBBLEWRAP_NAMESPACE_PROBE, DEFERRED_SANDBOX_ARTIFACT, DeferredSandboxArtifact,
