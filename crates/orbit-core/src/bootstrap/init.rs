@@ -796,10 +796,11 @@ pub fn link_skills(global_root: &Path) -> Result<LinkResult, OrbitError> {
 /// point elsewhere, core-named links that point somewhere else, catalog links
 /// under any other name, and ordinary files or directories are left in place.
 ///
-/// A discovery directory that is itself a symlink is not traversed. Following
-/// it would delete entries in a directory this root does not own. Removal
-/// counts and empty-directory cleanup include only links removed from a real
-/// discovery directory.
+/// A discovery directory is not traversed when it is a symlink, or when the
+/// `.agents/` or `.claude/` directory that holds it is one. Following either
+/// would delete entries in a directory this root does not own. Removal counts
+/// and empty-directory cleanup include only links removed from a real discovery
+/// directory.
 pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
     let init_target = resolve_init_target_from_root(global_root);
     let skills_root = global_skills_dir(&init_target.orbit_root);
@@ -862,10 +863,17 @@ pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
 /// Whether `path` is a real directory Orbit may edit.
 ///
 /// A symlink, including one that points at a directory, is not owned: callers
-/// must not follow it into another tree. Missing paths are not owned either.
-/// A non-directory, non-symlink entry is an error so unlink still fails when
-/// the discovery path is a regular file, as `read_dir` did before.
+/// must not follow it into another tree. A symlinked parent (`.agents/` or
+/// `.claude/`) is not owned either, because `symlink_metadata` on the final
+/// component resolves through it. Missing paths are not owned either. A
+/// non-directory, non-symlink entry is an error so unlink still fails when the
+/// discovery path is a regular file, as `read_dir` did before.
 fn owned_discovery_dir(path: &Path) -> Result<bool, OrbitError> {
+    if let Some(parent) = path.parent()
+        && fs::symlink_metadata(parent).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Ok(false);
+    }
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Ok(false),
         Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
