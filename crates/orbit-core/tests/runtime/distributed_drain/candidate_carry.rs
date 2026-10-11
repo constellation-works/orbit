@@ -644,6 +644,7 @@ fn owner_run_held_on_red_base(pair: &Pair, task: &str, base: &str) -> (String, S
         command: "make ci-fast".into(),
         run_id: run.clone(),
         selection: None,
+        failures: Default::default(),
     };
     let handoff = engine_action(
         owner,

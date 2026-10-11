@@ -145,8 +145,11 @@ pub fn baseline_red_hold_update(job_id: &str, hold: &BaselineRedHold) -> TaskAut
         status_event: Some(BASELINE_RED_HOLD_EVENT.to_string()),
         status_note: Some(hold.text(&format!(
             "workflow run held: job={job_id}, run_id={}; required validation `{}` is red on base \
-             {}, so the task waits in the backlog until the command passes on a new base tip",
-            hold.run_id, hold.command, hold.base_sha
+             {}{}, so the task waits in the backlog until the command passes on a new base tip",
+            hold.run_id,
+            hold.command,
+            hold.base_sha,
+            hold.failures_clause()
         ))),
         ..TaskAutomationUpdate::default()
     }

@@ -435,6 +435,34 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
     Ok(output)
 }
 
+/// The failures a hold recorded, as a Markdown section of the hold comment
+/// [ORB-15374], or nothing for a hold that records none.
+fn failing_on_base(failures: &orbit_types::workflow::BaselineRedFailures) -> String {
+    let lines = if failures.identities.is_empty() {
+        failures
+            .tail
+            .iter()
+            .map(|line| format!("    {line}"))
+            .collect::<Vec<_>>()
+    } else {
+        failures
+            .identities
+            .iter()
+            .map(|identity| format!("- `{identity}`"))
+            .chain((failures.omitted > 0).then(|| format!("- and {} more", failures.omitted)))
+            .collect()
+    };
+    if lines.is_empty() {
+        return String::new();
+    }
+    let heading = if failures.identities.is_empty() {
+        "The base run names no failing test; its output ends:"
+    } else {
+        "Failing on the base:"
+    };
+    format!("\n{heading}\n\n{}\n", lines.join("\n"))
+}
+
 /// Keep a candidate whose required command fails on its base exactly as on
 /// the candidate, and hold its task [ORB-14258].
 ///
@@ -494,20 +522,23 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
     let note = hold.text(&format!(
         "required validation `{}` is red on base {}: run={run_id}, failed_step={failed_step_id}, \
          candidate={head_sha}, branch={branch}; held in the backlog until {base_ref} moves to a \
-         base where it passes; {publication}",
-        hold.command, hold.base_sha
+         base where it passes{}; {publication}",
+        hold.command,
+        hold.base_sha,
+        hold.failures_clause()
     ));
     let body = format!(
         "## Red base\n\nRequired validation `{}` fails on base `{}` exactly as it fails on this \
          candidate, so the candidate did not cause it. No repair ran and no rework budget was \
          spent; {publication}.\n\n- Run: `{run_id}`\n- Failed step: \
-         `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
+         `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n{}\n\
          The task is back in the backlog and admission skips it while {base_ref} fails \
          the command; fixing the base is the way forward. Once it passes on a new base tip, the \
          next delivery can resume this candidate and validate it again.\n\n{}\n\n## Failure\n\n\
          ```text\n{}{}\n```",
         hold.command,
         hold.base_sha,
+        failing_on_base(&hold.failures),
         held_place(&held),
         &diagnostic[..cut],
         if cut < diagnostic.len() {

@@ -183,6 +183,7 @@ fn baseline_red_text() -> String {
         command: "make ci-fast".to_string(),
         run_id: "jrun-observed".to_string(),
         selection: None,
+        failures: Default::default(),
     }
     .text("the required check fails on the base exactly as on the candidate")
 }

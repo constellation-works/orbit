@@ -194,6 +194,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
                     command: run.command.clone(),
                     run_id: run_id.clone(),
                     selection: run.selection().cloned(),
+                    failures: check.failures(&workspace_path, run.selection()),
                 };
                 return Err(baseline_red_failure(&hold, &run, &candidate, &evidence));
             }

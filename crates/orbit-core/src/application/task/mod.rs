@@ -2,6 +2,7 @@
 
 mod add;
 mod baseline_hold;
+mod baseline_repair;
 mod blocked_recovery;
 pub(crate) mod contention;
 mod context_repair;

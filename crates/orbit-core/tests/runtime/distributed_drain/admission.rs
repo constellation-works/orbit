@@ -1323,6 +1323,7 @@ fn a_red_base_failure_releases_the_claim_until_the_command_passes() {
         command: "make ci-lint".into(),
         run_id: String::new(),
         selection: None,
+        failures: Default::default(),
     };
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
