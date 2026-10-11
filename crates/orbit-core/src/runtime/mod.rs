@@ -8,7 +8,9 @@
 //!
 //! The `resolve` sub-module implements root discovery. The `builder` sub-module
 //! wires together stores, policy, tool registry, and event bus into a complete
-//! [`OrbitRuntime`], which `orbit_runtime` defines. The `engine`, `audit`,
+//! [`OrbitRuntime`], whose `orbit_runtime` module separates construction,
+//! identity, host probes, persistence, configuration, and internal accessors.
+//! The `engine`, `audit`,
 //! `mutation`, and `tool_exec` sub-modules provide the high-level operations
 //! exposed to command handlers; `plugin` and `workspace` own host plugins and
 //! the workspace binding, catalog, and claim; `host_signal` probes host
