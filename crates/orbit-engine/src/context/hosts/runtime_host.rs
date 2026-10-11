@@ -448,6 +448,12 @@ pub trait RuntimeHost: Send + Sync {
         })
     }
 
+    /// The OS this host runs implementers on, which decides the deferral
+    /// kinds it admits [ORB-15587]. Defaults to this process's OS.
+    fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
+        orbit_types::workflow::EvidenceHostOs::current()
+    }
+
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
     /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and

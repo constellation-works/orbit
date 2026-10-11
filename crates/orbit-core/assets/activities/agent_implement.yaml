@@ -106,8 +106,9 @@ spec:
             source_path:
               type: string
       # A required affected-test gate whose only gap is one sandbox's
-      # deferrals: Bubblewrap on Linux, Seatbelt on macOS (item 7). The
-      # implementer names only the validation summary the gate wrote. The
+      # deferrals: Bubblewrap on Linux, Seatbelt on macOS, or ps-denied on a
+      # macOS claimed leaf (item 7). The implementer names only the
+      # validation summary the gate wrote. The
       # step boundary derives the record from it, runs the sandbox's probe in
       # this lane, refuses anything but the sanctioned case before commit and
       # replaces this field with the derived record; validation replays the
@@ -315,12 +316,14 @@ spec:
        exact command, denial, and uncertainty. Return success only for a
        complete deliverable when workspace policy permits deferring the
        check; otherwise report the validation blocker.
-       One deferral is sanctioned, in one shape per host OS: a required
+       One deferral is sanctioned, in one shape per sandbox: a required
        affected-test gate that exits 0 but prints, for tests whose nested
        sandbox the agent sandbox refuses, only
        `DEFERRED: bubblewrap unavailable:` notices on Linux or only
-       `SKIP: sandbox-exec cannot apply a profile:` notices on macOS. Do not
-       fail the step for it. Run the gate with its comparison base pinned to
+       `SKIP: sandbox-exec cannot apply a profile:` notices on macOS; or, in
+       claimed mode on macOS only, for tests the agent sandbox refuses to
+       exec `ps` for, only `DEFERRED: ps denied:` notices. Do not fail the
+       step for it. Run the gate with its comparison base pinned to
        `input.base_sha` and `ORBIT_VALIDATION_SUMMARY` naming a new file
        under the checkout's `.orbit/tmp/`, then return only that file's
        checkout-relative path:
@@ -340,7 +343,8 @@ spec:
        Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
        `skipping` notice, a gate that ran no tests or selected nothing,
        notices in a lane whose probe does not refuse that sandbox, notices of
-       both sandboxes in one gate run, a host-required criterion, a
+       two kinds in one gate run, `DEFERRED: ps denied:` notices outside a
+       macOS claimed leaf, a host-required criterion, a
        `baseline_red` command, and every other required command (formatting,
        lint, goldens, static-analysis extraction) keep their ordinary
        handling above.

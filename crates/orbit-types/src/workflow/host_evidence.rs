@@ -284,6 +284,16 @@ pub const BUBBLEWRAP_DEFERRAL_PREFIX: &str = "DEFERRED: bubblewrap unavailable:"
 /// `SKIP: sandbox-exec cannot apply a profile: <test>: <detail>` [ORB-15409].
 pub const SEATBELT_DEFERRAL_PREFIX: &str = "SKIP: sandbox-exec cannot apply a profile:";
 
+/// The deferral a test prints when the sandbox refuses to exec `ps`, which it
+/// needs to read a process start time, followed by the test's name and the
+/// refusal: `DEFERRED: ps denied: <test>: <detail>`. A macOS agent lane's
+/// Seatbelt sandbox refuses the setuid `ps`; only a claimed leaf on macOS may
+/// defer it [ORB-15587].
+pub const PS_DENIED_DEFERRAL_PREFIX: &str = "DEFERRED: ps denied:";
+
+/// What a sandbox's refusal to exec `ps` reports: `EPERM`.
+pub const PS_EXEC_REFUSAL: &str = "Operation not permitted";
+
 /// Line prefixes a test prints when it returns without exercising its path.
 const SKIP_PREFIXES: &[&str] = &["SKIP:", HOST_TEST_DEFERRED_PREFIX, "skipping:", "skipping "];
 

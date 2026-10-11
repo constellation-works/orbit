@@ -1310,6 +1310,10 @@ fn check_deferral(
             &serde_json::to_vec(&summary).expect("summary encodes"),
             gates,
             Some(base),
+            orbit_types::workflow::DeferralLane {
+                claimed: true,
+                os: orbit_types::workflow::EvidenceHostOs::current(),
+            },
         )?
         .complete(probe)
 }

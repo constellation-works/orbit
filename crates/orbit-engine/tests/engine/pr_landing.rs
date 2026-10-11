@@ -58,9 +58,9 @@ use orbit_types::workflow::handoff::{
 };
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedHold, ClaimFailureClass,
-    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, JobV2StepBody, KNOWN_RED_VALIDATION_EVENT,
-    KnownRedValidation, NamespaceProbe, PipelineState, ReviewTiming, ReviewVerdict,
-    SEATBELT_APPLY_PROBE, is_baseline_red_failure,
+    DEFERRED_SANDBOX_ARTIFACT, DeferralProbe, EvidenceHostOs, JobV2StepBody,
+    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, NamespaceProbe, PS_EXEC_PROBE, PipelineState,
+    ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE, is_baseline_red_failure,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -2023,7 +2023,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     ),
                     none.clone(),
                     none.clone(),
-                    "is neither a Bubblewrap nor a Seatbelt deferral",
+                    "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
                     "a Seatbelt denial that is not the guard's notice",
@@ -2033,7 +2033,7 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     ),
                     none.clone(),
                     none.clone(),
-                    "is neither a Bubblewrap nor a Seatbelt deferral",
+                    "is not a Bubblewrap, Seatbelt or ps-denied deferral",
                 ),
                 (
                     "a Seatbelt notice beside a Bubblewrap one",
@@ -2061,6 +2061,13 @@ fn a_deferral_that_is_not_one_sandboxs_case_fails_the_implement_step() {
                     none.clone(),
                     none.clone(),
                     "is not a Seatbelt deferral",
+                ),
+                (
+                    "a ps-denied notice in an owner run",
+                    with("notices", json!([ps_notice()])),
+                    none.clone(),
+                    none.clone(),
+                    "only a claimed leaf on macOS may defer",
                 ),
                 (
                     "a lane that answers the Seatbelt probe with the namespace one",
@@ -2390,6 +2397,96 @@ fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication() 
     );
 }
 
+/// A macOS claimed leaf whose agent sandbox refuses to exec `ps` hands off
+/// the tests that compare against it like a nested-Seatbelt skip [ORB-15587].
+/// The implement step derives the record with Orbit's own `ps` probe, and the
+/// claim host's `claim_validate` replays the gate outside the agent sandbox
+/// before publication: a native pass is the gate's evidence, a native failure
+/// fails the step, and a replay that still cannot run `ps` holds the
+/// candidate. The same notices from a claimed leaf on Linux are refused
+/// before commit.
+#[test]
+fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication() {
+    isolated(
+        "a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication",
+        |sandbox| {
+            let fx = Fixture::new(sandbox);
+            let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+            *host.ship_mode.lock().unwrap() = "pr".to_string();
+            *host.os.lock().unwrap() = Some(EvidenceHostOs::Macos);
+            let gate = Gate::new(sandbox);
+            host.require_commands(&["true"]);
+            host.baseline_commands(&[&gate.command()]);
+            let record = ps_deferral(&fx, &gate.command());
+            let handoff = |fx: &Fixture| {
+                json!({
+                    "summary": "done",
+                    "deferred_sandbox_validation": handoff_for(fx, &record),
+                })
+            };
+
+            run_claimed_implementation(&fx, &host, handoff(&fx))
+                .expect("the claim host's native replay passes");
+            assert_eq!(
+                host.scripted_input("test_stub_commit")["implementation"]["deferred_sandbox_validation"],
+                record,
+                "Orbit derived the record from the gate summary and its own `ps` probe"
+            );
+            assert_eq!(
+                host.probes
+                    .lock()
+                    .unwrap()
+                    .first()
+                    .map(|probe| probe.0.as_str()),
+                Some(PS_EXEC_PROBE),
+                "Orbit ran the `ps` probe in the implementer's lane"
+            );
+            assert!(
+                !host.has_artifact(TASK_ID, DEFERRED_SANDBOX_ARTIFACT),
+                "a claimed leaf keeps nothing on the task; its validation reads this output"
+            );
+            assert_eq!(
+                gate.runs(),
+                1,
+                "the claim host ran the deferred gate itself"
+            );
+
+            gate.fails();
+            let failed = run_claimed_implementation(&fx, &host, handoff(&fx))
+                .expect_err("a native replay that fails is not a pass");
+            assert!(
+                failed.contains(&gate.command())
+                    && !orbit_types::workflow::is_validation_environment_failure(
+                        None,
+                        Some(&failed)
+                    ),
+                "the failing replay is the candidate's failure, naming the gate: {failed}"
+            );
+
+            gate.denies_ps();
+            let held = run_claimed_implementation(&fx, &host, handoff(&fx))
+                .expect_err("a replay that still cannot run `ps` is not a pass");
+            assert!(
+                orbit_types::workflow::is_validation_environment_failure(None, Some(&held))
+                    && held.contains(&ps_notice()),
+                "the claim host that cannot run `ps` holds the candidate: {held}"
+            );
+
+            gate.executes();
+            *host.os.lock().unwrap() = Some(EvidenceHostOs::Linux);
+            let runs = gate.runs();
+            let refused = run_claimed_implementation(&fx, &host, handoff(&fx))
+                .expect_err("only a macOS claimed leaf defers ps-denied tests");
+            assert!(
+                refused.contains("`deferred_sandbox_validation`")
+                    && refused.contains("only a claimed leaf on macOS may defer"),
+                "{refused}"
+            );
+            assert_eq!(gate.runs(), runs, "a refused handoff reaches no replay");
+        },
+    );
+}
+
 /// The handed-off gate, run by path so a test can change what it does between
 /// runs while its command, and so the kept record, stays the same. Each run
 /// appends a line to `runs`.
@@ -2446,6 +2543,15 @@ impl Gate {
         ));
     }
 
+    /// Defers its ps-denied tests again: this host refuses `ps` too.
+    fn denies_ps(&self) {
+        self.set(&format!(
+            "echo '{}' >&2\n{}",
+            ps_notice(),
+            reported_tests(3)
+        ));
+    }
+
     /// Passes without reporting an executed test, as a lint gate does.
     fn executes_nothing(&self) {
         self.set("echo lint-ok");
@@ -2484,6 +2590,13 @@ fn seatbelt_notice() -> String {
         "cli_ctrl_c_during_proc_spawn_reports_interrupt",
         "permissive profile exited with Some(71): sandbox-exec: sandbox_apply: Operation not \
          permitted",
+    )
+}
+
+fn ps_notice() -> String {
+    orbit_common::test_env::ps_denied_deferral_notice(
+        "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
+        "the sandbox denied running ps: Operation not permitted (os error 1)",
     )
 }
 
@@ -2528,6 +2641,23 @@ fn seatbelt_deferral(fx: &Fixture, command: &str) -> Value {
     })
 }
 
+/// The accepted macOS claimed-leaf record for ps-denied tests, with the gate
+/// and base substituted for this run's values [ORB-15587].
+fn ps_deferral(fx: &Fixture, command: &str) -> Value {
+    json!({
+        "command": command,
+        "exit_code": 0,
+        "tests_run": 1650,
+        "base": fx.base_sha,
+        "notices": [ps_notice()],
+        "probe": {
+            "command": PS_EXEC_PROBE,
+            "exit_code": 71,
+            "output": "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
+        },
+    })
+}
+
 /// The accepted Linux record, with the gate and base substituted for this
 /// run's values.
 fn deferral(fx: &Fixture, command: &str) -> Value {
@@ -2556,6 +2686,31 @@ fn run_implementation(
     host: &DeliveryHost,
     implementation: Option<Value>,
 ) -> Result<(), String> {
+    run_shipped_implementation(fx, host, implementation, false)
+}
+
+/// [`run_implementation`] through the claimed PR pipeline, whose implementer
+/// runs in claimed mode and whose `validate` is the engine's own
+/// `claim_validate`, on this claim host before publication [ORB-15587].
+fn run_claimed_implementation(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    implementation: Value,
+) -> Result<(), String> {
+    run_shipped_implementation(fx, host, Some(implementation), true)
+}
+
+fn run_shipped_implementation(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    implementation: Option<Value>,
+    claimed: bool,
+) -> Result<(), String> {
+    let (pipeline, validate) = if claimed {
+        ("task_claimed_pr_pipeline.yaml", "claim_validate")
+    } else {
+        ("task_pr_pipeline.yaml", "candidate_validate")
+    };
     let implemented = implementation.is_some();
     host.script(
         "test_stub_worktree",
@@ -2576,7 +2731,9 @@ fn run_implementation(
     );
 
     let shipped = fs::read_to_string(
-        workspace_root().join("crates/orbit-core/assets/jobs/task_pr_pipeline.yaml"),
+        workspace_root()
+            .join("crates/orbit-core/assets/jobs")
+            .join(pipeline),
     )
     .unwrap();
     let shipped = load_job_asset(&shipped).unwrap().spec;
@@ -2614,7 +2771,7 @@ fn run_implementation(
     let mut catalog = V2ActivityCatalog::new();
     for (name, action) in [
         ("agent_implement", "test_stub_implement"),
-        ("candidate_validate", "candidate_validate"),
+        (validate, validate),
     ] {
         catalog.insert(
             name.to_string(),
@@ -2636,7 +2793,7 @@ fn run_implementation(
     let (writer, _, _) = build_writer_and_sinks(audit.path(), RUN_ID);
     match execute_job_with_resume(
         &job,
-        json!({ "task_ids": [TASK_ID] }),
+        json!({ "task_ids": [TASK_ID], "base_sync": "local" }),
         RUN_ID,
         writer,
         host,
@@ -5706,6 +5863,8 @@ struct DeliveryHost {
     deferral_probe: Mutex<Option<NamespaceProbe>>,
     /// Deferral probes run, as (probe, provider, checkout).
     probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
+    /// The OS this host runs implementers on [ORB-15587].
+    os: Mutex<Option<EvidenceHostOs>>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -5740,6 +5899,7 @@ impl DeliveryHost {
             scripted_inputs: Mutex::default(),
             deferral_probe: Mutex::default(),
             probes: Mutex::default(),
+            os: Mutex::new(EvidenceHostOs::current()),
         }
     }
 
@@ -6103,6 +6263,10 @@ impl RuntimeHost for DeliveryHost {
         self.baseline_commands.lock().unwrap().clone()
     }
 
+    fn host_os(&self) -> Option<EvidenceHostOs> {
+        *self.os.lock().unwrap()
+    }
+
     /// An implementer lane that refuses the probed sandbox, unless a test
     /// scripted another answer [ORB-15516].
     fn run_deferral_probe(
@@ -6122,6 +6286,11 @@ impl RuntimeHost for DeliveryHost {
         }
         let (exit_code, output) = if probe.command == SEATBELT_APPLY_PROBE {
             (71, "sandbox-exec: sandbox_apply: Operation not permitted")
+        } else if probe.command == PS_EXEC_PROBE {
+            (
+                71,
+                "sandbox-exec: execvp() of '/bin/ps' failed: Operation not permitted",
+            )
         } else {
             (1, "bwrap: No permissions to create a new namespace")
         };

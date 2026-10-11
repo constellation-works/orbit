@@ -66,7 +66,7 @@ mod darwin {
     use std::process::{ExitStatus, Output};
 
     use crate::process::identity::darwin_lstart_utc;
-    use crate::test_env::{PsRun, classify_ps, ps_lstart_utc};
+    use crate::test_env::{PsRun, classify_ps, ps_lstart_utc, report_ps_denied};
 
     #[derive(Debug, PartialEq)]
     enum PsComparison {
@@ -100,15 +100,17 @@ mod darwin {
 
     /// The sandbox-safe probe must produce exactly what `ps` prints, or a
     /// token a worker computes would never match the one the host recorded.
+    /// A managed executor's sandbox refuses to exec `ps`; the deferral notice
+    /// says why nothing was compared, and a claim host replays it [ORB-15587].
     #[test]
-    // A managed executor's sandbox refuses to exec `ps`; the skip notice goes
-    // to stderr so the run says why nothing was compared.
-    #[allow(clippy::print_stderr)]
     fn libproc_start_time_renders_exactly_as_ps_lstart() {
         let pid = std::process::id();
         match compare_with_ps(ps_lstart_utc(pid), darwin_lstart_utc(pid).as_deref()) {
             Ok(PsComparison::Matches) => {}
-            Ok(PsComparison::Skipped(reason)) => eprintln!("SKIP: {reason}"),
+            Ok(PsComparison::Skipped(reason)) => report_ps_denied(
+                "process::tests::identity::darwin::libproc_start_time_renders_exactly_as_ps_lstart",
+                &reason,
+            ),
             Err(failure) => panic!("{failure}"),
         }
     }

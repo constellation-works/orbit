@@ -367,6 +367,7 @@ one of these cases before commit:
 |---|---|---|---|
 | Linux | `DEFERRED: bubblewrap unavailable:` | `bwrap --unshare-user --ro-bind / / -- /bin/true` | nonzero, `No permissions to create a new namespace` |
 | macOS [ORB-15409] | `SKIP: sandbox-exec cannot apply a profile:` | `/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true` | exit 71, `sandbox_apply: Operation not permitted` |
+| macOS, claimed leaf only [ORB-15587] | `DEFERRED: ps denied:` | `/bin/ps -o pid= -p 1` | nonzero, `Operation not permitted` (not `sandbox_apply`) |
 
 The gate must be one of the owner's `workflow.required_validation_commands` or
 `review.baseline_commands`. The owner's `candidate_validate` (and a claim's
@@ -377,8 +378,9 @@ prints a `DEFERRED:` or `SKIP: sandbox-exec cannot apply a profile:` line is a
 refused, so the path runs natively before delivery or the candidate is held;
 a passing replay is pinned as the gate's evidence. Real failures, any other
 `SKIP:` or `skipping` notice, empty gates, notices in a lane whose probe does
-not refuse that sandbox, a gate run mixing both sandboxes' notices and the
-other required commands are not deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
+not refuse that sandbox, a gate run mixing two kinds' notices, `DEFERRED: ps
+denied:` notices from an owner-run or non-macOS implementer and the other
+required commands are not deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
 `host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside
