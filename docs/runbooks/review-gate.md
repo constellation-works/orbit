@@ -77,7 +77,7 @@ With `review.before_landing` captured, the table above applies to the
 | --- | --- | --- |
 | `accept` | completion merges the reviewed head | `done` with `--complete`, else `review` |
 | `accept_with_fixes` | owner validation reruns on the reviewer commit, which `landing_push` pushes onto the published head under a lease; hosted CI restarts and completion merges that head | `done` with `--complete`, else `review` |
-| `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
+| `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed, except that an `incomplete` review's reviewer commit is pushed unvalidated to the PR branch under a lease on the published head (`reviewer_push` in the handoff) | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
 
 A refusal that leaves the PR open for a recorded decision (`reject`, any
 `incomplete`, or an abandoned review below) ends the run `held` with code
