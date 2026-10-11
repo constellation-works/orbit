@@ -233,9 +233,12 @@ async function runDetailShot(id) {
       while (walker.nextNode()) {
         const node = walker.currentNode;
         node.textContent = node.textContent
-          .replace(/\bORBA?-\d+\b/g, "demo-task")
-          .replace(/\bF\d{4}-\d{2}-\d+\b/g, "demo-friction")
-          .replace(/\bjrun-\d{8}-\d{4}-[a-z0-9]+\b/gi, "demo-run");
+          // Run IDs must go first: uppercase JRUN also has a task-shaped prefix.
+          .replace(/\bjrun-\d{8}-\d{4}-[a-z0-9]+\b/gi, "demo-run")
+          // Machine task prefixes are 2–5 uppercase ASCII letters, including
+          // the persisted legacy ORB prefix. Redact every ID-shaped token.
+          .replace(/\b[A-Z]{2,5}-\d+\b/g, "demo-task")
+          .replace(/\bF\d{4}-\d{2}-\d+\b/g, "demo-friction");
       }
     });
     await shot("dashboard-run-detail", [panel.locator(":scope > header"), panel.locator(".gantt-panel")], 0);

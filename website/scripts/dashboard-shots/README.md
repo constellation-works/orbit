@@ -53,6 +53,20 @@ node website/scripts/dashboard-shots/capture.mjs \
 `PLAYWRIGHT_MODULE` selects the kit's Playwright module and bundled Chromium.
 `--hosts-only` captures only Settings › Hosts from the live host file.
 
+Run the browser regression with the same Playwright/browser setup:
+
+```bash
+npm --prefix website run test:dashboard-capture
+```
+
+It runs the actual capture script against a local synthetic dashboard and
+checks the header and timeline at screenshot time, plus the unchanged API
+response. Task redaction covers all 2–5 uppercase ASCII-letter prefixes,
+including historical ORB IDs. It conservatively redacts any text token with
+that ID shape; dates, counts and other labels remain. The test keeps its PNG
+and text evidence under `.orbit/tmp/dashboard-capture-*` for inspection.
+This regression does not replace the rendered-pixel inspection below.
+
 The browser viewport is 1440 × 900 CSS pixels at device scale factor 2, and
 taller (1600) for the task list, the Drain dock, and the run detail so nothing
 is cut. Every crop stops above the log ticker along the bottom edge, which
