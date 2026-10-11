@@ -1401,6 +1401,28 @@ fn a_check_failing_only_tests_the_base_fails_continues_as_known_red() {
     );
 }
 
+/// [ORB-15630] A reviewer that ran the registered check with leading
+/// environment assignments claims that check: the claim is admitted as the
+/// registered command, settlement reruns the registered text rather than the
+/// reviewer's, and the known-red failure continues.
+#[test]
+fn an_env_prefixed_claim_on_a_registered_check_is_that_check() {
+    if !super::dispatch_admission::isolated(
+        "review_baseline_hold::an_env_prefixed_claim_on_a_registered_check_is_that_check",
+    ) {
+        return;
+    }
+    let mut fixture = fixture(RED, "after\n");
+    fixture.admit();
+    let prefixed = format!("CI_TEST_BASE=main TMPDIR=\"$PWD/.orbit/tmp\" {CHECK}");
+    fixture.put_report(&claim_report(&fixture, &prefixed, &["check.sh"]));
+    let passed = fixture
+        .settle()
+        .expect("the env-prefixed claim is the registered check's");
+    assert_known_red(&fixture, &passed, &["suite::broken"]);
+    assert_eq!(certificate(&fixture).validation[0].command, prefixed);
+}
+
 /// [ORB-15546] Failures shaped like known red that the host cannot vouch
 /// for keep their refusal: a failing run that also deferred a sandbox-confined
 /// path, or named no failure at all, is held as before; an open finding or

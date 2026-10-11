@@ -131,6 +131,31 @@ impl Judgement {
         self.escalation = None;
     }
 
+    /// [ORB-15630] Settle as a pass when the claim host's own gate results
+    /// and owner-owed evidence decided every check the reviewer's records
+    /// left short of one: nothing the host refused or failed, no base hold,
+    /// no open finding, no pending evidence, and the records establish the
+    /// candidate over `scope`. `accept_with_fixes` over a `repair`.
+    pub(in crate::application::review::gate) fn accept_on_host_evidence(
+        &mut self,
+        repair: Option<&CommitIdentity>,
+        scope: &[String],
+        held_for_base: bool,
+    ) {
+        if !self.host_decided
+            || self.verdict.passed()
+            || self.host_refused
+            || self.host_gate_failed
+            || held_for_base
+            || self.has_open_findings()
+            || !self.external_evidence.is_empty()
+            || self.validation_defect(scope).is_some()
+        {
+            return;
+        }
+        self.accept(repair);
+    }
+
     /// [ORB-14616] What keeps a file a control says it temporarily mutated
     /// from being restored, if anything: the final candidate must carry each
     /// target byte-identical to the `reviewed` candidate. [ORB-14632] The

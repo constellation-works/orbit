@@ -49,6 +49,13 @@ spec:
         description: >
           This step reviews the published PR head: it applies only when the
           run captured `review.before_landing` on.
+      host_validation_step:
+        type: string
+        description: >
+          A claimed leaf's pipeline step that ran the owner's required
+          commands on the host, outside the agent sandbox. Its results for
+          the admitted head go to the reviewer in the manifest and decide
+          those gates at settlement.
   output_schema_json:
     type: object
     required: [applies]

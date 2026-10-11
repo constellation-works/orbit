@@ -127,6 +127,8 @@ impl Judgement {
             host_evidence: certificate.host_evidence.clone(),
             host_overrides: certificate.host_overrides.clone(),
             known_red: certificate.known_red.clone(),
+            host_validation: certificate.host_validation.clone(),
+            owner_owed: certificate.owner_owed_evidence.clone(),
             ..Self::empty(context)
         }
     }
@@ -158,6 +160,10 @@ impl Judgement {
             host_evidence: Vec::new(),
             host_overrides: Vec::new(),
             known_red: Vec::new(),
+            host_validation: Vec::new(),
+            owner_owed: Vec::new(),
+            host_decided: false,
+            host_gate_failed: false,
             initial_report_only: false,
         }
     }

@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-09
+last_validated: 2026-10-11
 ---
 
 # Operate the Review Gate
@@ -108,6 +108,60 @@ branch and its `pr_open` closes the earlier PR as superseded
 (`superseded_pull_request` in that step's output; `close_failed` leaves it for
 you to close). Other non-approving claimed reviews still block the task on the
 owner with its PR open.
+
+#### Sandboxed reviewers on a claimed leaf
+
+A claimed leaf's reviewer runs inside the agent sandbox, where nested-sandbox
+tests skip or fail and a loaded host turns timing-sensitive tests red. Its own
+run of a required gate would judge that sandbox, not the candidate. Before
+the leaf published, its `validate` step (`claim_validate`) ran the owner's
+`workflow.required_validation_commands` on the claim host, natively and
+outside any agent sandbox. The before-landing review decides those gates from
+that step's results instead [ORB-15630]:
+
+1. `landing_review_gate_admit` reads the run's `validate` output
+   (`host_validation_step`). It keeps each result for a required or baseline
+   command whose `tested_head` is the admitted head. The manifest and the
+   admission output list them as `host_validation`. The reviewer does not
+   rerun or judge those commands, though it may run focused tests for a
+   finding or a repair.
+2. Settlement replaces the reviewer's record of each listed command with the
+   host's result: a required record with the host's outcome and a
+   `Host gate:` note naming the run, the step and the reviewer's own outcome.
+   It drops any `host_sandbox_test` or `native_os` evidence the reviewer named
+   for a command the host passed.
+   - A host pass counts as the required pass. A review whose only blockers
+     were those gates, with no open finding and no other pending evidence,
+     settles `accept` (`accept_with_fixes` over a repair).
+   - A host failure that `claim_validate` verified known red counts as known
+     red, the record staying failed (`known_red` in the certificate, with
+     `evidence_artifact` `review-gate.json`). It counts only without a
+     reviewer repair, since known red binds to the commit it was verified on.
+   - Any other host failure is the candidate's: the review settles `reject`,
+     escalated `host_gate_failed:` with the command, exit status, run and step.
+3. The certificate's `host_validation` lists the results that decided the
+   review. A reviewer repair is still revalidated by `landing_review_validate`
+   before `landing_push`, and a failure there is the review's reject.
+
+On a claim host of a known OS other than Linux (macOS), a before-landing
+review never holds for Linux CodeQL. The published pull request's hosted CI
+(`CodeQL / Analyze (rust)`) runs it, and the owner's landing decision reads
+that run. A `[[review.host_evidence]]` CodeQL rule's Linux requirement is
+listed as `owner_owed_evidence` in the manifest, the admission output and the
+certificate, not as `owed_external_evidence`. The same applies when the
+reviewer names Linux CodeQL in `external_evidence` itself. Any CodeQL record
+that did not fail becomes `excluded` and `not_run`, with a note naming the
+owner and hosted CI. A failed CodeQL record still blocks. A before-PR review
+keeps the hold, since no hosted CI runs before the pull request opens.
+
+```bash
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+  | jq '.content | fromjson | {verdict, host_validation, owner_owed_evidence, known_red}'
+```
+
+Whether a candidate duplicates or is superseded by other work is the owner's
+decision after landing. The reviewer reviews only its own candidate and never
+reads another task's record to decide it.
 
 The timeout bound permits one automatic requeue per task and implementation
 tree, recorded in task history without a time window. The implementation tree
@@ -224,7 +278,10 @@ check on the host, on the final candidate and on the base. It shares the base
 result cache with required validation, and the runs land in the
 `review-baseline.json` task artifact. Only a `workflow.required_validation_commands`
 or `review.baseline_commands` entry captured when the run was admitted is
-rerun, never the reviewer's own command text. A failure of one of those
+rerun, never the reviewer's own command text. A claim on a command written
+with leading `NAME=value` assignments, such as
+`CI_TEST_BASE=<sha> make ci-test-affected`, is a claim on the registered
+command it prefixes; any other command is refused. A failure of one of those
 commands cannot be filed as a `diagnostic` instead: the review settles
 `incomplete` naming the command. A claim holds the task only when the base fails
 with the same exit status, every claimed failure appears in the base output,
@@ -338,7 +395,9 @@ orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artif
 ```
 
 A workspace `[[review.host_evidence]]` rule makes this deterministic for a
-claimed leaf. A Rust change on a macOS leaf owes the Linux CodeQL run, and a
+claimed leaf. A Rust change on a macOS leaf owes the Linux CodeQL run (before
+landing, the owner and the pull request's hosted CI owe it instead; see
+[Sandboxed reviewers on a claimed leaf](#sandboxed-reviewers-on-a-claimed-leaf)), and a
 sandbox-gated test on a host of the rule's OS owes a run outside the agent
 sandbox. Orbit adds each owed requirement whatever the reviewer reported:
 `owed_external_evidence` in the manifest and `owed_evidence` in the certificate

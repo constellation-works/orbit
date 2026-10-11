@@ -50,6 +50,19 @@ pub(super) struct Judgement {
     /// [ORB-15546] Failed required checks the host verified known red on the
     /// final candidate; each record keeps its failed outcome.
     pub(super) known_red: Vec<orbit_types::workflow::HostKnownRed>,
+    /// [ORB-15630] The claim host's own results for the owner's required
+    /// gates on the reviewed candidate, which decided those checks in place
+    /// of the reviewer's sandboxed records.
+    pub(super) host_validation: Vec<orbit_types::workflow::HostGateResult>,
+    /// [ORB-15630] Evidence this review's host cannot produce that the owner
+    /// and the pull request's hosted CI owe instead; it holds nothing.
+    pub(super) owner_owed: Vec<orbit_types::workflow::ReviewEvidenceRequirement>,
+    /// [ORB-15630] Set when host results or owner-owed evidence decided a
+    /// check the reviewer's records left short of a pass.
+    pub(super) host_decided: bool,
+    /// [ORB-15630] Set when a host-run required gate failed on the candidate
+    /// for a reason the base does not share.
+    pub(super) host_gate_failed: bool,
     /// [ORB-15130] Set when every report this judgement read is still the
     /// only revision the host retained for the attempt, so the reviewer never
     /// updated what it first persisted.

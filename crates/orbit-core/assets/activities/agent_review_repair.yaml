@@ -72,6 +72,9 @@ spec:
       validation then reruns on the fixed head.
     - Fix findings; do not do unrelated cleanup. Reading unrelated code does
       not authorize editing it.
+    - Review this candidate only. Never read another task's record to decide
+      whether this work duplicates or is superseded by other work: that is
+      the owner's decision after landing, not a review finding.
     - This invocation is bounded by the review's remaining minutes; the
       manifest's `remaining.seconds` is that deadline. Persist an initial
       `incomplete` report and update it after meaningful review or validation
@@ -148,6 +151,20 @@ spec:
        work, return `incomplete` with no open finding: the gate holds the
        candidate for them, and their arrival settles this review without
        another reviewer. Settlement adds them whatever the report says.
+       The manifest's `owner_owed_evidence` lists checks the owner and the
+       pull request's hosted CI run instead of this review, such as Linux
+       CodeQL for a before-landing review on a macOS host. Do not attempt
+       them, record them, or name them in `external_evidence`; they never
+       hold this review.
+       The manifest's `host_validation` lists the results the claim host
+       recorded when it ran the owner's required commands on this exact
+       candidate, natively and outside any agent sandbox. Settlement decides
+       each listed command from that result, never from a run in this
+       sandbox, and replaces any record you make of it. Do not rerun or
+       judge those commands; a sandbox failure or skip of one is not a
+       finding. You may still run focused tests to check a finding or a
+       repair. A listed failure that is not known red rejects the candidate
+       whatever you report.
        When the manifest names `evidence_carried`, those entries were checked
        on its `from_tree` and Orbit verified that this candidate carries the
        same patch onto a new base; treat them as verified for `candidate.tree`.
@@ -168,7 +185,9 @@ spec:
        standards from the workspace AGENTS.md.
        Treat the manifest's `required_validation_commands` as the captured
        host contract. Each listed command must have a passing `required`
-       validation record for the final candidate. If the field is absent,
+       validation record for the final candidate, except one the manifest's
+       `host_validation` lists, which the host's result decides. If the
+       field is absent,
        stop with an incomplete report and explain that a fresh delivery run is
        needed; do not infer the list from this activity or current config.
        Enforce repository standards for `CHANGELOG.md`: non-release tasks must
@@ -193,8 +212,9 @@ spec:
        redesign, non-release `CHANGELOG.md` edits, and anything you are
        unsure about stay open findings: there is no second review round, so
        an open finding rejects the candidate and blocks the task.
-    4. Satisfy the manifest's `required_validation_commands` and the validation
-       required by the workspace's own AGENTS.md on the final worktree state.
+    4. Satisfy the manifest's `required_validation_commands` (other than those
+       `host_validation` lists) and the validation required by the
+       workspace's own AGENTS.md on the final worktree state.
        Reuse verified implementer evidence only under the workspace's reuse
        rules and when it covers this exact candidate. Rerun every required
        check whose evidence a reviewer repair invalidates on the repaired tree.
@@ -247,7 +267,8 @@ spec:
          guidance requires, such as local Rust CodeQL: that silently drops the
          coverage. Run it, or name it in `external_evidence` (an entry the
          manifest's `owed_external_evidence` lists is already owner-fulfilled)
-         and keep its record `required` and `not_run`. A required command in
+         and keep its record `required` and `not_run`; one the manifest's
+         `owner_owed_evidence` lists needs no record. A required command in
          `required_validation_commands` is never `excluded`; run it.
        - `superseded`: an earlier diagnostic attempt a later required check
          replaced, such as a run in a misconfigured environment you then
@@ -296,7 +317,8 @@ spec:
        tests that failed there, on the base itself, and only a check the host
        already runs (a manifest
        `required_validation_commands` or `baseline_commands` entry, matched
-       like `check`) can be confirmed. When the base fails exactly as the
+       like `check`, so its form with leading `NAME=value` assignments counts
+       as that entry) can be confirmed; claim no other command. When the base fails exactly as the
        candidate does and
        nothing else is open, the candidate is kept and the task waits in the
        backlog until the base passes, then is reviewed afresh. A candidate

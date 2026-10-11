@@ -27,8 +27,12 @@ use crate::application::review::crew::pool_source;
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
 use super::context::{GateContext, admitted_run_id, not_applicable};
+use super::host_gates::{HOST_VALIDATION_STEP_INPUT, recorded_host_gates};
 use super::judgement::write_artifact;
-use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received};
+use super::owed::{
+    EVIDENCE_RECEIVED_DECISION, defers_linux_codeql, owed_evidence, owed_hold_received,
+    split_owner_owed,
+};
 use super::release::release_abandoned;
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
@@ -157,7 +161,12 @@ pub(crate) fn review_gate_admit(
         if preflight {
             preflight_budget(runtime, &context)
         } else {
-            admit(runtime, &context, &admission, rebase.as_ref())
+            let host_step = input
+                .get(HOST_VALIDATION_STEP_INPUT)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|step| !step.is_empty());
+            admit(runtime, &context, &admission, rebase.as_ref(), host_step)
         }
     });
     let audit_args = json!({
@@ -263,6 +272,7 @@ fn admit(
     context: &GateContext,
     admission: &ReviewAdmission,
     rebase: Option<&CompletionRebase>,
+    host_step: Option<&str>,
 ) -> Result<Value, OrbitError> {
     let required_validation_commands = admission
         .required_validation_commands
@@ -302,7 +312,24 @@ fn admit(
             reviewer_json(&crew, &source)
         }
     };
-    let owed_external_evidence = owed_evidence(runtime, context, &candidate.commits)?;
+    // [ORB-15630] Linux CodeQL a macOS host cannot run is owed to the owner
+    // and the pull request's hosted CI, not held by this before-landing
+    // review; the host's own runs of the owner's gates decide those checks.
+    let (owed_external_evidence, owner_owed_evidence) = split_owner_owed(
+        owed_evidence(runtime, context, &candidate.commits)?,
+        defers_linux_codeql(runtime, context),
+    );
+    let host_validation = match (host_step, rebase) {
+        (Some(step), None) => {
+            let trusted = required_validation_commands
+                .iter()
+                .chain(&admission.baseline_commands)
+                .cloned()
+                .collect::<Vec<_>>();
+            recorded_host_gates(runtime, context, step, &candidate.head.commit, &trusted)?
+        }
+        _ => Vec::new(),
+    };
     let (task_digests, task_meaning_digest) = &context.task_digests;
     let carry = match context.task_ids.as_slice() {
         [task_id] => evidence_carry(
@@ -371,6 +398,8 @@ fn admit(
         satisfied_external_evidence,
         evidence_carried: carry.carried().cloned(),
         owed_external_evidence,
+        owner_owed_evidence,
+        host_validation,
         previous_report,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt.attempt_id.clone(),
@@ -430,6 +459,8 @@ fn admit(
         "timing_source": admission.timing_source,
         "reviewer": reviewer,
         "owed_evidence": manifest.owed_external_evidence,
+        "owner_owed_evidence": manifest.owner_owed_evidence,
+        "host_validation": manifest.host_validation,
         "base_sha": candidate.base.commit,
         "base_tree": candidate.base.tree,
         "head_sha": candidate.head.commit,

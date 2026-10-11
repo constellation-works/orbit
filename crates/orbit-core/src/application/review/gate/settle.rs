@@ -28,11 +28,15 @@ use crate::application::task::TaskUpdateParams;
 use super::admit::reviewer_identity;
 use super::baseline;
 use super::context::GateContext;
+use super::host_gates::admitted_host_gates;
 use super::judgement::{
     Delivery, Judgement, comment_lead, repair_author_label, review_fixes_section, verdict_comment,
     write_artifact,
 };
-use super::owed::{EVIDENCE_RECEIVED_DECISION, owed_evidence, owed_hold_received};
+use super::owed::{
+    EVIDENCE_RECEIVED_DECISION, defers_linux_codeql, owed_evidence, owed_hold_received,
+    split_owner_owed,
+};
 use super::release::release_review_attempt;
 
 /// Close the admitted attempt with an honest verdict.
@@ -411,11 +415,28 @@ fn settle(
     };
     // Checks a host-evidence rule owes for what this candidate changed are
     // required whatever the reviewer reported.
-    let owed = match &held {
-        Some((_, certificate)) => certificate.owed_evidence.clone(),
-        None => owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?,
+    // [ORB-15630] Linux CodeQL a macOS host cannot run is the owner's and
+    // the pull request's hosted CI's on a before-landing review.
+    let defers = defers_linux_codeql(runtime, context);
+    let (owed, owner_owed) = match &held {
+        Some((_, certificate)) => (
+            certificate.owed_evidence.clone(),
+            certificate.owner_owed_evidence.clone(),
+        ),
+        None => split_owner_owed(
+            owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?,
+            defers,
+        ),
     };
     judgement.require_owed_evidence(&owed);
+    if held.is_none() {
+        judgement.defer_to_owner(&owner_owed, defers);
+        // [ORB-15630] The claim host ran the owner's required gates on the
+        // reviewed candidate outside the agent sandbox; its results decide
+        // those checks, not the reviewer's sandboxed records.
+        let gates = admitted_host_gates(admission_output, &reviewed.head.commit)?;
+        judgement.adopt_host_gates(&gates, &reviewed.base.commit, repair.is_some());
+    }
     // [ORB-14478] A claimed leaf's host runs the sandbox-gated checks its
     // reviewer named, before the verdict counts the evidence.
     let host = judgement.fulfil_host_evidence(
@@ -454,6 +475,7 @@ fn settle(
             u64::from(ledger.budget.minutes).saturating_mul(60),
         )),
     )?;
+    judgement.accept_on_host_evidence(repair.as_ref(), &validation_scope, !baseline_red.is_empty());
     // [ORB-14616] Every file a control mutated must come back byte-identical
     // in the final candidate.
     let unrestored = judgement.unrestored_mutation(
@@ -533,6 +555,8 @@ fn settle(
         known_red: judgement.known_red.clone(),
         host_evidence: judgement.host_evidence.clone(),
         owed_evidence: owed,
+        owner_owed_evidence: judgement.owner_owed.clone(),
+        host_validation: judgement.host_validation.clone(),
         resumed_hold_attempt: held.map(|(hold, _)| hold.attempt_id),
         issued_at: now,
     };

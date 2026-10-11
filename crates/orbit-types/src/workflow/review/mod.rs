@@ -26,7 +26,7 @@ pub use admission::{
     is_reserved_review_artifact,
 };
 pub use certificate::{
-    HostCandidateOverride, HostKnownRed, LandingTransformation, ReviewCertificate,
+    HostCandidateOverride, HostGateResult, HostKnownRed, LandingTransformation, ReviewCertificate,
     ReviewConsumption, ReviewInvalidation, ReviewLanding, ReviewManifest, ReviewerIdentity,
 };
 pub use history::{

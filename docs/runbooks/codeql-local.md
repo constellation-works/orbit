@@ -330,6 +330,10 @@ blocks on an `incomplete` verdict whose only gap this is, nor ships a pass the
 host could not have run. A Linux follower, or a candidate that changes no
 matching path, owes nothing
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
+A before-landing review is the exception: its pull request is already open, so
+the requirement is owed to the owner and the pull request's hosted CI
+(`owner_owed_evidence`) and does not hold the review
+([runbook](review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)).
 
 ### Owner fulfilment
 
