@@ -20,7 +20,7 @@ use crate::log_format::{
     Filters as LogFilters, format_message_html, read_recent_matching_events_across_segments,
     resolve_log_path,
 };
-use crate::runtime_memo::DIAGNOSTICS_ERRORS_TTL;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 use crate::state::{DashboardState, Ws};
 
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
@@ -47,12 +47,12 @@ pub(in crate::api) async fn list_diagnostics_errors(
     let compute_runtime = Arc::clone(&runtime);
     match state
         .diagnostics_errors_memo()
-        .get_or_compute(&runtime, key, DIAGNOSTICS_ERRORS_TTL, move || {
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
             diagnostics_errors(&compute_runtime, &range, limit)
         })
         .await
     {
-        Ok(rows) => Json((*rows).clone()).into_response(),
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
         Err(error) => map_runtime_error(error),
     }
 }

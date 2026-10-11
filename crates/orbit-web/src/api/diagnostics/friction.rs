@@ -15,7 +15,7 @@ use super::super::{
     map_runtime_error, month_bounds_utc, validate_year_month,
 };
 use super::audit::{audit_blob_store, events_by_id, v2_audit_values};
-use crate::runtime_memo::DIAGNOSTICS_FRICTION_TTL;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 use crate::state::{DashboardState, Ws};
 
 fn diagnostics_friction_from_v2_audit(
@@ -209,7 +209,7 @@ pub(in crate::api) async fn list_diagnostics_friction(
         .get_or_compute(
             &runtime,
             (month.clone(), limit),
-            DIAGNOSTICS_FRICTION_TTL,
+            DASHBOARD_POLL_MEMO_TTL,
             move || {
                 let mut entries = compute_runtime.read_friction_entries_limited(&month, limit)?;
                 entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
@@ -225,7 +225,7 @@ pub(in crate::api) async fn list_diagnostics_friction(
         )
         .await
     {
-        Ok(rows) => Json((*rows).clone()).into_response(),
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
         Err(error) => map_runtime_error(error),
     }
 }

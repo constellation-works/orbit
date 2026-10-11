@@ -48,8 +48,8 @@ To compare two binaries, run the script directly against each with the same fixt
 python3 scripts/web-memory-soak.py --bin <orbit-binary> --work-dir <fixture-dir> --report <report.json>
 ```
 
-Other flags: `--rounds` (default 20), `--interval` seconds between rounds (default 16,
-past the dashboard's 15 s memo TTL so every round recomputes), `--task-list-runs`,
+Other flags: `--rounds` (default 20), `--interval` seconds between rounds (default 91,
+past the dashboard's 90 s memo TTL so every round recomputes), `--task-list-runs`,
 `--server-env KEY=VALUE` (repeatable, extra environment for the server), and
 `--report-only` (exit 0 even when a budget fails).
 

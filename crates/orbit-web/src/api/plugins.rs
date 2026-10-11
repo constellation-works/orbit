@@ -275,7 +275,7 @@ pub(super) async fn read_panel(
         )
         .await
     {
-        Ok(body) => Json((*body).clone()).into_response(),
+        Ok(served) => Json((*served.body).clone()).into_response(),
         Err(orbit_core::OrbitError::NotFound { id, .. }) => not_found(id),
         Err(error) => super::map_runtime_error(error),
     }

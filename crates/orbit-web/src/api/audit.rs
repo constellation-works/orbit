@@ -26,7 +26,7 @@ use super::{
 };
 use crate::parse::{parse_duration_seconds, parse_since};
 use crate::projections::audit_event_to_json;
-use crate::runtime_memo::AUDIT_SUMMARY_TTL;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 
 /// Default header-tile alert threshold for the denials counter. Surfaced via
 /// `?denial_threshold=` and echoed back in the response so the dashboard can
@@ -401,12 +401,12 @@ pub(super) async fn audit_summary(
     let window_json = raw_since.to_string();
     let runtime_for_compute = runtime.clone();
 
-    let cached = match state
+    let served = match state
         .audit_summary_memo()
         .get_or_compute(
             &runtime,
             raw_since.to_string(),
-            AUDIT_SUMMARY_TTL,
+            DASHBOARD_POLL_MEMO_TTL,
             move || {
                 let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
                 Ok(summary_payload(&bundle, since, now, &window_json))
@@ -414,15 +414,15 @@ pub(super) async fn audit_summary(
         )
         .await
     {
-        Ok(body) => body,
+        Ok(served) => served,
         Err(e) => return server_error(e),
     };
 
-    let mut body = (*cached).clone();
+    let mut body = (*served.body).clone();
     if let Some(obj) = body.as_object_mut() {
         obj.insert("denial_threshold".to_string(), json!(denial_threshold));
     }
-    Json(body).into_response()
+    (served.age_header(), Json(body)).into_response()
 }
 
 struct AuditSummaryBundle {

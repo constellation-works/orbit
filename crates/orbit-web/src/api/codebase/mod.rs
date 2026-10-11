@@ -78,7 +78,7 @@ pub(super) async fn codebase_analytics(
         })
         .await
     {
-        Ok(facts) => facts,
+        Ok(served) => served.body,
         Err(error) => return map_runtime_error(error),
     };
 

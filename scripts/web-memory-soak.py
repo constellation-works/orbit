@@ -10,7 +10,7 @@ mix:
    VmRSS after the request minus VmRSS after a warm-up request.
 2. Soak: one server answers every endpoint in the dashboard GET mix
    concurrently, once per round, for `--rounds` rounds. Rounds are spaced
-   past the 15 s dashboard memo TTL so every round recomputes. VmRSS is
+   past the 90 s dashboard memo TTL so every round recomputes. VmRSS is
    sampled after each round, and VmHWM gives the peak.
 3. CLI cost: median wall time of `orbit task list` on the same fixture.
 
@@ -60,8 +60,9 @@ SOAK_DRIFT_BUDGET = 0.15
 PEAK_RSS_BUDGET_MB = 512
 SINGLE_REQUEST_BUDGET_MB = 20
 
-# Longer than the dashboard's 15 s memo TTLs, so each round recomputes.
-DEFAULT_INTERVAL_S = 16.0
+# Longer than the dashboard's 90 s memo TTL (DASHBOARD_POLL_MEMO_TTL), so each
+# round recomputes.
+DEFAULT_INTERVAL_S = 91.0
 WORKSPACE_NAME = "soak"
 WORKSPACE_ID = "ws_soak"
 TASK_PREFIX = "SK"
