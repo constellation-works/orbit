@@ -103,7 +103,6 @@ async function load(mode) {
   }
   const entry = { visit, mode };
   entry.promise = (async () => {
-    renderDoctor();
     try {
       const result = await requestDoctor(visit, mode);
       if (!visit.isCurrent()) return;
@@ -124,7 +123,10 @@ async function load(mode) {
       if (visit.isCurrent()) renderDoctor();
     }
   })();
+  // The request settles no sooner than the next microtask, so the busy state
+  // is installed and painted before its `finally` can clear it.
   running = entry;
+  renderDoctor();
   return entry.promise;
 }
 

@@ -5,8 +5,10 @@
 // `/api/on/<host>/…`, for a current remote and for an older remote whose
 // dashboard has no such route. It checks the rows (full message, remediation
 // with copyable commands), the cached report's age, that Refresh runs doctor
-// again while the dashboard's own poll never does, the Health rail count, and
-// that no request carries anything but the read-only parameters. No Orbit
+// again while the dashboard's own poll never does, the busy state of a first
+// run and of a refresh while the server holds its response (and the controls
+// restored after a success or a failure), the Health rail count, and that no
+// request carries anything but the read-only parameters. No Orbit
 // store, dashboard, SSH session or host is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
@@ -87,6 +89,24 @@ function doctorBody(host, state) {
   };
 }
 
+// A held doctor run: while armed, every run (not a cached peek) for `host`
+// waits until the test settles the hold, so the panel's pending state is
+// checked while a response is outstanding rather than after a delay.
+let hold = null;
+function holdDoctor(host) {
+  let settle;
+  const settled = new Promise((resolve) => { settle = resolve; });
+  hold = { host, requests: [], settled };
+  const armed = hold;
+  return {
+    requests: armed.requests,
+    settle: (outcome = {}) => {
+      if (hold === armed) hold = null;
+      settle(outcome);
+    },
+  };
+}
+
 function doctorApi(host, url, json) {
   const params = [...url.searchParams.keys()].filter((key) => key !== 'workspace');
   for (const key of params) {
@@ -95,12 +115,20 @@ function doctorApi(host, url, json) {
   const state = doctorState(host);
   const refresh = url.searchParams.get('refresh') === 'true';
   const cached = url.searchParams.get('cached') === 'true';
-  const recent = state.finished != null && Date.now() - state.finished < 10 * 60 * 1000;
-  if (!cached && (refresh || !recent)) {
-    state.runs += 1;
-    state.finished = Date.now();
+  const answer = () => {
+    const recent = state.finished != null && Date.now() - state.finished < 10 * 60 * 1000;
+    if (!cached && (refresh || !recent)) {
+      state.runs += 1;
+      state.finished = Date.now();
+    }
+    return json(doctorBody(host, state));
+  };
+  if (hold && hold.host === host && !cached) {
+    hold.requests.push(url.searchParams);
+    hold.settled.then((outcome) => (outcome.error ? json({ error: outcome.error }, 500) : answer()));
+    return undefined;
   }
-  return json(doctorBody(host, state));
+  return answer();
 }
 
 function resources(pct) {
@@ -205,6 +233,22 @@ const capture = async (name) => {
   await page.setViewportSize({ width: 1440, height: 900 });
 };
 const meta = () => page.locator('#doctor-meta').textContent();
+const panelState = () => page.evaluate(() => {
+  const button = document.getElementById('doctor-refresh');
+  const body = document.getElementById('doctor-body');
+  return {
+    disabled: button.disabled,
+    label: button.textContent,
+    meta: document.getElementById('doctor-meta').textContent,
+    busy: body.getAttribute('aria-busy'),
+    body: body.textContent,
+    rows: body.querySelectorAll('.doctor-row').length,
+  };
+});
+const assertIdle = (state, label) => {
+  assert(!state.disabled && state.label === 'Refresh' && state.busy === 'false' && !/[Rr]unning/.test(state.meta),
+    `${label}: Refresh is restored and no progress shows: ${JSON.stringify(state)}`);
+};
 const railCount = () => page.locator('#rail-count-diagnostics').evaluate((node) => ({
   text: node.textContent,
   alert: node.classList.contains('alert'),
@@ -264,19 +308,54 @@ try {
   assert(doctorState(SERVING).runs === 0, 'a dashboard tick never runs doctor');
   assert(doctorRequests().slice(before).every((entry) => entry.path.includes('cached=true')), `ticks only peek: ${JSON.stringify(doctorRequests().slice(before))}`);
 
-  // 3. Refresh runs doctor again and the age resets.
+  // 3. Refreshing the cached report disables Refresh and shows progress for
+  //    as long as the run is outstanding, keeping the previous rows. A failed
+  //    run restores the controls over the previous result.
+  let held = holdDoctor(SERVING);
   await page.locator('#doctor-refresh').click();
+  await until('the held failing refresh', () => held.requests.length > 0);
+  const refreshPending = await panelState();
+  evidenceLog.refreshPending = refreshPending;
+  assert(refreshPending.disabled && refreshPending.label === 'Running…', `Refresh is disabled while it runs: ${JSON.stringify(refreshPending)}`);
+  assert(refreshPending.meta.endsWith(' · running again…') && refreshPending.busy === 'true', `the panel shows the refresh in progress: ${JSON.stringify(refreshPending)}`);
+  assert(refreshPending.rows === 8, `the previous report stays while the refresh runs: ${JSON.stringify(refreshPending)}`);
+  held.settle({ error: 'doctor did not finish' });
+  await until('the failed refresh', async () => (await panelState()).body.includes('Doctor failed; showing the previous result: doctor did not finish'));
+  const refreshFailed = await panelState();
+  assertIdle(refreshFailed, 'after a failed refresh');
+  assert(refreshFailed.rows === 8 && doctorState(SERVING).runs === 0, `a failed refresh keeps the previous report: ${JSON.stringify(refreshFailed)}`);
+
+  // Refresh runs doctor again and the age resets.
+  held = holdDoctor(SERVING);
+  await page.locator('#doctor-refresh').click();
+  await until('the held refresh', () => held.requests.length > 0);
+  const retryPending = await panelState();
+  assert(retryPending.disabled && retryPending.label === 'Running…' && retryPending.busy === 'true', `a retried Refresh is disabled while it runs: ${JSON.stringify(retryPending)}`);
+  held.settle();
   await until('the refreshed report', async () => /^Ran (0s|just now|\ds) ago/.test(await meta()));
+  const refreshed = await panelState();
+  assertIdle(refreshed, 'after a refresh');
+  assert(!refreshed.body.includes('Doctor failed'), `a successful refresh clears the failure: ${JSON.stringify(refreshed)}`);
   assert(doctorState(SERVING).runs === 1, 'Refresh runs doctor once');
   assert(doctorRequests().some((entry) => entry.path.startsWith('/api/doctor?') && query(entry).get('refresh') === 'true' && query(entry).get('workspace') === 'ws_orbit'), `Refresh asks for a new run: ${JSON.stringify(doctorRequests())}`);
   evidenceLog.metaAfterRefresh = await meta();
   await page.locator('#doctor-body details.doctor-passing summary').click();
   await capture('refreshed');
 
-  // 4. The panel follows the selected host through the forward.
+  // 4. The panel follows the selected host through the forward. A remote
+  //    with no report shows doctor running, with Refresh disabled, until its
+  //    first run answers.
+  held = holdDoctor('hostb');
   await page.locator('#host-select').selectOption('hostb');
-  await until('hostb doctor', () => routeLog.some((entry) => entry.path.startsWith('/api/on/hostb/doctor?') && query(entry).get('workspace') === 'ws_b'));
+  await until('hostb doctor', () => held.requests.some((params) => params.get('workspace') === 'ws_b'));
+  const firstPending = await panelState();
+  evidenceLog.firstRunPending = firstPending;
+  assert(firstPending.disabled && firstPending.label === 'Running…', `Refresh is disabled during the first run: ${JSON.stringify(firstPending)}`);
+  assert(firstPending.meta === 'Running doctor…' && firstPending.busy === 'true', `the meta line shows the first run: ${JSON.stringify(firstPending)}`);
+  assert(firstPending.body === 'Running orbit doctor…' && firstPending.rows === 0, `the body shows the first run, not "Not run yet": ${JSON.stringify(firstPending)}`);
+  held.settle();
   await until('hostb rows', async () => (await page.locator('#doctor-body').textContent()).includes('/srv/hostb/repo/.orbit'));
+  assertIdle(await panelState(), 'after the first run');
   assert(doctorState('hostb').runs === 1, 'a remote with no report runs doctor on first open');
   assert(/^Ran /.test(await meta()), 'the remote report shows its age');
 
@@ -304,6 +383,8 @@ try {
       'browser-doctor-remediation-commands-copy',
       'browser-doctor-cached-report-shows-age',
       'browser-doctor-refresh-runs-again',
+      'browser-doctor-first-run-shows-busy-state',
+      'browser-doctor-refresh-shows-busy-state-until-settled',
       'browser-doctor-poll-never-runs-doctor',
       'browser-doctor-health-rail-count',
       'browser-doctor-follows-selected-host',
