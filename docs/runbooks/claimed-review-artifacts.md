@@ -12,7 +12,7 @@ paths:
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
 related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792]
-last_validated: 2026-10-06
+last_validated: 2026-10-11
 ---
 
 # Verify and Recover Claimed-Review Artifacts
@@ -274,10 +274,33 @@ cargo test -p orbit-core --lib dispatch::tests::claimed_review
 cargo test -p orbit-core --lib dispatch::tests::claimed_owner
 ```
 
-The sandbox test prints `skipped claimed-review bridge sandbox integration:`
-and passes when the platform sandbox cannot start, for example inside another
-Bubblewrap sandbox. A skip is not evidence. Record it as `NOT_RUN` with its
-reason, and run the test on a host that can start the sandbox.
+The outer exact fixture uses the bounded child-test runner, which verifies
+that exactly one child test passed and cleans up its process group on exit
+or overrun. Each sandbox provider acquires a group cleanup guard immediately
+after spawn, before worker registration, broker binding or readiness checks.
+On an error or assertion unwind the guard kills the group and reaps the
+provider; `finish` transfers ownership to the existing supervisor. A pipe
+watchdog also ends the provider's separate group if the outer fixture is
+killed before its destructors can run.
+
+The deterministic cleanup harness waits until a blocked provider and its
+descendant each hold a file lock, then injects a failure: an error return or
+an expired readiness wait around a raw provider, and, through the fixture's
+own `Confined::spawn` under the real sandbox, a broker authentication failure
+after worker registration or an expired readiness wait. Each case checks the
+original error, then that the provider was reaped, its group is empty and
+both locks are free, which also covers a descendant that Bubblewrap's new
+session moved out of the group. It also exercises an outer fixture overrun:
+
+```bash
+cargo test --locked -p orbit-cli --test tool claimed_review_bridge_sandbox::cleanup -- --nocapture
+```
+
+The sandbox tests print `DEFERRED: bubblewrap unavailable:` on Linux or
+`SKIP: sandbox-exec cannot apply a profile:` on macOS when the nested sandbox
+cannot start. A skip is not evidence. Record it as `NOT_RUN` with its reason,
+and run on a host that can start the sandbox. Native macOS coverage sets
+`ORBIT_REQUIRE_SANDBOX_EXEC=1` so an apply refusal fails the check.
 
 ## 4. Evidence schema
 
