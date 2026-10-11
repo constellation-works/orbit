@@ -138,7 +138,7 @@ pub(crate) const IMMUTABLE_CONFIG_KEYS: &[(&str, &str)] = &[
 ];
 
 /// The refusal note for an unsettable key, or `None` for any other key.
-pub(crate) fn immutable_key_note(key: &str) -> Option<&'static str> {
+pub fn immutable_key_note(key: &str) -> Option<&'static str> {
     IMMUTABLE_CONFIG_KEYS
         .iter()
         .find(|(immutable, _)| *immutable == key)

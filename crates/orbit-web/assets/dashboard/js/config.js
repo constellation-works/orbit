@@ -9,8 +9,12 @@
 // Each row saves on its own — there is no pending-changes gate. A save writes
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
+//
+// The Effective sub-view is its own module (config-effective.js); this one
+// owns the tab, the file views, Crews, Keys and System.
 
 import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { renderEffective, resetEffective } from './config-effective.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
@@ -56,6 +60,7 @@ export function initConfig() {
     lastPayload = null;
     editing = null;
     expandedSections.clear();
+    resetEffective();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
   // editor's focus, so it waits until nothing is being edited.
@@ -148,11 +153,17 @@ function renderPanels(payload, body) {
     $("config-count").textContent = `${(payload.crews || []).length} crews`;
     return;
   }
+  if (activeSubtab === "effective") {
+    renderEffective(body, payload, {
+      canEdit: editable(payload),
+      refusal: hostWriteRefusal() || payload?.config_set?.reason || "",
+      render,
+      reload: fetchAndRenderConfig,
+    });
+    $("config-count").textContent = countSummary(payload);
+    return;
+  }
   body.appendChild(layersStrip(payload));
-  const binding = registryStrip(payload);
-  if (binding) body.appendChild(binding);
-  const review = reviewStrip(payload);
-  if (review) body.appendChild(review);
   for (const section of payload.sections || []) {
     body.appendChild(section.kind === "crews" ? crewsPanel(payload, {}) : sectionPanel(section, payload));
   }
@@ -184,6 +195,14 @@ function renderControls(payload) {
 
   if (activeSubtab === "system") {
     controls.appendChild(reloadButton());
+    return;
+  }
+  // The Effective view carries its own search and filters beside its table.
+  if (activeSubtab === "effective") {
+    controls.appendChild(reloadButton());
+    const fileView = el("a", { class: "config-action ghost", text: "Workspace file view" });
+    fileView.href = "#config/workspace-file";
+    controls.appendChild(fileView);
     return;
   }
 
@@ -295,142 +314,11 @@ function layerChip(label, layer, builtIn = false) {
   return chip;
 }
 
-function registryStrip(payload) {
-  const binding = payload.workspace_binding;
-  if (!binding) return null;
-  const strip = el("div", { class: "config-strip config-registry" });
-  const left = el("div", { class: "config-registry-facts" }, [
-    el("span", { class: "config-source registry", text: "registry" }),
-    fact("base_branch", binding.base_branch),
-    fact("ship_mode", binding.ship_mode),
-    fact("owner", binding.owner_machine_id),
-    el("span", {
-      class: "config-note inline",
-      text: "from the workspace registry, not config.toml",
-    }),
-  ]);
-  strip.appendChild(left);
-  if (binding.base_branch_matches_workflow === true) {
-    strip.appendChild(
-      el("span", {
-        class: "config-match ok",
-        text: `matches workflow.base_branch (${binding.workflow_base_branch})`,
-      }),
-    );
-  } else if (binding.base_branch_matches_workflow === false) {
-    strip.appendChild(
-      el("span", {
-        class: "config-match warn",
-        text: `workflow.base_branch is ${binding.workflow_base_branch} — delivery uses the registered ${binding.base_branch}`,
-      }),
-    );
-  }
-  return strip;
-}
-
-// The automatic-review switches, each with its source: before-PR review is
-// `review.before_pr`, before-landing review is `review.before_landing`, and
-// after-landing review is the delivery-code-review auto-task's own `enabled`
-// flag.
-function reviewStrip(payload) {
-  const review = payload.review;
-  if (!review) return null;
-  const strip = el("div", { class: "config-strip config-review" });
-  if (review.error) {
-    strip.appendChild(reviewAlert("Review status is unavailable", review.error));
-    strip.appendChild(reviewDiagnostics([`Review status: ${review.error}`]));
-    return strip;
-  }
-
-  const before = review.before_pr || {};
-  const beforeProblems = Array.isArray(before.problems) ? before.problems : [];
-  const landing = review.before_landing || {};
-  const landingProblems = Array.isArray(landing.problems) ? landing.problems : [];
-  const after = review.after_landing || {};
-  const afterHealth = after.health || null;
-  const afterProblems = Array.isArray(afterHealth?.problems) ? afterHealth.problems : [];
-  const statuses = [
-    reviewSwitchStatus(
-      "Before-PR review",
-      before.enabled === true,
-      beforeProblems,
-      "It can gate delivery before PR creation.",
-    ),
-    reviewSwitchStatus(
-      "Before-landing review",
-      landing.enabled === true,
-      landingProblems,
-      "It can gate an open PR before it lands.",
-    ),
-    reviewSwitchStatus(
-      "After-landing review",
-      after.enabled === true,
-      afterProblems,
-      "It can review landed deliveries on this host.",
-    ),
-  ];
-  statuses.sort((left, right) => Number(right.unhealthy) - Number(left.unhealthy));
-  for (const status of statuses) strip.appendChild(status.node);
-
-  if (review.healthy === false && !statuses.some((status) => status.unhealthy)) {
-    strip.insertBefore(reviewAlert("Review is unhealthy", "The review switches could not be confirmed healthy."), strip.firstChild);
-  }
-  const diagnostics = [
-    before.line ? `Before-PR review: ${before.line}` : null,
-    landing.line ? `Before-landing review: ${landing.line}` : null,
-    after.line ? `After-landing review: ${after.line}` : null,
-    afterHealth?.line ? `After-landing health: ${afterHealth.line}` : null,
-  ].filter(Boolean);
-  if (diagnostics.length) strip.appendChild(reviewDiagnostics(diagnostics));
-  return strip;
-}
-
-function reviewSwitchStatus(label, enabled, problems, healthyReason) {
-  const unhealthy = enabled && problems.length > 0;
-  const row = el("div", { class: `config-review-status ${unhealthy ? "alert" : enabled ? "healthy" : "inactive"}` });
-  if (unhealthy) row.setAttribute("role", "alert");
-  row.appendChild(el("span", {
-    class: "config-review-switch",
-    text: `${label}: ${enabled ? "on" : "off"} · ${unhealthy ? "unhealthy" : enabled ? "healthy" : "inactive"}`,
-  }));
-  row.appendChild(el("span", {
-    class: "config-review-reason",
-    text: unhealthy ? `${String(problems[0]).replace(/[.!?]+$/, "")}.` : enabled ? healthyReason : "This switch is disabled.",
-  }));
-  if (unhealthy) {
-    row.appendChild(el("span", { class: "config-review-remedy" }, ["Run ", el("code", { text: "orbit doctor" }), "."]));
-  }
-  return { node: row, unhealthy };
-}
-
-function reviewAlert(title, reason) {
-  const row = el("div", { class: "config-review-status alert" });
-  row.setAttribute("role", "alert");
-  row.appendChild(el("span", { class: "config-review-switch", text: title }));
-  row.appendChild(el("span", { class: "config-review-reason", text: reason }));
-  row.appendChild(el("span", { class: "config-review-remedy" }, ["Run ", el("code", { text: "orbit doctor" }), "."]));
-  return row;
-}
-
-function reviewDiagnostics(lines) {
-  const details = el("details", { class: "config-review-details" });
-  details.appendChild(el("summary", { text: "Full review diagnostics" }));
-  details.appendChild(el("pre", { class: "config-review-diagnostic", text: lines.join("\n") }));
-  return details;
-}
-
 function updateConfigChrome() {
   const explainer = $("config-explainer");
   if (explainer) explainer.hidden = activeSubtab !== "effective";
   const controls = $("config-controls");
   if (controls && activeSubtab === "crews") controls.hidden = true;
-}
-
-function fact(label, value) {
-  return el("span", { class: "config-fact" }, [
-    el("span", { class: "config-fact-label", text: label }),
-    el("span", { class: "config-fact-value mono", text: value == null || value === "" ? NO_VALUE : String(value) }),
-  ]);
 }
 
 // ---------------------------------------------------------------- sections

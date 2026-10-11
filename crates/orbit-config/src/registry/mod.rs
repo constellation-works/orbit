@@ -166,7 +166,7 @@ pub(crate) use keys::{
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
-    describe, is_global_only_key,
+    describe, immutable_key_note, is_global_only_key,
 };
 pub(crate) use settings::read_optional;
 pub use settings::{
