@@ -1,5 +1,6 @@
 // Execute the shipped Settings modules against a small DOM and fixture API:
-// review health and crew table rendering, sub-view chrome, plus the System
+// review health, read-only and global-only keys in Effective, crew table
+// rendering, sub-view chrome, plus the System
 // view's provenance, override marker, edit round-trip, and refused write.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -146,9 +147,9 @@ const effective = () => ({
   scope: 'effective', config_set: configSet, layers: { global: { path: GLOBAL_PATH }, workspace: { path: '/ws/.orbit/config.toml' } },
   sections: [
     { token: 'machine', title: 'Machine (machine.*)', blurb: 'machine identity', key_prefix: 'machine', kind: 'keys', counts: { set: 3, default: 0, unset: 0, total: 3 }, keys: [
-      { key: 'machine.id', label: 'id', value: 'hm_fixture', value_type: 'string', state: 'set', settable: false, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Generated machine identity' },
-      { key: 'machine.task_prefix', label: 'task_prefix', value: 'HF', value_type: 'string', state: 'set', settable: false, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Task ID namespace' },
-      { key: 'machine.name', label: 'name', value: 'http-fixture', value_type: 'string', state: 'set', settable: true, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Display name' },
+      { key: 'machine.id', label: 'id', value: 'hm_fixture', value_type: 'string', state: 'set', settable: false, global_only: true, read_only_reason: 'a machine identity is generated once by `orbit init` and never reused', source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Generated machine identity' },
+      { key: 'machine.task_prefix', label: 'task_prefix', value: 'HF', value_type: 'string', state: 'set', settable: false, global_only: true, read_only_reason: "the task-id namespace is fixed for the life of this machine's task store", source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Task ID namespace' },
+      { key: 'machine.name', label: 'name', value: 'http-fixture', value_type: 'string', state: 'set', settable: true, global_only: true, read_only_reason: null, source: { layer: 'global', path: GLOBAL_PATH }, shadowed_by: [], description: 'Display name' },
     ] },
     { token: 'delivery', title: 'Delivery (workflow.*)', blurb: 'delivery settings', key_prefix: 'workflow', kind: 'keys', counts: { set: 1, unset: 0, total: 1 }, keys: [
       ...Object.keys(defaults).map(name => name in workspaceSet
@@ -267,22 +268,30 @@ assert.equal(named(body, 'config-filter').length, 0, 'there is no key filter on 
 // ---- immutable identity rows stay read-only and section headings show a prefix once ----
 setConfigSubtab('effective');
 await fetchAndRenderConfig();
+const effectiveRow = key => named(body, 'cfx-row').find(node => node.dataset.key === key);
+const inspector = () => named(body, 'cfx-inspector')[0];
 for (const key of ['machine.id', 'machine.task_prefix']) {
-  const row = named(body, 'config-row').find(node => node.dataset.key === key);
+  const row = effectiveRow(key);
   assert.ok(row, `${key} renders in Effective`);
-  assert.equal(named(row, 'config-pencil').length, 0, `${key} has no edit button`);
-  const main = named(row, 'config-row-main')[0];
-  assert.equal(classesOf(main).includes('clickable'), false, `${key} is not click-to-edit`);
-  main.dispatch('click');
-  assert.equal(named(body, 'config-editor').length, 0, `${key} click opens no editor`);
+  assert.deepEqual(textOf(row, 'cfx-status'), ['read-only'], `${key} is marked read-only in the table`);
+  row.click();
+  assert.equal(textOf(inspector(), 'cfx-inspector-key')[0], key, `${key} opens in the inspector`);
+  assert.equal(named(inspector(), 'cfx-editor').length, 0, `${key} offers no editor`);
+  const reason = effective().sections[0].keys.find(entry => entry.key === key).read_only_reason;
+  assert.ok(textOf(inspector(), 'cfx-readonly')[0].includes(reason.slice(1)), `${key} says why it is read-only`);
 }
-const sectionTitles = textOf(body, 'config-section-title');
+// A key only the global file may carry can be written there, never to the workspace.
+effectiveRow('machine.name').click();
+const scopes = named(inspector(), 'cfx-radio');
+assert.deepEqual(scopes.map(node => [node.dataset.scope, node.querySelector('input').disabled, node.querySelector('input').checked]),
+  [['workspace', true, false], ['global', false, true]], 'a global-only key writes the global file only');
+assert.equal(named(inspector(), 'cfx-cli')[0].textContent, 'orbit config set --global machine.name http-fixture');
+const sectionTitles = textOf(body, 'cfx-group-title');
 for (const [title, prefix] of [['Machine (machine.*)', 'machine.*'], ['Delivery (workflow.*)', 'workflow.*']]) {
   const heading = sectionTitles.find(value => value === title);
   assert.ok(heading, `${title} section heading renders`);
   assert.equal(heading.split(prefix).length - 1, 1, `${title} shows its key prefix once`);
 }
-assert.equal(named(body, 'config-section-prefix').length, 0, 'section headers do not add a second prefix');
 
 setConfigSubtab('keys');
 await fetchAndRenderConfig();
@@ -385,17 +394,21 @@ assert.equal(named(body, 'config-editor').length, 0, 'the system view does not o
 setConfigSubtab('effective');
 await fetchAndRenderConfig();
 assert.equal(explainer.hidden, false, 'the shared explainer appears on Effective');
-const reviewCard = named(body, 'config-review')[0];
-assert.ok(reviewCard, 'Effective renders the review health card');
-assert.equal(reviewCard.children[0].getAttribute('role'), 'alert', 'the unhealthy enabled switch leads with an alert');
-assert.ok(classesOf(reviewCard.children[0]).includes('alert'), 'the unhealthy status has the alert treatment');
-assert.match(reviewCard.children[0].textContent, /After-landing review: on · unhealthy/);
-assert.match(reviewCard.children[0].textContent, /definition_changed/);
-assert.match(reviewCard.children[0].textContent, /orbit doctor/);
-const diagnosticDisclosure = named(reviewCard, 'config-review-details')[0];
+const reviewCard = named(body, 'cfx-review')[0];
+assert.ok(reviewCard, 'Effective renders the review layers');
+const afterLanding = named(reviewCard, 'cfx-step').find(node => node.dataset.step === 'after-landing');
+assert.equal(afterLanding.getAttribute('role'), 'alert', 'the unhealthy enabled layer is an alert');
+assert.ok(classesOf(afterLanding).includes('alert'), 'the unhealthy layer has the alert treatment');
+assert.match(afterLanding.textContent, /After landingOn · unhealthy/);
+assert.match(afterLanding.textContent, /definition_changed/);
+assert.match(afterLanding.textContent, /orbit doctor/);
+const beforePr = named(reviewCard, 'cfx-step').find(node => node.dataset.step === 'before-pr');
+assert.equal(beforePr.getAttribute('role'), null, 'a disabled layer is not an alert');
+assert.match(beforePr.textContent, /Off/);
+const diagnosticDisclosure = named(reviewCard, 'cfx-details')[0];
 assert.ok(diagnosticDisclosure, 'raw diagnostics have a disclosure');
 assert.equal(diagnosticDisclosure.getAttribute('open'), null, 'raw diagnostics start collapsed');
-assert.match(textOf(diagnosticDisclosure, 'config-review-diagnostic')[0], /not adopted automatically/);
+assert.match(textOf(diagnosticDisclosure, 'cfx-diagnostic')[0], /not adopted automatically/);
 
 setConfigSubtab('crews');
 await fetchAndRenderConfig();
@@ -438,4 +451,4 @@ fileFailure = { status: 503, body: { error: 'temporarily unavailable' } };
 await assert.rejects(fetchAndRenderConfig());
 assert.match(body.textContent, /Use Refresh to retry/i, 'a transient HTTP failure still offers a retry');
 fileFailure = null;
-console.log('settings views: review health alert, collapsed diagnostics, crew headers and pool usage, sub-view chrome, and system behavior passed');
+console.log('settings views: review health alert, read-only and global-only keys, collapsed diagnostics, crew headers and pool usage, sub-view chrome, and system behavior passed');

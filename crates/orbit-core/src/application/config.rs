@@ -21,7 +21,7 @@ use orbit_config::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigRoots, ConfigSection, ConfigSnapshot,
     ConfigStore, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     WorkspaceInitMode, admit_config_key, admit_settable_config_key, config_key_options,
-    describe_config_key, load_effective_config,
+    describe_config_key, immutable_key_note, is_global_only_key, load_effective_config,
 };
 use serde_json::{Map, Value as JsonValue, json};
 
@@ -898,6 +898,13 @@ fn base_row(
         "settable".to_string(),
         json!(admit_settable_config_key(key).is_ok()),
     );
+    // Why `orbit config set` refuses the key, and whether only the global file
+    // may carry it, so a view can explain a refusal before attempting a write.
+    row.insert(
+        "read_only_reason".to_string(),
+        json!(immutable_key_note(key)),
+    );
+    row.insert("global_only".to_string(), json!(is_global_only_key(key)));
     row.insert("label".to_string(), json!(label_for(section, key)));
     row.insert("value".to_string(), value.clone());
     row.insert(

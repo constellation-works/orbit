@@ -321,6 +321,32 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
     );
     assert_eq!(approval["fallback"], Value::Null);
     assert_eq!(effective["crews_enumerated"], json!(true));
+    // A row says why `orbit config set` refuses it and whether only the
+    // global file may carry it, matching what a write would answer.
+    let machine_id = row(&effective, "machine.id");
+    assert_eq!(machine_id["settable"], json!(false));
+    assert!(
+        machine_id["read_only_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("orbit init")),
+        "a read-only key carries its refusal note: {machine_id}"
+    );
+    let machine_name = row(&effective, "machine.name");
+    assert_eq!(machine_name["global_only"], json!(true));
+    assert_eq!(machine_name["read_only_reason"], Value::Null);
+    let workspace_write = config::set_key(
+        &runtime,
+        "machine.name",
+        &json!("renamed"),
+        ConfigScope::Workspace,
+        ConfigWriteInit::RequireExisting,
+    );
+    assert!(
+        workspace_write.is_err(),
+        "a global-only row refuses a workspace write"
+    );
+    assert_eq!(minutes["global_only"], json!(false));
+    assert_eq!(minutes["read_only_reason"], Value::Null);
 
     let global_view = config::file_view(&runtime, ConfigScope::Global).expect("global view");
     assert_eq!(
