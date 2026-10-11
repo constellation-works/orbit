@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::sync::{OnceLock, RwLock};
 
+use jsonschema::error::ValidationErrorKind;
 use orbit_common::OrbitError;
 use serde_json::Value as JsonValue;
 
@@ -36,8 +37,10 @@ pub struct PluginConfigSchema {
 }
 
 impl PluginConfigSchema {
-    /// Keys the schema declares, in schema order. Empty when the plugin ships
-    /// no schema or an open one, which means no key can be called undeclared.
+    /// Named top-level properties and manifest defaults, sorted for suggestions.
+    ///
+    /// This is not an exhaustive allowlist: open schemas, patterns and schema
+    /// combinators may admit other keys.
     pub fn declared_keys(&self) -> Vec<String> {
         let mut keys: Vec<String> = self
             .schema
@@ -53,6 +56,63 @@ impl PluginConfigSchema {
         }
         keys.sort();
         keys
+    }
+
+    fn forbids_key(&self, key: &str) -> Result<bool, String> {
+        let Some(schema) = &self.schema else {
+            return Ok(false);
+        };
+        if schema == &JsonValue::Bool(false) {
+            return Ok(true);
+        }
+        let compiled = jsonschema::JSONSchema::compile(schema).map_err(|error| {
+            format!(
+                "plugin '{}' declares a config schema that does not compile: {error}",
+                self.namespace
+            )
+        })?;
+        let probe = serde_json::json!({ key: null });
+        let Err(mut errors) = compiled.validate(&probe) else {
+            return Ok(false);
+        };
+        // Only an unconditional object closure can prove a name forbidden
+        // without its value or the rest of the section. Ignore type, required,
+        // and branch-selection failures of this deliberately partial probe;
+        // writes validate the entire effective section with the original schema.
+        Ok(errors.any(|error| {
+            if error.instance_path.iter().next().is_some() {
+                return false;
+            }
+            // References preserve their call-site path. An allOf child always
+            // applies; a then/else or alternative branch may depend on values
+            // missing from the probe and cannot justify refusing a key.
+            let mut path = error.schema_path.into_vec().into_iter();
+            loop {
+                match path.next().as_deref() {
+                    Some("allOf") => {
+                        if !path
+                            .next()
+                            .is_some_and(|index| index.parse::<usize>().is_ok())
+                        {
+                            return false;
+                        }
+                    }
+                    Some("additionalProperties") if path.next().is_none() => {
+                        break;
+                    }
+                    _ => return false,
+                }
+            }
+            match error.kind {
+                ValidationErrorKind::AdditionalProperties { unexpected } => {
+                    unexpected.iter().any(|unexpected| unexpected == key)
+                }
+                // The validator uses FalseSchema for additionalProperties:
+                // false when neither properties nor patterns is present.
+                ValidationErrorKind::FalseSchema => true,
+                _ => false,
+            }
+        }))
     }
 
     /// Configured values layered over the manifest defaults.
@@ -145,7 +205,7 @@ pub fn registered_plugin_namespaces() -> Vec<String> {
 pub struct PluginFieldKey<'a> {
     /// Namespace between `plugins.` and the key.
     pub namespace: &'a str,
-    /// The key the plugin's schema declares.
+    /// A key in the plugin's configuration table.
     pub key: &'a str,
 }
 
@@ -189,8 +249,10 @@ pub fn parse_plugin_field_key(key: &str) -> Result<Option<PluginFieldKey<'_>>, O
 /// With no plugin loaded there is nothing to check the key against, so it is
 /// admitted: refusing here would make every plugin key unsettable on a host
 /// that has not opened a runtime. With plugins loaded, an unknown namespace
-/// and an undeclared key are both refused, each with the names that would
-/// have worked.
+/// is refused with installed names as suggestions. A key forbidden by a
+/// unconditionally closed schema is refused with named properties/defaults as
+/// suggestions; other constraints are checked against the effective section
+/// when writing, rather than inferred from a partial list of names.
 pub fn admit_plugin_field_key(parsed: PluginFieldKey<'_>) -> Result<(), OrbitError> {
     let namespaces = registered_plugin_namespaces();
     if namespaces.is_empty() {
@@ -209,10 +271,13 @@ pub fn admit_plugin_field_key(parsed: PluginFieldKey<'_>) -> Result<(), OrbitErr
                 .collect(),
         ));
     };
-    let declared = schema.declared_keys();
-    if declared.is_empty() || declared.iter().any(|key| key == parsed.key) {
+    if !schema
+        .forbids_key(parsed.key)
+        .map_err(OrbitError::InvalidInput)?
+    {
         return Ok(());
     }
+    let declared = schema.declared_keys();
     Err(OrbitError::invalid_input_with_suggestions(
         format!(
             "plugin '{}' declares no config key '{}'",
