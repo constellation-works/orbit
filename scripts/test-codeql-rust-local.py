@@ -831,6 +831,58 @@ os.execv({real_mv!r}, sys.argv)
                 self.assertNotEqual(self.run_dir(result), passed)
                 self.assert_isolated()
 
+    def test_external_suite_query_edits_run_analysis_again(self):
+        external = self.root / "external queries"
+        external.mkdir()
+        suite = external / "review.qls"
+        query = external / "check.ql"
+        suite.write_text("- query: check.ql\n")
+        query.write_text('select "before"\n')
+
+        first = self.run_script(str(suite))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        first_dir = self.run_dir(first)
+        self.assertEqual([call["args"][:2] for call in self.calls() if call["name"] == "codeql"],
+                         [["database", "create"], ["database", "analyze"]])
+        self.assertFalse((first_dir / "inputs.sha256").exists())
+
+        query.write_text('select "after"\n')
+        self.calls_file.write_text("")
+        second = self.run_script(str(suite))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_dir = self.run_dir(second)
+        self.assertNotEqual(second_dir, first_dir)
+        self.assertEqual([call["args"][:2] for call in self.calls() if call["name"] == "codeql"],
+                         [["database", "create"], ["database", "analyze"]])
+        self.assertFalse((second_dir / "inputs.sha256").exists())
+        self.assert_isolated()
+
+    def test_external_imported_library_edits_run_analysis_again(self):
+        external = self.root / "external query pack"
+        external.mkdir()
+        query = external / "check.ql"
+        library = external / "Helpers.qll"
+        query.write_text('import Helpers\nselect "before"\n')
+        library.write_text("module Helpers { predicate included() { any() } }\n")
+
+        first = self.run_script(str(query))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        first_dir = self.run_dir(first)
+        self.assertEqual([call["args"][:2] for call in self.calls() if call["name"] == "codeql"],
+                         [["database", "create"], ["database", "analyze"]])
+        self.assertFalse((first_dir / "inputs.sha256").exists())
+
+        library.write_text("module Helpers { predicate included() { none() } }\n")
+        self.calls_file.write_text("")
+        second = self.run_script(str(query))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_dir = self.run_dir(second)
+        self.assertNotEqual(second_dir, first_dir)
+        self.assertEqual([call["args"][:2] for call in self.calls() if call["name"] == "codeql"],
+                         [["database", "create"], ["database", "analyze"]])
+        self.assertFalse((second_dir / "inputs.sha256").exists())
+        self.assert_isolated()
+
     def test_failed_or_edited_run_is_never_reused(self):
         failed = self.run_script("fixture.ql", STUB_ANALYZE_FAIL="1")
         self.assertNotEqual(failed.returncode, 0)

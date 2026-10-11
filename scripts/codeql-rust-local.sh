@@ -12,8 +12,10 @@ Default: --ram 16384 --toolchain 1.97.0 (CodeQL 2.27.1 extractor).
 QUERY_OR_SUITE is a CodeQL pack selector, .ql file, or .qls suite.
 Logs, database and SARIF stay in a new directory under $ORBIT_SCRATCH_DIR,
 or this checkout's .orbit/tmp when unset; a passing run then removes the
-database dataset and build scratch. A passing run there whose inputs match
-this checkout byte for byte is reused instead of run again; --fresh runs anyway.
+database dataset and build scratch. Reuse is limited to non-path selectors and
+keys the checkout and CodeQL version, not resolved pack contents; use --fresh
+if those can change independently. Existing local .ql/.qls paths always run
+again because referenced queries and imported libraries are not fingerprinted.
 The pinned toolchain is installed once per host into ORBIT_CODEQL_CACHE_DIR
 (default ~/.orbit/cache/codeql-rust-local), or into the run directory when
 that cache is unusable. Extraction and analysis
@@ -169,13 +171,17 @@ inputs_digest() {
 }
 
 inputs=
-if codeql_version="$(codeql version --format=terse)" && environment_digest="$(inputs_environment)"; then
+if [[ -e "$query" || -L "$query" ]]; then
+  note "local query or suite path selected; referenced queries and imported libraries are not fingerprinted, so result reuse is disabled"
+elif codeql_version="$(codeql version --format=terse)" && environment_digest="$(inputs_environment)"; then
   inputs_header="$(printf 'codeql-rust-local inputs 1\nquery %s\ntoolchain %s\ncodeql %s\nenvironment %s\n%s' \
     "$query" "$toolchain" "$codeql_version" "$environment_digest" "$effective_config")"
   inputs="$(inputs_digest)" || inputs=
 fi
 if [[ -z "$inputs" ]]; then
-  note "cannot fingerprint this run's inputs, so no earlier run is reused and no later run will reuse this one"
+  if [[ ! -e "$query" && ! -L "$query" ]]; then
+    note "cannot fingerprint this run's inputs, so no earlier run is reused and no later run will reuse this one"
+  fi
 elif [[ -z "$fresh" ]]; then
   for prior in "$scratch_root"/codeql-rust-local.??????; do
     [[ -f "$prior/inputs.sha256" && -s "$prior/results.sarif" && "$(<"$prior/inputs.sha256")" == "$inputs" ]] || continue
