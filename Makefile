@@ -211,11 +211,11 @@ install:
 	$(BUILD_BUDGET) -- $(CARGO) build -p $(BIN_CRATE) --bin $(BINARY) $(INSTALL_CARGO_PROFILE) --message-format=json-render-diagnostics >"$$json"; \
 	bin="$$(python3 -c "$$CARGO_EXECUTABLE_FROM_JSON" install <"$$json")"; \
 	rm -f "$$json"; \
-	install -d $(INSTALL_BIN_DIR); \
-	install -m 755 "$$bin" $(INSTALL_BIN_DIR)/$(BINARY)
+	install -d "$(INSTALL_BIN_DIR)"; \
+	install -m 755 "$$bin" "$(INSTALL_BIN_DIR)/$(BINARY)"
 
 uninstall:
-	rm -f $(INSTALL_BIN_DIR)/$(BINARY)
+	rm -f "$(INSTALL_BIN_DIR)/$(BINARY)"
 
 # ------------------------------------------------------------
 # Clean
