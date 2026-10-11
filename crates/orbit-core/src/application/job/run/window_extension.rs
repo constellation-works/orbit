@@ -24,7 +24,9 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState, RunStateUpdate};
 use serde_json::{Value, json};
 
-use super::worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};
+use super::worker_limit::{
+    DrainWorkerLimitChange, DrainWorkerLimitRequest, validate_drain_worker_ceiling,
+};
 use crate::OrbitRuntime;
 use crate::application::distributed::PULL_DRAIN_JOB;
 use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow};
@@ -147,6 +149,9 @@ impl OrbitRuntime {
             return Err(OrbitError::InvalidInput(format!(
                 "the extension must be between 1 second and {MAX_DRAIN_WINDOW_SECONDS} seconds (24 hours)"
             )));
+        }
+        if let Some(requested_ceiling) = request.max_active_leaf_runs {
+            validate_drain_worker_ceiling(requested_ceiling)?;
         }
         let window = TimeDelta::try_seconds(request.for_seconds as i64).ok_or_else(|| {
             OrbitError::InvalidInput(format!("window {}s is out of range", request.for_seconds))

@@ -123,11 +123,7 @@ impl OrbitRuntime {
                 run.job_id, drain_jobs[0], drain_jobs[1]
             )));
         }
-        if requested == 0 {
-            return Err(OrbitError::InvalidInput(
-                "worker ceiling must be at least 1".to_string(),
-            ));
-        }
+        validate_drain_worker_ceiling(requested)?;
         if run.state.is_terminal() {
             return Err(terminal_run_error(run_id, run.state));
         }
@@ -343,4 +339,14 @@ fn revision_conflict(run_id: &str, expected: Option<u32>, actual: u32) -> OrbitE
         "worker ceiling of job run '{run_id}' is at revision {actual}, not {}; re-read it and decide again",
         expected.unwrap_or(actual)
     ))
+}
+
+/// Validate a requested worker ceiling before persisting or scheduling work.
+pub(crate) fn validate_drain_worker_ceiling(requested: u32) -> Result<(), OrbitError> {
+    if requested == 0 {
+        return Err(OrbitError::InvalidInput(
+            "worker ceiling must be at least 1".to_string(),
+        ));
+    }
+    Ok(())
 }
