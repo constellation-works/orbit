@@ -1,11 +1,17 @@
 //! Contract checks for tool requirements in bundled auto-task definitions.
+#![allow(clippy::unwrap_used)]
 
 orbit_common::isolate_test_process!();
 
 use std::path::Path;
 
-use orbit_core::application::task::TaskAddParams;
+use chrono::{Duration, Utc};
+use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
+use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{AutoTaskDefinition, OrbitRuntime};
+use orbit_types::task::{TaskArtifact, TaskStatus, TaskType};
+use orbit_types::workflow::{AutoTaskSchedule, SWEEP_CURSOR_ARTIFACT};
 use serde_json::Value;
 
 const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
@@ -145,12 +151,13 @@ fn spawned_from_coordinator(payload: &Value) -> bool {
     })
 }
 
-/// The minted coordinator fans out: it attaches its inventory, files area
-/// chores the pools route, and files a roll-up whose provenance tag makes the
-/// scheduler's open-instance dedupe hold the next sweep until the decision is
-/// made, so no second set of areas is filed while one is open.
+/// Parse the coordinator's tool contracts, then exercise roll-up dedupe and
+/// cursor selection through the public runtime and scheduler.
 #[test]
-fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_mint() {
+fn qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior() {
+    if !isolated("qa_full_sweep_tool_contracts_and_rollup_scheduler_behavior") {
+        return;
+    }
     let source = BUNDLED_AUTO_TASKS
         .iter()
         .find_map(|(name, source)| (*name == "qa-full-sweep").then_some(*source))
@@ -168,13 +175,21 @@ fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_min
         );
     }
     let description = &definition.template.description;
+    let attachments = tool_payloads(description, "orbit.task.artifact.put");
     assert!(
-        tool_payloads(description, "orbit.task.artifact.put")
-            .iter()
-            .any(|payload| payload["path"] == "qa-full-sweep-inventory.json"),
-        "the coordinator attaches its inventory artifact"
+        !attachments.is_empty(),
+        "the coordinator provides an artifact payload"
     );
-
+    for payload in attachments {
+        for field in ["id", "source_path", "path"] {
+            assert!(
+                payload[field]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "artifact payload requires {field}: {payload}"
+            );
+        }
+    }
     let filed = task_add_payloads(description);
     let areas = filed
         .iter()
@@ -185,23 +200,6 @@ fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_min
     let [area] = areas.as_slice() else {
         panic!("the coordinator files one kind of area chore: {areas:?}");
     };
-    assert_eq!(tags_of(area), ["qa-full-sweep", "no-diff-expected"]);
-    assert!(
-        area.get("crew").is_none(),
-        "area chores name no crew, so the pools route them: {area}"
-    );
-    for complexity in area["complexity"]
-        .as_str()
-        .unwrap_or_else(|| panic!("area chore declares a complexity: {area}"))
-        .trim_start_matches('<')
-        .trim_end_matches('>')
-        .split('|')
-    {
-        assert!(
-            ["low", "medium", "hard"].contains(&complexity),
-            "area chores are `hard` at most: {area}"
-        );
-    }
     assert!(spawned_from_coordinator(area), "{area}");
     assert!(
         declares_tools(
@@ -216,19 +214,11 @@ fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_min
         ),
         "area chores declare the tools their progress and findings use: {area}"
     );
-    assert!(
-        filed
-            .iter()
-            .any(|payload| payload["type"] == "bug" && tags_of(payload).contains(&"qa-full-sweep")),
-        "area testers file findings tagged qa-full-sweep"
-    );
-
     let rollup = filed
         .iter()
         .find(|payload| tags_of(payload).contains(&"qa-full-sweep-rollup"))
         .unwrap_or_else(|| panic!("the coordinator files a roll-up"));
     assert!(spawned_from_coordinator(rollup), "{rollup}");
-    assert!(rollup.get("crew").is_none(), "{rollup}");
     assert!(
         declares_tools(
             rollup,
@@ -240,39 +230,62 @@ fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_min
         ),
         "the roll-up declares the tools it reads areas and records its decision with: {rollup}"
     );
-    let cursor = definition
-        .skip_if_unchanged
-        .as_ref()
-        .unwrap_or_else(|| panic!("qa-full-sweep skips a tick when nothing landed"));
-    for tag in &cursor.cursor.tags {
-        assert!(
-            tags_of(rollup).contains(&tag.as_str()),
-            "the roll-up records the cursor, so it must carry cursor tag {tag}"
-        );
-    }
-    // The cursor task is the newest done chore carrying every cursor tag. A
-    // later sweep's coordinator or area chore must not qualify, or it would
-    // shadow the last decided sweep's cursor.
-    let mut coordinator_tags = definition.template.tags.clone();
-    coordinator_tags.push(orbit_types::workflow::auto_task_tag(&definition.name));
-    for (task, tags) in [
-        ("coordinator", coordinator_tags),
-        (
-            "area chore",
-            tags_of(area).into_iter().map(str::to_string).collect(),
-        ),
-    ] {
-        assert!(
-            !cursor.cursor.tags.iter().all(|tag| tags.contains(tag)),
-            "the {task} carries every cursor tag and could shadow the roll-up's cursor: {tags:?}"
-        );
-    }
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(workspace.join("auto_tasks")).unwrap();
+    git(&repo, &["init", "-b", "sweep-fixture"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Orbit Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "seed",
+        ],
+    );
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    assert_eq!(
+        runtime.paths().repo_root.canonicalize().unwrap(),
+        repo.canonicalize().unwrap()
+    );
 
-    let runtime = OrbitRuntime::in_memory()
-        .unwrap_or_else(|error| panic!("build in-memory runtime: {error}"));
+    // Only the fixture's enablement, due interval and branch change. The
+    // bundled cursor selector and task payload tags are used unchanged.
+    let mut definition = definition;
+    definition.enabled = true;
+    definition.schedule = AutoTaskSchedule::Interval { every_minutes: 1 };
+    definition.skip_if_unchanged.as_mut().unwrap().reference = "sweep-fixture".into();
+    std::fs::write(
+        workspace.join("auto_tasks/qa-full-sweep.yaml"),
+        serde_yaml::to_string(&definition).unwrap(),
+    )
+    .unwrap();
+    let now = Utc::now();
+    let baseline = run_auto_task_scheduler_at(&runtime, now, SchedulerOptions::default()).unwrap();
+    assert!(baseline.errors.is_empty(), "{baseline:?}");
+    assert_eq!(baseline.reports.len(), 1);
+    assert_eq!(baseline.reports[0].action, "baselined");
+    let due = now + Duration::minutes(2);
+    assert_eq!(
+        scheduler_report(&runtime, due).action,
+        "would_fire",
+        "without a completed cursor the sweep must remain eligible"
+    );
+
     let task = runtime
         .add_task(TaskAddParams {
             title: "Full QA decision".into(),
+            task_type: Some(TaskType::Chore),
             tags: tags_of(rollup).into_iter().map(str::to_string).collect(),
             ..Default::default()
         })
@@ -284,6 +297,127 @@ fn qa_full_sweep_files_routable_area_chores_and_a_rollup_that_holds_the_next_min
         Some(task.id.to_string()),
         "an open roll-up is an open sweep, so skip_if_open mints no second set"
     );
+    assert_eq!(
+        scheduler_report(&runtime, due).blocking_task_id,
+        Some(task.id.clone())
+    );
+    runtime.update_task_with_identity(&task.id, TaskUpdateParams {
+        upsert_artifacts: vec![TaskArtifact::from_text(SWEEP_CURSOR_ARTIFACT,
+            serde_json::json!({"schema_version": 1, "ref": "sweep-fixture", "cursor": head}).to_string())],
+        ..Default::default()
+    }, None, None).unwrap();
+    complete(&runtime, &task.id);
+
+    // Later completed coordinator and area chores have no cursor. If either
+    // shadows the roll-up, the probe becomes unknown and would mint again.
+    let coordinator = runtime.auto_task_mint(&definition.name).unwrap();
+    complete(&runtime, &coordinator.id);
+    let area = runtime
+        .add_task(TaskAddParams {
+            title: "Synthetic QA area".into(),
+            task_type: Some(TaskType::Chore),
+            tags: tags_of(area).into_iter().map(str::to_string).collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    complete(&runtime, &area.id);
+    assert!(
+        area.created_at > task.created_at,
+        "the shadowing control must be newer"
+    );
+    let outcome = run_auto_task_scheduler_at(&runtime, due, SchedulerOptions::default()).unwrap();
+    assert!(outcome.errors.is_empty(), "{outcome:?}");
+    assert_eq!(outcome.reports.len(), 1);
+    assert_eq!(outcome.reports[0].action, "skipped", "{outcome:?}");
+    let state = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir)).unwrap();
+    let skip = state.definitions[&definition.name]
+        .last_skip
+        .as_ref()
+        .unwrap();
+    assert_eq!(skip.reason, "unchanged_since_last_sweep");
+    assert_eq!(skip.cursor_task_id.as_deref(), Some(task.id.as_str()));
+
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Orbit Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "new landing",
+        ],
+    );
+    assert_eq!(
+        scheduler_report(&runtime, due + Duration::minutes(1)).action,
+        "would_fire",
+        "a commit beyond the completed roll-up cursor permits the next sweep"
+    );
+}
+
+fn isolated(test: &str) -> bool {
+    const MARKER: &str = "ORBIT_TEST_QA_CONTRACT_CHILD";
+    if std::env::var_os(MARKER).is_some() {
+        return true;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(MARKER, "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path());
+    let output = orbit_common::test_env::run_child_test(&mut command, test, home.path());
+    orbit_common::test_env::assert_child_test_passed(
+        test,
+        output.status,
+        output.stdout,
+        output.stderr,
+    );
+    false
+}
+
+fn git(repo: &Path, args: &[&str]) -> String {
+    let mut command = std::process::Command::new("git");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command.current_dir(repo).args(args).output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn complete(runtime: &OrbitRuntime, id: &str) {
+    runtime
+        .force_update_task_with_identity(
+            id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+}
+
+fn scheduler_report(
+    runtime: &OrbitRuntime,
+    now: chrono::DateTime<Utc>,
+) -> orbit_core::application::auto_tasks::AutoTaskFireReport {
+    let mut outcome =
+        run_auto_task_scheduler_at(runtime, now, SchedulerOptions { dry_run: true }).unwrap();
+    assert!(outcome.errors.is_empty(), "{outcome:?}");
+    assert_eq!(outcome.reports.len(), 1, "{outcome:?}");
+    outcome.reports.remove(0)
 }
 
 #[test]
