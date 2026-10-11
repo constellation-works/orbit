@@ -335,8 +335,8 @@ revalidated, hosted CI restarts on it, `complete_pr` does not run and nothing
 merges. A lost lease (`push_lease_lost`) is recorded without failing the
 handoff, and the commit stays local. A `reject`, a reviewer timeout or a failed
 revalidation pushes nothing; uncommitted edits of a timed-out reviewer are not
-preserved. Because the PR is already published and the task promoted, an
-evidence-only `incomplete` is not held in progress (§4): it ends like any other
+preserved. In an owner run, because the PR is already published and the task
+promoted, an evidence-only `incomplete` is not held in progress (§4): it ends like any other
 `incomplete`. Final
 recovery still gets one look, as for a failed re-review.
 
@@ -362,8 +362,12 @@ and merges only the handed-off head, so a claimed PR never lands unreviewed.
 The review runs on the leaf because the leaf owns the worktree and the
 published branch; an owner-side review before `handoff_land` would have to
 fetch the PR head into an owner workspace and push fixes to a branch the
-leaf published. A leaf whose review does not approve fails with its PR open
-and unmerged; its failure settlement blocks the task on the owner.
+leaf published. An evidence-only leaf review ends `held`: its drain reads the
+hold from `landing_review_gate_settle` and releases the claim with that hold.
+The owner task stays in progress because handoff has not promoted it, and the
+PR stays open and unmerged while the owner supplies the named checks. Other
+non-approving leaf reviews fail with the PR open and unmerged; their failure
+settlement blocks the task on the owner.
 
 ## 4. What the validation records establish [ORB-11528] [ORB-11545]
 
@@ -1208,9 +1212,10 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - A before-landing reviewer's fixes reach the open PR as a commit, not as a
   "Review fixes" section in its body: the body was written at `pr_open`. The
   findings comment on the task carries them.
-- A before-landing evidence-only gap is not held for its evidence: the PR is
-  already published, so it leaves the PR open in review like any other
-  `incomplete`.
+- An owner before-landing evidence-only gap is not held for its evidence: the
+  PR is already published, so it leaves the PR open in review like any other
+  `incomplete`. A claimed leaf instead releases its claim with the evidence
+  hold while its owner's task is still in progress.
 - The resolved-policy version is 5 with `review.before_landing`, and the
   distributed pull request schema changed with the ship contract's
   `before_landing`: owner and followers must run matching builds.

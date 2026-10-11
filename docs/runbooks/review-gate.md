@@ -98,8 +98,11 @@ No outcome closes the PR or requeues the task. A later DIRTY rebase of the
 reviewed head routes through the `re_review*` steps as before. A claimed leaf
 runs the same review after its `pr_open` and hands off the settled verdict as
 before-landing evidence; the owner refuses a handoff without it or for another
-head, and a leaf whose review does not approve blocks the task on the owner
-with its PR open.
+head. For a claimed leaf whose only gaps are named external checks, settlement
+ends the run `held` and releases its claim with the evidence hold. The owner's
+task stays `in-progress` pending evidence because handoff has not promoted it
+to review; the published PR remains open and unmerged. Other non-approving
+claimed reviews still block the task on the owner with its PR open.
 
 The timeout bound permits one automatic requeue per task and implementation
 tree, recorded in task history without a time window. The implementation tree
@@ -132,7 +135,9 @@ still fails with `worktree_head_changed`.
 
 An evidence hold applies only when every remaining requirement is a named
 unavailable external check and the report contains no open defect or failed
-required check. `review-evidence-hold.json` pins the attempt, candidate,
+required check. A reviewer names a check its host cannot run as that external
+check rather than returning a bare `incomplete`; a failed check is never held
+for owner evidence. `review-evidence-hold.json` pins the attempt, candidate,
 task meaning, and each required artifact. Attach a passing `ReviewExternalEvidence`
 result at each named path and its nonempty log artifact with
 `orbit task artifact put` from an operator shell: no agent identity, outside

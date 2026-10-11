@@ -372,6 +372,11 @@ impl ReviewedLeaf {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(super) fn leaf_holds(&self, hold: &ReviewEvidenceHold) {
         let jobs = &self.pair.follower_jobs;
+        let step = if self.gate_input["before_landing"] == true {
+            "landing_review_gate_settle"
+        } else {
+            "review_gate_settle"
+        };
         let mut state = self
             .pair
             .follower
@@ -380,8 +385,7 @@ impl ReviewedLeaf {
             .unwrap_or_else(|| {
                 PipelineState::new(self.leaf.clone(), LEAF_JOB.to_string(), json!({}))
             });
-        state.pipeline["review_gate_settle"] =
-            json!({"gate": "awaiting_evidence", "evidence_hold": hold});
+        state.pipeline[step] = json!({"gate": "awaiting_evidence", "evidence_hold": hold});
         self.pair
             .follower
             .write_run_state(&self.leaf, &state)
@@ -392,7 +396,7 @@ impl ReviewedLeaf {
             &JobRunStepParams {
                 step_index: 0,
                 target_type: JobTargetType::Activity,
-                target_id: "review_gate_settle".into(),
+                target_id: step.into(),
                 started_at: now,
                 finished_at: now,
                 duration_ms: None,
