@@ -31,8 +31,11 @@
 //! A base run that cannot be set up, or whose own result is a missing tool or
 //! a network failure, is inconclusive and also leaves the failure the
 //! candidate's. A base stopped by the output capture limit or by a signal is
-//! never cached and reports an infrastructure failure with the validation
+//! never cached as a conclusive result and reports an infrastructure failure with the validation
 //! environment marker, rather than attributing a verdict to either revision.
+//! Owner claim settlement retains its inconclusive attempted runs separately,
+//! so retries converge without restarting a deadline-cut build. These records
+//! never establish known red and ordinary base comparisons ignore them.
 //!
 //! A command that selects what to test from the candidate's diff
 //! (`make ci-test-affected`) selects nothing on the base itself, where that
@@ -481,6 +484,53 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
     selection: Option<&Value>,
     deadline: Option<Instant>,
 ) -> BaselineCheck {
+    compare_base(
+        host,
+        workspace_path,
+        base_sha,
+        command,
+        selection,
+        BaseComparison::Ordinary(deadline),
+    )
+}
+
+/// Owner claim comparisons retain inconclusive runs separately. They cannot
+/// confirm known red, but settlement retries must not restart a cold base run.
+pub(super) fn compare_claimed_with_base_until<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    base_sha: &str,
+    command: &str,
+    selection: Option<&Value>,
+    deadline: Instant,
+) -> BaselineCheck {
+    compare_base(
+        host,
+        workspace_path,
+        base_sha,
+        command,
+        selection,
+        BaseComparison::OwnerClaim(deadline),
+    )
+}
+
+enum BaseComparison {
+    Ordinary(Option<Instant>),
+    OwnerClaim(Instant),
+}
+
+fn compare_base<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    base_sha: &str,
+    command: &str,
+    selection: Option<&Value>,
+    comparison: BaseComparison,
+) -> BaselineCheck {
+    let (deadline, retain_inconclusive) = match comparison {
+        BaseComparison::Ordinary(deadline) => (deadline, false),
+        BaseComparison::OwnerClaim(deadline) => (Some(deadline), true),
+    };
     let inconclusive = |reason: String| BaselineCheck {
         base_sha: base_sha.to_string(),
         result: Err(reason),
@@ -499,6 +549,13 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
     };
     if let Some(result) = read_cached(&cache.result) {
         return judged(result, true);
+    }
+    if retain_inconclusive && let Some(reason) = read_claim_inconclusive(&cache.claim_inconclusive)
+    {
+        return BaselineCheck {
+            cached: true,
+            ..inconclusive(reason)
+        };
     }
     let _guard = match acquire_exclusive_file_lock(
         &cache.lock,
@@ -519,8 +576,20 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
     if let Some(result) = read_cached(&cache.result) {
         return judged(result, true);
     }
+    if retain_inconclusive && let Some(reason) = read_claim_inconclusive(&cache.claim_inconclusive)
+    {
+        return BaselineCheck {
+            cached: true,
+            ..inconclusive(reason)
+        };
+    }
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return inconclusive(
+            "the base comparison deadline expired before a run could start".into(),
+        );
+    }
     remove_legacy_checkouts(workspace_path, &cache.legacy_worktrees);
-    match run_on_base(
+    let check = (|| match run_on_base(
         host,
         workspace_path,
         &cache.worktree,
@@ -550,7 +619,7 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
             }
             if run.timed_out && run.timeout_ms < VALIDATION_TIMEOUT_MS {
                 return inconclusive(format!(
-                    "the base run of '{}' timed out before the review deadline",
+                    "the base run of '{}' timed out before the comparison deadline",
                     run.command
                 ));
             }
@@ -580,13 +649,39 @@ pub(super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
             judged(result, false)
         }
         Err(error) => inconclusive(format!("run the command on base {base_sha}: {error}")),
+    })();
+    if retain_inconclusive && let Err(reason) = &check.result {
+        let record = ClaimInconclusive {
+            schema_version: 1,
+            reason: reason.clone(),
+        };
+        if let Err(error) = serde_json::to_vec(&record)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| atomic_write_bytes(&cache.claim_inconclusive, &bytes))
+        {
+            tracing::warn!(path = %cache.claim_inconclusive.display(),
+                "could not retain the owner claim base outcome: {error}");
+        }
     }
+    check
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClaimInconclusive {
+    schema_version: u32,
+    reason: String,
+}
+
+fn read_claim_inconclusive(path: &Path) -> Option<String> {
+    let record: ClaimInconclusive = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    (record.schema_version == 1).then_some(record.reason)
 }
 
 pub(super) struct CachePaths {
     result: PathBuf,
     lock: PathBuf,
     inconclusive_hold: PathBuf,
+    claim_inconclusive: PathBuf,
     pub(super) worktree: PathBuf,
     legacy_worktrees: PathBuf,
 }
@@ -610,6 +705,7 @@ pub(super) fn cache_paths(
         result: dir.join(format!("{key}.json")),
         lock: dir.join(format!("{key}.lock")),
         inconclusive_hold: dir.join(format!("{key}.hold-inconclusive.json")),
+        claim_inconclusive: dir.join(format!("{key}.claim-inconclusive.json")),
         worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}"))?,
         legacy_worktrees: dir.join(LEGACY_WORKTREES_DIR),
     })
@@ -651,6 +747,11 @@ fn run_on_base<H: RuntimeHost + ?Sized>(
     deadline: Option<Instant>,
 ) -> Result<RequiredCommandRun, OrbitError> {
     in_detached_worktree(workspace_path, worktree, base_sha, |checkout| {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(OrbitError::Execution(
+                "the base comparison deadline expired during checkout".into(),
+            ));
+        }
         run_validation_command_until(host, checkout, command, selection, deadline)
     })?
 }

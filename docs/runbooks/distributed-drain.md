@@ -132,7 +132,12 @@ copy before it accepts, including the captured owner check list. The owner also
 verifies exact-run and exact-head validation logs using its own required
 commands; a command-list mismatch fails closed. A log reporting known red is
 accepted only after the owner's own run of a base in its captured base
-branch's history fails every test it names. A follower that cannot resolve
+branch's history fails every test it names. Settlement gives all owner base
+comparisons one ten-minute deadline within the routed call's fifteen minutes.
+A cut or other inconclusive attempted run is retained separately from conclusive
+base results; retries reuse its refusal and partial failures never confirm the
+report. A later conclusive base result can replace that refusal; a moved base
+or different replay selection gets its own check. A follower that cannot resolve
 or run the captured crew stops pulling with `before_pr_reviewer_unavailable`
 rather than claiming work it cannot review. A local-only ship workspace with
 before-PR review on is refused (`before_pr_unsupported`).

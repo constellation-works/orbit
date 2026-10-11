@@ -3356,6 +3356,7 @@ fn a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner
                             exit_code: 2,
                             failures,
                         },
+                        std::time::Instant::now() + Duration::from_secs(120),
                     )
                 };
 

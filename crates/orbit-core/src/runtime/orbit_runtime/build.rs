@@ -140,6 +140,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
             host_signals: default_host_signal_probe(),
@@ -199,6 +200,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_execution_location: None,
             host_os: orbit_types::task::HostOs::current(),
+            claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
             // An in-memory runtime is not bound to a host lifecycle.
@@ -235,6 +237,13 @@ impl OrbitRuntime {
         if let Some(hook) = hook {
             hook();
         }
+    }
+
+    /// Shorten the owner settlement budget in deterministic boundary fixtures.
+    #[cfg(feature = "test-support")]
+    pub fn with_claim_known_red_budget(mut self, budget: std::time::Duration) -> Self {
+        self.claim_known_red_budget = budget;
+        self
     }
 
     /// Outcome of the workspace-layout pre-flight that ran when this runtime

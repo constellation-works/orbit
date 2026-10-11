@@ -235,8 +235,9 @@ impl crate::OrbitRuntime {
                 )
             }
             ClaimMutation::AcceptHandoff(handoff) => {
+                let deadline = std::time::Instant::now() + self.claim_known_red_budget;
                 let mut observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
-                observation.known_red = self.observe_known_red(&handoff, &observation)?;
+                observation.known_red = self.observe_known_red(&handoff, &observation, deadline)?;
                 self.accept_task_handoff(
                     &context,
                     &handoff_mutation_id(&claim.claim_id),
@@ -411,6 +412,7 @@ impl crate::OrbitRuntime {
         &self,
         handoff: &TaskHandoff,
         observation: &HandoffObservation,
+        deadline: std::time::Instant,
     ) -> Result<Vec<KnownRedObservation>, OrbitError> {
         let base_sha = &observation.candidate.base.commit;
         let reported = handoff
@@ -454,6 +456,7 @@ impl crate::OrbitRuntime {
                             exit_code,
                             failures: &report.failures,
                         },
+                        deadline,
                     )
                 };
                 KnownRedObservation {
