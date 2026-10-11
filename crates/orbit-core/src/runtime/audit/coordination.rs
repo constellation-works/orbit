@@ -24,6 +24,7 @@ pub(crate) struct CoordinationAuditEvent<'a> {
     pub(crate) target_type: &'a str,
     pub(crate) target_id: Option<&'a str>,
     pub(crate) task_id: Option<&'a str>,
+    pub(crate) workspace_id: Option<&'a str>,
     pub(crate) status: AuditEventStatus,
     pub(crate) payload: Value,
 }
@@ -39,6 +40,7 @@ pub(crate) fn record_coordination_audit_event(
         target_type,
         target_id,
         task_id,
+        workspace_id,
         status,
         payload,
     } = event;
@@ -72,7 +74,7 @@ pub(crate) fn record_coordination_audit_event(
         host: std::env::var("HOSTNAME").ok(),
         pid: std::process::id(),
         session_id: None,
-        workspace_id: None,
+        workspace_id: workspace_id.map(ToOwned::to_owned),
         caller_machine_id: None,
         caller_machine_name: None,
         process_machine_id: None,
