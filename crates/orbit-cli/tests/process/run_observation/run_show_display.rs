@@ -70,6 +70,11 @@ fn shown(fixture: &Fixture, extra: &[&str]) -> String {
 
 #[test]
 fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_prints_human_durations_and_one_based_steps_in_every_human_mode",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
     // Piped output (`auto`) renders the plain form of the table.
@@ -95,6 +100,11 @@ fn run_show_prints_human_durations_and_one_based_steps_in_every_human_mode() {
 
 #[test]
 fn run_show_hides_shipped_catalog_layers_unless_verbose() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_hides_shipped_catalog_layers_unless_verbose",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
     let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
@@ -116,6 +126,11 @@ fn run_show_hides_shipped_catalog_layers_unless_verbose() {
 
 #[test]
 fn run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_lists_audit_steps_for_an_interrupted_run_with_only_a_run_level_record",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     seed_interrupted_run(&fixture);
 

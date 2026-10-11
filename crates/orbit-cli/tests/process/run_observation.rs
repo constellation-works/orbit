@@ -70,6 +70,10 @@ impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
     }
 }
 
+/// Re-executes `test` alone in a child with inherited authority cleared and a
+/// private `HOME`, so a body's in-process runtime and any process-wide worker
+/// substitute never reach the parallel parent. Returns `true` inside the child,
+/// where the body runs; the parent gets `false` once the child has passed.
 fn isolated_run_observation(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -547,6 +551,11 @@ fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
 
 #[test]
 fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
+    if !isolated_run_observation(
+        "run_observation::job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     let jobs = fixture.home.join(".orbit/resources/jobs");
     fs::create_dir_all(&jobs).unwrap();
@@ -716,6 +725,9 @@ fn default_run_reads_still_reconcile_stale_runs() {
 /// Legacy `orbit logs` follows the same rule.
 #[test]
 fn explicit_run_lookup_preserves_store_errors() {
+    if !isolated_run_observation("run_observation::explicit_run_lookup_preserves_store_errors") {
+        return;
+    }
     const MISSING: &str = "jrun-20260920-9999";
     let fixture = Fixture::init();
     fixture
@@ -811,6 +823,11 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
 /// candidate in place; `--block` retains the previous blocked transition.
 #[test]
 fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
+    if !isolated_run_observation(
+        "run_observation::cancel_task_leaf_requeues_by_default_and_block_is_explicit",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     let candidate = fixture.work.join("src").join("candidate.rs");
     fs::create_dir_all(candidate.parent().unwrap()).unwrap();
@@ -997,6 +1014,11 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
+    if !isolated_run_observation(
+        "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
+    ) {
+        return;
+    }
     use orbit_common::process::identity::{
         STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
     };
@@ -1465,6 +1487,11 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
 /// to cancellation or any process-control command.
 #[test]
 fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
+    if !isolated_run_observation(
+        "run_observation::run_concurrency_updates_persisted_revision_and_refuses_stale_writes",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -1553,6 +1580,11 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
 /// fixture's live test PID keeps orphan reconciliation away from the run.
 #[test]
 fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
+    if !isolated_run_observation(
+        "run_observation::run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
     let runtime = orbit_core::OrbitRuntime::from_roots(
@@ -1670,6 +1702,11 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
 /// detached worker is substituted, so nothing beyond admission executes.
 #[test]
 fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
+    if !isolated_run_observation(
+        "run_observation::a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
     let runtime = orbit_core::OrbitRuntime::from_roots(
@@ -1703,6 +1740,11 @@ fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
 /// is not a drain.
 #[test]
 fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
+    if !isolated_run_observation(
+        "run_observation::run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -1750,6 +1792,11 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
 /// threshold and since-when, and ship discovery stands down.
 #[test]
 fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
+    if !isolated_run_observation(
+        "run_observation::a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship",
+    ) {
+        return;
+    }
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -1920,31 +1967,12 @@ fn run_show_counts_local_deferred_tasks_once() {
 /// and, once several passes in a row claimed nothing, one line saying why.
 #[test]
 fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
-    const CHILD: &str = "ORBIT_TEST_PULL_WAITING_CHILD";
-    const TEST: &str =
-        "run_observation::run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host";
-    use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let home = tempfile::tempdir().unwrap();
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .current_dir(home.path());
-        let output = orbit_common::process::run_bounded_capped(
-            &mut command,
-            std::time::Duration::from_secs(30),
-            64 * 1024,
-        )
-        .unwrap();
-        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+    if !isolated_run_observation(
+        "run_observation::run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host",
+    ) {
         return;
     }
+    use orbit_types::workflow::{DrainAdmissionPass, DrainWaitingTask};
     let fixture = Fixture::init();
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
@@ -2086,27 +2114,9 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
 /// block counts every deferred task and says how many the list left out.
 #[test]
 fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
-    const CHILD: &str = "ORBIT_TEST_PULL_DEFERRED_OVERFLOW_CHILD";
-    const TEST: &str = "run_observation::run_show_reports_deferred_tasks_beyond_the_listed_ones";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let home = tempfile::tempdir().unwrap();
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .current_dir(home.path());
-        let output = orbit_common::process::run_bounded_capped(
-            &mut command,
-            std::time::Duration::from_secs(30),
-            64 * 1024,
-        )
-        .unwrap();
-        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+    if !isolated_run_observation(
+        "run_observation::run_show_reports_deferred_tasks_beyond_the_listed_ones",
+    ) {
         return;
     }
     let fixture = Fixture::init();
@@ -2178,27 +2188,7 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
 /// and JSON, independently of successful coordinator step outputs.
 #[test]
 fn run_show_exposes_degraded_pull_pass_health() {
-    const CHILD: &str = "ORBIT_TEST_PULL_PASS_HEALTH_CHILD";
-    const TEST: &str = "run_observation::run_show_exposes_degraded_pull_pass_health";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let home = tempfile::tempdir().unwrap();
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .current_dir(home.path());
-        let output = orbit_common::process::run_bounded_capped(
-            &mut command,
-            std::time::Duration::from_secs(30),
-            64 * 1024,
-        )
-        .unwrap();
-        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+    if !isolated_run_observation("run_observation::run_show_exposes_degraded_pull_pass_health") {
         return;
     }
     let fixture = Fixture::init();
@@ -2309,32 +2299,9 @@ mod agent_invoke;
 /// exits unsuccessfully in both JSON and terminal modes.
 #[test]
 fn force_cancel_reports_unstopped_local_children_and_exits_one() {
-    const MARKER: &str = "ORBIT_TEST_LOCAL_CANCEL_CHILD";
-    if std::env::var_os(MARKER).is_none() {
-        let home = tempfile::tempdir().unwrap();
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|key| {
-            command.env_remove(key);
-        });
-        let output = command
-            .args([
-                "--exact",
-                "run_observation::force_cancel_reports_unstopped_local_children_and_exits_one",
-                "--nocapture",
-            ])
-            .env(MARKER, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .current_dir(home.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    if !isolated_run_observation(
+        "run_observation::force_cancel_reports_unstopped_local_children_and_exits_one",
+    ) {
         return;
     }
     for as_json in [true, false] {
@@ -2413,28 +2380,9 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
 /// pass rather than a seeded record.
 #[test]
 fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
-    const CHILD: &str = "ORBIT_TEST_SURFACE_RESERVATION_CHILD";
-    const TEST: &str =
-        "run_observation::a_surface_reservation_reaches_readiness_and_drain_run_show";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let home = tempfile::tempdir().unwrap();
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .current_dir(home.path());
-        let output = orbit_common::process::run_bounded_capped(
-            &mut command,
-            std::time::Duration::from_secs(60),
-            64 * 1024,
-        )
-        .unwrap();
-        test_env::assert_child_test_passed(TEST, output.status, output.stdout, output.stderr);
+    if !isolated_run_observation(
+        "run_observation::a_surface_reservation_reaches_readiness_and_drain_run_show",
+    ) {
         return;
     }
     use orbit_core::application::task::TaskAddParams;
@@ -2551,6 +2499,11 @@ fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
 #[cfg(target_os = "linux")]
 #[test]
 fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
+    if !isolated_run_observation(
+        "run_observation::run_show_marks_an_agent_blocked_on_a_stopped_descendant",
+    ) {
+        return;
+    }
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
