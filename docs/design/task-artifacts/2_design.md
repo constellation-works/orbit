@@ -283,9 +283,9 @@ For example:
 ORB-00000
 ```
 
-`<prefix>` is 2 to 5 uppercase ASCII letters excluding reserved artifact namespaces (`ADR`, `L`, and `F`). `ORB` is the canonical example and historical single-machine default prefix. Under the shipped multi-host model, each host configures its own distinct task prefix (e.g. `ORB`, `DANI`, `SHR`) in `[machine].task_prefix` in `~/.orbit/config.toml`, projected into the local allocator before any runtime opens.
+`<prefix>` is 2 to 5 uppercase ASCII letters excluding reserved artifact namespaces (`ADR`, `L`, and `F`). `ORB` is the canonical example and historical single-machine default prefix; it remains valid for migrated machines but is reserved for new machine identities. Under the shipped multi-host model, each new host configures its own distinct task prefix (e.g. `DANI`, `SHR`) in `[machine].task_prefix` in `~/.orbit/config.toml`, projected into the local allocator before any runtime opens.
 
-The suffix is decimal, zero-padded to at least five digits for formatting (for example, `ORB-00000` through `ORB-99999` or `DANI-00001`). Five digits is a formatting minimum width; parsers accept wider decimal suffixes and the numeric value is bounded by `u32::MAX`. The string is the task identity inside one allocation authority. Consumers may parse the numeric suffix only for validation and ordering.
+The suffix is a non-empty sequence of ASCII decimal digits. Minted IDs are zero-padded to at least five digits (for example, `ORB-00000` through `ORB-99999` or `DANI-00001`). Five digits is a formatting minimum width: ID validation accepts shorter and wider suffixes without a numeric upper bound, while numeric parsing and allocation are bounded by `u32::MAX`. The string is the task identity inside one allocation authority. Consumers may parse the numeric suffix only for validation and ordering.
 
 The local OSS authority is one `~/.orbit/tasks/index.sqlite` allocator shared across all local workspaces, minting under the host's configured prefix. Two hosts with distinct prefixes (such as `ORB-` and `DANI-`) cannot collide regardless of counter values, establishing disjoint per-host ID namespaces. Cross-registry references carry the owner's prefix; tasks and relations referencing foreign host prefixes remain valid and portable across registries.
 
