@@ -19,7 +19,7 @@ use super::super::baseline::{
 };
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::git::normalize_base_branch;
-use super::super::required_command::RequiredCommandRun;
+use super::super::required_command::{RequiredCommandRun, bounded_validation_text};
 use super::input::{refused, required_workspace};
 use super::no_diff;
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
@@ -182,20 +182,12 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
         let run = run_validation_command(host, workspace_path, command, None)?;
         validation_env = run.environment_record();
         let commit = &candidate.candidate.commit;
-        if let Some(failure) = run.coverage_failure(commit, replays.contains(&run.command)) {
-            return Err(failure);
-        }
-        let known_red = if run.passed {
+        let replay = replays.contains(&run.command);
+        let known_red = if run.passed && run.coverage_failure(commit, replay).is_none() {
             None
         } else {
             Some(claim_failure(
-                host,
-                context,
-                workspace_path,
-                input,
-                candidate,
-                index,
-                &run,
+                host, context, input, candidate, index, &run, replay,
             )?)
         };
         require_clean_candidate(workspace_path, candidate)?;
@@ -408,31 +400,35 @@ fn decision(known_red: &[KnownRedValidation]) -> &'static str {
 fn claim_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
-    workspace_path: &Path,
     input: &Value,
     candidate: &HandoffCandidate,
     index: usize,
     run: &RequiredCommandRun,
+    replay: bool,
 ) -> Result<HandoffKnownRed, OrbitError> {
     let commit = &candidate.candidate.commit;
-    if run.missing_tool.is_some() || run.infrastructure_failure.is_some() {
-        return Err(run.failure(commit));
-    }
-    let check = compare_with_base(
-        host,
-        workspace_path,
-        &candidate.base.commit,
-        &run.command,
-        run.selection(),
-    );
-    if let Some(failures) = check.known_red(run) {
+    let workspace_path = required_workspace(input)?;
+    let check = (!run.passed && run.missing_tool.is_none() && run.infrastructure_failure.is_none())
+        .then(|| {
+            compare_with_base(
+                host,
+                &workspace_path,
+                &candidate.base.commit,
+                &run.command,
+                run.selection(),
+            )
+        });
+    let coverage_failure = run.coverage_failure(commit, replay);
+    if let Some(check) = check.as_ref().filter(|_| coverage_failure.is_none())
+        && let Some(failures) = check.known_red(run)
+    {
         return Ok(HandoffKnownRed {
             base_sha: check.base_sha.clone(),
             selection: run.selection().cloned(),
             failures: failures.clone(),
         });
     }
-    let red = check.reproduces(run);
+    let red = check.as_ref().is_some_and(|check| check.reproduces(run));
     let log_path = format!("validation/{}/{index}.failed.json", context.claim_id);
     let base_path = format!("validation/{}/{index}.baseline.json", context.claim_id);
     let log = json!({
@@ -456,7 +452,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         "validation_env": run.environment_record(),
         "failure_kind": if red {
             json!("baseline_red")
-        } else if check.infrastructure_failure().is_some() {
+        } else if check.as_ref().is_some_and(|check| check.infrastructure_failure().is_some()) {
             json!("environment")
         } else if run.network_evidence.is_some() {
             json!("transient")
@@ -465,11 +461,15 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         },
         "network_retries": run.network_retries,
         "summary": run.summary,
-        "baseline": check.record(Some(&base_path)),
+        "baseline": check.as_ref().map(|check| check.record(Some(&base_path))),
     });
     // The logs are evidence for whoever reads the owner's task; failing to
     // deliver them must not hide the typed failure itself.
-    for (path, content) in [(&log_path, log), (&base_path, check.log(&context.run_id))] {
+    let mut logs = vec![(&log_path, log)];
+    if let Some(check) = &check {
+        logs.push((&base_path, check.log(&context.run_id)));
+    }
+    for (path, content) in logs {
         if let Err(error) = serde_json::to_vec(&content)
             .map_err(|error| OrbitError::Execution(error.to_string()))
             .and_then(|bytes| host.attach_claim_validation_log(path, bytes))
@@ -480,8 +480,22 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
             );
         }
     }
-    let evidence = format!("Candidate log: `{log_path}`; base log: `{base_path}`.");
-    if red {
+    let evidence = format!(
+        "Candidate log: `{log_path}`; base log: {}.",
+        check
+            .as_ref()
+            .map_or_else(|| "not run".to_string(), |_| format!("`{base_path}`"))
+    );
+    let verdict = check
+        .as_ref()
+        .map_or("not checked", |check| check.decision());
+    if let Some(failure) = run.coverage_failure_with_evidence(commit, replay, verdict, &evidence) {
+        return Err(failure);
+    }
+    if run.missing_tool.is_some() || run.infrastructure_failure.is_some() {
+        return Err(run.failure(commit, verdict, &evidence));
+    }
+    if let Some(check) = check.as_ref().filter(|_| red) {
         let hold = BaselineRedHold {
             base_ref: claimed_base_ref(context, input),
             base_sha: check.base_sha.clone(),
@@ -496,13 +510,14 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
     // nothing about the candidate [ORB-14257].
     if let Some(network) = &run.network_evidence {
         return Err(OrbitError::Execution(format!(
-            "{TRANSIENT_FAILURE_MARKER} required validation '{}' could not reach the network on \
-             candidate {commit} after {} retries ({network}); the candidate was not judged. \
-             {evidence}",
-            run.command, run.network_retries
+            "{TRANSIENT_FAILURE_MARKER} {} Could not reach the network after {} retries ({}); \
+             the candidate was not judged.",
+            run.failure_summary(commit, verdict, &evidence),
+            run.network_retries,
+            bounded_validation_text(network, 1024)
         )));
     }
-    Err(candidate_failure(run, commit, Some(&check), &evidence))
+    Err(candidate_failure(run, commit, check.as_ref(), &evidence))
 }
 
 /// The base ref this claim synchronized onto, as the owner names it.

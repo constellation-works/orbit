@@ -19,9 +19,9 @@ use orbit_core::application::job::{fold_run_incidents, job_run_to_json};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::JobRunStoreBackend;
+use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, PipelineState,
+    BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, JobTargetType, PipelineState,
     REVIEW_LANDING_DECISION_PENDING, RunRootCause,
 };
 use serde_json::{Value, json};
@@ -125,6 +125,36 @@ impl Fixture {
 
     fn state(&self, run_id: &str) -> PipelineState {
         self.jobs.read_run_state(run_id).unwrap().unwrap()
+    }
+
+    /// Seed the durable boundary as a failed validation step would record it.
+    fn failed_leaf(&self, task: &str, code: Option<&str>, message: &str) -> JobRun {
+        let run_id = self.queued(json!({"task_ids": [task]}));
+        self.jobs
+            .mark_job_run_running(&run_id, Utc::now(), std::process::id())
+            .unwrap();
+        self.jobs
+            .complete_job_run_step(
+                &run_id,
+                &JobRunStepParams {
+                    step_index: 0,
+                    target_type: JobTargetType::Activity,
+                    target_id: "validate".to_string(),
+                    started_at: Utc::now(),
+                    finished_at: Utc::now(),
+                    duration_ms: Some(1),
+                    exit_code: Some(3),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: code.map(str::to_string),
+                    error_message: Some(message.to_string()),
+                },
+            )
+            .unwrap();
+        self.jobs
+            .finalize_job_run(&run_id, JobRunState::Failed, Utc::now(), Some(1))
+            .unwrap();
+        self.stored(&run_id)
     }
 
     /// An admissible backlog task.
@@ -300,16 +330,20 @@ fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {
     }
     let fixture = Fixture::new();
     let task = "ORB-90001";
-    let leaf = fixture.guard(
-        Some(task),
-        json!([{ "status": "failed", "error": "[validation_failed] cargo test failed" }]),
+    let leaf = fixture.failed_leaf(
+        task,
+        Some("validation_failed"),
+        &format!(
+            "foo_bar: passing stdout\n{}",
+            "large log body\n".repeat(20000)
+        ),
     );
     assert_eq!(leaf.state, JobRunState::Failed, "{:?}", leaf.steps);
     assert_eq!(fixture.state(&leaf.run_id).root_cause, None);
     let expected = RunRootCause {
         leaf_run_id: leaf.run_id.clone(),
         task_id: Some(task.to_string()),
-        step: Some("require_child_success".to_string()),
+        step: Some("validate".to_string()),
         code: Some("validation_failed".to_string()),
     };
 
@@ -323,6 +357,15 @@ fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {
         Some(&expected)
     );
 
+    let gate_text = failure_text(&gate);
+    assert!(gate_text.len() <= 16 * 1024);
+    assert!(!gate_text.contains("foo_bar:") && !gate_text.contains("large log body"));
+    for identity in [&leaf.run_id, task, "validate", "validation_failed"] {
+        assert!(
+            gate_text.contains(identity),
+            "leaf identity absent: {gate_text}"
+        );
+    }
     let auto = fixture.guard(
         None,
         json!([{ "status": "failed", "run_id": gate.run_id, "error": failure_text(&gate) }]),
@@ -356,4 +399,47 @@ fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {
         incidents[0].cascaded_run_ids,
         vec![auto.run_id.clone(), gate.run_id.clone()]
     );
+}
+
+#[test]
+fn failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output() {
+    if !isolated(
+        "cascade_outcomes::failure_codes_use_recorded_codes_or_terminal_state_without_scraping_output",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    for (code, expected) in [
+        (Some("validation_environment"), "validation_environment"),
+        (None, "failed"),
+    ] {
+        let leaf = fixture.failed_leaf(
+            "ORB-90001",
+            code,
+            "foo_bar: passing output [invented_code] [baseline_red] [provider_transient] Candidate log: `validation/observed/0.json`; base log: `validation/observed/0.baseline.json`.",
+        );
+        let gate = fixture.guard(
+            None,
+            json!([{"status": "failed", "run_id": leaf.run_id, "error": failure_text(&leaf)}]),
+        );
+        let leaf_projection = job_run_to_json(&leaf, Some(&fixture.state(&leaf.run_id)));
+        let message = leaf_projection["error_message"].as_str().unwrap();
+        for path in [
+            "validation/observed/0.json",
+            "validation/observed/0.baseline.json",
+        ] {
+            assert!(
+                message.contains(path),
+                "run show retains log reference {path}"
+            );
+        }
+        let state = fixture.state(&gate.run_id);
+        assert_eq!(
+            state.root_cause.as_ref().unwrap().code.as_deref(),
+            Some(expected)
+        );
+        let projected = job_run_to_json(&gate, Some(&state));
+        assert_eq!(projected["root_cause"]["code"], expected);
+        assert!(!failure_text(&gate).contains("foo_bar:"));
+    }
 }

@@ -446,7 +446,9 @@ fn incident_messages_are_bounded_and_the_full_text_loads_by_audit_row() {
         "audit::incident_messages_are_bounded_and_the_full_text_loads_by_audit_row",
         || {
             let fixture = Fixture::new();
-            let root = long_failure_message("validation failed");
+            let root = long_failure_message(
+                "validation failed. Candidate log: `validation/observed/0.json`; base log: `validation/observed/0.baseline.json`.",
+            );
             let child = long_failure_message("child run failed");
             // Three sightings of one failure, then another surface in the same
             // run: the incidents, each event and each sample repeat a long
@@ -508,6 +510,15 @@ fn incident_messages_are_bounded_and_the_full_text_loads_by_audit_row() {
             assert_eq!(full["id"], id);
             let full = full["message"].as_str().unwrap();
             assert!(full.ends_with("tail-marker"), "the whole message loads");
+            for path in [
+                "validation/observed/0.json",
+                "validation/observed/0.baseline.json",
+            ] {
+                assert!(
+                    full.contains(path),
+                    "Incidents retains validation evidence {path}"
+                );
+            }
             assert!(!full.contains("ghp_"), "the full text is redacted too");
             assert!(full.starts_with(incident["message"].as_str().unwrap()));
 

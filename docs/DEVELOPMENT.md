@@ -58,6 +58,24 @@ required_validation_commands = ["make ci-fast", "make ci-test-affected"]
 
 Candidate validation and before-PR review then require a passing affected-test record. Distributed review contracts freeze the owner's list at admission, so existing claims need a fresh admission after a change.
 
+### Validation failure diagnostics
+
+Required-command failure messages are limited to 16 KiB and name the command,
+exit code, failing tests, base verdict and candidate/base log artifact paths.
+Captured output stays in the task's `validation/<run>/<index>.json` and
+`<index>.baseline.json` artifacts (claimed runs use their claim namespace).
+`orbit run show --json` and Incidents retain these references in the leaf's
+message; follow a parent's recorded `root_cause` to that leaf. Read the logs
+with `orbit.task.artifact.get` using the owning task and artifact path. Recovery
+uses those same artifacts before choosing a repair.
+
+Parent gates echo only the leaf run, task, step and code. Incident codes use
+recorded error codes, falling back to the typed terminal run state; command
+stdout and diagnostic prose never supply a code. A red-base message retains
+its exact persisted hold for admission. If that metadata itself exceeds the
+message budget, validation refuses it rather than truncating a command or
+selection needed for a safe replay; the artifacts retain the evidence.
+
 ### Validation summary and base reruns
 
 When a required command fails, Orbit reruns it on the base to tell a red base from a candidate failure ([decision rules](CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)). A command that selects tests from the diff would test nothing on the base, so the runner passes two variables, both implemented by `scripts/ci-test-affected.py`:

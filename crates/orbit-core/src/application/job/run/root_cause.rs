@@ -9,10 +9,7 @@
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{
-    BASELINE_RED_ERROR_CODE, JobRun, JobRunState, JobTargetType, PipelineState,
-    ProviderFailureClass, RunRootCause, is_baseline_red_failure,
-};
+use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState, RunRootCause};
 
 use crate::OrbitRuntime;
 
@@ -73,37 +70,13 @@ pub fn fold_run_incidents(runs: &[JobRun], states: &[Option<&PipelineState>]) ->
     incidents
 }
 
-/// The typed failure code a diagnostic leads with: its recorded code, a red
-/// base or provider class, else the first bracketed `[snake_case]` marker or
-/// leading `snake_case:` token in its text.
-fn failure_code(error_code: Option<&str>, message: Option<&str>) -> Option<String> {
+/// Use the recorded code or typed terminal outcome. Diagnostic prose and
+/// captured command output cannot supply a classification.
+fn failure_code(error_code: Option<&str>, state: JobRunState) -> Option<String> {
     if let Some(code) = error_code.filter(|code| !code.trim().is_empty()) {
         return Some(code.to_string());
     }
-    let message = message?;
-    if is_baseline_red_failure(None, Some(message)) {
-        return Some(BASELINE_RED_ERROR_CODE.to_string());
-    }
-    if let Some(class) = ProviderFailureClass::of(None, Some(message)) {
-        return Some(class.as_str().to_string());
-    }
-    let snake = |word: &str| {
-        word.contains('_')
-            && word
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    };
-    let bracketed = message.split('[').skip(1).find_map(|rest| {
-        let (marker, _) = rest.split_once(']')?;
-        snake(marker).then(|| marker.to_string())
-    });
-    bracketed.or_else(|| {
-        message
-            .split_whitespace()
-            .filter_map(|word| word.strip_suffix(':'))
-            .find(|word| snake(word))
-            .map(str::to_string)
-    })
+    (state.is_terminal() && state != JobRunState::Success).then(|| state.to_string())
 }
 
 impl OrbitRuntime {
@@ -119,9 +92,7 @@ impl OrbitRuntime {
             return Ok(Some(cause));
         }
         let error_step = run_error_step(&run);
-        let (error_code, message) = error_step
-            .map(|step| (step.error_code.as_deref(), step.error_message.as_deref()))
-            .unwrap_or((None, None));
+        let error_code = error_step.and_then(|step| step.error_code.as_deref());
         // The failure handoff names the step that failed; otherwise the audit
         // trail does, and a stored per-activity step is the last resort. A
         // job-level diagnostic step names the job, not a step.
@@ -159,7 +130,7 @@ impl OrbitRuntime {
             leaf_run_id: run.run_id.clone(),
             task_id: job_run_task_ids(&run).into_iter().next(),
             step,
-            code: failure_code(error_code, message),
+            code: failure_code(error_code, run.state),
         }))
     }
 

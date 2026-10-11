@@ -71,8 +71,8 @@ use crate::context::RuntimeHost;
 
 use super::git::{fetch_remote_base, git_output, git_run};
 use super::required_command::{
-    RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS, ValidationSummary,
-    run_required_command,
+    MAX_VALIDATION_MESSAGE_BYTES, RequiredCommandRun, VALIDATION_PATH_LINE, VALIDATION_TIMEOUT_MS,
+    ValidationSummary, bounded_validation_text, run_required_command,
 };
 use super::worktree::scratch_checkout_path;
 
@@ -844,18 +844,22 @@ pub(super) fn baseline_red_failure(
     } else {
         format!("`{}`", hold.base_ref)
     };
-    OrbitError::Execution(hold.text(&format!(
-        "required validation '{}' fails on base {} exactly as on candidate {candidate} (exit \
-         {}{}{}). The candidate did not introduce the failure, so no repair runs: the candidate \
-         is kept and the task is held until {base_ref} moves to a base where the command passes. \
-         {logs}\n{}",
-        run.command,
+    let summary = run.failure_summary(candidate, "failed identically", logs);
+    let message = hold.text(&format!(
+        "{summary} The command fails on base {} exactly as on the candidate{}. \
+         The candidate did not introduce the failure, so no repair runs: the candidate \
+         is kept and the task is held until {base_ref} moves to a base where the command passes.",
         hold.base_sha,
-        run.exit_code,
-        if run.timed_out { ", timed out" } else { "" },
         hold.failures_clause(),
-        run.output
-    )))
+    ));
+    if message.len() > MAX_VALIDATION_MESSAGE_BYTES - 64 {
+        // Never truncate the persisted hold JSON: admission needs its exact
+        // command and selection to replay it. Refuse oversized metadata safely.
+        return OrbitError::PolicyDenied(format!(
+            "{summary} The base hold metadata exceeds the diagnostic limit; inspect the logs."
+        ));
+    }
+    OrbitError::Execution(message)
 }
 
 /// A candidate failure the base does not share, with the base's result.
@@ -867,12 +871,11 @@ pub(super) fn candidate_failure(
 ) -> OrbitError {
     if let Some(reason) = check.and_then(BaselineCheck::infrastructure_failure) {
         return OrbitError::Execution(format!(
-            "{reason}. Candidate {candidate} could not be compared with its base. {logs}"
+            "{VALIDATION_ENVIRONMENT_MARKER} {} {}",
+            run.failure_summary(candidate, "inconclusive: base infrastructure stopped", logs),
+            bounded_validation_text(reason, 2048),
         ));
     }
-    let OrbitError::Execution(message) = run.failure(candidate) else {
-        return run.failure(candidate);
-    };
     let baseline = match check {
         None => "The base was not checked: the step names no synchronized base.".to_string(),
         Some(check) => match (&check.result, &check.not_comparable) {
@@ -899,7 +902,7 @@ pub(super) fn candidate_failure(
             ),
         },
     };
-    OrbitError::Execution(format!("{message}\n\n{baseline} {logs}"))
+    run.failure(candidate, &baseline, logs)
 }
 
 /// Whether a held task's base has moved to a commit where its command may

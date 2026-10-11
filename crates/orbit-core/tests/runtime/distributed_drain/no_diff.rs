@@ -1274,14 +1274,6 @@ impl CleanLeaf {
             .collect()
     }
 
-    /// Whether the owner holds any attached validation log, passing or not.
-    fn owner_holds_validation_logs(&self) -> bool {
-        RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task)
-            .unwrap()
-            .iter()
-            .any(|artifact| artifact.path.starts_with("validation/"))
-    }
-
     /// Run a shipped clean pipeline that must refuse, and return the refusal.
     fn refused_pipeline(&self, name: &str) -> String {
         let refusal = match self.execute_clean_pipeline(name) {
@@ -1295,9 +1287,29 @@ impl CleanLeaf {
             self.pair.admission(&self.leaf).settlement.is_none(),
             "a refused leaf records no handoff"
         );
+        let artifacts = RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
+        let logs = artifacts
+            .iter()
+            .filter(|artifact| artifact.path.starts_with("validation/"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            logs.len(),
+            1,
+            "the refused command retains its diagnostic log"
+        );
         assert!(
-            !self.owner_holds_validation_logs(),
-            "a refused leaf attaches no validation log"
+            logs[0].path.ends_with(".failed.json"),
+            "no passing handoff log: {}",
+            logs[0].path
+        );
+        let log: Value = serde_json::from_slice(&logs[0].content).unwrap();
+        assert_eq!(
+            log["exit_code"], 0,
+            "the zero-exit replay still lacks executed coverage"
+        );
+        assert!(
+            refusal.contains(&logs[0].path),
+            "the refusal points to its evidence"
         );
         self.assert_no_blocked();
         refusal

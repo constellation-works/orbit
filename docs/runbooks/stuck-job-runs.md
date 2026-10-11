@@ -190,7 +190,10 @@ step detail. The compact child-dispatch lines can still shorten wrapper errors.
 A gate or auto parent that failed only because a child did also records that leaf on itself. Its
 `--json` `root_cause` is `{leaf_run_id, task_id, step, code}`, and a nested parent inherits the
 leaf its child recorded. Its error names that leaf ("echoes leaf run …") rather than repeating the
-leaf's text. A run that failed on its own has `root_cause: null`. So one failed delivery no longer
+leaf's text. Codes come from recorded error codes or the terminal run state,
+never from command output. Required-validation messages contain a bounded
+summary and task artifact paths for the candidate and base logs; read those
+artifacts for the captured output. A run that failed on its own has `root_cause: null`. So one failed delivery no longer
 reads as three failures: `orbit run history --state failed --incidents` shows one row per
 incident, the leaf when it is listed, and the CASCADED column (`--json`: `cascaded_run_ids`)
 counts the parents folded into it. A parent whose waited-on children were all cancelled ends

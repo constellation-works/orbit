@@ -211,10 +211,12 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
     }
     let fixture = Fixture::new();
 
+    // The fixture guard supplies the leaf's own error without a child run
+    // identity; a guard with one would echo that child's typed identity.
     // Held on a red base: the wait entry carries no error, so the reason
     // comes from the child's own hold step.
     let (child, row) = fixture.observe(
-        json!([{"run_id": "jrun-leaf", "status": "failed", "error": baseline_red_text()}]),
+        json!([{"status": "failed", "error": baseline_red_text()}]),
         60,
         execute,
     );
@@ -235,7 +237,7 @@ fn a_child_wait_row_names_the_child_and_why_and_only_failures_are_incidents() {
 
     // A genuine failure keeps the child's error and stays unexpected.
     let (_, row) = fixture.observe(
-        json!([{"run_id": "jrun-leaf", "status": "failed", "error": "cargo test failed"}]),
+        json!([{"status": "failed", "error": "cargo test failed"}]),
         60,
         execute,
     );
