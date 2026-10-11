@@ -15,9 +15,9 @@ use super::super::inspect::{PluginSummary, summary_for_installed};
 use super::enable::{PluginEnableResult, apply_enabled_contributions};
 use super::record::{installed_plugin, verified_install_path};
 
-/// Switch a host-enabled plugin back on in this workspace only: write its
-/// `[plugin_enablement]` toggle and seed this workspace's routines and
-/// auto-tasks.
+/// Switch a host-enabled plugin back on in this workspace only: seed this
+/// workspace's routines and auto-tasks, then write its `[plugin_enablement]`
+/// toggle.
 ///
 /// A toggle only narrows the host state and never grants anything, so a
 /// plugin the host has disabled is refused with a typed error naming the
@@ -38,8 +38,8 @@ pub fn enable_plugin_in_workspace(
     // Load before any write, so a manifest that no longer loads fails closed
     // with the toggle untouched.
     let plugin = load_plugin_dir(&install_path)?;
-    write_workspace_toggle(&workspace_config, &runtime.global_root(), name, true)?;
     let contributions = apply_enabled_contributions(runtime, &install_path, force)?;
+    write_workspace_toggle(&workspace_config, &runtime.global_root(), name, true)?;
     let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
         runtime.global_root(),
     ))?;
