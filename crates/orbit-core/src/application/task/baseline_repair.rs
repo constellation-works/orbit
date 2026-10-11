@@ -3,7 +3,8 @@
 //! A baseline-red hold waits for the base to turn green, and nothing else
 //! files that work. The owner's clock tick, which already reads every
 //! standing hold ([`OrbitRuntime::run_baseline_hold_tick`]), makes sure each
-//! hold's command and failure set has one open repair task in the workspace:
+//! hold that has not lifted has one open repair task for its command and
+//! failure set in the workspace:
 //!
 //! - the first hold for that pair files the task, naming the command, the
 //!   failures, the first red base and the held task;

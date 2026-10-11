@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::{RuntimeHost, baseline_red_hold_update};
+use orbit_engine::{BaselineHoldStatus, RuntimeHost, baseline_red_hold_update};
 use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskRelationType};
 use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold};
 use serde_json::Value;
@@ -18,6 +18,8 @@ use super::review_gate_audit::Fixture;
 /// The check `held_on_red_base` holds for; it prints `suite::broken` failing.
 const CHECK: &str = "sh check.sh";
 const REPAIR_REF_SYSTEM: &str = "baseline-red";
+/// A check that passes on any tree.
+const PASSING: &str = "#!/bin/sh\nexit 0\n";
 
 fn tick(runtime: &OrbitRuntime) -> orbit_core::application::task::BaselineHoldRefresh {
     runtime
@@ -451,4 +453,55 @@ fn persisted_holds_without_a_digest_find_their_existing_repair() {
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(related, [first, second].into_iter().collect());
+}
+
+/// [ORB-15412] A standing hold whose base already has a cached passing
+/// result lifts on the tick without filing a repair for the failure the base
+/// has since resolved.
+#[test]
+fn a_cached_green_base_lifts_a_hold_without_filing_its_repair() {
+    if !super::dispatch_admission::isolated(
+        "baseline_red_repair::a_cached_green_base_lifts_a_hold_without_filing_its_repair",
+    ) {
+        return;
+    }
+    let (fixture, legacy) = held_on_red_base();
+    let hold = BaselineRedHold {
+        base_ref: "main".into(),
+        base_sha: legacy.base_sha.clone(),
+        command: CHECK.into(),
+        run_id: "jrun-green-1".into(),
+        selection: None,
+        failures: failing(&["suite::broken"]),
+    };
+    let held = held_task(&fixture, "Held task whose base turns green", &hold);
+
+    // `main` fixes the failure, and the real status path judges the new tip
+    // and records that passing result in the base-result cache.
+    git(&fixture.repo, &["checkout", "--quiet", "main"]);
+    std::fs::write(fixture.repo.join("check.sh"), PASSING).unwrap();
+    git(
+        &fixture.repo,
+        &["commit", "--quiet", "-am", "base fixes the failure"],
+    );
+    git(&fixture.repo, &["checkout", "--quiet", "candidate"]);
+    assert!(
+        matches!(
+            orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+            BaselineHoldStatus::Lifted(_)
+        ),
+        "the passing tip lifts the hold"
+    );
+
+    let refresh = tick(&fixture.runtime);
+    assert!(refresh.lifted.contains(&held), "{refresh:?}");
+    assert!(
+        refresh.repairs_filed.is_empty() && refresh.repairs_linked.is_empty(),
+        "{refresh:?}"
+    );
+    let filed = repairs(&fixture);
+    assert!(
+        filed.is_empty(),
+        "no repair for a resolved failure: {filed:?}"
+    );
 }
