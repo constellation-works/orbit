@@ -4,6 +4,8 @@
 
 #[path = "provider_invocation/audit.rs"]
 mod audit;
+#[path = "provider_invocation/response.rs"]
+mod response;
 mod support;
 
 use std::fs;

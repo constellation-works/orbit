@@ -76,13 +76,13 @@ pub(super) fn run_target(
         }
     }
     let Dispatched {
-        outcome: dispatch,
+        outcome: mut dispatch,
         timed_out,
         ..
     } = dispatched;
     persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatch);
-    record_pipeline(ctx, &step.id, dispatch.output.clone());
     if timed_out {
+        record_pipeline(ctx, &step.id, dispatch.output.clone());
         return Err(DispatchError::DeterministicActionRefused {
             action: step.id.clone(),
             message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
@@ -106,6 +106,34 @@ pub(super) fn run_target(
         message,
         &dispatch.output,
     );
+    // Response envelopes belong to provider invocations. A deterministic
+    // target already returns its structured output directly and can implement
+    // a custom delivery activity without the provider's stdout contract.
+    let (success, message) = if success
+        && matches!(dispatched_spec, ActivityV2Spec::AgentLoop(_))
+        && is_implementer_step(step, t)
+    {
+        match crate::executor::automation::vcs::require_implementer_no_diff_artifacts(
+            ctx.host,
+            &dispatched_input,
+            &dispatch.output,
+        ) {
+            Ok(()) => (success, message),
+            Err(error) => {
+                let diagnostic = format!("response_envelope_error: {error}");
+                if let Some(output) = dispatch.output.as_object_mut() {
+                    output.insert(
+                        "response_envelope_error".to_string(),
+                        Value::String(diagnostic.clone()),
+                    );
+                }
+                (false, Some(diagnostic))
+            }
+        }
+    } else {
+        (success, message)
+    };
+    record_pipeline(ctx, &step.id, dispatch.output.clone());
     Ok(StepOutcome {
         success,
         output: dispatch.output,

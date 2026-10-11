@@ -908,12 +908,23 @@ Every agent invocation is prompted with the response-envelope contract
 (`render_prompt_with_embedded_envelope`), so exiting 0 without one is a protocol
 violation, not a stylistic choice.
 
-Deliberate asymmetry: the completion check is *more* permissive than the content
-parser about stream shape. When the document stream will not parse — a wrapped
-tool writing to the same stdout, a stray warning line — it falls back to scanning
-the raw text for an embedded envelope. Failing a step that genuinely completed,
-over stdout tidiness, would be a worse defect than the one this check exists to
-catch.
+Completion, response parsing and status peeking share bounded envelope discovery.
+When the document stream will not parse — a wrapped tool writing to the same
+stdout, a stray warning line, prose before the final JSON answer — they scan
+the raw answer for a complete JSON envelope. Its structured fields alone supply
+the response result; no field is inferred from surrounding prose. Content
+validation still checks exit alignment and the response result separately from
+the completion frame, and the raw provider capture stays retained.
+
+`agent_implement` keeps the best-effort response default. At the implement step
+boundary, a claimed provider invocation that leaves its pinned base unchanged must return
+a non-empty `no_diff_artifacts` array, unless the authoritative task is terminal
+or tagged `no-diff-expected`. Missing references fail that step with
+`response_envelope_error`, before `git_commit` can run. Owner invocations attach
+their evidence directly to durable task state, and edited or already-committed
+candidates do not need these response fields. The check only requires the
+references; the deterministic commit verifier still imports and validates their
+contents before delivery.
 
 **Failure semantics.** A missing or malformed frame, or a completed frame that
 declares `failed` or `timeout`, fails the step exactly as an opted-in envelope

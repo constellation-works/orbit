@@ -50,45 +50,37 @@ impl<'a> ParsedStdout<'a> {
     }
 
     pub fn peek_response_status(&self) -> Option<String> {
-        let documents = self.json_documents().ok()?;
-        match discover_in_values(
-            documents.iter().rev(),
-            &mut Budget::production(),
-            selected_response,
-        ) {
+        match self.discover(selected_response) {
             Ok(Some(selected)) => Some(selected.status),
             Ok(None) | Err(_) => None,
         }
     }
 
     pub fn peek_declared_response_failure(&self) -> Option<DeclaredResponseFailure> {
-        let documents = self.json_documents().ok()?;
-        discover_in_values(
-            documents.iter().rev(),
-            &mut Budget::production(),
-            selected_response,
-        )
-        .unwrap_or_default()
-        .and_then(|selected| selected.failure)
+        self.discover(selected_response)
+            .unwrap_or_default()
+            .and_then(|selected| selected.failure)
     }
 
-    pub fn response_envelope_protocol_check(&self) -> Result<(), OrbitError> {
+    fn discover<T>(&self, inspect: impl Fn(&Value) -> Option<T>) -> Result<Option<T>, OrbitError> {
         // A provider may interleave non-protocol chatter with its output — a
         // wrapped tool writing to the same stdout, a warning line — which makes
         // the stream unparseable as a whole even though the agent did terminate
         // properly. Fall back to scanning the raw text so this gate tests for
         // the termination signal, not for the tidiness of the stream around it.
-        let envelope = match self.json_documents() {
-            Ok(documents) => discover_in_values(
-                documents.iter().rev(),
-                &mut Budget::production(),
-                deserialize_envelope,
-            )?,
-            Err(_) => {
-                discover_in_string(self.raw, &mut Budget::production(), deserialize_envelope)?
+        // Response parsing and status peeking use this same bounded search:
+        // only a complete JSON object supplies fields, never surrounding prose.
+        match self.json_documents() {
+            Ok(documents) => {
+                discover_in_values(documents.iter().rev(), &mut Budget::production(), inspect)
             }
-        };
-        let envelope = envelope
+            Err(_) => discover_in_string(self.raw, &mut Budget::production(), inspect),
+        }
+    }
+
+    pub fn response_envelope_protocol_check(&self) -> Result<(), OrbitError> {
+        let envelope = self
+            .discover(deserialize_envelope)?
             .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(self)))?;
         if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
             return Err(OrbitError::AgentProtocolViolation(format!(
@@ -134,8 +126,8 @@ pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
 /// Orbit response envelope.
 ///
 /// This is the step-completion protocol signal ([ADR-0258] / [ORB-10449]), not a
-/// judgement about the work: it reads only the envelope frame — that stdout
-/// parsed as JSON, that a recognizable envelope is present, that its
+/// judgement about the work: it reads only the envelope frame — that a
+/// recognizable complete JSON envelope is present in stdout, that its
 /// `schemaVersion` is supported, and that its `status` is one of the three
 /// protocol tokens. It never reads `result` or `error`, and it does not care
 /// *which* status was declared. An agent that reports `status: "failed"`
@@ -226,14 +218,10 @@ fn parse_json_envelope(
     exec_result: &ExecutionResult,
     parsed: &ParsedStdout<'_>,
 ) -> ResponseParseResult {
-    let documents = parsed.json_documents()?;
-    let envelope = discover_in_values(
-        documents.iter().rev(),
-        &mut Budget::production(),
-        deserialize_envelope,
-    )?
-    .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(parsed)))?;
-    let trace = extract_invocation_trace(documents, exec_result.duration_ms);
+    let envelope = parsed
+        .discover(deserialize_envelope)?
+        .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(parsed)))?;
+    let trace = synthesize_trace_from_parsed(exec_result, parsed);
 
     if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
         return Err(OrbitError::AgentProtocolViolation(format!(

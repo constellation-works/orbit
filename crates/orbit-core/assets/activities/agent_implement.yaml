@@ -76,6 +76,9 @@ spec:
               type: string
       # Claimed no-diff evidence: the deterministic commit step imports only
       # these bounded scratch files and verifies them before delivery.
+      # On an unchanged claimed base without the no-diff-expected tag, missing
+      # references fail the implement step with response_envelope_error. Other
+      # implementations retain the best-effort response-envelope default.
       no_diff_artifacts:
         type: array
         items:

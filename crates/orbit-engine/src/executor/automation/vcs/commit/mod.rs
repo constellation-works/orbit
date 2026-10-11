@@ -5,6 +5,7 @@ mod checkpoint;
 mod detached;
 mod diagnostics;
 mod git_ops;
+mod implementer;
 mod message;
 mod no_diff;
 mod recovery;
@@ -13,6 +14,7 @@ mod scope;
 mod summary;
 mod tagged_no_diff;
 
+pub(crate) use implementer::require_implementer_no_diff_artifacts;
 pub(super) use scope::attribute_candidate_paths;
 pub use scope::validate_claim_new_paths;
 
