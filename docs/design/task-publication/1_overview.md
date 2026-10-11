@@ -2,7 +2,7 @@
 title: Task Publication — Overview
 owner: codex
 last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_validated: 2026-10-11
 status: Accepted
 feature: task-publication
 doc_role: overview
