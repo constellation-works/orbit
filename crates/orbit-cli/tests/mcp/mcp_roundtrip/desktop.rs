@@ -566,3 +566,172 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
         snap["revision"]
     );
 }
+
+/// The bounded run detail reads a fixed metadata budget however long the
+/// run's audit trail is, yet still counts every log, places early logs in
+/// their step, reports the newest provider child and redacts previews.
+#[test]
+fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
+    const RUN_ID: &str = "jrun-20261011-0000-bd";
+    const INVOCATIONS: usize = 600;
+    let secret = format!("ghp_{}", "E".repeat(36));
+    let workspace = McpWorkspace::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &workspace.home.join(".orbit"),
+        &workspace.work.join(".orbit"),
+    )
+    .expect("fixture runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace identity");
+    let blobs = orbit_common::storage::blob_store::BlobStore::new(
+        runtime.data_root().join("state/audit/blobs"),
+    );
+    let long_stdout = blobs
+        .write(format!("token {secret}\n{}\n", "x".repeat(8192)).as_bytes())
+        .expect("long stdout blob");
+    let short_stdout = blobs.write(b"done\n").expect("short stdout blob");
+
+    // Each invocation is an activity under the `implement` step whose
+    // provider child spawns, samples once and finishes; the newest child is
+    // still open. Only the activity names the step, through its parent.
+    let mut rows = vec![
+        json!({"event_id":"start-prepare","body_kind":"step_started","step_id":"prepare"}),
+        json!({"event_id":"finish-prepare","body_kind":"step_finished","step_id":"prepare","outcome":"success"}),
+        json!({"event_id":"start-implement","body_kind":"step_started","step_id":"implement"}),
+    ];
+    for index in 0..INVOCATIONS {
+        let activity = format!("act-{index}");
+        rows.push(json!({"event_id":activity,"body_kind":"activity_started","parent_event_id":"start-implement"}));
+        rows.push(json!({"event_id":format!("proc-{index}"),"body_kind":"cli_invocation_process","parent_event_id":activity,"provider":"codex","pid":4_000_000 + index}));
+        rows.push(json!({"event_id":format!("sample-{index}"),"body_kind":"cli_invocation_activity","parent_event_id":activity,"provider":"codex","observed_bytes":5,"latest_message":format!("message {index}")}));
+        if index + 1 < INVOCATIONS {
+            let stdout = if index == 0 {
+                &long_stdout
+            } else {
+                &short_stdout
+            };
+            rows.push(json!({"event_id":format!("fin-{index}"),"body_kind":"cli_invocation_finished","parent_event_id":activity,"provider":"codex","exit_code":0,"duration_ms":10,"timed_out":false,"stdout_blob_ref":stdout}));
+        }
+    }
+    let mut connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open fixture store");
+    let transaction = connection.transaction().expect("seed transaction");
+    transaction
+        .execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                 scheduled_at, started_at, finished_at, duration_ms, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'failed', '{}',
+                 '2026-10-11T00:00:00+00:00', '2026-10-11T00:00:00+00:00',
+                 '2026-10-11T02:00:00+00:00', 7200000, '2026-10-11T00:00:00+00:00')",
+            rusqlite::params![RUN_ID, workspace_id],
+        )
+        .expect("seed run");
+    for (second, row) in rows.iter_mut().enumerate() {
+        let ts = format!(
+            "2026-10-11T{:02}:{:02}:{:02}+00:00",
+            second / 3600,
+            second / 60 % 60,
+            second % 60
+        );
+        row["ts"] = json!(ts);
+        row["run_id"] = json!(RUN_ID);
+        transaction
+            .execute(
+                "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                     event_type, ts, run_id, agent_identity, parent_event_id, payload_json)
+                 VALUES (?1, ?2, 'v2_envelope', 1, ?3, ?4, ?5, 'codex', ?6, ?7)",
+                rusqlite::params![
+                    workspace_id,
+                    row["event_id"].as_str(),
+                    row["body_kind"].as_str(),
+                    ts,
+                    RUN_ID,
+                    row["parent_event_id"].as_str(),
+                    row.to_string(),
+                ],
+            )
+            .expect("seed audit row");
+    }
+    transaction.commit().expect("commit seed");
+
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut input = json!({"workspace":"ws_mcp-roundtrip","view":"bounded","id":RUN_ID,"limit":2});
+    let first = client.call_tool_ok("orbit_workflow_run_show", input.clone());
+
+    let metadata = &first["audit_metadata"];
+    let rows_read = metadata["rows_read"].as_u64().expect("rows read");
+    let row_budget = metadata["row_budget"].as_u64().expect("row budget");
+    assert!(
+        rows_read <= row_budget && (row_budget as usize) < rows.len(),
+        "the read stays inside a budget smaller than the history: {metadata}"
+    );
+    assert_eq!(
+        metadata["complete"], false,
+        "a history past the budget is not presented as complete: {metadata}"
+    );
+
+    let logs = &first["logs"];
+    assert_eq!(logs["state"], "observed");
+    assert_eq!(
+        logs["total"],
+        INVOCATIONS - 1,
+        "every finished invocation is counted"
+    );
+    assert_eq!(logs["pagination"]["next_offset"], 2);
+    let items = logs["items"].as_array().expect("log items");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| (
+                item["event_id"].as_str(),
+                item["step_id"].as_str(),
+                item["step_index"].as_u64()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (Some("fin-0"), Some("implement"), Some(1)),
+            (Some("fin-1"), Some("implement"), Some(1)),
+        ],
+        "the oldest logs keep their step through ancestry outside the provider window"
+    );
+    let preview = items[0]["stdout"].as_str().expect("stdout preview");
+    assert!(
+        !preview.contains(&secret) && preview.len() <= 4096,
+        "previews are redacted and bounded: {preview}"
+    );
+    assert_eq!(items[0]["stdout_truncated"], true);
+
+    input["log_offset"] = json!(150);
+    input["limit"] = json!(1);
+    let later = client.call_tool_ok("orbit_workflow_run_show", input);
+    assert_eq!(later["logs"]["items"][0]["event_id"], "fin-150");
+    assert_eq!(later["logs"]["total"], INVOCATIONS - 1);
+
+    let progress = &first["execution_progress"];
+    assert_eq!(progress["state"], "observed");
+    assert_eq!(progress["active_step"]["step_id"], "implement");
+    assert_eq!(progress["active_step"]["step_index"], 1);
+    assert_eq!(
+        progress["provider_processes"]["truncated"], true,
+        "older children may exist outside the window: {progress}"
+    );
+    let children = progress["provider_processes"]["items"]
+        .as_array()
+        .expect("provider children");
+    assert_eq!(children.len(), 8);
+    let newest = children.last().expect("newest child");
+    assert_eq!(newest["event_id"], format!("proc-{}", INVOCATIONS - 1));
+    assert_eq!(newest["finished"], false);
+    assert_eq!(newest["step_index"], 1);
+    assert_eq!(
+        newest["latest_message"],
+        format!("message {}", INVOCATIONS - 1)
+    );
+
+    // The full-history view still answers from its own complete replay.
+    let full = client.call_tool_ok("orbit_workflow_run_show", json!({"id":RUN_ID}));
+    assert_eq!(
+        full["execution_progress"]["provider_processes"]["items"],
+        progress["provider_processes"]["items"],
+        "both views report the same newest children: {full}"
+    );
+}
