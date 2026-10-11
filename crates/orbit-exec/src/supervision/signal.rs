@@ -165,9 +165,9 @@ enum PreviousDisposition {
 }
 
 fn previous_disposition(action: &libc::sigaction) -> PreviousDisposition {
-    if action.sa_flags & libc::SA_SIGINFO != 0 {
-        return PreviousDisposition::Custom;
-    }
+    // Exec can reset a caught handler to SIG_DFL while retaining SA_SIGINFO
+    // on macOS (notably in nextest children). The handler value determines
+    // the disposition; flags only describe how a custom handler is called.
     if action.sa_sigaction == libc::SIG_IGN {
         PreviousDisposition::Ignore
     } else if action.sa_sigaction == libc::SIG_DFL {

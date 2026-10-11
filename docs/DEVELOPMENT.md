@@ -111,6 +111,14 @@ termination status (including the signal number and name on Unix) to captured
 stderr. Timeout, cancellation and output-capture limits remain separate causes;
 an absent exit code alone does not identify a signal.
 
+When Orbit intercepts a parent SIGINT or SIGTERM, it reaps supervised children
+before restoring and forwarding the parent's previous disposition. For
+`SIG_DFL`, it prints the interrupt note before re-raising the signal. Classify
+that disposition by the handler value: macOS can retain `SA_SIGINFO` after exec
+resets a caught handler to `SIG_DFL`, so the flag alone does not identify a
+custom handler. The `signal_fanout` integration test exercises default
+dispositions with and without that flag under either test runner.
+
 Production code never waits on a child without a deadline. Spawn through `orbit_common::process::run_bounded` or `run_bounded_capped`, which put the child in its own process group, kill the group at the deadline and cap captured output. `run_bounded_capped_typed` returns a failed spawn as its `io::Error` for callers that branch on the kind (the `ETXTBSY` retry in `orbit update`, the sandbox probes). `run_bounded_capped_complete_typed` also requires stdout and stderr to reach EOF within the deadline. Update version and admission-contract probes use this mode: a parent that exits while a descendant retains either pipe still times out, and the runner tears down the group and closes both pipes. Unix capture uses nonblocking reads on the supervising thread, so no capture worker survives the probe. The other modes keep their existing behavior of tearing down descendants and accepting the direct child's status as soon as it exits.
 
 The production Clippy pass disallows `std::process::Command::output` and `Command::status`; an exception needs `#[allow(clippy::disallowed_methods, reason = "...")]`. The current exceptions have no natural deadline: the SSH stdio relay in `orbit-mcp` and the interactive or operator-watched `sudo` steps of `orbit init` on Linux. Fixtures may use both.

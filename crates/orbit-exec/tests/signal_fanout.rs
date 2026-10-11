@@ -450,66 +450,86 @@ fn pending_sigterm_interrupts_late_supervisors_without_delaying_forwarding() {
     assert_eq!(fresh.exit_code, Some(0));
 }
 
-const SIGTERM_HELPER_ENV: &str = "ORBIT_EXEC_SIGTERM_HELPER";
-const SIGTERM_MARKER_ENV: &str = "ORBIT_EXEC_SIGTERM_MARKER";
+const SIGNAL_HELPER_ENV: &str = "ORBIT_EXEC_SIGNAL_HELPER";
+const SIGNAL_FLAGS_ENV: &str = "ORBIT_EXEC_SIGNAL_FLAGS";
+const SIGNAL_MARKER_ENV: &str = "ORBIT_EXEC_SIGNAL_MARKER";
 
-/// SIGTERM with the default disposition must actually exit the supervisor
-/// process (the `orbit mcp listen` / systemd-stop case).
+/// Default dispositions must print the interrupt note before terminating,
+/// including macOS's retained SA_SIGINFO after exec clears a caught handler.
 #[test]
-fn sigterm_with_default_disposition_exits_the_supervisor() {
-    if std::env::var_os(SIGTERM_HELPER_ENV).is_some() {
+fn default_signals_report_interrupt_before_exiting_the_supervisor() {
+    if let Some(signal) = std::env::var_os(SIGNAL_HELPER_ENV) {
+        let signal: i32 = signal
+            .to_str()
+            .expect("signal number")
+            .parse()
+            .expect("signal");
+        let flags: i32 = std::env::var(SIGNAL_FLAGS_ENV)
+            .expect("signal flags")
+            .parse()
+            .expect("flags");
+        // SAFETY: only this isolated helper's disposition is changed. The
+        // parent signals it after the supervised child announces readiness.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = libc::SIG_DFL;
+            action.sa_flags = flags;
+            libc::sigemptyset(&mut action.sa_mask);
+            assert_eq!(libc::sigaction(signal, &action, std::ptr::null_mut()), 0);
+        }
         let marker =
-            PathBuf::from(std::env::var(SIGTERM_MARKER_ENV).expect("marker dir")).join("ready");
+            PathBuf::from(std::env::var(SIGNAL_MARKER_ENV).expect("marker dir")).join("ready");
         let _ = supervise_sleep_after_ready(&marker);
-        panic!("supervisor returned instead of dying on SIGTERM");
+        panic!("supervisor returned instead of dying on signal {signal}");
     }
 
     let _lock = TEST_LOCK.lock().expect("signal test lock");
-    let dir = tempfile::tempdir().expect("tempdir");
-    let marker = dir.path().join("ready");
-    orbit_common::test_env::assert_child_test_exists(
-        "sigterm_with_default_disposition_exits_the_supervisor",
-    );
+    const ENTRY: &str = "default_signals_report_interrupt_before_exiting_the_supervisor";
+    orbit_common::test_env::assert_child_test_exists(ENTRY);
     let exe = std::env::current_exe().expect("current test binary");
-    let mut child = Command::new(&exe)
-        .env(SIGTERM_HELPER_ENV, "1")
-        .env(SIGTERM_MARKER_ENV, dir.path())
-        .args([
-            "--exact",
-            "sigterm_with_default_disposition_exits_the_supervisor",
-            "--nocapture",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn supervisor helper");
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        for flags in [0, libc::SA_SIGINFO] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let marker = dir.path().join("ready");
+            let mut child = Command::new(&exe)
+                .env(SIGNAL_HELPER_ENV, signal.to_string())
+                .env(SIGNAL_FLAGS_ENV, flags.to_string())
+                .env(SIGNAL_MARKER_ENV, dir.path())
+                .args(["--exact", ENTRY, "--nocapture"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn supervisor helper");
 
-    wait_for_marker(&marker);
-    // Safety: SIGTERM targets this test's helper pid — the same signal
-    // systemd sends on stop — and performs no other side effect.
-    let rc = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-    assert_eq!(rc, 0, "kill helper with SIGTERM");
-
-    let started = Instant::now();
-    let output = wait_child_output(&mut child, Duration::from_secs(8)).unwrap_or_else(|| {
-        panic!("supervisor helper did not exit within the termination grace period")
-    });
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "SIGTERM should exit the supervisor within the child-termination grace period, took {:?}",
-        started.elapsed()
-    );
-    assert!(
-        !output.status.success(),
-        "SIGTERM must exit the supervisor non-zero, got {:?}",
-        output.status
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("process interrupted by signal SIGTERM"),
-        "stderr was {stderr:?}"
-    );
+            wait_for_marker(&marker);
+            // SAFETY: targets only this fixture's ready supervisor helper.
+            assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
+            let started = Instant::now();
+            let output = wait_child_output(&mut child, Duration::from_secs(8))
+                .expect("supervisor helper must exit within the termination grace period");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "signal {signal} shutdown exceeded the child-termination grace period: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(
+                output.status.signal(),
+                Some(signal),
+                "restore default disposition"
+            );
+            let name = if signal == libc::SIGINT {
+                "SIGINT"
+            } else {
+                "SIGTERM"
+            };
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!("process interrupted by signal {name}")),
+                "default signal {name} with flags {flags:#x} must announce interruption before exit; stderr={stderr:?}"
+            );
+        }
+    }
 }
 
 fn supervise_sleep_after_ready(marker: &Path) -> orbit_exec::ExecutionResult {
