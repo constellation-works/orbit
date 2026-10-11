@@ -363,6 +363,10 @@ spec:
         review_fixes: "{{ steps.review_gate_settle.output.review_fixes }}"
         body: "{{ input.body }}"
         title: "{{ input.title }}"
+        # [ORB-15570] Its `prior_pull_request` is the one the claim whose
+        # candidate this run resumed opened (a before-landing evidence hold
+        # leaves it open): closed with a comment naming this run's.
+        candidate_resume: "{{ steps.resume_candidate.output }}"
 
     - id: promote_tasks
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"

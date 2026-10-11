@@ -101,8 +101,13 @@ before-landing evidence; the owner refuses a handoff without it or for another
 head. For a claimed leaf whose only gaps are named external checks, settlement
 ends the run `held` and releases its claim with the evidence hold. The owner's
 task stays `in-progress` pending evidence because handoff has not promoted it
-to review; the published PR remains open and unmerged. Other non-approving
-claimed reviews still block the task on the owner with its PR open.
+to review; the published PR remains open and unmerged. The release names that
+PR (`held_pull_request`) and the owner keeps it with the held candidate, so the
+run that resumes the candidate after the evidence arrives publishes on its own
+branch and its `pr_open` closes the earlier PR as superseded
+(`superseded_pull_request` in that step's output; `close_failed` leaves it for
+you to close). Other non-approving claimed reviews still block the task on the
+owner with its PR open.
 
 The timeout bound permits one automatic requeue per task and implementation
 tree, recorded in task history without a time window. The implementation tree

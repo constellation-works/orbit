@@ -165,6 +165,11 @@ Scope limits:
   `pr_open` closes the earlier pull request with a comment naming the new
   one; `superseded_pull_request.decision` `close_failed` leaves the earlier
   pull request for the operator to close.
+- A claim whose before-landing review held for named evidence releases with
+  its open pull request (`held_pull_request`). The owner keeps it with the
+  held candidate; the run that resumes that candidate after the evidence
+  arrives publishes on its own branch, and its `pr_open` closes the earlier
+  pull request the same way.
 - A claimed leaf cancelled or interrupted while its reviewer is working
   (a forced drain cancel included) keeps its candidate and the reviewer's
   uncommitted repair. The host that stopped it commits that repair as a

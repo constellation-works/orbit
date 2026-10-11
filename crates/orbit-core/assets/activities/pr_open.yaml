@@ -68,12 +68,13 @@ spec:
       candidate_resume:
         type: [object, "null"]
         description: >
-          A claimed leaf's `candidate_resume` output. When its
+          The run's `candidate_resume` output. When its
           `prior_pull_request` (the pull request an earlier claim opened for
           the resumed candidate) is not the one this run opened or reused,
           the earlier one is closed with a comment naming it, provided it is
-          still open and its head is the output's `source_branch`; a failed
-          close is reported in `superseded_pull_request`, not a step failure.
+          still open and its head is the output's `prior_pull_request_head`
+          (else its `source_branch`); a failed close is reported in
+          `superseded_pull_request`, not a step failure.
       # A claimed leaf's implement-step output. Under the claim's worker
       # binding the delivery gate judges its summary, not the owner's
       # stored one; any other run ignores it.

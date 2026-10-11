@@ -150,8 +150,11 @@ the PR under a lease (`push_lease_lost` if the branch moved). The handoff
 carries before-landing evidence for the settled head, and the owner refuses a
 handoff without it, with before-PR evidence instead, or for any other head, so
 an unreviewed head never reaches `review` or a merge. A leaf whose review does
-not approve fails with its PR open and unmerged; evidence-only holds do not
-apply to this timing. The claim's ship contract carries the field, so owner and
+not approve fails with its PR open and unmerged. An evidence-only `incomplete`
+holds as before PR, and its release also names the open PR
+(`held_pull_request`): the owner keeps it with the held candidate, and the run
+that resumes that candidate after the evidence arrives publishes on its own
+branch, then its `pr_open` closes the earlier PR as superseded. The claim's ship contract carries the field, so owner and
 followers need matching builds. Readiness, refusals and the reviewer-crew
 requirement are the same as for before-PR review, with the reason codes
 unchanged.

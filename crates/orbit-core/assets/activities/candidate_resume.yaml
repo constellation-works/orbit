@@ -66,7 +66,10 @@ spec:
     worktree at the published head is renamed aside first; one at any other
     commit is never moved. When the branch cannot be adopted the output says
     why (`branch_reuse_refused`), and the leaf's `pr_open` closes
-    `prior_pull_request` once its own is open.
+    `prior_pull_request` once its own is open. A pull request on a branch
+    other than the candidate's (`prior_pull_request_head`: a before-landing
+    evidence hold's, whose held candidate was kept from the branch it was
+    published to for evidence) is never adopted.
     When the task's prior run executed on another machine
     (`prior_foreign_run`, a claim's leaf), its id is never looked up in this
     machine's run store. An owner-local run continues the candidate the
@@ -77,7 +80,10 @@ spec:
     it). The outcome is written to the task history naming the claim and
     the machine that committed the candidate. A prior run on this machine
     that recorded no failure handoff falls back to the candidate the owner
-    kept from that run's claim.
+    kept from that run's claim. When that claim's leaf opened a pull request
+    for the candidate, the owner-local run names it too
+    (`prior_pull_request`, `prior_pull_request_head`), and its `pr_open`
+    closes it once its own is open.
     A repair claim's leaf instead passes `claim_repair`, the candidate an
     owner's landing stopped on a base conflict or stale base. It is
     squash-merged the same way and is always `resumed_repaired`: trigger
@@ -169,7 +175,13 @@ spec:
       prior_pull_request:
         type: [string, "null"]
         description: >
-          Claimed mode: the pull request the candidate's claim opened.
+          The pull request the candidate's claim opened.
+      prior_pull_request_head:
+        type: [string, "null"]
+        description: >
+          The head branch of `prior_pull_request`: the candidate's branch, or
+          the leaf's own when a before-landing evidence hold kept the
+          candidate from the branch it was published to for evidence.
       reused_branch:
         type: [string, "null"]
         description: >

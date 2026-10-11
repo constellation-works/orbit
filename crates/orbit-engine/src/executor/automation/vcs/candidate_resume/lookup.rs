@@ -101,7 +101,15 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         }
     };
     record(host, &task, &run_id, &candidate, &outcome)?;
-    Ok(output(&outcome, Some(&candidate), &base_sha))
+    let mut resumed = output(&outcome, Some(&candidate), &base_sha);
+    // [ORB-15570] The claim's leaf opened a pull request for the candidate
+    // the owner kept: this run publishes on its own branch, so its `pr_open`
+    // closes that one once its own is open.
+    if let Some(pull_request) = &candidate.pull_request {
+        resumed["prior_pull_request"] = json!(pull_request);
+        resumed["prior_pull_request_head"] = json!(candidate.prior_pull_request_head());
+    }
+    Ok(resumed)
 }
 
 /// [ORB-14257] Resume the candidate the owner kept from the task's last
@@ -142,11 +150,19 @@ fn claimed_resume<H: RuntimeHost + ?Sized>(
     // land on that pull request; otherwise `pr_open` closes it once this
     // leaf's own is open.
     resumed["prior_pull_request"] = json!(pull_request);
+    resumed["prior_pull_request_head"] = json!(candidate.prior_pull_request_head());
     let adoption = match outcome {
         Outcome::Fresh(_) => Adoption::Refused("the candidate was not resumed".to_string()),
         _ if !candidate.published => Adoption::Refused(format!(
             "branch '{}' was not pushed at {}",
             candidate.branch, candidate.head_sha
+        )),
+        // [ORB-15570] A held candidate kept from its evidence branch: its
+        // pull request is on the leaf's own branch, without the held head.
+        _ if candidate.prior_pull_request_head() != candidate.branch => Adoption::Refused(format!(
+            "pull request #{pull_request} is on '{}', not the candidate's branch '{}'",
+            candidate.prior_pull_request_head(),
+            candidate.branch
         )),
         _ => adopt_published_branch(workspace_path, task_id, &candidate)?,
     };
@@ -191,6 +207,7 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
         claim,
         published: preserved.get("published").and_then(Value::as_bool) == Some(true),
         pull_request: input_string_field(preserved, "pull_request"),
+        pull_request_head: input_string_field(preserved, "pull_request_head"),
         // A record that does not parse leaves the candidate to resume
         // without its review's repair.
         interrupted_review: preserved
@@ -256,6 +273,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         claim: None,
         published: false,
         pull_request: None,
+        pull_request_head: None,
         interrupted_review: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
@@ -316,6 +334,7 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         claim: None,
         published: false,
         pull_request: None,
+        pull_request_head: None,
         interrupted_review: None,
     };
     // A hold from before spec provenance was released by a receipt that
@@ -502,6 +521,7 @@ fn claim_repair_resume(
         claim: None,
         published: false,
         pull_request: None,
+        pull_request_head: None,
         interrupted_review: None,
     };
     let outcome = match apply(&candidate, &candidate.head_sha, workspace_path, base_sha)? {

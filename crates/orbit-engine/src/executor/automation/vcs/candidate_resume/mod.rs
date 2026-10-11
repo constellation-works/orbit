@@ -63,6 +63,10 @@
 //! that candidate and opened a pull request for it, the leaf also continues
 //! on its branch, so it republishes through the same pull request (see
 //! `adopt`); when it cannot, its `pr_open` closes that pull request instead.
+//! [ORB-15570] A held candidate's pull request, which a before-landing hold
+//! left open on the leaf's own branch while the candidate was kept from the
+//! branch it was published to for evidence, is never adopted: the run
+//! publishes on its own branch and its `pr_open` closes that pull request.
 //!
 //! [ORB-14603] When the task's prior run is one another machine executed — a
 //! claim's leaf, handed in as `prior_foreign_run` with that machine — its id
@@ -80,6 +84,10 @@
 //! apply is `resumed_held`, as for a local hold. A prior run on this machine
 //! that recorded no failure handoff — a claim's leaf this machine executed —
 //! falls back to the candidate the owner kept from that run's claim.
+//! [ORB-15570] When the claim's leaf opened a pull request for a candidate
+//! the owner kept, the owner-local run names it as `prior_pull_request`, with
+//! its head branch, so its `pr_open` closes it once its own is open and the
+//! task never has two open pull requests.
 //!
 //! A repair claim's leaf passes `claim_repair` instead [ORB-14261]: the
 //! candidate an owner's landing stopped on a base conflict or stale base.
@@ -185,12 +193,20 @@ struct Candidate {
     published: bool,
     /// [ORB-15308] The pull request a claim's leaf opened for it.
     pull_request: Option<String>,
+    /// [ORB-15570] That pull request's head branch, when it is not `branch`.
+    pull_request_head: Option<String>,
     /// [ORB-15314] The review its leaf was stopped inside, whose reviewer's
     /// uncommitted repair was kept as a commit on top of `head_sha`.
     interrupted_review: Option<InterruptedReview>,
 }
 
 impl Candidate {
+    /// [ORB-15570] The head branch of the pull request a claim's leaf opened
+    /// for it: its own branch unless that pull request is on another.
+    fn prior_pull_request_head(&self) -> &str {
+        self.pull_request_head.as_deref().unwrap_or(&self.branch)
+    }
+
     /// The run that produced it, with the machine that executed it when that
     /// was a claim's leaf: its id alone names no run on this machine.
     fn source(&self) -> String {
