@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, formatDateTime, runHref, bindTaskLink, makeCopyButton } from './common.js';
+import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatDateTime, runHref, bindTaskLink, makeCopyButton } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -70,8 +70,13 @@ let evidenceOpen = false;
 let lastPayload = null;
 let lastCtx = {};
 let layout = null;
-// Full messages loaded for the detail panel, by workspace and audit row.
+// Full messages loaded for the detail panel, by host, workspace and audit row.
 const fullMessageLoads = new Map();
+
+onWorkspaceChange(() => {
+  fullMessageLoads.clear();
+  lastPayload = null;
+});
 
 export function getIncidentClass() { return incidentClass; }
 
@@ -1070,20 +1075,24 @@ function relatedNode(group, groups, ctx) {
 }
 
 function fullMessageKey(eventId) {
-  return `${getWorkspace() || ""}:${eventId}`;
+  return JSON.stringify([getHost(), getWorkspace(), eventId]);
 }
 
 function loadFullMessage(eventId) {
   const key = fullMessageKey(eventId);
   const current = fullMessageLoads.get(key);
   if (current && current.state !== "error") return;
+  const revision = getWorkspaceRevision();
   fullMessageLoads.set(key, { state: "loading" });
   rerender();
   fetchJson(`/api/audit/events/${encodeURIComponent(eventId)}/message`).then(body => {
+    if (revision !== getWorkspaceRevision()) return;
     fullMessageLoads.set(key, { state: "done", text: body && typeof body.message === "string" ? body.message : "" });
   }, error => {
+    if (revision !== getWorkspaceRevision()) return;
     fullMessageLoads.set(key, { state: "error", error: (error && error.message) || String(error) });
   }).finally(() => {
+    if (revision !== getWorkspaceRevision()) return;
     // Another Health tab may own the panel by now; only repaint this one.
     if (layout && layout.root && layout.root.isConnected !== false) rerender();
   });
