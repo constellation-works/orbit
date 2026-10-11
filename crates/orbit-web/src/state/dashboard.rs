@@ -58,6 +58,8 @@ pub(super) struct StateInner {
     audit_summary: RuntimeMemo<String>,
     /// Per-server scoreboard memo, keyed by live workspace runtime and window.
     scoreboard: RuntimeMemo<String>,
+    /// Host-wide routine projection, invalidated by its input stamps.
+    routines: RuntimeMemo<crate::api::routines::RoutineMemoKey>,
     /// Per-server single-flight TTL memo for audited plugin panel reads.
     /// Keyed by `(namespace, panel)`.
     plugin_panels: RuntimeMemo<(String, String)>,
@@ -409,6 +411,7 @@ impl DashboardState {
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: RuntimeMemo::new("audit summary aggregation"),
                 scoreboard: RuntimeMemo::new("scoreboard aggregation"),
+                routines: RuntimeMemo::new("routine health"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
@@ -490,6 +493,11 @@ impl DashboardState {
     /// Process-local scoreboard memo shared by every dashboard tab.
     pub(crate) fn scoreboard_memo(&self) -> &RuntimeMemo<String> {
         &self.inner.scoreboard
+    }
+
+    /// Host-wide routine memo shared even across different selected workspaces.
+    pub(crate) fn routines_memo(&self) -> &RuntimeMemo<crate::api::routines::RoutineMemoKey> {
+        &self.inner.routines
     }
 
     /// Process-local plugin panel memo shared by every dashboard tab.

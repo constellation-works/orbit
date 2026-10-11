@@ -1,14 +1,15 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Local, Utc};
-use orbit_cmd::registry_routines::routine_statuses;
+use orbit_cmd::registry_routines::{routine_status_input_paths, routine_statuses};
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE, GovernedOperation,
@@ -27,6 +28,34 @@ use serde_json::{Value, json};
 
 use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
+
+/// Host-wide cache key: selection does not restrict the host's routine list.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct RoutineMemoKey {
+    inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+    include_inactive_plugins: bool,
+    operator: bool,
+}
+
+/// Record `path`'s modification time and length, recursing into directories.
+/// Best effort: an unreadable input stamps as absent rather than failing the
+/// read, and the memo's short TTL still bounds how long a change can hide.
+fn stamp(path: &Path, inputs: &mut Vec<(PathBuf, Option<(SystemTime, u64)>)>) {
+    let metadata = std::fs::symlink_metadata(path).ok();
+    inputs.push((
+        path.into(),
+        metadata
+            .as_ref()
+            .and_then(|metadata| Some((metadata.modified().ok()?, metadata.len()))),
+    ));
+    if metadata.is_some_and(|metadata| metadata.is_dir())
+        && let Ok(entries) = std::fs::read_dir(path)
+    {
+        for entry in entries.flatten() {
+            stamp(&entry.path(), inputs);
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct OperationsQuery {
@@ -83,26 +112,61 @@ pub(super) async fn list_routine_health(
     let generated_at = Utc::now();
     let include_inactive_plugins = query.include_inactive_plugins;
     let operator_session = state.operator_session();
-    match blocking("routine health", move || {
-        let report = routine_statuses(state.global_root())?;
-        let clock = match state.clock_status() {
-            Ok(status) => clock_json(&status),
-            Err(error) => unavailable_clock_json(&error.to_string()),
-        };
-        Ok((report, clock))
+    let stamp_state = state.clone();
+    let key = match blocking("routine health inputs", move || {
+        let mut inputs = Vec::new();
+        for path in routine_status_input_paths(stamp_state.global_root())? {
+            stamp(&path, &mut inputs);
+        }
+        inputs.sort();
+        Ok(RoutineMemoKey {
+            inputs,
+            include_inactive_plugins,
+            operator: operator_session,
+        })
     })
     .await
     {
-        Ok((report, clock)) => Json(report_json(
-            &report,
-            clock,
-            generated_at,
-            operator_session,
-            include_inactive_plugins,
-        ))
-        .into_response(),
-        Err(response) => *response,
+        Ok(key) => key,
+        Err(response) => return *response,
+    };
+    let compute_state = state.clone();
+    match state
+        .routines_memo()
+        .get_or_compute_for_host(key, Duration::from_secs(5), move || {
+            compute_routine_health(
+                compute_state,
+                generated_at,
+                operator_session,
+                include_inactive_plugins,
+            )
+        })
+        .await
+    {
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
+}
+
+// Called exclusively by RuntimeMemo's spawn_blocking computation.
+fn compute_routine_health(
+    state: DashboardState,
+    generated_at: DateTime<Utc>,
+    operator_session: bool,
+    include_inactive_plugins: bool,
+) -> Result<Value, orbit_core::OrbitError> {
+    let report = routine_statuses(state.global_root())?;
+    let clock = match state.clock_status() {
+        Ok(status) => clock_json(&status),
+        Err(error) => unavailable_clock_json(&error.to_string()),
+    };
+    Ok(report_json(
+        &report,
+        clock,
+        generated_at,
+        operator_session,
+        include_inactive_plugins,
+    ))
 }
 
 /// `POST /api/routines/toggle` — atomically change one selected workspace's

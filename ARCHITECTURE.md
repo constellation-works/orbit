@@ -36,6 +36,17 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-web` | internal | cmd, common, core, registry, types (dev: engine, store) |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 
+Core uses `git2` (vendored libgit2, network features disabled) to read local
+refs, config and trees in process: routine status's branch inspection, and the
+instruction and selector-object reads behind the preparation fingerprint. A
+repository libgit2 cannot open, such as a partial clone or reftable refs, keeps
+the bounded Git commands. Fetches, pins and other source evaluation continue to
+use bounded Git commands and the shared fetch lock. A request-scoped source
+cache shares inspection facts across routines without retaining stale refs
+across polls. Web's host-wide routine memo uses the existing runtime-memo
+single-flight mechanism with a separate host namespace and file/database input
+stamps.
+
 Core exposes Exec's shared Bubblewrap capability probe to CLI onboarding and
 diagnostics. The CLI's dev-only edges to Engine, Exec and Tools support the real
 sandbox broker integration test, which pairs the host runtime with the built

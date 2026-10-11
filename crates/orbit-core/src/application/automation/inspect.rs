@@ -12,7 +12,7 @@ use orbit_types::workflow::{
     },
 };
 
-use super::{ownership, source::Source};
+use super::{SourceCache, ownership, source::Source};
 
 /// An enabled delivery definition this host owns whose configured branch does
 /// not resolve in the repository. No tick can baseline it, so `orbit doctor`
@@ -305,6 +305,7 @@ fn inspect_auto_task_inner(
             definition: Some(definition),
         },
         now,
+        None,
     )
 }
 
@@ -313,8 +314,17 @@ pub fn inspect_routine(
     definition: &RoutineDefinition,
     now: DateTime<Utc>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
+    inspect_routine_with_cache(runtime, definition, now, &SourceCache::default())
+}
+
+pub(crate) fn inspect_routine_with_cache(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+    now: DateTime<Utc>,
+    cache: &SourceCache,
+) -> Result<AutomationDiagnostic, OrbitError> {
     if definition.trigger.state.is_some() {
-        return super::members::evaluate(runtime, definition, true, now);
+        return super::members::evaluate_with_cache(runtime, definition, true, now, Some(cache));
     }
 
     let declared = definition
@@ -343,6 +353,7 @@ pub fn inspect_routine(
             definition: None,
         },
         now,
+        Some(cache),
     )
 }
 
@@ -365,6 +376,7 @@ fn inspect(
     runtime: &OrbitRuntime,
     request: Inspection<'_>,
     now: DateTime<Utc>,
+    cache: Option<&SourceCache>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let Inspection {
         kind,
@@ -426,8 +438,14 @@ fn inspect(
             // and health compares the cursor with that remote-tracking ref
             // without fetching. Inspection fetches no history or provider
             // evidence.
-            None => branch_unavailable(&Source::new(&runtime.paths().repo_root), &trigger.branch)
-                .unwrap_or_else(|| "awaiting_baseline".into()),
+            None => branch_unavailable(
+                &match cache {
+                    Some(cache) => Source::read_only_with_cache(&runtime.paths().repo_root, cache),
+                    None => Source::new(&runtime.paths().repo_root),
+                },
+                &trigger.branch,
+            )
+            .unwrap_or_else(|| "awaiting_baseline".into()),
             Some(state) => scheduling_reason(state, trigger, admission_deferred, now).into(),
         }
     };

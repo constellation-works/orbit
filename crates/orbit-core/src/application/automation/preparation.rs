@@ -1,6 +1,6 @@
 //! Authoritative task/source inputs for the shared material fingerprint.
 
-use super::source::Source;
+use super::source::{LISTING_LIMIT, OUTPUT_LIMIT, SOURCE_DEADLINE, Source};
 use crate::OrbitRuntime;
 use orbit_automation::AutomationError;
 use orbit_automation::members::preparation::{self, MaterialEvidence};
@@ -126,8 +126,88 @@ pub(crate) fn instructions(
     runtime: &OrbitRuntime,
     revision: &str,
 ) -> Result<InstructionSnapshot, AutomationError> {
-    let source = Source::new(&runtime.paths().repo_root);
+    let root = &runtime.paths().repo_root;
+    // libgit2 reads the pinned tree without a child process per file. A
+    // repository it cannot open (a partial clone, whose blobs Git fetches on
+    // demand, or reftable refs) keeps the bounded Git commands.
+    let instructions = match git2::Repository::open(root) {
+        Ok(repo) => instructions_in_process(&repo, revision)?,
+        Err(_) => instructions_with_git(&Source::new(root), revision)?,
+    };
 
+    Ok(InstructionSnapshot(
+        serde_json::to_string(&instructions)
+            .map_err(|error| AutomationError::Evidence(error.to_string()))?,
+    ))
+}
+
+/// The instruction files at `revision`, in `git ls-tree -r` order (byte
+/// order of the full path), under the same budgets and failure reasons as
+/// [`instructions_with_git`], so the snapshot and its fingerprint are
+/// identical whichever reader produced them.
+fn instructions_in_process(
+    repo: &git2::Repository,
+    revision: &str,
+) -> Result<Vec<(String, String)>, AutomationError> {
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(local_git_error)?;
+    let started = std::time::Instant::now();
+    let mut paths = Vec::new();
+    let mut failure = None;
+    let mut listed_bytes = 0u64;
+    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if started.elapsed() >= SOURCE_DEADLINE {
+            failure = Some(AutomationError::Deferred("source_deadline".into()));
+            return git2::TreeWalkResult::Abort;
+        }
+        let Ok(name) = entry.name() else {
+            failure = Some(AutomationError::Evidence(
+                "Git instruction path is not UTF-8".into(),
+            ));
+            return git2::TreeWalkResult::Abort;
+        };
+        if entry.kind() == Some(git2::ObjectType::Tree) {
+            return git2::TreeWalkResult::Ok;
+        }
+        // `ls-tree -r -z --name-only` lists each non-tree path and a NUL.
+        listed_bytes += (root.len() + name.len() + 1) as u64;
+        if listed_bytes > LISTING_LIMIT {
+            failure = Some(AutomationError::Deferred("source_budget".into()));
+            return git2::TreeWalkResult::Abort;
+        }
+        if matches!(name, "AGENTS.md" | "CLAUDE.md") {
+            paths.push((format!("{root}{name}"), entry.id()));
+        }
+        git2::TreeWalkResult::Ok
+    });
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    walked.map_err(local_git_error)?;
+    paths.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut instructions = Vec::new();
+    for (path, oid) in paths {
+        if instructions.len() >= 50 {
+            return Err(AutomationError::Deferred("instruction_scan_budget".into()));
+        }
+        let blob = repo.find_blob(oid).map_err(local_git_error)?;
+        // `git show` output above one command's evidence cap defers.
+        if blob.size() as u64 > OUTPUT_LIMIT {
+            return Err(AutomationError::Deferred("source_budget".into()));
+        }
+        let content = std::str::from_utf8(blob.content())
+            .map_err(|_| AutomationError::Deferred("stream did not contain valid UTF-8".into()))?;
+        instructions.push((path, content.to_owned()));
+    }
+    Ok(instructions)
+}
+
+fn instructions_with_git(
+    source: &Source<'_>,
+    revision: &str,
+) -> Result<Vec<(String, String)>, AutomationError> {
     // `git ls-tree` matches pathspecs literally and rejects glob magic, so
     // `**/AGENTS.md` lists nothing. Stream the pinned tree and keep
     // instruction basenames: the full listing of a large repository passes
@@ -157,11 +237,7 @@ pub(crate) fn instructions(
             source.git_preserving_output(&["show", &format!("{revision}:{path}")])?,
         ));
     }
-
-    Ok(InstructionSnapshot(
-        serde_json::to_string(&instructions)
-            .map_err(|error| AutomationError::Evidence(error.to_string()))?,
-    ))
+    Ok(instructions)
 }
 
 /// Reads instructions through `instructions` — so a caller can share one
@@ -319,15 +395,21 @@ fn selector_objects(
             paths.insert(path);
         }
     }
+    // As for instructions, a repository libgit2 cannot open uses Git.
+    let root = &runtime.paths().repo_root;
+    let repo = git2::Repository::open(root).ok();
     if root_selected {
         // The root tree covers every narrower selector, including paths added
         // after the assessment. Git does not list `.` as an ls-tree path.
-        let tree = Source::new(&runtime.paths().repo_root).git(&[
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{revision}^{{tree}}"),
-        ])?;
+        let tree = match &repo {
+            Some(repo) => revision_tree(repo, revision)?.id().to_string(),
+            None => Source::new(root).git(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{revision}^{{tree}}"),
+            ])?,
+        };
         return Ok(json!({".": tree}));
     }
     if paths.len() > 50 {
@@ -348,25 +430,51 @@ fn selector_objects(
     if objects.is_empty() {
         return Ok(json!(objects));
     }
-    let mut args = vec![
-        "--literal-pathspecs",
-        "ls-tree",
-        "-z",
-        "--full-tree",
-        revision,
-        "--",
-    ];
-    args.extend(objects.keys().map(String::as_str));
-    let listing = Source::new(&runtime.paths().repo_root).git(&args)?;
-    for entry in listing.split('\0') {
-        let Some((meta, path)) = entry.split_once('\t') else {
-            continue;
-        };
-        if let (Some(slot), Some(object)) = (objects.get_mut(path), meta.split(' ').nth(2)) {
-            *slot = json!(object);
+    let Some(repo) = repo else {
+        let mut args = vec![
+            "--literal-pathspecs",
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            revision,
+            "--",
+        ];
+        args.extend(objects.keys().map(String::as_str));
+        let listing = Source::new(root).git(&args)?;
+        for entry in listing.split('\0') {
+            let Some((meta, path)) = entry.split_once('\t') else {
+                continue;
+            };
+            if let (Some(slot), Some(object)) = (objects.get_mut(path), meta.split(' ').nth(2)) {
+                *slot = json!(object);
+            }
+        }
+        return Ok(json!(objects));
+    };
+    // Selector paths are normalized (no `.`, empty or trailing components),
+    // so an exact tree lookup names what the literal ls-tree pathspec lists.
+    let tree = revision_tree(&repo, revision)?;
+    for (path, slot) in &mut objects {
+        match tree.get_path(Path::new(path)) {
+            Ok(entry) => *slot = json!(entry.id().to_string()),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(local_git_error(error)),
         }
     }
     Ok(json!(objects))
+}
+
+fn revision_tree<'r>(
+    repo: &'r git2::Repository,
+    revision: &str,
+) -> Result<git2::Tree<'r>, AutomationError> {
+    repo.revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(local_git_error)
+}
+
+fn local_git_error(error: git2::Error) -> AutomationError {
+    AutomationError::Deferred(format!("evidence_unavailable: local Git material: {error}"))
 }
 
 fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>, AutomationError> {

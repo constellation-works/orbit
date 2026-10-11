@@ -30,6 +30,7 @@ pub(crate) use direct::record_direct_landing_intent;
 use evaluation::{auto_task_action_liveness, auto_task_admission_deferral};
 pub use evaluation::{evaluate_auto_task, evaluate_routine};
 pub(crate) use evaluation::{evaluate_auto_task_with_cache, evaluate_routine_with_cache};
+pub(crate) use inspect::inspect_routine_with_cache;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
     inspect_auto_task, inspect_auto_task_with_open_instance, inspect_routine,

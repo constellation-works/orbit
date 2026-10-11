@@ -526,6 +526,28 @@ impl RegisteredRuntimeFactory {
         )
     }
 
+    /// Open existing registered state for routine inspection with no incidental
+    /// database or task-index writes. Scheduling keeps its normal writable open.
+    pub fn open_registered_checkout_observational(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        let identity = inspect_machine_identity(global_root)?;
+        OrbitRuntime::from_resolved_roots_observational_with_binding(
+            global_root,
+            &checkout.orbit_dir,
+            workspace_runtime_binding(workspace, checkout)?,
+        )
+        .map(|runtime| {
+            attach_registry_context(
+                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                global_root,
+                &identity,
+            )
+        })
+    }
+
     fn open_registered_checkout_read_only_with_identity(
         global_root: &Path,
         workspace: &Workspace,

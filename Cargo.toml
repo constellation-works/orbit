@@ -71,6 +71,10 @@ flate2 = "1"
 fs2 = "0.4"
 futures-core = "0.3"
 getrandom = { version = "0.3", features = ["std"] }
+# Routine status reads refs, config and trees in process [ORB-15595]. No network
+# transports; vendored so a host's own libgit2 (such as Homebrew's, found via
+# pkg-config) is never linked dynamically into a release binary.
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 hostname = "0.4"
 # The dashboard's host forward speaks HTTP/1.1 to another host's dashboard
 # over a loopback SSH forward, streaming both bodies [ORB-14679].

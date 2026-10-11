@@ -1,4 +1,4 @@
-//! Source facts shared by delivery consumers for one scheduler tick only.
+//! Source facts shared for one scheduler tick or routine inspection request.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -9,18 +9,33 @@ use orbit_types::workflow::automation::SourceRevision;
 
 type HeadKey = (PathBuf, String, String);
 type LookupKey = (String, String, String);
+type InspectionKey = (PathBuf, String, bool);
+/// `None` records that libgit2 cannot open the checkout, so Git commands run.
+type InspectionHead = Option<(String, SourceRevision)>;
 type Cached<T> = Result<T, String>;
 
-/// A fetched head belongs to one Git object store; provider responses can be
+/// A fetched head belongs to one Git object store; local inspection heads are
+/// scoped to a checkout and request. Provider responses can be
 /// reused across independent clones of the same provider repository. Failures
 /// are shared too, so an unavailable source is attempted only once per tick.
 #[derive(Default)]
 pub(crate) struct SourceCache {
     heads: RefCell<BTreeMap<HeadKey, Cached<SourceRevision>>>,
     lookups: RefCell<BTreeMap<LookupKey, Cached<String>>>,
+    inspections: RefCell<BTreeMap<InspectionKey, Cached<InspectionHead>>>,
 }
 
 impl SourceCache {
+    pub(super) fn inspection(
+        &self,
+        root: PathBuf,
+        branch: &str,
+        preparation: bool,
+        read: impl FnOnce() -> Result<InspectionHead, AutomationError>,
+    ) -> Result<InspectionHead, AutomationError> {
+        cached(&self.inspections, (root, branch.into(), preparation), read)
+    }
+
     pub(super) fn head(
         &self,
         git_dir: PathBuf,

@@ -1,4 +1,4 @@
-//! Process-local single-flight TTL cache keyed by runtime identity.
+//! Process-local single-flight TTL cache keyed by runtime identity or host inputs.
 //!
 //! Every visible dashboard tab polls the same endpoints. Keying by the live
 //! runtime plus a request key collapses overlapping polls into one compute,
@@ -9,8 +9,9 @@
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
 //! `/api/scoreboard` (keyed by the canonical window), and the codebase
 //! analytics scan behind `/api/codebase/analytics`, which caches typed facts
-//! rather than a response body. Every payload served from a memo reports its
-//! age in an `Age` header.
+//! rather than a response body. `/api/routines` uses a host namespace keyed by
+//! definition, config and database stamps instead of a selected runtime. Every
+//! payload served from a memo reports its age in an `Age` header.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -57,7 +58,7 @@ pub(crate) struct RuntimeMemo<K, V = Value> {
     slots: Mutex<Slots<K, V>>,
 }
 
-/// One slot per (runtime identity, key).
+/// One slot per (runtime identity, key); zero names the host namespace.
 type Slots<K, V> = HashMap<(usize, K), Arc<Slot<V>>>;
 
 struct Slot<V> {
@@ -68,7 +69,7 @@ struct Slot<V> {
 }
 
 struct Cached<V> {
-    runtime: Weak<OrbitRuntime>,
+    runtime: Option<Weak<OrbitRuntime>>,
     computed_at: Instant,
     ttl: Duration,
     body: Arc<V>,
@@ -95,7 +96,36 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     where
         F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
     {
-        let slot = self.slot((Arc::as_ptr(runtime) as usize, key));
+        self.compute(Some(runtime), key, ttl, compute).await
+    }
+
+    /// Host-wide projection, independent of the workspace selected by a tab.
+    pub(crate) async fn get_or_compute_for_host<F>(
+        &self,
+        key: K,
+        ttl: Duration,
+        compute: F,
+    ) -> Result<Served<V>, OrbitError>
+    where
+        F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
+    {
+        self.compute(None, key, ttl, compute).await
+    }
+
+    async fn compute<F>(
+        &self,
+        runtime: Option<&Arc<OrbitRuntime>>,
+        key: K,
+        ttl: Duration,
+        compute: F,
+    ) -> Result<Served<V>, OrbitError>
+    where
+        F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
+    {
+        let slot = self.slot((
+            runtime.map_or(0, |runtime| Arc::as_ptr(runtime) as usize),
+            key,
+        ));
         if let Some(hit) = slot.hit(runtime) {
             tracing::debug!(memo = self.label, "cache hit");
             return Ok(hit);
@@ -119,7 +149,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             }
         };
         *slot.value.lock().unwrap_or_else(PoisonError::into_inner) = Some(Cached {
-            runtime: Arc::downgrade(runtime),
+            runtime: runtime.map(Arc::downgrade),
             computed_at: Instant::now(),
             ttl,
             body: Arc::clone(&computed),
@@ -145,23 +175,35 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 }
 
 impl<V> Slot<V> {
-    fn hit(&self, runtime: &Arc<OrbitRuntime>) -> Option<Served<V>> {
+    fn hit(&self, runtime: Option<&Arc<OrbitRuntime>>) -> Option<Served<V>> {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         let cached = guard.as_ref().filter(|cached| cached.is_fresh())?;
-        let live = cached.runtime.upgrade()?;
-        Arc::ptr_eq(&live, runtime).then(|| Served {
+        let same_runtime = match (&cached.runtime, runtime) {
+            (None, None) => true,
+            (Some(cached), Some(runtime)) => cached
+                .upgrade()
+                .is_some_and(|live| Arc::ptr_eq(&live, runtime)),
+            _ => false,
+        };
+        same_runtime.then(|| Served {
             body: Arc::clone(&cached.body),
             age: cached.computed_at.elapsed(),
         })
     }
 
-    /// Drop expired or orphaned ready entries once no caller owns the slot.
-    /// Empty slots stay reusable after a failed compute.
+    /// Drop empty, expired or orphaned entries once no caller owns the slot.
+    /// An empty slot left by a failed compute is dropped too: host input keys
+    /// change with every stamped write, so retaining them would grow the map
+    /// without bound while a compute keeps failing.
     fn keep(&self) -> bool {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
-        guard
-            .as_ref()
-            .is_none_or(|cached| cached.is_fresh() && cached.runtime.strong_count() > 0)
+        guard.as_ref().is_some_and(|cached| {
+            cached.is_fresh()
+                && cached
+                    .runtime
+                    .as_ref()
+                    .is_none_or(|runtime| runtime.strong_count() > 0)
+        })
     }
 }
 

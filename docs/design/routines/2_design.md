@@ -56,6 +56,18 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
+The host-wide `GET /api/routines` projection uses a process-local single-flight
+memo with a five-second TTL, shared across workspace selections and tabs. Its
+`Age` header reports the cached payload's age. Each request stamps the workspace
+registry, global and workspace config, routine and target definitions, and
+resolved database files plus their WALs; changes invalidate the next read,
+including definition toggles, pauses and recorded runs. Status opens existing
+stores observationally, without migrations or run reconciliation. Branch
+inspection reads local Git objects, config and refs in process, sharing heads
+across routines within a request; a repository libgit2 cannot open (a partial
+clone or reftable refs) is read with the same bounded Git commands as before. Preparation retains its local-ahead rule
+against the existing remote-tracking ref and never fetches for status.
+
 Automation polling fetches only the selected subtab: routines and clock share
 `GET /api/routines`, auto-tasks uses `GET /api/auto-tasks`, and jobs uses routines
 plus recent job runs for its catalogue. Both definition lists project compact

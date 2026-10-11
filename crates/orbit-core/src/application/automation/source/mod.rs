@@ -1,10 +1,12 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
 mod command;
+mod inspection;
 mod observe;
 mod replay;
 mod revision;
 
+pub(super) use command::{LISTING_LIMIT, OUTPUT_LIMIT};
 #[cfg(test)]
 pub(super) use command::{arm_canonical_signature_deadline, clear_canonical_signature_deadline};
 pub(super) use replay::is_batch_mismatch;
@@ -20,7 +22,7 @@ use std::{
 };
 
 /// Overall budget for every git and provider command one source pass runs.
-const SOURCE_DEADLINE: Duration = Duration::from_secs(30);
+pub(super) const SOURCE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// A delivery pass could not fetch `origin/<branch>`. Observation is not
 /// advanced and the local branch is not consulted in its place.

@@ -106,8 +106,8 @@ impl OrbitRuntime {
         Ok(runtime)
     }
 
-    /// Whether this runtime opened Orbit's state without write access because
-    /// the process joined a live generation it may not record itself into.
+    /// Whether this runtime opened Orbit's state without write access, for
+    /// observational routine status or a live generation it cannot record into.
     /// Reads work; operations that would repair or finalize stored state must
     /// be skipped rather than attempted. Tool audit appends use a separate
     /// connection without granting writes to these runtime state handles.

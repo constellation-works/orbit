@@ -184,9 +184,27 @@ pub fn routine_statuses_with_providers(
     workspace_provider: &dyn RoutineWorkspaceProvider,
     now_utc: DateTime<Utc>,
 ) -> Result<RoutineStatusReport, OrbitError> {
-    let store = super::open_routine_store(global_root)?;
+    let started = std::time::Instant::now();
+    let database =
+        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    // Existing status reads do not need migration/preflight writes. Preserve
+    // first-use initialization on a host that has no scheduler database yet.
+    let store: std::sync::Arc<dyn orbit_store::contracts::RoutineStoreBackend> =
+        if database.exists() {
+            std::sync::Arc::new(orbit_store::Store::open_read_only(&database)?)
+        } else {
+            super::open_routine_store(global_root)?
+        };
+    tracing::debug!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "routine status store opened"
+    );
 
     let discovered = workspace_provider.discover_workspaces(global_root)?;
+    tracing::debug!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "routine status workspaces discovered"
+    );
     let mut load_errors = discovered.errors.clone();
     let host = collect_host_routines(&discovered);
     let mut collection = host.collection;
@@ -196,6 +214,7 @@ pub fn routine_statuses_with_providers(
     let now = now_utc.with_timezone(&Local);
 
     let mut statuses = Vec::with_capacity(collection.routines.len());
+    let source_cache = crate::application::automation::SourceCache::default();
     for routine in collection.routines {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
         let cron_fires =
@@ -205,7 +224,7 @@ pub fn routine_statuses_with_providers(
             .get(&routine.definition.name)
             .map(|pause| pause.paused_at.clone());
         let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
-            discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine(runtime,&routine.definition,now_utc) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
+            discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine_with_cache(runtime,&routine.definition,now_utc,&source_cache) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
         });
         let automation_fires = automation_fires(&discovered, &routine)?;
         let last_fire = newest_fire(
