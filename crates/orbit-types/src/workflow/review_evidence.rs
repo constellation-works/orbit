@@ -61,6 +61,24 @@ pub struct ReviewEvidenceHold {
     /// the task's next run resumes it instead of implementing again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_ref: Option<String>,
+    /// Fallback preservation when publishing the evidence branch failed.
+    /// Absent on older holds. The held revision remains the candidate head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_carry: Option<ReviewEvidenceCandidateCarry>,
+}
+
+/// Where a claimed evidence hold kept its candidate after publication failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewEvidenceCandidateCarry {
+    pub branch: String,
+    /// The delivery branch's previously pushed head, before reviewer repairs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durable_ref: Option<String>,
+    /// A failed carry leaves the candidate available only on its source host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carry_failure: Option<String>,
 }
 
 /// A workspace rule naming a check a claimed leaf's host owes for the paths

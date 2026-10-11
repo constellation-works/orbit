@@ -293,3 +293,226 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
         "{comment}"
     );
 }
+
+/// [ORB-15635] Evidence holds bypass the failure hook. A reviewer-fixed tip
+/// must still reach the next claim if the evidence-branch push is refused,
+/// and a failed fallback must preserve the local tip rather than the PR head.
+#[test]
+fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
+    if !isolated(
+        module_path!(),
+        "a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim",
+    ) {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+
+    for (reject_evidence, reject_carry) in [(false, false), (true, false), (true, true)] {
+        let mut leaf = ReviewedLeaf::admit_from(
+            &format!(
+                "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
+                macos_codeql_rule()
+            ),
+            "",
+        );
+        leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Linux));
+        leaf.gate_input["before_landing"] = json!(true);
+        let (_, origin) = publish_origin(&leaf);
+        let repo = leaf.pair.follower_repo.clone();
+        let branch = format!("orbit/{}", leaf.task);
+        git(&repo, &["push", "-q", "origin", &branch]);
+        let published = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+        let mut state = leaf
+            .pair
+            .follower
+            .read_run_state(&leaf.leaf)
+            .unwrap()
+            .unwrap();
+        state.pipeline["worktree"] = json!({"workspace_path": repo, "head_ref": branch});
+        state.pipeline["push"] = json!({"branch": branch, "local_sha": published});
+        state.pipeline["pr_open"] = json!({"pr_number": LEAF_PR, "head": branch});
+        leaf.pair
+            .follower
+            .write_run_state(&leaf.leaf, &state)
+            .unwrap();
+
+        if reject_evidence {
+            // A ref-specific refusal leaves candidate refs available, unlike
+            // an unreachable remote, so the fallback is exercised separately.
+            let hook = origin.join("hooks/pre-receive");
+            std::fs::write(
+                &hook,
+                format!(
+                    "#!/bin/sh\nwhile read old new ref; do\ncase \"$ref\" in\n\
+                     refs/heads/orbit-evidence/*{}) echo 'fixture push refused' >&2; exit 1;;\n\
+                     esac\ndone\n",
+                    if reject_carry {
+                        "|refs/orbit/candidates/*"
+                    } else {
+                        ""
+                    }
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let admitted = leaf.admit_review();
+        assert_eq!(admitted["timing"], "before-landing");
+        leaf.reviewer_reports(
+            admitted["attempt_id"].as_str().unwrap(),
+            ReviewVerdict::Incomplete,
+            true,
+        );
+        let reviewer = &admitted["reviewer"];
+        let fixed = orbit_engine::review_gate::commit_reviewer_repairs(
+            &repo,
+            &format!(
+                "{} / {}",
+                reviewer["provider"].as_str().unwrap(),
+                reviewer["model"].as_str().unwrap()
+            ),
+            &format!(
+                "review: fix the stub\n\nOrbit-Review-Attempt: {}",
+                admitted["attempt_id"].as_str().unwrap()
+            ),
+        )
+        .unwrap()
+        .expect("the reviewer committed a fix")
+        .commit;
+        let refused = leaf
+            .settle()
+            .expect_err("the named macOS check still holds review");
+        assert!(refused.contains("review_awaiting_evidence"), "{refused}");
+        let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), fixed);
+        assert_ne!(
+            fixed, published,
+            "the reviewer committed past the published head"
+        );
+        assert_eq!(hold.candidate.commit, fixed);
+        let certificate: orbit_types::workflow::ReviewCertificate =
+            artifact(&leaf, orbit_types::workflow::REVIEW_GATE_ARTIFACT).unwrap();
+        assert_eq!(certificate.repair_commits.last().unwrap().commit, fixed);
+        let reference = format!("refs/orbit/candidates/{}/{}", leaf.task, leaf.leaf);
+        if reject_evidence {
+            assert!(hold.published_ref.is_none());
+            let carry = hold
+                .candidate_carry
+                .as_ref()
+                .expect("failed publication keeps its carry");
+            assert_eq!(carry.branch, branch);
+            assert_eq!(carry.published_sha.as_deref(), Some(published.as_str()));
+            if reject_carry {
+                assert!(carry.durable_ref.is_none());
+                assert!(
+                    carry
+                        .carry_failure
+                        .as_deref()
+                        .is_some_and(|why| !why.is_empty())
+                );
+            } else {
+                assert_eq!(carry.durable_ref.as_deref(), Some(reference.as_str()));
+                assert!(carry.carry_failure.is_none());
+                assert_eq!(git(&origin, &["rev-parse", &reference]).trim(), fixed);
+            }
+        } else {
+            assert!(hold.candidate_carry.is_none());
+            assert_eq!(
+                git(
+                    &origin,
+                    &["rev-parse", hold.published_ref.as_deref().unwrap()]
+                )
+                .trim(),
+                fixed
+            );
+        }
+        assert_eq!(
+            git(&origin, &["rev-parse", &format!("refs/heads/{branch}")]).trim(),
+            published
+        );
+        leaf.leaf_holds(&hold);
+        leaf.pair.pass(&leaf.drain);
+        let owner = &leaf.pair.wire.owner;
+        let kept = owner
+            .kept_claim_candidate(&leaf.task)
+            .unwrap()
+            .expect("the release keeps the reviewed tip");
+        assert_eq!(kept.candidate.head_sha, fixed);
+        assert_eq!(kept.candidate.pull_request.as_deref(), Some(LEAF_PR));
+        assert_eq!(
+            kept.candidate.pull_request_head.as_deref(),
+            Some(branch.as_str())
+        );
+        assert_eq!(
+            kept.candidate.failed_step_id, None,
+            "an evidence hold is a complete candidate"
+        );
+        if reject_carry {
+            assert!(kept.candidate.carry_failure.is_some());
+            assert!(!kept.candidate.durable());
+        } else if reject_evidence {
+            assert_eq!(
+                kept.candidate.durable_ref.as_deref(),
+                Some(reference.as_str())
+            );
+        }
+        attach_result(&leaf, owner, &hold);
+        assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
+
+        let second;
+        let pair = if reject_carry {
+            // Both pushes failed: the host that made the fix can still resume.
+            git(&repo, &["checkout", "-q", "main"]);
+            &leaf.pair
+        } else {
+            second = leaf.pair.another_host("evidence-resumer");
+            let next_repo = &second.follower_repo;
+            git(next_repo, &["init", "-q", "-b", "main"]);
+            git(
+                next_repo,
+                &["remote", "add", "origin", origin.to_str().unwrap()],
+            );
+            git(next_repo, &["fetch", "-q", "origin", "main"]);
+            git(next_repo, &["reset", "-q", "--hard", "origin/main"]);
+            assert!(
+                !std::process::Command::new("git")
+                    .current_dir(next_repo)
+                    .args(["cat-file", "-e", &fixed])
+                    .output()
+                    .unwrap()
+                    .status
+                    .success(),
+                "the next host starts without the reviewer's commit"
+            );
+            &second
+        };
+        let drain = pair.run_drain();
+        let next = pair.running_leaf(&drain, 1);
+        assert_eq!(pair.claimed_task(&next), leaf.task);
+        let input = pair
+            .follower_jobs
+            .get_job_run(&next)
+            .unwrap()
+            .unwrap()
+            .input
+            .unwrap();
+        assert_eq!(input["resume_candidate"]["head_sha"], fixed);
+        let resumed = owner_action(
+            &pair.follower,
+            "candidate_resume",
+            &json!({
+                "job_run_id": next, "task_ids": [leaf.task],
+                "workspace_path": pair.follower_repo, "base_sha": leaf.base.commit,
+                "candidate": input["resume_candidate"], "claimed": true,
+            }),
+        );
+        assert_eq!(resumed["source_sha"], fixed, "{resumed}");
+        assert_eq!(resumed["repair"]["trigger"], "continuation", "{resumed}");
+        assert_eq!(
+            std::fs::read_to_string(pair.follower_repo.join("src/f0.rs")).unwrap(),
+            "fn work() {}\n// reviewed\n",
+            "the next claim applies the reviewer's fix"
+        );
+    }
+}

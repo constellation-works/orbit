@@ -365,6 +365,30 @@ pub fn publish_held_candidate(workspace_path: &Path, commit: &str) -> Result<Str
     Ok(target)
 }
 
+/// Preserve a claimed evidence hold at the same durable ref as a failed leaf.
+/// A refused push still names the local candidate and its diagnostic.
+pub fn carry_evidence_candidate<H: crate::context::RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    commit: &str,
+    task_id: &str,
+    run_id: &str,
+    published_sha: Option<String>,
+) -> Result<orbit_types::workflow::ReviewEvidenceCandidateCarry, OrbitError> {
+    let branch = git_output(
+        workspace_path,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?;
+    let carried =
+        super::claim::carry_to_durable_ref(host, workspace_path, &branch, commit, task_id, run_id);
+    Ok(orbit_types::workflow::ReviewEvidenceCandidateCarry {
+        branch,
+        published_sha,
+        durable_ref: carried.as_ref().ok().cloned(),
+        carry_failure: carried.err(),
+    })
+}
+
 /// [ORB-14450] The stable patch id of the whole change from `base` to
 /// `head`, taken as one diff so a squash or a rebase of the same change
 /// yields the same id; `None` when the range changes nothing.
