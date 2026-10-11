@@ -2,9 +2,9 @@
 type: runbook
 summary: Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off.
 tags: [operations, qa, release, automation]
-paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*"]
+paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
-related_artifacts: [ORB-12010]
+related_artifacts: [ORB-12010, ORB-15327]
 last_validated: 2026-10-10
 ---
 
@@ -12,8 +12,17 @@ last_validated: 2026-10-10
 
 `qa-full-sweep` is the intentional, workspace-local sign-off for Orbit. It is
 disabled for periodic scheduling and routes minted work to the `opus` crew.
-It complements the recent-change `qa-sweep`; it does not ship to other Orbit
-users as a seeded default.
+It complements the recent-change `qa-sweep`.
+
+Orbit also ships a generic, product-agnostic `qa-full-sweep` default that
+coordinates per-area surface-QA chores and a roll-up release decision
+([auto-task overview](../design/auto-tasks/1_overview.md#embedded-default-catalog)).
+This workspace's own `.orbit/auto_tasks/qa-full-sweep.yaml` predates it and
+overrides it: `orbit workspace sync` and `orbit update` keep the file byte for
+byte and never retire it, and sync warns that it occupies the bundled
+default's name. That warning is expected here; do not move or rename the file.
+The rest of this runbook describes this workspace's definition and harness,
+which the generic default never references.
 
 ## Mint and run
 
